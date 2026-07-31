@@ -76,9 +76,16 @@ typedef struct {
     volatile uint32_t sample_count;
     volatile uint32_t isr_count;      // raw DRDY ISR triggers (flood detector)
     volatile uint32_t read_ns_avg;    // EMA of one contread SPI read (ns)
+    volatile uint32_t spi_err_count;  // capture_one() SPI transaction failures (diag)
 
     // Runtime
-    TaskHandle_t  capture_task;
+    // volatile: capture_task NULLs this itself as the last act before
+    // vTaskDelete(NULL); adaq_stream_stop() busy-polls it to detect real task
+    // exit instead of guessing with a fixed delay (see adaq_stream_stop). Plain
+    // `volatile` is only a compiler barrier, not a substitute for a memory
+    // fence, but a poll loop that just needs to observe a single pointer flip
+    // to NULL/non-NULL doesn't need one here.
+    volatile TaskHandle_t  capture_task;
     volatile bool running;
     uint32_t      seq[ADAQ_STREAM_MAX_DEVICES];
     adaq_drdy_ctx_t drdy_ctx[ADAQ_STREAM_MAX_DEVICES];
@@ -121,7 +128,10 @@ esp_err_t adaq_stream_stop(adaq_stream_t *s);
 typedef struct adaq_stream_comb {
     adaq_stream_t *streams[ADAQ_STREAM_MAX_DEVICES];
     uint8_t        n_streams;
-    TaskHandle_t   task;
+    // volatile: NULLed by capture_task_comb itself right before it
+    // vTaskDelete(NULL)s, so adaq_stream_comb_stop() can poll for real task
+    // exit instead of a fixed delay (see adaq_stream_comb_stop).
+    volatile TaskHandle_t task;
     volatile bool  running;
     volatile uint32_t pending;            // lock-free per-device ready bitmask
     uint32_t       drdy_mask;             // GPIO status mask of all DRDY pins

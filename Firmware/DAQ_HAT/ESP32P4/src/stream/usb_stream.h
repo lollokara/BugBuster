@@ -55,6 +55,20 @@ typedef void (*usb_cmd_cb_t)(usb_rec_type_t cmd, const uint8_t *payload,
 // WAVE_V: 24 + count*4 <= 16384
 #define USB_WAVE_V_BATCH    800u
 
+// Compile-time proof that the worst-case WAVE_I / WAVE_V payloads actually
+// fit in one frame. usb_stream_flush_wave_i()/_v() only caught an overflow at
+// RUNTIME (an ESP_LOGE after emit_frame_inplace() rejected an oversized len),
+// by which point the composing memcpys into frame_buf had already run past
+// the intended payload region -- i.e. a silent buffer overflow, not just a
+// dropped frame. These asserts make any future change to the batch sizes (or
+// to usb_wave_hdr_t) that would blow the budget a build break instead.
+_Static_assert(sizeof(usb_wave_hdr_t) + (size_t)USB_WAVE_I_BATCH * (sizeof(float) + sizeof(uint8_t))
+               <= USB_MAX_PAYLOAD,
+               "WAVE_I worst-case payload exceeds USB_MAX_PAYLOAD");
+_Static_assert(sizeof(usb_wave_hdr_t) + (size_t)USB_WAVE_V_BATCH * sizeof(float)
+               <= USB_MAX_PAYLOAD,
+               "WAVE_V worst-case payload exceeds USB_MAX_PAYLOAD");
+
 typedef struct {
     usb_transport_t transport;
     bool            have_transport;
@@ -123,6 +137,16 @@ typedef struct {
     uint64_t perf_last_sample_seq; // sample_seq snapshot at last perf tick,
                                     // for the emitted-rate (Sa/s) log line.
 } usb_stream_t;
+
+// Compile-time proof that frame_buf is large enough to stage the biggest
+// frame this code ever composes into it (header + full USB_MAX_PAYLOAD +
+// CRC). Every zero-copy builder above (WAVE_I/WAVE_V/FFT) writes straight
+// into frame_buf at USB_FRAME_HEADER_LEN before calling emit_frame_inplace(),
+// so an undersized buffer here is a real, silent stack/heap overflow, not
+// just a rejected frame.
+_Static_assert(sizeof(((usb_stream_t *)0)->frame_buf)
+               >= USB_FRAME_HEADER_LEN + USB_MAX_PAYLOAD + USB_FRAME_CRC_LEN,
+               "usb_stream_t.frame_buf too small for a full-payload frame");
 
 /** @brief Initialise the stream manager (no transport yet). */
 void usb_stream_init(usb_stream_t *s);

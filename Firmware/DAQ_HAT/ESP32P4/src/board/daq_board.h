@@ -115,7 +115,10 @@ typedef struct daq_board {
 
     // Fast path (DRDY-gated streaming): a processor task drains the per-bus
     // capture rings, pairs FINE+COARSE by sequence, and runs the full pipeline.
-    TaskHandle_t            fast_task;
+    // volatile: daq_fast_task NULLs this itself right before vTaskDelete(NULL)
+    // so daq_board_stop_fast() can poll for real task exit (bounded) instead of
+    // a fixed delay before freeing the sample rings — see daq_board_stop_fast.
+    volatile TaskHandle_t   fast_task;
     volatile bool           fast_running;
     uint8_t                 wave_decim;   // USB waveform decimation (>=1)
     uint8_t                 wave_count;   // running decimation counter
@@ -126,6 +129,13 @@ typedef struct daq_board {
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
+    // P4: raw (un-decimated) fused-sample periods accumulated since the last
+    // power-DSP push that haven't yet been folded into a whole dsp_decim-
+    // sized dt -- 1 per fast_emit() call plus 1 per drop_fine/drop_coarse
+    // increment, integer-divided down by dsp_decim at push time (remainder
+    // carried here) so a dsp-tail push that spans a pairing-resync drop still
+    // integrates energy/charge over the real elapsed time. See fast_emit().
+    uint32_t                dsp_emit_periods;
     uint32_t                fine_rate_hz; // cached FINE ODR for the fast path (avoids
                                           // a per-sample adaq7769_output_data_rate() call)
     uint8_t                 perf_div;     // 10 Hz summary calls -> 1 Hz usb_stream_perf_tick

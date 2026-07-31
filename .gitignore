@@ -82,7 +82,11 @@ Diag/repro_*
 /iOSApp/.omc
 /Firmware/ESP32/src/.omc
 iOSApp/bugbuster.xcodeproj/project.xcworkspace/xcuserdata/lorenzo.xcuserdatad/UserInterfaceState.xcuserstate
-iOSApp/Sources/App/
+# NOTE: 'iOSApp/Sources/App/' was ignored here, which silently excluded
+# AppDelegate.swift, AppSections.swift and OrientationLock.swift -- three
+# files the iOS target cannot build without. A fresh clone therefore could
+# not build the app at all (same failure mode as the C6 components/ dir).
+# Only the per-user Xcode state below belongs in this file.
 Scripts/clean-appledouble.sh
 
 # -----------------------------------------------------------------------------

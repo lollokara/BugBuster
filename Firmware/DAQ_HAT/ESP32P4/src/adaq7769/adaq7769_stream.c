@@ -4,6 +4,7 @@
 
 #include "adaq7769_stream.h"
 #include <string.h>
+#include <stdatomic.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_attr.h"
@@ -63,6 +64,17 @@ static inline bool ring_push(adaq_stream_t *s, const adaq_sample_t *rec)
         return false;            // full; drop newest
     }
     s->ring[head] = *rec;
+    // Producer runs on core 1, consumer (adaq_stream_read/available) on core
+    // 0. `head`/`tail` are `volatile`, but on the P4's dual RISC-V cores that
+    // is only a compiler ordering barrier, not a CPU release/acquire fence --
+    // nothing stops the consumer's core from observing the new `head` before
+    // the record store above has actually retired to memory it can see. That
+    // is suspected to be the real source of the "arbitrary-value corrupted
+    // conversion with clean flags" that the despike filter in daq_board.c
+    // (glitch_isolated, ~line 2136) currently papers over; the despike stays
+    // in place until this fence is confirmed to fix it on the bench. Release
+    // here pairs with the acquire in adaq_stream_read/adaq_stream_available.
+    atomic_thread_fence(memory_order_release);
     s->head = next;
     s->sample_count++;
     return true;
@@ -85,6 +97,10 @@ static inline void capture_one(adaq_stream_t *s, uint8_t idx, size_t plen, uint8
     esp_err_t err = adaq_ll_fifo_read(&dev->ll, buf, plen);
     adaq_ll_cs_deassert(&dev->ll);
     if (err != ESP_OK) {
+        // Previously silent: a persistent bus fault produced no observable
+        // symptom at all. Just count it here -- surfacing it in the CLI/USB
+        // STATUS record belongs to other agents' files.
+        s->spi_err_count++;
         return;
     }
     adaq_sample_t rec = {0};
@@ -169,6 +185,11 @@ static void capture_task(void *arg)
         gpio_num_t pin = s->devices[i]->drdy_pin;
         if (pin != GPIO_NUM_NC) gpio_isr_handler_remove(pin);
     }
+    // Last act before self-deleting: NULL our own handle so adaq_stream_stop()
+    // can poll for real task exit instead of a fixed delay before freeing the
+    // ring this task was producing into (adaq_stream_deinit is not safe to run
+    // concurrently with a still-running capture_task).
+    s->capture_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -209,7 +230,12 @@ esp_err_t adaq_stream_init(adaq_stream_t *s,
 void adaq_stream_deinit(adaq_stream_t *s)
 {
     if (s->running) {
-        adaq_stream_stop(s);
+        // If the capture task didn't confirm exit in time, adaq_stream_stop()
+        // already logged it — leaking the ring is strictly better than
+        // freeing it out from under a task that might still be running.
+        if (adaq_stream_stop(s) != ESP_OK) {
+            return;
+        }
     }
     if (s->ring) {
         heap_caps_free(s->ring);
@@ -247,8 +273,18 @@ esp_err_t adaq_stream_start(adaq_stream_t *s, int task_core, int task_prio)
 
     // The capture task installs the GPIO ISR service + DRDY handlers itself so
     // they are serviced on its (acquisition) core. Nothing to do here.
+    //
+    // xTaskCreatePinnedToCore() wants a plain TaskHandle_t* out-param, but
+    // s->capture_task is now volatile (adaq_stream_stop() polls it to detect
+    // real task exit — see below) so we can't pass &s->capture_task directly
+    // without discarding the qualifier. Create into a local and publish it;
+    // this races harmlessly with the task's own
+    // `s->capture_task = xTaskGetCurrentTaskHandle()` (its very first line) —
+    // both ultimately write the same handle value.
+    TaskHandle_t capture_task_handle = NULL;
     BaseType_t ok = xTaskCreatePinnedToCore(capture_task, "adaq_cap", 4096, s,
-                                            task_prio, &s->capture_task, task_core);
+                                            task_prio, &capture_task_handle, task_core);
+    s->capture_task = capture_task_handle;
     if (ok != pdPASS) {
         s->running = false;
         return ESP_ERR_NO_MEM;
@@ -262,9 +298,27 @@ esp_err_t adaq_stream_stop(adaq_stream_t *s)
 
     s->running = false;
     // The capture task observes running=false, removes its own DRDY handlers,
-    // and self-deletes.
-    vTaskDelay(pdMS_TO_TICKS(150));
-    s->capture_task = NULL;
+    // and self-deletes, NULLing s->capture_task as its last act (see the end
+    // of capture_task). Poll for that instead of guessing a fixed delay: the
+    // task can be blocked in an SPI transaction well past any fixed wait, and
+    // adaq_stream_deinit() (called by owners right after this) frees the ring
+    // capture_one() writes into — a fixed-delay handshake risks a
+    // use-after-free if the task wakes after the "wait" and pushes one more
+    // record. Bounded at ~2 s: a genuinely wedged task must not hang the
+    // caller forever, and leaving s->capture_task non-NULL here means the
+    // caller must NOT free the ring (see adaq_stream_deinit).
+    {
+        int waited_ms = 0;
+        while (s->capture_task != NULL && waited_ms < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            waited_ms += 5;
+        }
+        if (s->capture_task != NULL) {
+            ESP_LOGE(TAG, "capture_task did not exit within %d ms — refusing "
+                          "to touch its ring/registers", waited_ms);
+            return ESP_ERR_TIMEOUT;
+        }
+    }
 
     // Exit continuous-read mode so registers are accessible again.
     for (uint8_t i = 0; i < s->device_count; ++i) {
@@ -461,6 +515,11 @@ static void capture_task_comb(void *arg)
             adaq_ll_cs_manual_end(&dev->ll);
         }
     }
+    // Last act before self-deleting: NULL our own handle so
+    // adaq_stream_comb_stop() can poll for real task exit instead of a fixed
+    // delay before the caller frees the per-stream rings this task produces
+    // into.
+    c->task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -489,8 +548,16 @@ esp_err_t adaq_stream_comb_start(adaq_stream_comb_t *c,
         }
     }
     c->running = true;
+    // c->task is volatile (adaq_stream_comb_stop() polls it — see below), so
+    // route xTaskCreatePinnedToCore()'s plain TaskHandle_t* out-param through
+    // a local instead of passing &c->task directly (would discard the
+    // qualifier). Harmlessly races the task's own
+    // `c->task = xTaskGetCurrentTaskHandle()` (its first line) with the same
+    // value.
+    TaskHandle_t comb_task_handle = NULL;
     BaseType_t ok = xTaskCreatePinnedToCore(capture_task_comb, "adaq_cap", 4096,
-                                            c, prio, &c->task, core);
+                                            c, prio, &comb_task_handle, core);
+    c->task = comb_task_handle;
     if (ok != pdPASS) {
         c->running = false;
         return ESP_ERR_NO_MEM;
@@ -506,9 +573,25 @@ esp_err_t adaq_stream_comb_stop(adaq_stream_comb_t *c)
     for (uint8_t si = 0; si < c->n_streams; ++si) {
         c->streams[si]->running = false;
     }
-    // Let the task observe running=false, remove its handlers, and self-delete.
-    vTaskDelay(pdMS_TO_TICKS(150));
-    c->task = NULL;
+    // Let the task observe running=false, remove its handlers, and
+    // self-delete. It NULLs c->task itself as its last act (see the end of
+    // capture_task_comb); poll for that instead of a fixed delay — same
+    // use-after-free hazard as adaq_stream_stop (the task can be parked in an
+    // SPI transaction well past any fixed wait, and the caller frees the
+    // per-stream rings right after this returns). Bounded at ~2 s; a timeout
+    // is reported and the caller must not free anything downstream.
+    {
+        int waited_ms = 0;
+        while (c->task != NULL && waited_ms < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            waited_ms += 5;
+        }
+        if (c->task != NULL) {
+            ESP_LOGE(TAG, "capture_task_comb did not exit within %d ms — "
+                          "refusing to touch its rings/registers", waited_ms);
+            return ESP_ERR_TIMEOUT;
+        }
+    }
 
     // Exit continuous-read on every device so registers are accessible again.
     for (uint8_t si = 0; si < c->n_streams; ++si) {
@@ -535,18 +618,37 @@ esp_err_t adaq_stream_comb_stop(adaq_stream_comb_t *c)
 
 size_t adaq_stream_read(adaq_stream_t *s, adaq_sample_t *out, size_t max)
 {
+    // Snapshot head ONCE and fence ONCE, outside the copy loop.
+    //
+    // The fence is what makes the producer's record stores visible on this
+    // core, so it must happen after observing head and before touching any
+    // record -- but only once per observation, not once per record: every
+    // sample below index `head` was published by the same release fence in
+    // ring_push. Fencing per iteration was measurably expensive (this is a
+    // full RISC-V `fence` draining the store buffer, and daq_fast_task calls
+    // this with max==1 at up to 128 kSPS, so it ran per sample on BOTH sides
+    // of the ring).
+    //
+    // Re-reading head each pass would also be pointless: head only ever grows,
+    // so a stale snapshot merely defers a few samples to the next call, which
+    // the caller already loops for.
+    size_t tail = s->tail;
+    size_t head = s->head;
+    atomic_thread_fence(memory_order_acquire);
+
     size_t n = 0;
-    while (n < max) {
-        size_t tail = s->tail;
-        if (tail == s->head) break;     // empty
+    while (n < max && tail != head) {
         out[n++] = s->ring[tail];
-        s->tail = (tail + 1) & (s->ring_capacity - 1);
+        tail = (tail + 1) & (s->ring_capacity - 1);
     }
+    s->tail = tail;              // publish once; the producer only reads it
     return n;
 }
 
 size_t adaq_stream_available(const adaq_stream_t *s)
 {
     size_t head = s->head, tail = s->tail;
+    // Pairs with the release fence in ring_push (see adaq_stream_read).
+    atomic_thread_fence(memory_order_acquire);
     return (head - tail) & (s->ring_capacity - 1);
 }

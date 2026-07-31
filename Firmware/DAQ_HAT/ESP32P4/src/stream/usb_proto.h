@@ -15,7 +15,15 @@
 //   3       1     type    (usb_rec_type_t)
 //   4       1     flags
 //   5       1     reserved (0)
-//   6       4     seq      (monotonic per stream)
+//   6       4     seq      (monotonic per stream). Contract: seq increments
+//                 for every frame the device DECIDES to emit, even when that
+//                 frame never reaches the wire (no transport, host not
+//                 connected, TX back-pressure, or a short/failed write) --
+//                 only the value written into a byte stream the host actually
+//                 receives can skip. This means a gap between consecutive
+//                 received seq values is always exactly the count of frames
+//                 the device dropped in between, so host decoders can use it
+//                 directly as a loss counter without a separate drop signal.
 //   10      2     payload_len
 //   12      N     payload
 //   12+N    2     crc16-ccitt over bytes [2 .. 12+N) (header tail + payload)

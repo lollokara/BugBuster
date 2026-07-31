@@ -42,7 +42,13 @@ esp_err_t spectrum_configure(spectrum_t *s, uint16_t n, spectrum_window_t window
     s->n      = n;
     s->nbins  = (uint16_t)(n / 2);
     s->window = window;
-    s->hop    = (uint16_t)(n / 2);   // 50% overlap
+    // Default to 0% overlap (hop = n), not the previous 50%. run_fft() runs
+    // INLINE on daq_fast_task, the acquisition producer that must never
+    // stall, so every FFT here is on its critical path; 50% overlap doubled
+    // the FFT (and post-FFT memmove) rate for statistical smoothing that the
+    // bounded-depth EMA in run_fft() now provides far more cheaply. Callers
+    // that still want overlap can request it via spectrum_set_hop().
+    s->hop    = n;
     s->fill        = 0;
     s->since_last  = 0;
     build_window(s);
@@ -67,6 +73,14 @@ void spectrum_set_enabled(spectrum_t *s, bool on)
     s->enabled = on;
 }
 
+void spectrum_set_hop(spectrum_t *s, uint16_t hop)
+{
+    if (hop < 1 || hop > s->n) {
+        return;   // out of range -- leave the current hop untouched
+    }
+    s->hop = hop;
+}
+
 void spectrum_reset(spectrum_t *s)
 {
     memset(s->psd, 0, sizeof(s->psd));
@@ -85,18 +99,34 @@ static void run_fft(spectrum_t *s)
     dsps_bit_rev_fc32(s->fft_buf, s->n);
 
     float norm = 1.0f / s->win_power;
+
+    // Running average of periodograms (Welch), clamped to a bounded-depth EMA.
+    // Unclamped, avg_count grows forever and each new periodogram's weight
+    // (1/avg_count) decays towards zero, so after a few thousand FFTs the
+    // display silently freezes on the first seconds of the session. Decide
+    // this frame's weight BEFORE folding it in (not after, as a naive
+    // clamp-then-divide-by-avg_count+1 would do) so that once avg_count
+    // saturates at SPECTRUM_AVG_MAX the divisor stays pinned there instead of
+    // drifting to SPECTRUM_AVG_MAX+1. With the divisor pinned, this is
+    // exactly a first-order EMA with alpha = 1/SPECTRUM_AVG_MAX -- still
+    // converges to the true mean under a stationary signal, just with a
+    // bounded ~1 s time constant instead of an ever-growing one.
+    bool first = (s->avg_count == 0);
+    if (s->avg_count < SPECTRUM_AVG_MAX) {
+        s->avg_count++;
+    }
+    float inv_count = 1.0f / (float)s->avg_count;
+
     for (uint16_t k = 0; k < s->nbins; ++k) {
         float re = s->fft_buf[2 * k];
         float im = s->fft_buf[2 * k + 1];
         float pw = (re * re + im * im) * norm;
-        // Running average of periodograms (Welch).
-        if (s->avg_count == 0) {
+        if (first) {
             s->psd[k] = pw;
         } else {
-            s->psd[k] += (pw - s->psd[k]) / (float)(s->avg_count + 1);
+            s->psd[k] += (pw - s->psd[k]) * inv_count;
         }
     }
-    s->avg_count++;
 }
 
 bool spectrum_push(spectrum_t *s, float x)
@@ -105,7 +135,9 @@ bool spectrum_push(spectrum_t *s, float x)
         return false;
     }
     // Fill the analysis buffer; when full, run an FFT and slide down by `hop`
-    // (50% overlap) so the memmove cost is amortised over hop samples, not 1.
+    // samples (default: hop == n, i.e. no overlap -- see spectrum_set_hop()).
+    // A smaller hop reintroduces overlap; the memmove cost is amortised over
+    // hop samples either way, not 1.
     s->sample_buf[s->fill++] = x;
     if (s->fill < s->n) {
         return false;

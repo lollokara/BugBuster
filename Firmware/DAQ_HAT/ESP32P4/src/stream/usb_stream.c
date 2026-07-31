@@ -129,12 +129,14 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
     if (!s->have_transport) {
         s->dropped_frames++;
         count_by_type(s, (uint8_t)type, false);
+        s->tx_seq++;   // see tx_seq contract note below
         return ESP_ERR_INVALID_STATE;
     }
     if (s->transport.connected && !s->transport.connected(s->transport.ctx)) {
         // No host attached: drop silently, no log spam.
         s->dropped_frames++;
         count_by_type(s, (uint8_t)type, false);
+        s->tx_seq++;   // see tx_seq contract note below
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -165,11 +167,16 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
 
     uint32_t total = crc_off + USB_FRAME_CRC_LEN;
 
-    // Back-pressure: drop the frame if the TX FIFO cannot take it whole.
+    // Back-pressure: drop the frame if the TX FIFO cannot take it whole. This
+    // frame's tx_seq was already stamped into the header above but never
+    // reaches the wire -- still bump tx_seq (matching the failed-write path
+    // below) so the sequence the host DOES see has a gap here, rather than
+    // silently reusing this value for the next frame and hiding the drop.
     if (s->transport.writable &&
         s->transport.writable(s->transport.ctx) < total) {
         s->dropped_frames++;
         count_by_type(s, (uint8_t)type, false);
+        s->tx_seq++;
         if (s->dropped_frames <= 5 || s->dropped_frames % 1000 == 0) {
             ESP_LOGW(TAG, "frame drop #%lu: need=%lu avail=%lu",
                      (unsigned long)s->dropped_frames,
@@ -492,7 +499,20 @@ void usb_stream_on_rx(usb_stream_t *s, const uint8_t *data, uint32_t len)
 
         // Resync on magic at the start of the buffer.
         if (s->rx_len == 0 && byte != USB_PROTO_MAGIC0) continue;
-        if (s->rx_len == 1 && byte != USB_PROTO_MAGIC1) { s->rx_len = 0; continue; }
+        if (s->rx_len == 1 && byte != USB_PROTO_MAGIC1) {
+            // Byte 2 isn't MAGIC1, so this candidate frame is bogus -- but
+            // don't just drop the byte: if it's itself a MAGIC0, a real frame
+            // may start right here (e.g. "BB BB 50 ..." -- the first BB fails
+            // as a candidate, and the naive drop-and-reset also ate the second
+            // BB, so the frame that actually starts there was never found).
+            // Re-arm rx_len=1 with this byte as the new rx_buf[0] instead.
+            if (byte == USB_PROTO_MAGIC0) {
+                s->rx_buf[0] = byte;
+            } else {
+                s->rx_len = 0;
+            }
+            continue;
+        }
 
         if (s->rx_len < sizeof(s->rx_buf)) {
             s->rx_buf[s->rx_len++] = byte;

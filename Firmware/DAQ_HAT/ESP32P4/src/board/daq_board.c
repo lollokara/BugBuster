@@ -273,8 +273,12 @@ esp_err_t daq_board_init(daq_board_t *b)
         }
     }
     power_dsp_init(&b->dsp, current_odr);
-    // Multi-resolution zoom tiers (x100 each) and a continuous 1024-pt Hann FFT.
-    multires_init(&b->multires, /*tiers=*/4, /*factor=*/100, NULL, NULL);
+    // multires_init() removed from the hot path (P2): b->multires had no
+    // reader anywhere (grep confirmed: cb was NULL and nothing consumes the
+    // tiers) so init + the two per-sample multires_push() calls were pure
+    // dead work on the acquisition hot path. The module (dsp/multires.*,
+    // the multires_t field, and the CMakeLists entry) is left in place for a
+    // future consumer -- only the unused work was removed here.
     spectrum_init(&b->spectrum, 1024, SPEC_WIN_HANN);
     spectrum_set_enabled(&b->spectrum, true);
     b->fft_source = 0;   // current
@@ -793,8 +797,8 @@ esp_err_t daq_board_stream_step(daq_board_t *b, fusion_output_t *out)
     }
     float p = power_dsp_last_p(&b->dsp);
 
-    // Feed multi-resolution reduction + continuous spectrum.
-    multires_push(&b->multires, fo.amps);
+    // Feed continuous spectrum. (multires_push() removed here -- see P2 note
+    // at multires_init's old call site: b->multires has no reader.)
     spectrum_push(&b->spectrum, (b->fft_source == 1) ? p : fo.amps);
 
     uint32_t rate = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
@@ -2089,7 +2093,15 @@ esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity)
 
 esp_err_t daq_board_stop_streaming(daq_board_t *b)
 {
-    adaq_stream_comb_stop(&b->capture);
+    // A1: adaq_stream_comb_stop() now polls capture_task_comb to real exit
+    // instead of a fixed delay (see its definition) and can return
+    // ESP_ERR_TIMEOUT if the task never confirmed. In that case it may still
+    // be running and touching the per-stream rings, so do NOT free them here
+    // -- leaking is strictly better than a use-after-free.
+    esp_err_t err = adaq_stream_comb_stop(&b->capture);
+    if (err != ESP_OK) {
+        return err;
+    }
     adaq_stream_deinit(&b->stream_a);
     adaq_stream_deinit(&b->stream_b);
     return ESP_OK;
@@ -2222,15 +2234,43 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     float v = power_dsp_voltage(&b->dsp);
     float p = v * emit_fo.amps;
 
-    // DSP TAIL (energy/charge/stats + multires + spectrum) runs DECIMATED: it
-    // doesn't need the full per-channel rate, and decimating frees core-0 budget
-    // so the full-rate fused stream to the PC keeps flowing. power_dsp's dt is
-    // set to the decimated period in daq_board_run_fast so energy/charge stay
-    // correct. The PC still gets every fused sample below.
+    // DSP TAIL (energy/charge/stats + spectrum) runs DECIMATED: it doesn't
+    // need the full per-channel rate, and decimating frees core-0 budget so
+    // the full-rate fused stream to the PC keeps flowing. power_dsp's dt is
+    // set to the DECIMATED period in daq_board_run_fast (and by the CLI's
+    // `dspdecim` / the SET_RATE settings glue, which we don't own and must
+    // stay compatible with -- both use the same odr/dsp_decim formula), i.e.
+    // one dt nominally covers dsp_decim raw fused-sample periods.
+    // (multires_push() removed here -- see P2 note at multires_init's old
+    // call site.) The PC still gets every fused sample below.
+    //
+    // P4: daq_fast_task's FINE/COARSE pairing loop (~lines 2329-2371) silently
+    // discards a raw sample and retries whenever the two streams' sequence
+    // numbers don't line up (b->drop_fine / b->drop_coarse), and a ring
+    // overflow does the same further upstream. Each such discard consumes one
+    // real ADC period at the nominal ODR without ever reaching fast_emit --
+    // so the old fixed-dt power_dsp_push_current() (always 1 dt per push)
+    // silently under-integrated energy/charge by that many periods.
+    //
+    // b->dsp_emit_periods accounts for this in raw-period units: daq_fast_task
+    // increments it by 1 for every drop (alongside drop_fine++/drop_coarse++),
+    // and it is incremented by 1 here for this fused sample itself. Because dt
+    // is denominated in dsp_decim-sized blocks (not raw periods) we can't pass
+    // a raw-period count straight to power_dsp_push_current_n -- we have to
+    // convert to whole dt's first. Integer-divide by dsp_decim to get the
+    // number of whole dt's actually elapsed and carry the remainder (< 1 dt
+    // of raw periods) forward into the next accumulation window instead of
+    // dropping it, so every raw period is eventually accounted for exactly
+    // once with no double counting and no net drift (only a bounded <1-dt
+    // lag on any single push, which is immaterial to the cumulative mAh/mWh
+    // total this is protecting).
+    b->dsp_emit_periods++;
     if (++b->dsp_count >= b->dsp_decim) {
         b->dsp_count = 0;
-        power_dsp_push_current(&b->dsp, emit_fo.amps);
-        multires_push(&b->multires, emit_fo.amps);
+        uint32_t decim = b->dsp_decim ? b->dsp_decim : 1;
+        uint32_t periods = b->dsp_emit_periods / decim;
+        b->dsp_emit_periods = b->dsp_emit_periods % decim;   // carry remainder
+        power_dsp_push_current_n(&b->dsp, emit_fo.amps, periods);
         spectrum_push(&b->spectrum,
                       (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : emit_fo.amps);
     }
@@ -2349,6 +2389,11 @@ static void daq_fast_task(void *arg)
                     }
                     have_fine = false;
                     b->drop_fine++;
+                    // P4: this discarded FINE sample consumed one real ADC
+                    // period that will never reach fast_emit -- count it so
+                    // the next dsp-tail push integrates over the true elapsed
+                    // time (see the b->dsp_emit_periods comment in fast_emit).
+                    b->dsp_emit_periods++;
                 } else {
                     // COARSE seq fell behind FINE — same overflow guard.
                     if ((fadj - cadj) > 128) {
@@ -2357,6 +2402,7 @@ static void daq_fast_task(void *arg)
                     }
                     have_coarse = false;
                     b->drop_coarse++;
+                    b->dsp_emit_periods++;   // see drop_fine branch above
                 }
                 progress = true;
             }
@@ -2389,6 +2435,11 @@ static void daq_fast_task(void *arg)
             vTaskDelay(1);
         }
     }
+    // Last act before deleting ourselves: NULL our own handle so
+    // daq_board_stop_fast()'s poll loop can detect real exit instead of
+    // guessing with a fixed delay before it frees the sample rings we've been
+    // reading from (adaq_stream_read is not NULL-safe against a freed ring).
+    b->fast_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -2452,12 +2503,19 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
     }
     b->drop_fine    = 0;
     b->drop_coarse  = 0;
+    b->dsp_emit_periods = 0;   // P4 raw-period accumulator (see fast_emit)
 
     // Pin the processor to core 0 (alongside FINE capture). It runs below the
     // prio-20 capture tasks, so DRDY reads always pre-empt the pipeline.
+    // xTaskCreatePinnedToCore() wants a plain TaskHandle_t* out-param (its
+    // signature isn't ours to change); b->fast_task is volatile (see
+    // daq_board.h) so we can't hand it &b->fast_task directly without
+    // discarding the qualifier. Create into a local and publish it after.
+    TaskHandle_t fast_task_handle = NULL;
     BaseType_t ok = xTaskCreatePinnedToCore(daq_fast_task, "daq_fast", 8192, b,
-                                            /*prio=*/12, &b->fast_task,
+                                            /*prio=*/12, &fast_task_handle,
                                             /*core=*/0);
+    b->fast_task = fast_task_handle;
     if (ok != pdPASS) {
         b->fast_running = false;
         daq_board_stop_streaming(b);
@@ -2480,13 +2538,43 @@ esp_err_t daq_board_stop_fast(daq_board_t *b)
     // !fast_running.
     //   1. Stop the capture task and release the bus WHILE fast_running is still
     //      set, so those pollers stay locked out during teardown.
-    adaq_stream_comb_stop(&b->capture);
+    esp_err_t comb_err = adaq_stream_comb_stop(&b->capture);
+    if (comb_err != ESP_OK) {
+        // capture_task_comb didn't confirm exit (see adaq_stream_comb_stop) —
+        // it may still hold the SPI bus. Do NOT clear fast_running: that
+        // would let the register pollers it guards against race the bus.
+        // Leave everything as-is and report the failure; a stuck comb task
+        // is a worse problem than a failed stop() call.
+        return comb_err;
+    }
     //   2. The bus is now free — clear the flag (register access is safe again)
     //      and let the processor task, which only touches the sample rings (not
     //      SPI), observe it and self-delete.
     b->fast_running = false;
-    vTaskDelay(pdMS_TO_TICKS(20));
-    b->fast_task = NULL;
+    // Wait for daq_fast_task to actually exit rather than guessing with a
+    // fixed delay: it can be parked far longer than any fixed wait inside
+    // usb_stream_push_sample() -> the TCP backend's backend_write(), which
+    // retries a mid-frame send for up to 500 ms (tcp_backend.c). A fixed
+    // 20 ms delay here let that retry wake up and call adaq_stream_read() on
+    // a ring already heap_caps_free()'d below (use-after-free). daq_fast_task
+    // NULLs b->fast_task itself as its very last act before vTaskDelete(NULL)
+    // (see end of daq_fast_task), so poll that instead. Bounded at ~2 s: a
+    // genuinely wedged task must not hang the whole board forever, and
+    // leaking the rings (skip the frees below) is strictly better than
+    // freeing out from under a task that never confirmed it stopped.
+    {
+        int waited_ms = 0;
+        while (b->fast_task != NULL && waited_ms < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            waited_ms += 5;
+        }
+        if (b->fast_task != NULL) {
+            ESP_LOGE(TAG, "daq_fast_task did not exit within %d ms — leaking "
+                          "sample rings instead of risking a use-after-free",
+                     waited_ms);
+            return ESP_ERR_TIMEOUT;
+        }
+    }
     //   3. Free the rings only AFTER the processor has stopped reading them
     //      (adaq_stream_read is not NULL-safe against a freed ring).
     adaq_stream_deinit(&b->stream_a);

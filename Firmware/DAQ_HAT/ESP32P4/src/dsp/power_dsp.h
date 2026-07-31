@@ -28,9 +28,46 @@ extern "C" {
 #endif
 
 // Running statistics for one signal over the active window.
+//
+// SHIFTED-DATA variance: every sample is accumulated as an offset from `k`
+// (the first sample of the window) rather than in absolute terms.
+//
+// The naive sum/sum_sq -> mean_of_squares - mean^2 form catastrophically
+// cancels when there is a large DC offset and small AC ripple -- the normal
+// case for a supply rail -- because sum_sq and mean*mean are then both huge
+// and nearly equal. Subtracting a constant `k` shifts the data to ~zero mean
+// without changing the variance (variance is translation-invariant), so the
+// accumulators stay O(ripple^2) instead of O(DC^2) and the cancellation is
+// gone.
+//
+// Welford's algorithm fixes the same numerical problem but needs a DIVISION
+// per sample (mean += delta/n), and that is unaffordable here. The ESP32-P4's
+// FPU is SINGLE precision only, so every double-precision operation on this
+// path is a SOFTWARE-emulated call, and stat_update runs 3x per fused sample
+// at up to 128 kSPS.
+//
+// Measured end-to-end on the bench (tests/tools/daq_usb_stream_bench.py, ODR
+// ratio 64, dspdecim=1, WAVE_I samples/s delivered to a real USB host):
+//     original naive sum/sum_sq ......... 73,514 Sa/s
+//     Welford (double divide/sample) .... 46,175 Sa/s   (-38%)
+//     shifted-data, all double ..........  67,900 Sa/s   (-8%)
+//     shifted-data, float subtract ...... 76,308 Sa/s   (+3.8%)
+//
+// The last form is what is implemented: division-free in the update, and the
+// subtract/square done in hardware single precision so only the two
+// accumulations remain in double -- one fewer double op than the original.
+// It is therefore both numerically better AND faster than the code it
+// replaced. See stat_update() for why the float subtract is safe here.
+//
+// RMS is derived at finish time from the identity mean(x^2) = var + mean^2,
+// which is algebraically exact, so no separate sum-of-squares accumulator is
+// needed -- this is strictly cheaper than the code it replaced.
 typedef struct {
-    double   sum;        // sum of values            (for mean)
-    double   sum_sq;     // sum of squares           (for RMS / std)
+    float    k;           // shift origin: value of the first sample in the window
+                          // (float: the subtract in stat_update is done in
+                          //  hardware single precision -- see stat_update)
+    double   sum_d;       // sum of (x - k)
+    double   sum_d2;      // sum of (x - k)^2
     float    min;
     float    max;
     uint32_t count;
@@ -89,6 +126,26 @@ void power_dsp_set_voltage(power_dsp_t *d, float volts);
  * @return the instantaneous power for this sample (W).
  */
 float power_dsp_push_current(power_dsp_t *d, float amps);
+
+/**
+ * @brief Same as power_dsp_push_current(), but integrates energy/charge over
+ *        n_periods * d->dt instead of a fixed one sample period (d->dt).
+ *
+ * Use this when the caller knows more samples' worth of real time elapsed
+ * since the previous push than the fixed-dt call would assume -- e.g. a
+ * dropped/discarded sample between two pushes -- so the trapezoidal area
+ * between prev and this sample is stretched over the true elapsed time
+ * instead of silently under-integrating. Still trapezoidal between prev_i/
+ * prev_p and the new sample (a straight-line approximation over the whole
+ * n_periods span, which is the best available without the missing samples'
+ * actual values). power_dsp_push_current() is a thin wrapper for n_periods=1.
+ *
+ * @param n_periods  number of sample periods (multiples of d->dt) elapsed
+ *                    since the previous call. Must be >= 1 for a real push;
+ *                    passing 0 advances nothing (statistics still update).
+ * @return the instantaneous power for this sample (W).
+ */
+float power_dsp_push_current_n(power_dsp_t *d, float amps, uint32_t n_periods);
 
 // ---- Accumulator readout ----------------------------------------------------
 
