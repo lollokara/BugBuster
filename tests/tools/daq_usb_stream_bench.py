@@ -114,6 +114,8 @@ class Result:
     resyncs: int = 0
     device: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+    energy: dict = field(default_factory=dict)
+    energy_first: dict = field(default_factory=dict)
     error: str = ""
 
     @property
@@ -225,6 +227,14 @@ class FrameParser:
                 r.wave_v_samples += count
         elif typ == REC_STATUS:
             r.device = parse_status(payload)
+        elif typ == REC_ENERGY and len(payload) >= 52:
+            (emwh, ej, cmah, cc, els) = struct.unpack_from("<ddddd", payload, 0)
+            li, lv, lp = struct.unpack_from("<fff", payload, 40)
+            if not r.energy_first:
+                r.energy_first = dict(charge_c=cc, energy_j=ej, elapsed_s=els)
+            r.energy = dict(energy_mwh=emwh, energy_j=ej, charge_mah=cmah,
+                            charge_c=cc, elapsed_s=els,
+                            last_i=li, last_v=lv, last_p=lp)
         elif typ == REC_STATS and len(payload) >= 72:
             # usb_stats_payload_t = 3 x usb_stat_block_t{f32 min,max,mean,rms,std; u32 count}
             names = ("i", "v", "p")
@@ -318,6 +328,34 @@ def print_report(r: Result, title: str = "") -> None:
               f"fine_err_pct={d.get('fine_err_pct')}")
         print(f"    wave_i_frames={d.get('wave_i_frames')} drops={d.get('wave_i_drops')}  "
               f"wave_v_frames={d.get('wave_v_frames')} drops={d.get('wave_v_drops')}")
+    if r.energy and r.energy_first:
+        # Cross-check the on-device integrators against independently-known
+        # quantities. Two things must hold or the integration is wrong:
+        #   elapsed_s must advance at 1 s per wall second, and
+        #   d(charge) must equal mean current x d(elapsed).
+        d_el = r.energy["elapsed_s"] - r.energy_first["elapsed_s"]
+        d_q  = r.energy["charge_c"] - r.energy_first["charge_c"]
+        d_e  = r.energy["energy_j"] - r.energy_first["energy_j"]
+        print("device integrators:")
+        print(f"    elapsed={r.energy['elapsed_s']:.3f} s  charge={r.energy['charge_mah']:.6f} mAh  "
+              f"energy={r.energy['energy_mwh']:.6f} mWh")
+        clock_err = abs(d_el - r.seconds) / r.seconds if r.seconds else 0
+        ok_clock = "OK" if clock_err < 0.05 else "*** CLOCK DRIFT ***"
+        print(f"    d(elapsed)={d_el:.3f} s vs wall {r.seconds:.3f} s "
+              f"({clock_err*100:.1f}%) -> {ok_clock}")
+        if r.stats and d_el > 0:
+            i_mean = r.stats["i"]["mean"]
+            expect_q = i_mean * d_el
+            err = abs(d_q - expect_q) / max(abs(expect_q), 1e-12)
+            ok_q = "OK" if err < 0.05 else "*** CHARGE MISMATCH ***"
+            print(f"    d(charge)={d_q:.6e} C vs mean_i*d(elapsed)={expect_q:.6e} C "
+                  f"({err*100:.1f}%) -> {ok_q}")
+            p_mean = r.stats["p"]["mean"]
+            expect_e = p_mean * d_el
+            err_e = abs(d_e - expect_e) / max(abs(expect_e), 1e-12)
+            ok_e = "OK" if err_e < 0.05 else "*** ENERGY MISMATCH ***"
+            print(f"    d(energy)={d_e:.6e} J vs mean_p*d(elapsed)={expect_e:.6e} J "
+                  f"({err_e*100:.1f}%) -> {ok_e}")
     if r.stats:
         # Validate the device's own statistics rather than just printing them:
         # rms^2 == var + mean^2 is an algebraic identity, so a violation means

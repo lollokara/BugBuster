@@ -53,21 +53,32 @@ extern "C" {
 //     shifted-data, all double ..........  67,900 Sa/s   (-8%)
 //     shifted-data, float subtract ...... 76,308 Sa/s   (+3.8%)
 //
-// The last form is what is implemented: division-free in the update, and the
-// subtract/square done in hardware single precision so only the two
-// accumulations remain in double -- one fewer double op than the original.
-// It is therefore both numerically better AND faster than the code it
-// replaced. See stat_update() for why the float subtract is safe here.
+// Shifted-data is what is implemented: division-free in the update, with the
+// subtract/square in hardware single precision. See stat_update() for why the
+// float subtract is safe here.
 //
 // RMS is derived at finish time from the identity mean(x^2) = var + mean^2,
 // which is algebraically exact, so no separate sum-of-squares accumulator is
-// needed -- this is strictly cheaper than the code it replaced.
+// needed -- strictly cheaper than the code it replaced.
+//
+// BLOCK ACCUMULATION: the per-sample path is now entirely single precision.
+// Deviations are summed into `acc_*` in hardware float and folded into the
+// double totals only once every PDSP_FOLD_N samples, so the amortised cost of
+// a software double add drops by that factor. Precision is preserved because
+// the shift already makes every term small and same-magnitude, so a block of
+// PDSP_FOLD_N of them sums cleanly in float, and the block totals themselves
+// are accumulated in double -- this is ordinary two-level (blocked) summation,
+// which is MORE accurate than naive double summation over millions of samples,
+// not less.
+#define PDSP_FOLD_N  512u
+
 typedef struct {
     float    k;           // shift origin: value of the first sample in the window
-                          // (float: the subtract in stat_update is done in
-                          //  hardware single precision -- see stat_update)
-    double   sum_d;       // sum of (x - k)
-    double   sum_d2;      // sum of (x - k)^2
+    float    acc_d;       // block sum of (x - k), folded every PDSP_FOLD_N
+    float    acc_d2;      // block sum of (x - k)^2, folded every PDSP_FOLD_N
+    uint32_t block_n;     // samples in the current unfolded block
+    double   sum_d;       // folded total of (x - k)
+    double   sum_d2;      // folded total of (x - k)^2
     float    min;
     float    max;
     uint32_t count;
@@ -89,10 +100,22 @@ typedef struct {
     // Latest voltage (held between the slower voltage updates).
     float    voltage;
 
-    // Accumulators (double for drift-free long runs).
-    double   energy_j;       // joules
-    double   charge_c;       // coulombs
-    double   elapsed_s;      // integrated time over the accumulation window
+    // Accumulators. Same blocked-summation trick as running_stat_t: the
+    // per-sample trapezoid areas are summed in float in PERIOD units (dt
+    // factored out, since it is constant), and folded into the double totals
+    // every PDSP_FOLD_N periods. That removes the last double multiply-adds
+    // from the per-sample path.
+    //
+    // Elapsed time is folded the same way rather than summed per sample. It
+    // cannot be a plain period-count x dt, because dt changes when the rate or
+    // dspdecim changes mid-session and the periods already banked were taken
+    // at the OLD dt.
+    double   energy_j;       // joules   (folded total)
+    double   charge_c;       // coulombs (folded total)
+    float    acc_charge;     // block sum of 0.5*(i_prev+i)*n, in amp-periods
+    float    acc_energy;     // block sum of 0.5*(p_prev+p)*n, in watt-periods
+    double   elapsed_s;      // integrated time (folded total)
+    uint32_t acc_periods;    // periods in the current unfolded block
 
     // Running statistics (current, voltage, power).
     running_stat_t st_i;
