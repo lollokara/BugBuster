@@ -185,3 +185,146 @@ def test_redundant_stop_is_harmless(daq_safe):
     daq_safe.stop()
     cap = capture(daq_safe, 1.0)
     assert cap.wave_i_samples > 0, "device did not recover from a double STOP"
+
+
+# ---------------------------------------------------------------------------
+# Rate, decimation and record integrity
+# ---------------------------------------------------------------------------
+
+ADAQ_BASE_SPS = 8_192_000
+
+# End-to-end floor at the stress point (odr 64 + dspdecim 1). Measured 127,258
+# Sa/s after the DSP-tail float conversion in 8504122 (up from 73,514). The
+# threshold sits well below the measured ceiling so run-to-run variance cannot
+# flake the gate, while a real regression -- which was a 40% drop -- still fails.
+STRESS_MIN_SPS = 120_000
+
+
+def test_wave_i_header_count_matches_payload_length(daq_safe):
+    """A decoded WaveI proves count, the f32 array and the meta array agree.
+
+    _decode_wave returns None on any mismatch, and Capture only appends
+    non-None records, so a truncated frame would show as a decoded-frame count
+    below the raw frame count.
+    """
+    cap = capture(daq_safe, 1.0)
+    assert cap.wave_i, "no WAVE_I records decoded"
+    assert len(cap.wave_i) == cap.frames["WAVE_I"], (
+        "%d of %d WAVE_I frames failed to decode — header count disagrees with "
+        "payload length" % (cap.frames["WAVE_I"] - len(cap.wave_i),
+                            cap.frames["WAVE_I"]))
+    for w in cap.wave_i:
+        assert len(w.samples) == w.count
+        assert len(w.meta) == w.count
+
+
+def test_wave_v_has_no_meta_array_and_native_decimation(daq_safe):
+    cap = capture(daq_safe, 1.0)
+    assert cap.wave_v, "no WAVE_V records decoded"
+    assert len(cap.wave_v) == cap.frames["WAVE_V"]
+    for w in cap.wave_v:
+        assert w.decimation == 1, (
+            "WAVE_V must stream at native ODR, got decimation=%d" % w.decimation)
+        assert len(w.samples) == w.count
+
+
+def test_wave_i_sample_index_is_contiguous(daq_safe):
+    """Consecutive WAVE_I blocks must tile the sample index with no hole."""
+    cap = capture(daq_safe, 2.0)
+    assert len(cap.wave_i) >= 2, "need at least 2 WAVE_I blocks to check tiling"
+    assert cap.contiguous_wave_i, (
+        "sample-index hole between WAVE_I blocks — samples were dropped "
+        "between capture and transmit")
+
+
+def test_meta_bytes_decode_to_plausible_values(daq_safe):
+    from tests.lib.daq_records import (meta_range, meta_saturated, meta_settling,
+                                       meta_source)
+
+    cap = capture(daq_safe, 1.0)
+    meta = cap.all_meta()
+    assert meta, "no meta bytes captured"
+
+    ranges = {meta_range(m) for m in meta}
+    assert ranges <= {P.RANGE_HI, P.RANGE_MID, P.RANGE_LO}, (
+        "meta reported range ids outside 0..2: %r" % sorted(ranges))
+    assert {meta_source(m) for m in meta} <= {0, 1, 2, 3}
+
+    # Saturation and settling are legal but should be rare in steady state.
+    sat = sum(1 for m in meta if meta_saturated(m))
+    assert sat < 0.5 * len(meta), (
+        "%d/%d samples flagged saturated — the front end is clipping"
+        % (sat, len(meta)))
+    settling = sum(1 for m in meta if meta_settling(m))
+    assert settling < 0.5 * len(meta), (
+        "%d/%d samples flagged settling — the range latch is thrashing"
+        % (settling, len(meta)))
+
+
+def test_wave_headers_report_a_sane_sample_rate(daq_safe):
+    cap = capture(daq_safe, 1.0)
+    for w in cap.wave_i:
+        assert 0 < w.sample_rate <= ADAQ_BASE_SPS, (
+            "implausible sample_rate %d in a WAVE_I header" % w.sample_rate)
+
+
+def test_measured_rate_matches_the_header_rate(daq_safe):
+    """The rate the device claims and the rate it actually delivers must agree.
+
+    This is the assertion that catches a pipeline losing samples silently:
+    headers keep advertising 64 kSPS while the host receives far fewer.
+    """
+    cap = capture(daq_safe, 3.0)
+    assert cap.wave_i, "no WAVE_I records"
+    claimed = cap.wave_i[-1].sample_rate / max(1, cap.wave_i[-1].decimation)
+    measured = cap.wave_i_sps
+    assert measured == pytest.approx(claimed, rel=0.15), (
+        "headers advertise %.0f Sa/s but only %.0f arrived (%.1f%% of claimed)"
+        % (claimed, measured, 100.0 * measured / claimed if claimed else 0.0))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("ratio", [64, 128, 256])
+def test_odr_ratio_produces_the_expected_capture_rate(daq_safe, p4_console, ratio):
+    """`odr N` is an oversampling RATIO: per-channel SPS = 8192000 / N.
+
+    Reprogramming goes through the P4 console because it rewrites both ADAQs
+    over SPI, which requires the capture task to release the bus first.
+    """
+    p4_console.set_odr(ratio)
+    time.sleep(0.5)
+
+    cap = capture(daq_safe, 2.0, settle=0.5)
+    expected_per_ch = ADAQ_BASE_SPS / ratio
+    claimed = cap.wave_i[-1].sample_rate if cap.wave_i else 0
+    assert claimed == pytest.approx(expected_per_ch, rel=0.1), (
+        "odr %d should give %.0f SPS/ch, headers report %d"
+        % (ratio, expected_per_ch, claimed))
+
+
+@pytest.mark.slow
+def test_stress_point_throughput_meets_the_regression_floor(daq_safe, p4_console):
+    """End-to-end throughput gate at the stress point (odr 64, dspdecim 1).
+
+    This is the number the DSP-tail float conversion moved from 73,514 to
+    127,258 Sa/s (8504122). Measured end to end against a real consumer, which
+    matters: with no host attached emit_frame_inplace() early-returns and the
+    entire back half of the pipeline never runs, so a device-side-only
+    measurement here would be measuring a stub.
+    """
+    p4_console.set_odr(64)
+    p4_console.cmd("dspdecim 1", deadline=10.0)
+    time.sleep(0.5)
+
+    try:
+        cap = capture(daq_safe, 5.0, settle=1.0)
+        assert cap.wave_i_sps >= STRESS_MIN_SPS, (
+            "throughput regression: %.0f Sa/s at odr 64 + dspdecim 1, floor is "
+            "%d (last known good: 127,258 after commit 8504122)"
+            % (cap.wave_i_sps, STRESS_MIN_SPS))
+        st = cap.last_status
+        assert st.get("drop_fine", 0) == 0, (
+            "drop_fine=%d — ADC pairing is losing samples under load"
+            % st.get("drop_fine"))
+    finally:
+        p4_console.cmd("dspdecim 8", deadline=10.0)
