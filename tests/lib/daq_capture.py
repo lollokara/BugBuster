@@ -94,13 +94,16 @@ class Capture:
         # failed write), so this is real, attributable loss.
         if self.seq_first < 0:
             self.seq_first = seq
-        elif self._expect_seq is not None:
+        elif self._expect_seq is not None and seq != self._expect_seq:
+            # _expect_seq is the seq we SHOULD have received next, so delta is
+            # the count of frames that never arrived -- not the raw seq jump.
+            # For 10 -> 13, expect=11 and delta=2 (frames 11 and 12 are lost).
             delta = (seq - self._expect_seq) & 0xFFFFFFFF
-            if 1 < delta < 1 << 31:
+            if 0 < delta < 1 << 31:
                 self.seq_gaps += 1
                 self.seq_lost += delta
         self.seq_last = seq
-        self._expect_seq = seq
+        self._expect_seq = (seq + 1) & 0xFFFFFFFF
 
         if rec is None:
             return

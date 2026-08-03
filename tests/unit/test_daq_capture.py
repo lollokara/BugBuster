@@ -71,7 +71,8 @@ def test_seq_gap_is_counted_and_attributed():
     p = C.FrameParser(cap.on_record)
     p.feed(wave_i(10, 0, 1) + wave_i(13, 1, 1))
     assert cap.seq_gaps == 1
-    assert cap.seq_lost == 3
+    # Frames 11 and 12 never arrived: two frames lost, not the raw seq jump of 3.
+    assert cap.seq_lost == 2
     assert cap.seq_first == 10
     assert cap.seq_last == 13
 
