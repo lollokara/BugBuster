@@ -55,20 +55,18 @@ The port defaults to the first ESP32 USB-Serial-JTAG that answers with the
 from __future__ import annotations
 
 import argparse
-import glob
 import json
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass, asdict, field
 
-try:
-    import serial  # type: ignore
-except ImportError:  # pragma: no cover
-    sys.exit("pyserial is required: pip3 install pyserial")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from tests.lib.p4_console import P4Console, P4ConsoleUnavailable, find_p4_port  # noqa: E402
 
 
-PROMPT = b"daq> "
 # Sample rate per channel for a given oversampling ratio.
 ADAQ_BASE_SPS = 8_192_000
 
@@ -80,61 +78,13 @@ DEFAULT_ODRS = [32, 48, 64, 96, 128, 160, 192, 256, 512]
 # ---------------------------------------------------------------------------
 # CLI transport
 # ---------------------------------------------------------------------------
-class P4Console:
-    """Line-oriented client for the P4 CLI.
-
-    Reads until the `daq> ` prompt rather than sleeping a fixed interval: some
-    commands (`fast on`, `odr`) reprogram both ADAQs over SPI and take far
-    longer than others, and a fixed sleep either truncates their output or
-    wastes seconds on every fast command.
-    """
-
-    def __init__(self, port: str, baud: int = 115200, timeout: float = 1.0):
-        self.ser = serial.Serial(port, baud, timeout=timeout)
-        self.port = port
-        time.sleep(0.3)
-        self.ser.reset_input_buffer()
-
-    def close(self) -> None:
-        self.ser.close()
-
-    def cmd(self, line: str, deadline: float = 8.0) -> str:
-        self.ser.reset_input_buffer()
-        self.ser.write((line + "\r\n").encode())
-        buf = bytearray()
-        end = time.time() + deadline
-        while time.time() < end:
-            chunk = self.ser.read(4096)
-            if chunk:
-                buf += chunk
-                if buf.endswith(PROMPT):
-                    break
-            elif buf:
-                # Quiet for a full read timeout with data already in hand:
-                # the prompt may have been consumed by a prior read.
-                break
-        return buf.decode("utf8", "replace")
-
-    def alive(self) -> bool:
-        return "daq>" in self.cmd("", deadline=2.0)
-
-
 def autodetect_port() -> str:
-    candidates = sorted(glob.glob("/dev/cu.usbmodem*"))
-    for port in candidates:
-        try:
-            con = P4Console(port, timeout=0.6)
-        except Exception:
-            continue
-        try:
-            if con.alive():
-                return port
-        finally:
-            con.close()
+    port = find_p4_port()
+    if port:
+        return port
     raise SystemExit(
-        "No P4 DAQ console found. Tried: %s\n"
-        "Pass --port explicitly, or check the DAQ HAT is powered and its "
-        "USB-Serial-JTAG port is connected." % (", ".join(candidates) or "none")
+        "No P4 DAQ console found. Pass --port explicitly, or check the DAQ "
+        "HAT is powered and its USB-Serial-JTAG port is connected."
     )
 
 
@@ -386,7 +336,10 @@ def main() -> int:
 
     port = args.port or autodetect_port()
     sys.stderr.write(f"P4 console: {port}\n")
-    con = P4Console(port)
+    try:
+        con = P4Console(port)
+    except P4ConsoleUnavailable as exc:
+        return int(sys.stderr.write(f"no P4 console port: {exc}\n") or 2)
     try:
         fw = con.cmd("status", deadline=6.0)
         m = re.search(r"fw\s*:\s*(\S+\s+\S+)", fw)
@@ -401,6 +354,8 @@ def main() -> int:
         con.cmd(f"odr {args.restore_odr}", deadline=10.0)
         con.cmd(f"voltodr {args.restore_odr}", deadline=10.0)
         con.cmd("fast on", deadline=10.0)
+    except TimeoutError as exc:
+        return int(sys.stderr.write(f"P4 console not responding: {exc}\n") or 2)
     finally:
         con.close()
 
