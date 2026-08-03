@@ -44,60 +44,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
+import os
 import sys
 import time
 from dataclasses import dataclass, asdict, field
 
-try:
-    import usb.core
-    import usb.util
-except ImportError:  # pragma: no cover
-    sys.exit("pyusb is required: pip3 install pyusb  (and: brew install libusb)")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-
-VID = 0x303A
-PID = 0x4001
-EP_OUT = 0x01
-EP_IN = 0x81
-
-MAGIC0, MAGIC1 = 0xBB, 0x50
-PROTO_VERSION = 2
-HDR_LEN = 12
-CRC_LEN = 2
-
-REC_WAVE_I = 0x01
-REC_STATS = 0x02
-REC_ENERGY = 0x03
-REC_FFT = 0x04
-REC_MARKER = 0x05
-REC_STATUS = 0x06
-REC_WAVE_V = 0x07
-
-CMD_START = 0x80
-CMD_STOP = 0x81
-
-TYPE_NAMES = {
-    REC_WAVE_I: "WAVE_I", REC_STATS: "STATS", REC_ENERGY: "ENERGY",
-    REC_FFT: "FFT", REC_MARKER: "MARKER", REC_STATUS: "STATUS",
-    REC_WAVE_V: "WAVE_V",
-}
-KNOWN_TYPES = set(TYPE_NAMES)
-
-
-def crc16_ccitt(data: bytes, init: int = 0xFFFF) -> int:
-    crc = init
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
-
-
-def build_control_frame(cmd: int, payload: bytes = b"") -> bytes:
-    body = bytes([PROTO_VERSION, cmd, 0, 0]) + struct.pack("<I", 0) + \
-        struct.pack("<H", len(payload)) + payload
-    return bytes([MAGIC0, MAGIC1]) + body + struct.pack("<H", crc16_ccitt(body))
+from tests.lib import daq_proto as P            # noqa: E402
+from tests.lib.daq_link import DaqLink, DaqLinkUnavailable   # noqa: E402
 
 
 @dataclass
@@ -136,171 +91,53 @@ class Result:
         return 100.0 * self.seq_lost / span if span > 0 else 0.0
 
 
-def parse_status(p: bytes) -> dict:
-    """Decode usb_status_payload_t. Fields are read defensively by END offset
-    so a frame from older firmware (which is shorter) degrades to absent keys
-    rather than raising."""
-    d = {}
-    if len(p) >= 20:
-        d["sample_rate"], d["overflow_count"] = struct.unpack_from("<II", p, 0)
-        d["range"], d["streaming"], d["range_locked"], d["source_enabled"] = \
-            struct.unpack_from("<BBBB", p, 8)
-    if len(p) >= 36:
-        d["adaq_ok_bits"], d["fine_err_pct"] = struct.unpack_from("<BB", p, 28)
-        d["drop_fine"], d["drop_coarse"] = struct.unpack_from("<HH", p, 30)
-    if len(p) >= 56:
-        (d["frames_tx"], d["bytes_per_sec"], d["fifo_drop_frames"],
-         d["ring_high_water"], d["wave_i_index_lo"]) = struct.unpack_from("<IIIII", p, 36)
-    if len(p) >= 88:
-        (d["wave_i_frames"], d["wave_v_frames"],
-         d["wave_i_drops"], d["wave_v_drops"]) = struct.unpack_from("<IIII", p, 72)
-    if len(p) >= 96:
-        d["filter"], d["adc_dec"] = struct.unpack_from("<BB", p, 88)
-        d["stream_decim"], = struct.unpack_from("<H", p, 90)
-        d["odr_mhz"], = struct.unpack_from("<I", p, 92)
-    return d
-
-
-class FrameParser:
-    """Incremental parser mirroring the iOS client's `drainFrames` logic:
-    accept a resync candidate only when version, type AND length are all
-    plausible, because the 2-byte magic occurs freely inside float payloads."""
-
-    def __init__(self, res: Result):
-        self.buf = bytearray()
-        self.res = res
-        self.expect_seq = None
-
-    def header_ok(self, i: int) -> bool:
-        b = self.buf
-        return (b[i] == MAGIC0 and b[i + 1] == MAGIC1 and b[i + 2] == PROTO_VERSION
-                and b[i + 3] in KNOWN_TYPES
-                and struct.unpack_from("<H", b, i + 10)[0] <= 16384)
-
-    def feed(self, data: bytes) -> None:
-        self.buf += data
-        i = 0
-        n = len(self.buf)
-        while n - i >= HDR_LEN:
-            if not self.header_ok(i):
-                nxt = self.buf.find(bytes([MAGIC0]), i + 1)
-                if nxt < 0:
-                    i = n
-                    break
-                self.res.resyncs += 1
-                i = nxt
-                continue
-            plen = struct.unpack_from("<H", self.buf, i + 10)[0]
-            total = HDR_LEN + plen + CRC_LEN
-            if n - i < total:
-                break
-            typ = self.buf[i + 3]
-            seq = struct.unpack_from("<I", self.buf, i + 6)[0]
-            payload = bytes(self.buf[i + HDR_LEN:i + HDR_LEN + plen])
-            self.on_frame(typ, seq, payload)
-            i += total
-        del self.buf[:i]
-
-    def on_frame(self, typ: int, seq: int, payload: bytes) -> None:
-        r = self.res
-        name = TYPE_NAMES.get(typ, f"0x{typ:02X}")
-        r.frames[name] = r.frames.get(name, 0) + 1
-
-        # Sequence is per-stream and monotonic across ALL emitted frames; a gap
-        # means the device dropped a frame it had decided to send (back-pressure
-        # or a failed write), so this is real, attributable loss.
-        if r.seq_first < 0:
-            r.seq_first = seq
-        elif self.expect_seq is not None and seq != self.expect_seq:
-            delta = (seq - self.expect_seq) & 0xFFFFFFFF
-            if 0 < delta < 1 << 31:
-                r.seq_gaps += 1
-                r.seq_lost += delta
-        r.seq_last = seq
-        self.expect_seq = (seq + 1) & 0xFFFFFFFF
-
-        if typ in (REC_WAVE_I, REC_WAVE_V) and len(payload) >= 24:
-            count = struct.unpack_from("<H", payload, 20)[0]
-            if typ == REC_WAVE_I:
-                r.wave_i_samples += count
-            else:
-                r.wave_v_samples += count
-        elif typ == REC_STATUS:
-            r.device = parse_status(payload)
-        elif typ == REC_ENERGY and len(payload) >= 52:
-            (emwh, ej, cmah, cc, els) = struct.unpack_from("<ddddd", payload, 0)
-            li, lv, lp = struct.unpack_from("<fff", payload, 40)
-            if not r.energy_first:
-                r.energy_first = dict(charge_c=cc, energy_j=ej, elapsed_s=els)
-            r.energy = dict(energy_mwh=emwh, energy_j=ej, charge_mah=cmah,
-                            charge_c=cc, elapsed_s=els,
-                            last_i=li, last_v=lv, last_p=lp)
-        elif typ == REC_STATS and len(payload) >= 72:
-            # usb_stats_payload_t = 3 x usb_stat_block_t{f32 min,max,mean,rms,std; u32 count}
-            names = ("i", "v", "p")
-            blocks = {}
-            for bi, nm in enumerate(names):
-                mn, mx, mean, rms, std, cnt = struct.unpack_from("<fffffI", payload, bi * 24)
-                blocks[nm] = dict(min=mn, max=mx, mean=mean, rms=rms, std=std, count=cnt)
-            r.stats = blocks
-
-
 def run(seconds: float, chunk: int, timeout_ms: int) -> Result:
+    """Open the P4, stream for `seconds`, and fold the Capture into a Result.
+
+    Result is kept as the tool's own reporting struct (rather than returning a
+    Capture directly) so the --json schema, and therefore --compare against
+    previously recorded runs, stays byte-compatible.
+    """
     res = Result()
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
-    if dev is None:
-        res.error = (f"no device {VID:04x}:{PID:04x}. The P4's USB-HS port must "
-                     "be cabled to this host (the JTAG console port is a "
-                     "different connector and does NOT carry the stream).")
+    try:
+        link = DaqLink.usb(timeout_ms)
+    except DaqLinkUnavailable as exc:
+        res.error = str(exc)
         return res
 
-    try:
-        if dev.is_kernel_driver_active(0):
-            dev.detach_kernel_driver(0)
-    except (NotImplementedError, usb.core.USBError):
-        pass  # macOS: vendor-class interfaces are not claimed by a kernel driver
+    with link:
+        link.drain()
+        link.start()
+        cap = link.collect(seconds, chunk=chunk, timeout_ms=timeout_ms)
+        link.stop()
 
-    try:
-        dev.set_configuration()
-    except usb.core.USBError as e:
-        res.error = f"set_configuration failed: {e}"
-        return res
-    usb.util.claim_interface(dev, 0)
+    res.seconds = cap.seconds
+    res.bytes_rx = cap.bytes_rx
+    res.frames = dict(cap.frames)
+    res.wave_i_samples = cap.wave_i_samples
+    res.wave_v_samples = cap.wave_v_samples
+    res.seq_first = cap.seq_first
+    res.seq_last = cap.seq_last
+    res.seq_gaps = cap.seq_gaps
+    res.seq_lost = cap.seq_lost
+    res.resyncs = cap.resyncs
+    res.device = dict(cap.last_status)
 
-    parser = FrameParser(res)
-    try:
-        # Drain anything the device queued before we attached, so the first
-        # measured window starts clean and seq accounting is not polluted by a
-        # partial frame from a previous session.
-        while True:
-            try:
-                if not dev.read(EP_IN, chunk, timeout=50):
-                    break
-            except usb.core.USBError:
-                break
-
-        dev.write(EP_OUT, build_control_frame(CMD_START), timeout=1000)
-        t0 = time.perf_counter()
-        deadline = t0 + seconds
-        while time.perf_counter() < deadline:
-            try:
-                data = dev.read(EP_IN, chunk, timeout=timeout_ms)
-            except usb.core.USBError as e:
-                if "timed out" in str(e).lower():
-                    continue
-                res.error = f"bulk read failed: {e}"
-                break
-            if data:
-                res.bytes_rx += len(data)
-                parser.feed(bytes(data))
-        res.seconds = time.perf_counter() - t0
-    finally:
-        try:
-            dev.write(EP_OUT, build_control_frame(CMD_STOP), timeout=1000)
-        except usb.core.USBError:
-            pass
-        usb.util.release_interface(dev, 0)
-        usb.util.dispose_resources(dev)
+    if cap.stats:
+        s = cap.stats[-1]
+        res.stats = {
+            nm: dict(min=b.min, max=b.max, mean=b.mean, rms=b.rms, std=b.std,
+                     count=b.count)
+            for nm, b in (("i", s.i), ("v", s.v), ("p", s.p))
+        }
+    if cap.energy:
+        first, last = cap.energy[0], cap.energy[-1]
+        res.energy_first = dict(charge_c=first.charge_c, energy_j=first.energy_j,
+                                elapsed_s=first.elapsed_s)
+        res.energy = dict(energy_mwh=last.energy_mwh, energy_j=last.energy_j,
+                          charge_mah=last.charge_mah, charge_c=last.charge_c,
+                          elapsed_s=last.elapsed_s, last_i=last.last_i,
+                          last_v=last.last_v, last_p=last.last_p)
     return res
 
 
