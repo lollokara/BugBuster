@@ -54,6 +54,44 @@ def pytest_addoption(parser):
         ),
     )
     parser.addoption(
+        "--daq",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable DAQ HAT hardware tests (requires a DAQ HAT with its "
+            "USB-HS port connected). Without this flag every test marked "
+            "requires_daq is skipped."
+        ),
+    )
+    parser.addoption(
+        "--daq-wifi",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable the DAQ WiFi streaming tier. WARNING: this joins the "
+            "DAQ HAT's softAP, which takes this machine off its normal "
+            "network for the duration of those tests."
+        ),
+    )
+    parser.addoption(
+        "--daq-p4-serial",
+        metavar="PORT",
+        default=None,
+        help="P4 console serial port. Auto-detected when omitted.",
+    )
+    parser.addoption(
+        "--daq-load-ohms",
+        metavar="R",
+        type=float,
+        default=None,
+        help=(
+            "Nominal DUT load resistance. REPORTING ONLY — never asserted "
+            "against, because the suite verifies relational properties "
+            "(linearity, monotonicity, self-consistency) rather than "
+            "absolute accuracy."
+        ),
+    )
+    parser.addoption(
         "--sim",
         action="store_true",
         default=False,
@@ -127,6 +165,24 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "destructive" in item.keywords:
                 item.add_marker(skip_destructive)
+
+    _daq_skips(config, items)
+
+
+def _daq_skips(config, items):
+    """Skip DAQ-tier tests unless their flags are given."""
+    if not config.getoption("--daq", default=False):
+        skip = pytest.mark.skip(reason="needs --daq (DAQ HAT not requested)")
+        for item in items:
+            if "requires_daq" in item.keywords:
+                item.add_marker(skip)
+
+    if not config.getoption("--daq-wifi", default=False):
+        skip = pytest.mark.skip(
+            reason="needs --daq-wifi (this tier changes the host's WiFi network)")
+        for item in items:
+            if "daq_wifi" in item.keywords:
+                item.add_marker(skip)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -893,3 +949,62 @@ def _reset_device_session_bookends(request):
     _perform_device_reset(request.config)
     yield
     _perform_device_reset(request.config)
+
+
+# ---------------------------------------------------------------------------
+# DAQ HAT fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def daq_link(request):
+    """A live DaqLink to the P4 over USB-HS.
+
+    Session-scoped because claiming the vendor interface per-test is slow and
+    the device holds stream state across tests anyway. The finalizer is the
+    safety contract: it runs even on failure, error and KeyboardInterrupt, so a
+    dead run cannot leave V_DUT enabled into whatever is wired to the DUT
+    terminals.
+    """
+    from tests.lib.daq_link import DaqLink, DaqLinkUnavailable
+
+    try:
+        link = DaqLink.usb()
+    except DaqLinkUnavailable as exc:
+        pytest.skip("DAQ HAT unavailable: %s" % exc)
+
+    yield link
+
+    link.safe_state()
+    link.close()
+
+
+@pytest.fixture(scope="session")
+def p4_console(request):
+    """The P4's serial CLI, for capabilities not reachable over USB bulk."""
+    from tests.lib.p4_console import P4Console, P4ConsoleUnavailable, find_p4_port
+
+    port = request.config.getoption("--daq-p4-serial") or find_p4_port()
+    try:
+        con = P4Console(port)
+    except P4ConsoleUnavailable as exc:
+        pytest.skip("P4 console unavailable: %s" % exc)
+
+    yield con
+    con.close()
+
+
+@pytest.fixture
+def daq_safe(daq_link):
+    """Return the link to a safe state after every DAQ test.
+
+    Per-test, in addition to the session finalizer, so one test leaving the SMU
+    enabled or a range locked cannot silently change the meaning of the next.
+    """
+    yield daq_link
+    daq_link.safe_state()
+
+
+@pytest.fixture(scope="session")
+def daq_load_ohms(request):
+    """Reporting-only hint. Never assert against this."""
+    return request.config.getoption("--daq-load-ohms")
