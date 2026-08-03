@@ -54,11 +54,24 @@ class UsbIO:
         self.dev.write(P.EP_OUT, data, self.timeout_ms)
 
     def read(self, nbytes: int, timeout_ms: int) -> bytes:
+        """Read up to nbytes. A timeout returns b"" rather than raising.
+
+        A read timeout is NORMAL here -- it just means the device had nothing
+        queued in that window -- so collect() must be able to spin through them.
+        pyusb raises USBTimeoutError (a USBError subclass) for this since 1.0.2.
+        Do NOT substring-match the message: libusb's text is "Operation timed
+        out", which does not contain "timeout".
+        """
         import usb.core
         try:
             return bytes(self.dev.read(P.EP_IN, nbytes, timeout_ms))
+        except getattr(usb.core, "USBTimeoutError", ()):
+            return b""
         except usb.core.USBError as exc:
-            if "timeout" in str(exc).lower():
+            # Fallback for pyusb < 1.0.2, which has no USBTimeoutError. Cover
+            # both spellings libusb backends use.
+            text = str(exc).lower()
+            if "timed out" in text or "timeout" in text:
                 return b""
             raise
 
