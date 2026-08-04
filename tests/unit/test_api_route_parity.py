@@ -19,8 +19,6 @@ WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
 # registration AND every wildcard/dispatch-prefix handler in webserver.cpp,
 # not just a literal string search:
 #
-#   /api/daq                    -- established fact for this suite; no handler
-#                                   at all for the bare path.
 #   /api/hat/rail/enable         -- only the /api/hat/v2/rail/enable variant is
 #   /api/hat/rail/voltage           registered. The catch-all POST /api/hat/*
 #                                    dispatcher (handle_hat_post_dispatch) only
@@ -47,7 +45,6 @@ WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
 # Remove an entry from this list when its handler is registered -- the test
 # will then fail if it regresses.
 KNOWN_HTTP_MISSING = {
-    "/api/daq",
     "/api/hat/rail/enable",
     "/api/hat/rail/voltage",
     "/api/hat/v2/swd/detect",

@@ -128,18 +128,6 @@ def test_unauthenticated_writes_are_rejected(daq_http_base):
         "rejected: %r" % st)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FIRMWARE BUG (found by this suite, 2026-08-04): GET /api/daq returns "
-        "404 over HTTP although api_core_handle() dispatches it, because no URI "
-        "handler is registered for exactly \"/api/daq\" in webserver.cpp. It "
-        "works over BLE, which goes straight through api_core_handle(). Same "
-        "bug class as 539c0d9 (/api/update/apply parsed in two dispatchers, "
-        "only one migrated). Strict xfail: delete when the handler is "
-        "registered. tests/unit/test_api_route_parity.py guards the family."
-    ),
-)
 def test_api_daq_top_level_is_reachable(daq_http, daq_http_base):
     r = daq_http.get(daq_http_base + "/api/daq", timeout=10)
     assert r.status_code == 200, "HTTP %d: %s" % (r.status_code, r.text[:200])
