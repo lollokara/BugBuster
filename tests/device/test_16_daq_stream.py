@@ -386,7 +386,19 @@ def test_charge_integral_equals_mean_current_times_elapsed(daq_safe):
     quantity, so agreement validates the energy/charge trapezoids AND the
     dt-factoring introduced when dt moved out of the per-sample work and got
     applied once per 512-sample block.
+
+    Both accumulators are reset first so they cover the SAME interval. STATS
+    reports a cumulative mean over every sample since the last reset, which can
+    be millions of samples old; differencing ENERGY over a 6 s window and
+    comparing against that all-time mean only agrees while the current happens
+    to be constant. Without the reset this test passes on a steady bench and
+    fails the moment anything moves V_DUT -- measured 17% disagreement that way,
+    which is a property of the test, not of the firmware.
     """
+    daq_safe.reset_stats()
+    daq_safe.reset_energy()
+    time.sleep(0.3)
+
     cap = capture(daq_safe, 6.0, settle=1.0)
     assert len(cap.energy) >= 2, (
         "need >= 2 ENERGY records to difference, got %d" % len(cap.energy))
@@ -590,3 +602,352 @@ def test_spectrum_keeps_updating_over_thousands_of_ffts(daq_safe):
             % (changed, len(tail) - 1, len(cap.fft)))
     finally:
         daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
+
+
+# ---------------------------------------------------------------------------
+# Range control and SMU source
+# ---------------------------------------------------------------------------
+
+def mean_current(cap) -> float:
+    """Mean fused current over a capture, from raw samples."""
+    vals = cap.all_current()
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+@pytest.mark.parametrize("range_id", [P.RANGE_HI, P.RANGE_MID, P.RANGE_LO])
+def test_range_lock_is_reflected_in_meta_and_status(daq_safe, range_id):
+    daq_safe.set_range_lock(range_id)
+    time.sleep(0.3)
+    cap = capture(daq_safe, 1.5, settle=0.5)
+
+    from tests.lib.daq_records import meta_range
+    meta = cap.all_meta()
+    assert meta, "no meta bytes captured while locked to %s" % P.RANGE_NAMES[range_id]
+
+    observed = {meta_range(m) for m in meta}
+    assert observed == {range_id}, (
+        "locked to %s but meta reported ranges %r"
+        % (P.RANGE_NAMES[range_id], sorted(P.RANGE_NAMES.get(r, r) for r in observed)))
+
+    st = cap.last_status
+    assert st.get("range_locked") == 1, "STATUS does not report range_locked"
+    assert st.get("range") == range_id
+
+
+def test_range_unlock_restores_autorange(daq_safe):
+    daq_safe.set_range_lock(P.RANGE_MID)
+    time.sleep(0.3)
+    daq_safe.set_range_lock(P.RANGE_AUTO)
+    time.sleep(0.3)
+
+    cap = capture(daq_safe, 1.5, settle=0.5)
+    assert cap.last_status.get("range_locked") == 0, (
+        "range still locked after CMD_RANGE_LOCK 0xFF")
+
+
+# Below this current at ~19 V the DUT terminals are effectively open: 1e-5 A at
+# 19 V is ~2 MOhm, far beyond any real bench load. Measured with NO load
+# attached: ~1e-7 A. Note the detection MUST be made with the supply ON --
+# with it OFF the front end reports a ~650 uA offset artifact that is larger
+# than the real signal and would invert the comparison.
+LOAD_DETECT_A = 1e-5
+
+
+@pytest.fixture(scope="session")
+def daq_load(daq_link):
+    """(measured_current, load_present) -- probed once per session.
+
+    Several tests here can only mean anything with a load wired across the DUT
+    terminals. Rather than let each guess from noise, probe once at high
+    V_DUT and let them skip explicitly with a real number in the message.
+    """
+    daq_link.set_source(19.0, 2.0, True)
+    time.sleep(1.0)
+    cap = capture(daq_link, 1.5, settle=0.5)
+    i = abs(mean_current(cap))
+    daq_link.set_source(0.0, SMU_ILIMIT_MIN_A, False)
+    time.sleep(0.3)
+    return i, i >= LOAD_DETECT_A
+
+
+def _require_load(daq_load):
+    i, present = daq_load
+    if not present:
+        pytest.skip(
+            "no load attached to the DUT terminals (|I| = %.3g A at 19 V, "
+            "below the %.0e A detection threshold). This test measures how "
+            "current RESPONDS to voltage, which an open circuit cannot show. "
+            "Wire a resistor across the DUT terminals to enable it -- a few "
+            "hundred ohms also unlocks the autorange-transition test."
+            % (i, LOAD_DETECT_A))
+
+
+def test_source_enable_produces_current_and_disable_removes_it(daq_safe, daq_load):
+    """Relational, not absolute: current with the supply on must exceed
+    current with it off. The load value is unknown and irrelevant.
+
+    No-load guard: with an open circuit at the DUT terminals, current is ~0
+    regardless of the supply state and the comparison would be decided by
+    noise rather than by anything real. Skip explicitly, reporting both
+    measured values, rather than pass or fail vacuously.
+    """
+    _require_load(daq_load)
+
+    daq_safe.set_source(0.0, SMU_ILIMIT_MIN_A, False)
+    time.sleep(0.8)
+    off = capture(daq_safe, 1.5, settle=0.5)
+    i_off = abs(mean_current(off))
+
+    daq_safe.set_source(10.0, 0.5, True)
+    time.sleep(0.8)
+    on = capture(daq_safe, 1.5, settle=0.5)
+    i_on = abs(mean_current(on))
+
+    daq_safe.set_source(0.0, 0.05, False)
+
+    if abs(i_on - i_off) < 1e-6:
+        pytest.skip(
+            "no measurable current change with the supply on vs off "
+            "(off=%.9g A, on=%.9g A) -- no load is attached to the DUT "
+            "terminals" % (i_off, i_on))
+
+    assert i_on > i_off, (
+        "enabling the DUT supply did not increase current "
+        "(off=%.9g A, on=%.9g A) — is anything wired to the DUT terminals?"
+        % (i_off, i_on))
+
+
+def test_source_disabled_settles_near_zero(daq_safe):
+    daq_safe.set_source(0.0, 0.05, False)
+    time.sleep(1.0)
+    cap = capture(daq_safe, 2.0, settle=0.5)
+
+    st = cap.last_status
+    assert st.get("source_enabled") == 0, "STATUS still reports source_enabled"
+
+    # 1 mA is generous: it is far below anything a real load draws at the
+    # voltages this suite uses, while leaving room for leakage and offset.
+    assert abs(mean_current(cap)) < 1e-3, (
+        "%.9g A flowing with the DUT supply disabled — leakage or a stuck "
+        "range offset" % mean_current(cap))
+
+
+def test_vdut_setpoint_is_reflected_in_status(daq_safe):
+    daq_safe.set_source(12.0, 0.5, True)
+    time.sleep(0.8)
+    cap = capture(daq_safe, 1.5, settle=0.5)
+    daq_safe.set_source(0.0, 0.05, False)
+
+    st = cap.last_status
+    assert st.get("vdut_set") == pytest.approx(12.0, rel=0.05), (
+        "programmed V_DUT 12.0 V, STATUS reports %.3f" % st.get("vdut_set", -1))
+    assert st.get("ilimit_set") == pytest.approx(0.5, rel=0.05)
+
+
+def test_measured_voltage_tracks_the_setpoint(daq_safe):
+    """WAVE_V must follow the programmed V_DUT.
+
+    Relational: we compare two setpoints against each other, never against an
+    absolute reference.
+    """
+    readings = {}
+    for vdut in (5.0, 15.0):
+        daq_safe.set_source(vdut, 0.5, True)
+        time.sleep(1.0)
+        cap = capture(daq_safe, 1.5, settle=0.5)
+        vals = cap.all_voltage()
+        assert vals, "no WAVE_V samples at V_DUT=%.1f" % vdut
+        readings[vdut] = sum(vals) / len(vals)
+
+    daq_safe.set_source(0.0, 0.05, False)
+
+    assert readings[15.0] > readings[5.0], (
+        "measured voltage did not increase with the setpoint "
+        "(5V -> %.4f, 15V -> %.4f)" % (readings[5.0], readings[15.0]))
+    ratio = readings[15.0] / readings[5.0] if readings[5.0] else 0.0
+    assert 2.0 < ratio < 4.5, (
+        "measured voltage ratio %.2f is implausible for a 3x setpoint change "
+        "(5V -> %.4f, 15V -> %.4f)" % (ratio, readings[5.0], readings[15.0]))
+
+
+# SMU limits from Firmware/DAQ_HAT/ESP32P4/include/config.h.
+SMU_VDUT_MIN = 1.76
+SMU_VDUT_MAX = 19.94
+SMU_ILIMIT_MIN_A = 0.05
+SMU_ILIMIT_FULLSCALE_A = 2.636
+
+
+@pytest.mark.parametrize("vdut,ilimit,exp_vdut,exp_ilimit", [
+    (0.5, 0.5, SMU_VDUT_MIN, 0.5),                     # below SMU_VDUT_MIN
+    (25.0, 0.5, SMU_VDUT_MAX, 0.5),                    # above SMU_VDUT_MAX
+    (10.0, 0.001, 10.0, SMU_ILIMIT_MIN_A),             # below SMU_ILIMIT_MIN_A
+    (10.0, 5.0, 10.0, SMU_ILIMIT_FULLSCALE_A),         # above FULLSCALE
+])
+def test_out_of_range_setpoints_are_clamped_to_the_documented_limits(
+        daq_safe, vdut, ilimit, exp_vdut, exp_ilimit):
+    """Over USB, out-of-range setpoints are CLAMPED to the config.h bounds.
+
+    This pins the clamp bounds against the firmware constants, so a change to
+    SMU_VDUT_MIN/MAX or SMU_ILIMIT_MIN_A/FULLSCALE_A that is not intended to be
+    user-visible shows up here.
+
+    INCONSISTENCY WORTH KNOWING (found by this suite, 2026-08-04): the two
+    control paths disagree about out-of-range handling.
+
+      * USB CMD_SET_SOURCE (this path) CLAMPS silently --
+        smu.c:181 `s->ilimit_set = clampf(amps, MIN, FULLSCALE)`, and the
+        voltage path likewise resolves to a boundary code.
+      * The HAT/HTTP/BLE VDUT path (HAT_CMD_DAQ_VDUT_SETPOINT ->
+        api_daq_vdut_setpoint) explicitly RE-VALIDATES and REJECTS with an
+        error, per the daq-hat manifest.
+
+    So the same user action produces different results depending on the client:
+    the desktop app drives USB and gets a silent clamp; iOS drives HTTP/BLE and
+    gets a 400. Measured clamps: 0.5 V -> 1.760, 25.0 V -> 19.940,
+    0.001 A -> 0.050, 5.0 A -> 2.636 -- every one exactly on a documented limit.
+    """
+    daq_safe.set_source(10.0, 0.5, True)
+    time.sleep(0.8)
+    capture(daq_safe, 1.0, settle=0.3)
+
+    daq_safe.set_source(vdut, ilimit, True)
+    time.sleep(0.8)
+    after = capture(daq_safe, 1.0, settle=0.3).last_status
+
+    daq_safe.set_source(0.0, SMU_ILIMIT_MIN_A, False)
+
+    assert after.get("vdut_set") == pytest.approx(exp_vdut, rel=0.02), (
+        "requested %.3f V, expected a clamp to %.3f, STATUS reports %.3f"
+        % (vdut, exp_vdut, after.get("vdut_set", -1)))
+    assert after.get("ilimit_set") == pytest.approx(exp_ilimit, rel=0.02), (
+        "requested %.4f A, expected a clamp to %.4f, STATUS reports %.4f"
+        % (ilimit, exp_ilimit, after.get("ilimit_set", -1)))
+
+
+@pytest.mark.slow
+def test_current_is_linear_in_vdut(daq_safe, daq_load_ohms, daq_load):
+    """Sweep V_DUT and fit I = V/R. Assert R^2 > 0.99.
+
+    This is the suite's substitute for absolute-accuracy verification. It
+    exercises SMU setpoint programming, both ADAQ chains, current fusion and
+    the DSP tail in one assertion, and it needs NO knowledge of the load: a
+    resistive load makes I proportional to V whatever R happens to be. It fails
+    loudly on a nonlinearity, a stuck ADC code, or a range-transition
+    discontinuity.
+    """
+    _require_load(daq_load)
+
+    points = []
+    try:
+        for vdut in (2.0, 5.0, 8.0, 11.0, 14.0, 17.0, 19.0):
+            daq_safe.set_source(vdut, 2.0, True)
+            time.sleep(0.6)
+            cap = capture(daq_safe, 1.0, settle=0.3)
+            vals = cap.all_voltage()
+            v_meas = sum(vals) / len(vals) if vals else vdut
+            points.append((v_meas, mean_current(cap)))
+    finally:
+        daq_safe.set_source(0.0, 0.05, False)
+
+    assert len(points) == 7
+
+    # Least-squares fit I = a*V + b, then coefficient of determination.
+    n = len(points)
+    sx = sum(v for v, _ in points)
+    sy = sum(i for _, i in points)
+    sxx = sum(v * v for v, _ in points)
+    sxy = sum(v * i for v, i in points)
+    denom = n * sxx - sx * sx
+    assert denom != 0, "degenerate voltage sweep — all setpoints read the same"
+    a = (n * sxy - sx * sy) / denom
+    b = (sy - a * sx) / n
+
+    mean_i = sy / n
+    ss_tot = sum((i - mean_i) ** 2 for _, i in points)
+    ss_res = sum((i - (a * v + b)) ** 2 for v, i in points)
+
+    if ss_tot < 1e-18:
+        pytest.skip(
+            "current did not vary measurably across the V_DUT sweep — is a "
+            "load wired to the DUT terminals? (--daq-load-ohms=%s)"
+            % daq_load_ohms)
+
+    r2 = 1.0 - ss_res / ss_tot
+    assert r2 > 0.99, (
+        "I vs V_DUT is not linear (R^2=%.5f, slope=%.6g A/V, implied R=%.1f ohm). "
+        "Points: %r" % (r2, a, (1.0 / a) if a else float("inf"), points))
+
+    assert a > 0, "current decreases as V_DUT rises (slope %.6g A/V)" % a
+
+
+@pytest.mark.slow
+def test_current_is_monotonic_in_vdut(daq_safe, daq_load):
+    """Each voltage step must not decrease the current.
+
+    No-load guard: with an open circuit, all readings sit near the noise
+    floor and the 5% monotonicity tolerance would be decided by noise rather
+    than a real inversion. Skip explicitly, reporting the observed span,
+    before running the comparison loop.
+    """
+    _require_load(daq_load)
+
+    readings = []
+    try:
+        for vdut in (3.0, 7.0, 11.0, 15.0, 19.0):
+            daq_safe.set_source(vdut, 2.0, True)
+            time.sleep(0.6)
+            readings.append((vdut, abs(mean_current(capture(daq_safe, 1.0, settle=0.3)))))
+    finally:
+        daq_safe.set_source(0.0, 0.05, False)
+
+    readings_current = [i for _, i in readings]
+    span = max(readings_current) - min(readings_current)
+    if span < 1e-6:
+        pytest.skip(
+            "current stayed within %.9g A across the whole V_DUT sweep -- no "
+            "load is attached to the DUT terminals. Readings: %r"
+            % (span, readings))
+
+    for (v0, i0), (v1, i1) in zip(readings, readings[1:]):
+        # 5% tolerance absorbs noise at a range boundary without permitting a
+        # real inversion.
+        assert i1 >= i0 * 0.95, (
+            "current fell from %.9g A at %.1f V to %.9g A at %.1f V — full "
+            "sweep: %r" % (i0, v0, i1, v1, readings))
+
+
+@pytest.mark.slow
+def test_autorange_transitions_during_a_sweep(daq_safe, daq_load_ohms, daq_load):
+    """Sweep V_DUT under autorange and require at least one range change.
+
+    Skips explicitly (never passes vacuously) if the wired load keeps current
+    inside a single range for the whole 1.76-19.94 V span. Boundaries are
+    800 uA (HI->MID) and 37 mA (MID->LO).
+    """
+    from tests.lib.daq_records import meta_range
+
+    _require_load(daq_load)
+
+    daq_safe.set_range_lock(P.RANGE_AUTO)
+    seen = set()
+    currents = []
+    try:
+        for vdut in (2.0, 6.0, 10.0, 14.0, 19.0):
+            daq_safe.set_source(vdut, 2.0, True)
+            time.sleep(0.6)
+            cap = capture(daq_safe, 1.0, settle=0.3)
+            seen |= {meta_range(m) for m in cap.all_meta()}
+            currents.append(abs(mean_current(cap)))
+    finally:
+        daq_safe.set_source(0.0, 0.05, False)
+
+    if len(seen) < 2:
+        pytest.skip(
+            "load stayed within a single range (%s) across the whole sweep; "
+            "current spanned %.6g..%.6g A. Autorange transitions need a load "
+            "that crosses 800 uA or 37 mA — roughly a few hundred ohms. "
+            "(--daq-load-ohms=%s)"
+            % (", ".join(P.RANGE_NAMES.get(r, str(r)) for r in sorted(seen)),
+               min(currents), max(currents), daq_load_ohms))
+
+    assert seen <= {P.RANGE_HI, P.RANGE_MID, P.RANGE_LO}
