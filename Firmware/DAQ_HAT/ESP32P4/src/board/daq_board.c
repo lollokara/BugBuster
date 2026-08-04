@@ -1738,8 +1738,13 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // Response: u32 packed version + NUL-terminated version string.
             uint32_t v = FW_VERSION_U32;
             memcpy(resp, &v, sizeof(v));
+            // Truncate against HAT_WIRE_FRAME_MAX_LEN (32), not HATP_MAX_PAYLOAD
+            // (240): this reply crosses the S3 link, whose 32-byte frame cap
+            // would silently drop anything longer. Currently well clear
+            // ("bb-daq-p4 2.0.0" = 20 bytes total) but bounding against the
+            // wrong budget is exactly the bug class this file was hit by.
             size_t slen = strlen(FW_VERSION_STRING);
-            if (slen > HATP_MAX_PAYLOAD - 5) slen = HATP_MAX_PAYLOAD - 5;
+            if (slen > HAT_WIRE_FRAME_MAX_LEN - 5) slen = HAT_WIRE_FRAME_MAX_LEN - 5;
             memcpy(resp + 4, FW_VERSION_STRING, slen);
             resp[4 + slen] = 0;
             return (int)(5 + slen);

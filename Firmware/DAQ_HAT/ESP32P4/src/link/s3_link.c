@@ -79,7 +79,13 @@ static void handle_config_get_all(const uint8_t *payload, uint8_t len)
     size_t count = 0;
     const daq_setting_schema_t *tbl = daq_config_table(&count);
 
-    uint8_t resp[HATP_MAX_PAYLOAD];
+    // Page against HAT_WIRE_FRAME_MAX_LEN (32), NOT HATP_MAX_PAYLOAD (240):
+    // this reply crosses the S3 link, whose hat_recv_frame() rejects any
+    // frame over 32 bytes before it even reads the payload (see the
+    // HAT_WIRE_FRAME_MAX_LEN comment above). A 240-byte page was silently
+    // discarded every time, surfacing as a BBP timeout (0x11) -- more, smaller
+    // pages actually arrive instead of one big one that never does.
+    uint8_t resp[HAT_WIRE_FRAME_MAX_LEN];
     size_t off = 1;                 // resp[0] reserved for next_idx
     size_t i = start;
     for (; i < count; i++) {
@@ -90,7 +96,16 @@ static void handle_config_get_all(const uint8_t *payload, uint8_t len)
         } else {
             n = daq_settings_encode_one(sc->key, resp + off, sizeof(resp) - off);
         }
-        if (n < 0) break;           // does not fit; resume here next call
+        if (n < 0) {
+            // Does not fit in what's left of this page. If it doesn't even
+            // fit in a FRESH page (off == 1), it never will at this cap --
+            // a lone value can exceed 32 bytes (e.g. a long WiFi password,
+            // DAQ_TLV_MAX_VAL=64) even though a whole page can't. Skip it
+            // rather than getting stuck resuming at the same index forever;
+            // the caller can still fetch it individually via CONFIG_GET.
+            if (off == 1) continue;
+            break;                  // resume here next call
+        }
         off += (size_t)n;
     }
     resp[0] = (i >= count) ? 0xFFu : (uint8_t)i;   // 0xFF == complete
@@ -105,8 +120,13 @@ static void handle_config_schema(const uint8_t *payload, uint8_t len)
     if (!sc) { send_error(); return; }
 
     // [key u16][type u8][flags u8][min i32][max i32][step i32][def i32]
-    // [label_len u8][label bytes].
-    uint8_t r[HATP_MAX_PAYLOAD];
+    // [label_len u8][label bytes]. Sized/truncated against
+    // HAT_WIRE_FRAME_MAX_LEN (32), not HATP_MAX_PAYLOAD (240) -- this is a
+    // P4->S3 reply and several labels (e.g. "DUT Current Limit", 18 chars)
+    // push the 20-byte fixed header past 32 bytes once HATP_MAX_PAYLOAD was
+    // used as the truncation bound, which the S3's hat_recv_frame() then
+    // silently dropped as an oversized frame.
+    uint8_t r[HAT_WIRE_FRAME_MAX_LEN];
     size_t o = 0;
     r[o++] = (uint8_t)(sc->key & 0xFF);
     r[o++] = (uint8_t)(sc->key >> 8);
@@ -122,7 +142,7 @@ static void handle_config_schema(const uint8_t *payload, uint8_t len)
     }
     const char *label = sc->label ? sc->label : "";
     size_t llen = strlen(label);
-    if (llen > (size_t)(HATP_MAX_PAYLOAD - o - 1)) llen = HATP_MAX_PAYLOAD - o - 1;
+    if (llen > (size_t)(sizeof(r) - o - 1)) llen = sizeof(r) - o - 1;
     r[o++] = (uint8_t)llen;
     memcpy(&r[o], label, llen);
     o += llen;
