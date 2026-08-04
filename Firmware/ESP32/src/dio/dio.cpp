@@ -98,9 +98,19 @@ bool dio_configure_ext(uint8_t io, uint8_t mode, bool pulldown)
 
     case DIO_MODE_OUTPUT:
         gpio_reset_pin(gpin);
-        gpio_set_direction(gpin, GPIO_MODE_OUTPUT);
+        // INPUT_OUTPUT, not plain OUTPUT: keeping the input buffer enabled
+        // lets the pin be read back, so `input_level` reflects what is
+        // actually on the pin instead of staying permanently false. That
+        // matters twice over. A line we drive high but that something external
+        // is holding low is otherwise indistinguishable from a healthy drive.
+        // And the DAQ trigger engine watches `input_level`
+        // (dio/daq_trigger.cpp: daq_trigger_poll_digital), so without
+        // read-back an edge driven by this board is invisible to its own
+        // trigger/flag engine.
+        gpio_set_direction(gpin, GPIO_MODE_INPUT_OUTPUT);
         gpio_set_level(gpin, 0);
         s_io[i].output_level = false;
+        s_io[i].input_level  = false;
         break;
 
     default:
@@ -165,7 +175,15 @@ const DioState* dio_get_all(void)
 void dio_poll_inputs(void)
 {
     for (int i = 0; i < DIO_NUM_IOS; i++) {
-        if (s_io[i].mode == DIO_MODE_INPUT && s_io[i].gpio_num >= 0) {
+        if (s_io[i].gpio_num < 0) continue;
+        // OUTPUT pins are sampled too, not just INPUT ones. They are configured
+        // GPIO_MODE_INPUT_OUTPUT so the input buffer stays live, which makes
+        // `input_level` the level actually present on the pin -- normally equal
+        // to output_level, but diverging when something external holds the line.
+        // It also lets the DAQ trigger engine see edges this board drives; it
+        // reads input_level (daq_trigger.cpp), so before this an S3-driven edge
+        // was invisible to the S3's own trigger/flag engine.
+        if (s_io[i].mode == DIO_MODE_INPUT || s_io[i].mode == DIO_MODE_OUTPUT) {
             s_io[i].input_level = (gpio_get_level((gpio_num_t)s_io[i].gpio_num) != 0);
         }
     }
