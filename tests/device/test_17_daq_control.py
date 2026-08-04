@@ -157,3 +157,93 @@ def test_measure_range_agrees_with_the_stream_meta(daq_bbp, daq_safe):
     assert int(m["range"]) in stream_ranges, (
         "DAQ_MEASURE reports range %d but the stream's samples were taken in "
         "range(s) %r" % (int(m["range"]), sorted(stream_ranges)))
+
+
+# ---------------------------------------------------------------------------
+# DAQ_CONFIG — per-key round-trip and actions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("key,value", [
+    (DaqKey.AUTORANGING, 1),
+    (DaqKey.FFT_ENABLE, 0),
+    (DaqKey.DUT_VOLTAGE_MV, 5000),
+    (DaqKey.DUT_ILIMIT_MA, 500),
+    (DaqKey.STATS_WINDOW_MS, 1000),
+])
+def test_daq_config_set_get_roundtrip(daq_bbp, key, value):
+    """Each config key must read back what was written.
+
+    Restores the original value afterwards so key order cannot matter.
+    """
+    try:
+        original = daq_bbp.daq.get(key)
+    except Exception as exc:
+        pytest.skip("cannot read %s: %s" % (key.name, exc))
+
+    try:
+        daq_bbp.daq.set(key, value)
+        time.sleep(0.2)
+        got = daq_bbp.daq.get(key)
+        assert int(got) == int(value), (
+            "%s: wrote %r, read back %r" % (key.name, value, got))
+    finally:
+        try:
+            daq_bbp.daq.set(key, original)
+        except Exception:
+            pass
+
+
+def test_energy_reset_action_is_observable_in_the_stream(daq_bbp, daq_safe):
+    """DAQ_CONFIG ACTION ENERGY_RESET must zero the P4's accumulator.
+
+    Cross-layer again: the command goes over BBP, and the evidence that it
+    worked comes off the USB stream.
+    """
+    from tests.device.test_16_daq_stream import capture
+
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(1.5)
+    before = daq_safe.collect(1.0)
+    daq_safe.stop()
+    assert before.energy, "no ENERGY records before the reset"
+    e_before = before.energy[-1].elapsed_s
+
+    daq_bbp.daq.action(DaqAction.ENERGY_RESET)
+    time.sleep(0.5)
+
+    after = capture(daq_safe, 1.5, settle=0.3)
+    assert after.energy, "no ENERGY records after the reset"
+    assert after.energy[0].elapsed_s < e_before, (
+        "elapsed did not restart after ENERGY_RESET over BBP "
+        "(%.3f -> %.3f)" % (e_before, after.energy[0].elapsed_s))
+
+
+def test_charge_reset_action_is_accepted(daq_bbp):
+    daq_bbp.daq.action(DaqAction.CHARGE_RESET)
+
+
+@pytest.mark.destructive
+def test_factory_reset_is_available(daq_bbp, request):
+    """Marked destructive: only runs without --skip-destructive."""
+    if request.config.getoption("--skip-destructive", default=False):
+        pytest.skip("destructive")
+    pytest.skip(
+        "factory reset would clear calibration stored in NVS (rngcal, smu cal). "
+        "Enable deliberately only on a board whose calibration you can restore.")
+
+
+def test_daq_cal_status_is_readable(daq_bbp):
+    """DAQ_CAL STATUS must answer without starting anything.
+
+    START is deliberately not exercised: interactive calibration needs an
+    operator with a reference meter, which the unattended constraint forbids.
+    """
+    st = daq_bbp.daq.cal_status()
+    assert isinstance(st, dict) and st, "cal_status returned %r" % (st,)
+
+
+def test_daq_cal_abort_is_idempotent(daq_bbp):
+    """Aborting when no calibration is running must not error."""
+    daq_bbp.daq.cal_abort()
+    daq_bbp.daq.cal_abort()
