@@ -63,7 +63,10 @@ const C_CHIP_BD: &str = "#1e3050";
 
 const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
-const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 2, 3];
+// IO_Block 3/4 sit on swapped ADGS2414D device indices (confirmed by hardware
+// probing). SYNC: python/bugbuster/hal.py DEFAULT_ROUTING, bus_planner.cpp
+// IO_ROUTES, tasks.cpp tasks_logical_to_physical, web SignalPath.tsx.
+const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 3, 2];
 
 // Switch input topology:
 // GPIO pairs: IO goes through level shifter, then SPLITS:

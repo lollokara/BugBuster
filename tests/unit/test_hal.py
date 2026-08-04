@@ -183,10 +183,11 @@ class TestSetMux(unittest.TestCase):
     def test_different_devices_independent(self):
         """IOs on different mux devices write to separate state slots."""
         hal, mock_bb = _make_hal()
-        # IO 9 is on mux_device 2, group A
+        # IO 9 is on mux_device 3, group A (IO_Block 3/4 MUX indices are
+        # physically swapped -- see hal.py DEFAULT_ROUTING).
         rt9 = hal._routing[9]
         hal._set_mux(rt9, PortMode.ANALOG_OUT)
-        self.assertEqual(hal._mux_state[2], _SW_A_ADC)
+        self.assertEqual(hal._mux_state[3], _SW_A_ADC)
         self.assertEqual(hal._mux_state[0], 0)  # device 0 untouched
 
     def test_multiple_ios_same_device_coexist(self):
@@ -410,14 +411,14 @@ class TestEnableIoBlockPower(unittest.TestCase):
         c = hal._routing[9]
         self.assertEqual(c.io_block, 3)
         self.assertEqual(c.channel, 2)
-        self.assertEqual(c.mux_device, 2)
+        self.assertEqual(c.mux_device, 3)
         self.assertEqual(c.esp_gpio, 10)
         self.assertIs(c.efuse, PowerControl.EFUSE3)
 
         d = hal._routing[12]
         self.assertEqual(d.io_block, 4)
         self.assertEqual(d.channel, 3)
-        self.assertEqual(d.mux_device, 3)
+        self.assertEqual(d.mux_device, 2)
         self.assertEqual(d.esp_gpio, 13)
         self.assertIs(d.efuse, PowerControl.EFUSE4)
 
