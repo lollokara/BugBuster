@@ -74,6 +74,8 @@ typedef struct {
     volatile size_t tail;             // consumer (drain)
     volatile uint32_t overflow_count;
     volatile uint32_t sample_count;
+    volatile uint32_t high_water;     // max ring fill ever observed (records);
+                                       // see adaq_stream_high_water()
     volatile uint32_t isr_count;      // raw DRDY ISR triggers (flood detector)
     volatile uint32_t read_ns_avg;    // EMA of one contread SPI read (ns)
     volatile uint32_t spi_err_count;  // capture_one() SPI transaction failures (diag)
@@ -163,6 +165,15 @@ size_t adaq_stream_read(adaq_stream_t *s, adaq_sample_t *out, size_t max);
 
 /** @brief Records currently available to drain. */
 size_t adaq_stream_available(const adaq_stream_t *s);
+
+/**
+ * @brief High-water mark: the largest ring fill (records) ever observed by
+ *        the producer since the last adaq_stream_start(). Reset to 0 on each
+ *        start alongside overflow_count/sample_count. A value approaching
+ *        ring_capacity means the consumer is falling behind and drops are
+ *        imminent/occurring -- see the STATUS `ring_high_water` field.
+ */
+uint32_t adaq_stream_high_water(const adaq_stream_t *s);
 
 #ifdef __cplusplus
 }

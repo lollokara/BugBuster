@@ -903,7 +903,13 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .frames_tx        = b->usb.tx_frames,
         .bytes_per_sec    = b->usb.bytes_per_sec,
         .fifo_drop_frames = b->usb.dropped_frames,
-        .ring_high_water  = 0, // filled if adaq_stream exposes it; else 0 (documented)
+        // Max of the two capture rings (stream_a = FINE, stream_b =
+        // COARSE+VOLTAGE): whichever is closer to saturating is the one that
+        // matters to a host trying to tell "healthy" from "about to drop".
+        .ring_high_water  = (adaq_stream_high_water(&b->stream_a)
+                                  > adaq_stream_high_water(&b->stream_b))
+                                 ? adaq_stream_high_water(&b->stream_a)
+                                 : adaq_stream_high_water(&b->stream_b),
         .wave_i_index_lo  = (uint32_t)b->usb.sample_seq,
         .relay_target       = (uint8_t)relay_st.target,
         .relay_state        = (uint8_t)relay_st.state,

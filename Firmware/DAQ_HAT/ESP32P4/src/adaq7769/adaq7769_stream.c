@@ -77,6 +77,16 @@ static inline bool ring_push(adaq_stream_t *s, const adaq_sample_t *rec)
     atomic_thread_fence(memory_order_release);
     s->head = next;
     s->sample_count++;
+    // High-water: fill just after this push, i.e. how many records the
+    // consumer is currently behind by. Producer-only read of s->tail (the
+    // consumer never writes head), so this needs no extra fence beyond the
+    // release above. A plain compare-then-store race against the consumer
+    // reading high_water elsewhere is harmless -- worst case is one stale
+    // read of a monotonically-updated counter, not a torn value.
+    uint32_t fill = (uint32_t)((next - s->tail) & (s->ring_capacity - 1));
+    if (fill > s->high_water) {
+        s->high_water = fill;
+    }
     return true;
 }
 
@@ -258,6 +268,7 @@ static esp_err_t stream_arm(adaq_stream_t *s)
     }
     s->head = s->tail = 0;
     s->overflow_count = s->sample_count = 0;
+    s->high_water = 0;
     s->isr_count = 0;
     memset((void *)s->seq, 0, sizeof(s->seq));
     s->running = true;
@@ -651,4 +662,9 @@ size_t adaq_stream_available(const adaq_stream_t *s)
     // Pairs with the release fence in ring_push (see adaq_stream_read).
     atomic_thread_fence(memory_order_acquire);
     return (head - tail) & (s->ring_capacity - 1);
+}
+
+uint32_t adaq_stream_high_water(const adaq_stream_t *s)
+{
+    return s->high_water;
 }
