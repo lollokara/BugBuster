@@ -18,6 +18,7 @@ import {
   deviceMac,
   supplyMonitorActive,
   startSelftestStatusPolling,
+  pollIntervalFor,
 } from "../../state/signals";
 import { ChDOverlay } from "../../components/ChDOverlay";
 
@@ -40,7 +41,10 @@ const C_CHIP_BD = "#1e3050";
 
 const ACCENTS = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"] as const;
 const MUX_REF = ["U10", "U11", "U17", "U16"] as const;
-const MUX_DEVICE_BY_LOGICAL = [0, 1, 2, 3] as const;
+// IO_Block 3/4 sit on swapped ADGS2414D device indices (confirmed by hardware
+// probing). SYNC: python/bugbuster/hal.py DEFAULT_ROUTING, bus_planner.cpp
+// IO_ROUTES, tasks.cpp tasks_logical_to_physical, DesktopApp signal_path.rs.
+const MUX_DEVICE_BY_LOGICAL = [0, 1, 3, 2] as const;
 
 const GPIO_PAIR_LABELS: ReadonlyArray<readonly [string, string, string]> = [
   ["IO3", "IO2", "IO1"],
@@ -137,6 +141,14 @@ export function SignalPath() {
   const rafRef = useRef<number | null>(null);
   const dimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const lastWriteMs = useRef<number>(0);
+  // Age of the newest successful mux/ioexp read. Both poll loops below used to
+  // swallow every error silently, so on a dropped link the MUX diagram, PSU
+  // toggles and efuse indicators froze on their last values with nothing to
+  // distinguish them from live state -- a user could power the HAT down and
+  // the UI would keep showing the old configuration indefinitely.
+  // See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-10.
+  const lastReadMs = useSignal<number>(0);
+  const readFailing = useSignal<boolean>(false);
 
   useEffect(() => startSelftestStatusPolling(), []);
 
@@ -144,7 +156,10 @@ export function SignalPath() {
   useEffect(() => {
     let alive = true;
     const tick = async () => {
-      if (Date.now() - lastWriteMs.current < 750) return;
+      // NOTE: must not `return` early -- this loop reschedules itself at the
+      // end, so any early exit would stop it permanently (a fixed setInterval
+      // tolerated that; this does not).
+      if (Date.now() - lastWriteMs.current >= 750) {
       try {
         const st = deviceStatus.value;
         if (st?.muxStates && Array.isArray(st.muxStates) && st.muxStates.length >= 4) {
@@ -165,23 +180,33 @@ export function SignalPath() {
             ];
           }
         }
+        if (alive) { lastReadMs.value = Date.now(); readFailing.value = false; }
       } catch {
-        /* ignore transient errors */
+        // Surface the failure instead of freezing on stale values (S2-10).
+        if (alive) readFailing.value = true;
       }
+      }
+      // Self-scheduling rather than a fixed 500 ms setInterval, so this loop
+      // stretches toward 30 s when the device is unreachable instead of
+      // hammering it alongside every other tab's poller (S2-9).
+      if (alive) timer = window.setTimeout(tick, pollIntervalFor(500));
     };
+    let timer: number | undefined;
     tick();
-    const id = window.setInterval(tick, 500);
-    return () => { alive = false; window.clearInterval(id); };
+    return () => { alive = false; if (timer) window.clearTimeout(timer); };
   }, []);
 
   /* ---- Poll /api/ioexp for PSU + efuse state ---- */
   useEffect(() => {
     let alive = true;
     const tick = async () => {
-      if (Date.now() - lastWriteMs.current < 750) return;
+      // See the note in the mux poller: no early return, the loop self-schedules.
+      if (Date.now() - lastWriteMs.current >= 750) {
       try {
         const r = await api.ioexp();
-        if (!alive || !r) return;
+        // Was `if (!alive || !r) return;` -- a bare return here would skip the
+        // reschedule at the end and silently stop this poller for good.
+        if (alive && r) {
         const en = r.enables ?? r.enable ?? r.en ?? r;
         const v1 = !!(en?.vadj1 ?? r.vadj1_en ?? r.vadj1);
         const v2 = !!(en?.vadj2 ?? r.vadj2_en ?? r.vadj2);
@@ -195,13 +220,18 @@ export function SignalPath() {
         ef.value = arr;
         if (typeof r.lshiftOe === "boolean") oe.value = r.lshiftOe;
         else if (typeof r.lshift_oe === "boolean") oe.value = r.lshift_oe;
+        lastReadMs.value = Date.now();
+        readFailing.value = false;
+        }
       } catch {
-        /* ignore */
+        if (alive) readFailing.value = true;
       }
+      }
+      if (alive) timer = window.setTimeout(tick, pollIntervalFor(500));
     };
+    let timer: number | undefined;
     tick();
-    const id = window.setInterval(tick, 500);
-    return () => { alive = false; window.clearInterval(id); };
+    return () => { alive = false; if (timer) window.clearTimeout(timer); };
   }, []);
 
   /* ---- Also read lshift state from deviceStatus if present ---- */
@@ -398,6 +428,22 @@ export function SignalPath() {
   return (
     <div class="signal-layout">
       <IoOwnerBanner lease={lease} slots={[12, 13, 14, 15]} />
+
+      {/* Stale-data banner (S2-10). Without this the whole diagram silently
+          freezes on its last-read values when the link drops, indistinguishable
+          from live state -- so a powered-down HAT still looks configured. */}
+      {readFailing.value && (
+        <div
+          class="text-err"
+          style={{ fontSize: "0.8rem", marginBottom: "6px" }}
+          role="status"
+        >
+          Link lost — showing last known state
+          {lastReadMs.value > 0 &&
+            ` from ${Math.round((Date.now() - lastReadMs.value) / 1000)}s ago`}
+          . Values below may no longer reflect the hardware.
+        </div>
+      )}
       <div class="signal-toolbar">
         <span class="uppercase-tag">Signal Path</span>
         <div class="signal-preset-pills">

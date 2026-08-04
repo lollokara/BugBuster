@@ -8,6 +8,7 @@ import {
   pairingRequired,
   deviceStatus,
   deviceMac,
+  deviceFailureStreak,
 } from "./state/signals";
 import { PairingModal } from "./components/PairingModal";
 import { Overview } from "./tabs/overview/Overview";
@@ -97,8 +98,12 @@ export function App() {
         const s = await api.status();
         deviceStatus.value = s;
         consecutiveFailures = 0;
+        deviceFailureStreak.value = 0;
       } catch (e) {
         consecutiveFailures += 1;
+        // Publish the streak so secondary pollers can back off too, instead of
+        // hammering a device this loop already knows is unreachable (S2-9).
+        deviceFailureStreak.value = consecutiveFailures;
         // PairingRequiredError fires its own modal; don't spam the console.
         // Other errors warn at most once per backoff stage transition.
         const stage = Math.min(consecutiveFailures, BACKOFF_STAGES.length);
