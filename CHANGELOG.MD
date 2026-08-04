@@ -2,6 +2,93 @@
 
 ## [Unreleased]
 
+### Added
+
+- **DAQ HAT hardware-in-the-loop test suite** — ~92 hardware tests plus 44 unit
+  tests, built from nothing. Entry point `python3 tests/tools/daq_gate.py`
+  (fast tier by default, `--full` for slow tests incl. the FFT freeze guard,
+  `--wifi` to add the WiFi tier). Four tiers: `tests/device/test_16_daq_stream.py`
+  (tier 1, P4 USB-HS: link/protocol/lifecycle, rate/decimation, record
+  integrity, throughput floor, DSP/FFT correctness, range/SMU/linearity,
+  STATUS counters, arm/markers), `test_17_daq_control.py` (tier 2, BBP control
+  plane: DAQ_CONFIG/DAQ_CAL/DAQ_MEASURE/DAQ_TRIG, incl. cross-layer
+  DAQ_MEASURE-vs-stream agreement and the trigger→marker path),
+  `test_18_daq_api.py` (tier 3, `api_core` HTTP routes) with a new static
+  guard `tests/unit/test_api_route_parity.py` (every route in `api_core.cpp`
+  must be registered in `webserver.cpp`), and `test_19_daq_wifi.py` (tier 4a,
+  WiFi provisioning without joining the hotspot). New shared libraries in
+  `tests/lib/` — `daq_proto.py`, `daq_records.py` (typed record decoders, now
+  the single source of truth for wire record layouts on the host side),
+  `daq_capture.py`, `daq_link.py`, `p4_console.py` — extracted from the
+  existing bench tools so the repo has exactly one frame decoder. New conftest
+  options `--daq`, `--daq-wifi`, `--daq-p4-serial`, `--daq-load-ohms`; new
+  markers `requires_daq`, `requires_daq_bbp`, `requires_daq_http`, `daq_wifi`.
+  Assertions are relational only (linearity, monotonicity, self-consistency)
+  — the DUT load resistance is never asserted against.
+
+### Fixed
+
+- **DAQ HAT: FFT disable stopped computing spectra but never stopped
+  transmitting them.** `spectrum_push()` correctly gated new FFTs on the
+  `enabled` flag, but the emit path in `daq_board.c` kept shipping the last
+  computed magnitude buffer forever, so a client that asked the device to
+  stop sending spectra kept receiving stale ones indefinitely. Found by the
+  new DAQ test suite; fixed alongside the item below.
+- **DAQ HAT: the FFT header always reported the Hann window**, regardless of
+  which window was actually configured. The window was correctly *applied* to
+  the computation — only the reported window ID in the FFT record header was
+  wrong, so a host had no reliable way to know which window produced a given
+  spectrum.
+- **`GET /api/daq` 404'd over plain HTTP** even though `api_core` already
+  dispatched it correctly over BLE — the route was simply never registered in
+  `webserver.cpp`. Found by the new tier-3 HTTP API tests.
+- **`DAQ_CONFIG` GET_ALL never worked over BBP.** The P4 packed its reply
+  pages up to 240 bytes (`HATP_MAX_PAYLOAD`), but the S3's HAT-frame receiver
+  silently rejects anything over 32 bytes (`HAT_FRAME_MAX_LEN`) *before*
+  reading the payload — every GET_ALL reply was dropped, retried once, and
+  surfaced to callers as a bare `DeviceError 0x11` timeout with no indication
+  of the real cause. The same undersized-reply bug was also found and fixed
+  in the DAQ config schema handler. Fixed by paging P4→S3 replies at the
+  32-byte wire limit; `daq.get_all()` now returns its full key set in well
+  under a second, and BBP control-plane test latency dropped by roughly half
+  across the board as a side effect (the undersized-frame retry had been
+  silently slowing other calls too, not just GET_ALL).
+
+### Changed
+
+- **A digital-IO output pin's reported input level now reflects reality
+  instead of always reading `false`.** Output pins were previously
+  write-only: `DioState.input_level` stayed permanently `false` for any pin
+  configured as OUTPUT, because the pin was never reconfigured to also read
+  back its own level. This is user-visible on every surface that shows DIO
+  state — the on-device web UI, the desktop app, and MCP tools all now show a
+  live level for output pins where they previously always showed off/false.
+  It also fixes a real functional gap: the DAQ trigger/flag engine watches
+  `input_level` to detect edges, so an S3-driven output pin's own transitions
+  were invisible to the S3's own trigger engine and could never fire a
+  self-stimulus flag or trigger.
+
+### Known issues
+
+- **Frame drops at the shipping default DAQ rate.** 42–53 `fifo_drop_frames`
+  observed on an idle, single-consumer bench at the default 32000 SPS/ch —
+  suspected cause is the 800-sample `USB_WAVE_V_BATCH` flushing at ~80 Hz
+  against WAVE_I's ~10 Hz cadence, transiently tripping USB back-pressure.
+  Recorded as a strict xfail in the new test suite so it surfaces the moment
+  it's fixed.
+- **`ring_high_water` in the DAQ USB STATUS record is permanently dead**,
+  hardcoded to 0 in `daq_board.c` rather than reading a live figure from the
+  acquisition ring buffer.
+- **Desktop and iOS diverge on out-of-range DAQ source setpoints.** The
+  desktop's USB `CMD_SET_SOURCE` path clamps an out-of-range value to the
+  nearest legal one; the HAT/HTTP/BLE VDUT path used by iOS rejects it
+  outright. Same underlying hardware action, two different behaviors — needs
+  a product decision on which is correct.
+- Open questions from this pass: the OTA upload response's
+  `sha256Verified:false` field is unexplained; exposing `wifi_ap_sta_count()`
+  would make the DAQ WiFi idle-teardown test fully conclusive rather than
+  inferred.
+
 ## [2.0.0] — 2026-07-29
 
 Combined release. Component versions: **ESP32-S3 firmware v5.0.0**, **RP2040 HAT
