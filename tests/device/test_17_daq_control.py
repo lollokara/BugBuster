@@ -7,6 +7,7 @@ Run with:
 Needs BOTH links: the S3's CDC0 for control, and the P4's USB-HS for the
 stream the control plane is supposed to be describing.
 """
+import threading
 import time
 
 import pytest
@@ -317,27 +318,74 @@ def test_flag_event_reaches_the_p4_stream_as_a_marker(daq_bbp, daq_safe):
     stream. Also the only automated check that a marker is stamped with the
     LIVE fused-sample index rather than a stale one.
 
-    Currently CANNOT fire, and this is proven rather than suspected:
+    This used to be unreachable, and that was proven rather than suspected:
 
       - daq_trigger_poll_digital() (Firmware/ESP32/src/dio/daq_trigger.cpp:162)
         reads all_dio[i].input_level to detect edges.
-      - dio_poll_inputs() (Firmware/ESP32/src/dio/dio.cpp:165) only refreshes
+      - dio_poll_inputs() (Firmware/ESP32/src/dio/dio.cpp:165) only refreshed
         input_level when mode == DIO_MODE_INPUT.
-      - Outputs are configured GPIO_MODE_OUTPUT, not GPIO_MODE_INPUT_OUTPUT
-        (Firmware/ESP32/src/dio/dio.cpp:101), so a driven pin's own level is
+      - Outputs were configured GPIO_MODE_OUTPUT, not GPIO_MODE_INPUT_OUTPUT
+        (Firmware/ESP32/src/dio/dio.cpp:101), so a driven pin's own level was
         never read back into input_level.
 
-    So an S3 IO the S3 itself drives can never be seen by its own trigger
-    poll -- there is no self-stimulus path today. Enabling GPIO_MODE_INPUT_OUTPUT
-    (or a separate loopback) is planned as separate firmware work; this test
-    will run once that lands. It is intentionally skipped, not xfailed: this
-    is a missing capability, not a bug to chase.
+    Read-back has now landed: DIO_MODE_OUTPUT uses GPIO_MODE_INPUT_OUTPUT and
+    dio_poll_inputs() refreshes input_level for OUTPUT pins too, so an S3 IO
+    the S3 itself drives is visible to its own trigger/flag engine. This test
+    exercises that self-stimulus path end to end for the first time.
     """
-    pytest.skip(
-        "no self-stimulus path exists yet: daq_trigger_poll_digital() "
-        "(Firmware/ESP32/src/dio/daq_trigger.cpp:162) only sees edges via "
-        "dio_poll_inputs() (Firmware/ESP32/src/dio/dio.cpp:165), which refreshes "
-        "input_level only for mode == DIO_MODE_INPUT; outputs are configured "
-        "GPIO_MODE_OUTPUT rather than GPIO_MODE_INPUT_OUTPUT (dio.cpp:101), so a "
-        "pin the S3 drives cannot be read back to stimulate its own trigger. "
-        "Will run once outputs read back (separate firmware work).")
+    io = 4
+    original = daq_bbp.daq_trigger.get_io(io)
+
+    daq_bbp.dio_configure(io, 2)  # 2 = output
+    daq_bbp.dio_write(io, False)
+    time.sleep(0.2)  # let the baseline (low) settle before FLAG picks it up
+
+    try:
+        daq_bbp.daq_trigger.set_io(io, role=DaqTrigRole.FLAG, edge=DaqTrigEdge.RISING)
+        time.sleep(0.1)  # first poll after set_io only captures the baseline level
+
+        daq_safe.drain()
+        daq_safe.start()
+        time.sleep(0.3)
+
+        result = {}
+
+        def _collect():
+            result["cap"] = daq_safe.collect(2.5)
+
+        t = threading.Thread(target=_collect)
+        t.start()
+        time.sleep(1.0)
+        daq_bbp.dio_write(io, True)  # rising edge -> S3 trigger engine -> marker
+        t.join()
+
+        cap = result["cap"]
+        daq_safe.stop()
+
+        assert cap.markers, (
+            "no MARKER records received on the USB stream; frames=%r" % (cap.frames,))
+
+        marker = cap.markers[-1]
+        assert marker.channel == io, (
+            "marker channel %d != driven IO %d" % (marker.channel, io))
+        assert marker.edge == 1, "marker edge %d != rising(1)" % marker.edge
+
+        if cap.wave_i:
+            lo = cap.wave_i[0].start_index
+            hi = cap.wave_i[-1].start_index + cap.wave_i[-1].count
+            # Generous upper margin: the marker can arrive slightly after the
+            # last WAVE_I block we happened to capture, but it must not be 0
+            # or wildly out of range -- that would mean a stale/uninitialized
+            # index rather than the live fused-sample index.
+            assert lo <= marker.sample_index <= hi + 200000, (
+                "marker sample_index %d outside observed WAVE_I index range "
+                "[%d, %d] -- looks stale" % (marker.sample_index, lo, hi))
+    finally:
+        daq_bbp.dio_write(io, False)
+        try:
+            daq_bbp.daq_trigger.set_io(
+                io, role=DaqTrigRole(int(original["role"])),
+                edge=DaqTrigEdge(int(original["edge"])))
+        except Exception:
+            pass
+        daq_bbp.dio_configure(io, 0)  # 0 = disabled / high-impedance
