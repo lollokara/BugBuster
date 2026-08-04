@@ -98,3 +98,62 @@ def test_daq_measure_reflects_the_streaming_state(daq_bbp, daq_link):
 def test_daq_config_get_all_returns_a_dict(daq_bbp):
     cfg = daq_bbp.daq.get_all()
     assert isinstance(cfg, dict) and cfg, "get_all returned %r" % (cfg,)
+
+
+# ---------------------------------------------------------------------------
+# Cross-layer: the S3's view vs the P4's own stream
+# ---------------------------------------------------------------------------
+
+def test_measure_agrees_with_the_p4_stream(daq_bbp, daq_safe):
+    """DAQ_MEASURE and the USB stream must report the same physical reality.
+
+    DAQ_MEASURE goes S3 -> HAT UART -> P4 and back; the stream comes straight
+    off the P4's USB-HS endpoint. They are independent paths to the same
+    quantity, so disagreement means a units error, a stale cache, or a broken
+    bridge -- and nothing else in this repo checks it.
+
+    Tolerance is deliberately loose: the two are not sampled at the same
+    instant, so this is a sanity check on scale and sign, not on precision.
+    A units error (mA vs A, mV vs V) is a 1000x discrepancy and is caught
+    easily; genuine sampling skew is a few percent and is not flagged.
+    """
+    from tests.device.test_16_daq_stream import capture, mean_current
+
+    cap = capture(daq_safe, 2.0, settle=0.5)
+    stream_i = mean_current(cap)
+    volts = cap.all_voltage()
+    stream_v = sum(volts) / len(volts) if volts else None
+    assert stream_v is not None, "no WAVE_V samples to compare against"
+
+    m = daq_bbp.daq.measure()
+
+    # Voltage: absolute floor of 50 mV absorbs offset on a near-zero rail.
+    v_tol = max(abs(stream_v) * 0.20, 0.05)
+    assert abs(m["voltage_v"] - stream_v) <= v_tol, (
+        "voltage disagrees across layers: DAQ_MEASURE %.6g V vs stream %.6g V "
+        "-- a ~1000x gap here means a mV/V units error"
+        % (m["voltage_v"], stream_v))
+
+    # Current: absolute floor of 1 mA, since an unloaded bench sits near zero
+    # and a relative comparison there is meaningless.
+    i_tol = max(abs(stream_i) * 0.20, 1e-3)
+    assert abs(m["current_a"] - stream_i) <= i_tol, (
+        "current disagrees across layers: DAQ_MEASURE %.9g A vs stream %.9g A "
+        "-- a ~1000x gap here means a mA/A units error"
+        % (m["current_a"], stream_i))
+
+
+def test_measure_range_agrees_with_the_stream_meta(daq_bbp, daq_safe):
+    """The range the S3 reports must match the range the samples were taken in."""
+    from tests.device.test_16_daq_stream import capture
+    from tests.lib.daq_records import meta_range
+
+    cap = capture(daq_safe, 1.5, settle=0.5)
+    meta = cap.all_meta()
+    assert meta, "no meta bytes captured"
+    stream_ranges = {meta_range(b) for b in meta}
+
+    m = daq_bbp.daq.measure()
+    assert int(m["range"]) in stream_ranges, (
+        "DAQ_MEASURE reports range %d but the stream's samples were taken in "
+        "range(s) %r" % (int(m["range"]), sorted(stream_ranges)))
