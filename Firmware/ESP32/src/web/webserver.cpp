@@ -243,6 +243,10 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
     return send_json(req, root, code);
 }
 
+// Forward declaration: defined further down alongside the DAQ handlers, but
+// used by earlier handlers that delegate to api_core_handle().
+static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *fail_msg);
+
 static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 {
     if (error == HTTPD_404_NOT_FOUND) {
@@ -654,8 +658,19 @@ static esp_err_t handle_get_faults(httpd_req_t *req)
 static esp_err_t handle_get_scope(httpd_req_t *req)
 {
     uint16_t since_seq = 0;
-    char qbuf[32] = {};
-    if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK) {
+    // 256 bytes, and truncation is an explicit 400 rather than being folded
+    // into "no query". A 32-byte buffer silently dropped ?since= as soon as a
+    // client appended a cache-buster (?since=65535&_=1738500000000 is 33
+    // bytes): the delta request became a full replay of the oldest buckets on
+    // every poll, so the trace never advanced and it looked like a firmware
+    // sampling bug. Same shape at /api/scripts/eval and /api/scripts/logs.
+    // See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S3-7.
+    char qbuf[256] = {};
+    esp_err_t qrc = httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf));
+    if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
+        return send_error(req, 400, "query string too long");
+    }
+    if (qrc == ESP_OK) {
         char val[16] = {};
         if (httpd_query_key_value(qbuf, "since", val, sizeof(val)) == ESP_OK) {
             since_seq = (uint16_t)atoi(val);
@@ -2078,31 +2093,30 @@ static esp_err_t handle_get_idac(httpd_req_t *req)
 // GET /api/idac/cal/points?ch=0
 static esp_err_t handle_get_idac_cal_points(httpd_req_t *req)
 {
+    // Delegates so both transports return the SAME document. This handler used
+    // to build its own response, which stopped at points[] and omitted the
+    // entire "hat" calibration object that api_core attaches when a HAT is
+    // present -- so a desktop client polling over HTTP during a HAT rail
+    // calibration read resp.hat.progress as undefined and its progress bar
+    // never moved, while the identical BLE poll worked.
+    // See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-3.
     char buf[128];
     int ch = 0;
-    if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+    esp_err_t qrc = httpd_req_get_url_query_str(req, buf, sizeof(buf));
+    if (qrc == ESP_OK) {
         char param[32];
         if (httpd_query_key_value(buf, "ch", param, sizeof(param)) == ESP_OK) {
             ch = atoi(param);
         }
+    } else if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
+        return send_error(req, 400, "query string too long");
     }
     if (ch < 0 || ch > 2) return send_error(req, 400, "ch must be 0-2");
 
-    const DS4424State *st = ds4424_get_state();
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "ch", ch);
-    cJSON_AddNumberToObject(root, "count", st->cal[ch].count);
-    cJSON_AddBoolToObject(root, "valid", st->cal[ch].valid);
-    
-    cJSON *points = cJSON_AddArrayToObject(root, "points");
-    for (uint8_t i = 0; i < st->cal[ch].count; i++) {
-        cJSON *pt = cJSON_CreateObject();
-        cJSON_AddNumberToObject(pt, "dacCode", st->cal[ch].points[i].dac_code);
-        cJSON_AddNumberToObject(pt, "measuredV", (double)st->cal[ch].points[i].measured_v);
-        cJSON_AddItemToArray(points, pt);
-    }
-    
-    return send_json(req, root);
+    char path[64];
+    snprintf(path, sizeof(path), "/api/idac/cal/points?ch=%d", ch);
+    char *resp = api_core_handle("GET", path, NULL);
+    return send_api_core_result(req, resp, "idac cal points unavailable");
 }
 
 // POST /api/idac/code  body: {"ch":0, "code":-10}
@@ -3978,11 +3992,17 @@ static esp_err_t handle_get_update_check(httpd_req_t *req)
     if (check_admin_auth(req) != ESP_OK) {
         return send_error(req, 401, "Admin token required");
     }
-    cJSON *root = NULL;
-    if (update_manager_check(&root) != ESP_OK || !root) {
-        return send_error(req, 500, "Update check failed");
-    }
-    return send_json(req, root);
+    // MUST delegate: update_manager_check() performs an HTTPS fetch
+    // (esp_http_client_perform + software-AES mbedTLS) that needs ~16 KB of
+    // stack, and the httpd task has 4096 (see config.stack_size below).
+    // Calling it inline here rebooted the board on every request -- this is
+    // the exact reproducer the api_core.cpp comment documents, which was
+    // fixed only on the BLE side because /api/ota/check has no HTTP route and
+    // this route never went through api_core_handle().
+    // api_core's handler runs the query on a dedicated 16 KB worker.
+    // See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-2.
+    char *resp = api_core_handle("GET", "/api/ota/check", NULL);
+    return send_api_core_result(req, resp, "Update check failed");
 }
 
 static esp_err_t handle_get_update_status(httpd_req_t *req)
@@ -4375,8 +4395,12 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
 
     // Parse optional ?persist=true query parameter
     bool persist = false;
-    char query[64] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+    char query[256] = {0};   // see the truncation note in handle_get_scope
+    esp_err_t qrc = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
+        return send_error(req, 400, "query string too long");
+    }
+    if (qrc == ESP_OK) {
         char persist_val[8] = {0};
         if (httpd_query_key_value(query, "persist", persist_val, sizeof(persist_val)) == ESP_OK) {
             persist = (strcmp(persist_val, "true") == 0 || strcmp(persist_val, "1") == 0);
@@ -4473,8 +4497,13 @@ static esp_err_t handle_get_scripts_logs(httpd_req_t *req)
 
     bool use_cursor = false;
     uint64_t since = 0;
-    char query[64] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+    char query[256] = {0};   // see the truncation note in handle_get_scope
+    esp_err_t qrc = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
+        free(buf);
+        return send_error(req, 400, "query string too long");
+    }
+    if (qrc == ESP_OK) {
         char since_val[24] = {0};
         if (httpd_query_key_value(query, "since", since_val, sizeof(since_val)) == ESP_OK) {
             use_cursor = true;
