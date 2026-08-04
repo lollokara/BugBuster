@@ -195,6 +195,12 @@ def _daq_skips(config, items):
             if "requires_daq_bbp" in item.keywords:
                 item.add_marker(skip)
 
+    if not config.getoption("--device-http", default=None):
+        skip = pytest.mark.skip(reason="needs --device-http (device IP for the HTTP API)")
+        for item in items:
+            if "requires_daq_http" in item.keywords:
+                item.add_marker(skip)
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
@@ -1048,3 +1054,57 @@ def daq_bbp(request):
         dev.disconnect()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# DAQ HTTP API fixtures (tier 3 — /api/daq/* over HTTP)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def daq_http_base(request):
+    """Base URL for the device's HTTP API."""
+    host = request.config.getoption("--device-http")
+    if not host:
+        pytest.skip("no --device-http given")
+    return "http://%s" % host
+
+
+@pytest.fixture(scope="session")
+def daq_http(request, daq_http_base):
+    """A requests.Session carrying the admin token.
+
+    The token is taken from --admin-token when given, else read from the
+    device over USB -- which is why --device-usb is the more convenient way to
+    run this tier: it needs no secret on the command line.
+    """
+    import requests
+
+    token = request.config.getoption("--admin-token")
+    if not token:
+        port = request.config.getoption("--device-usb")
+        if not port:
+            pytest.skip("need --admin-token, or --device-usb to read it from the device")
+        try:
+            import bugbuster as bb
+            from bugbuster.transport.usb import USBTransport
+            dev = bb.BugBuster(USBTransport(port))
+            dev.connect()
+            token = dev.get_admin_token()
+            dev.disconnect()
+        except Exception as exc:
+            pytest.skip("cannot read the admin token over USB: %s" % exc)
+
+    s = requests.Session()
+    s.headers.update({"X-BugBuster-Admin-Token": token})
+    s.timeout = 10
+
+    # Fail fast and clearly if the device is not actually reachable, rather
+    # than letting every test in the tier time out one at a time.
+    try:
+        r = s.get(daq_http_base + "/api/daq/vdut/status", timeout=8)
+        r.raise_for_status()
+    except Exception as exc:
+        pytest.skip("device not reachable at %s: %s" % (daq_http_base, exc))
+
+    yield s
+    s.close()

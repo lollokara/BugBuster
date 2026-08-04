@@ -98,6 +98,18 @@ def test_daq_bbp_tests_skip_without_device_usb(tmp_path):
     assert "1 skipped" in r.stdout
 
 
+def test_daq_http_tests_skip_without_device_http(tmp_path):
+    r = _run_pytest(tmp_path, [], """
+        import pytest
+
+        @pytest.mark.requires_daq_http
+        def test_needs_http():
+            assert False, "must not run without --device-http"
+    """)
+    assert r.returncode == 0
+    assert "1 skipped" in r.stdout
+
+
 def test_daq_bbp_tests_skip_without_daq_flag(tmp_path):
     """requires_daq_bbp must imply --daq as well as --device-usb.
 
