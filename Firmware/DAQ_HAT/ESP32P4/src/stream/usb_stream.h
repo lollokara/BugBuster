@@ -53,7 +53,15 @@ typedef void (*usb_cmd_cb_t)(usb_rec_type_t cmd, const uint8_t *payload,
 // WAVE_I: 24 + count*(4+1) <= 16384  ->  24 + 3200*5 = 16024 <= 16384
 #define USB_WAVE_I_BATCH   3200u
 // WAVE_V: 24 + count*4 <= 16384
-#define USB_WAVE_V_BATCH    800u
+// Was 800 (24 + 800*4 = 3224 bytes/frame). At the shipping default (64000
+// SPS voltage ADC) that flushed usb_stream_flush_wave_v() ~80x/sec -- 8x the
+// ~10 Hz WAVE_I flush cadence -- and the bursty small-frame rate transiently
+// tripped the writable()-based back-pressure check in emit_frame_inplace()
+// well under the ~430 KB/s actual throughput (measured fifo_drop_frames=
+// 37-41/3.5s window, almost all wave_v_drops). Raised to 3200 to drop the
+// flush rate to 20 Hz, coalescing four old batches into one; see
+// tests/device/test_16_daq_stream.py for the measured before/after.
+#define USB_WAVE_V_BATCH   3200u
 
 // Compile-time proof that the worst-case WAVE_I / WAVE_V payloads actually
 // fit in one frame. usb_stream_flush_wave_i()/_v() only caught an overflow at
