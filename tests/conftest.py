@@ -174,7 +174,11 @@ def _daq_skips(config, items):
     if not config.getoption("--daq", default=False):
         skip = pytest.mark.skip(reason="needs --daq (DAQ HAT not requested)")
         for item in items:
-            if "requires_daq" in item.keywords:
+            # Both markers need the P4 stream. `item.keywords` is a MAPPING, so
+            # membership is an exact key lookup, not a substring match --
+            # "requires_daq" does not match a test marked only
+            # "requires_daq_bbp". Check both explicitly.
+            if "requires_daq" in item.keywords or "requires_daq_bbp" in item.keywords:
                 item.add_marker(skip)
 
     if not config.getoption("--daq-wifi", default=False):

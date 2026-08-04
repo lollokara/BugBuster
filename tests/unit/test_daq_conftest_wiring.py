@@ -96,3 +96,22 @@ def test_daq_bbp_tests_skip_without_device_usb(tmp_path):
     """)
     assert r.returncode == 0
     assert "1 skipped" in r.stdout
+
+
+def test_daq_bbp_tests_skip_without_daq_flag(tmp_path):
+    """requires_daq_bbp must imply --daq as well as --device-usb.
+
+    item.keywords is a mapping, so "requires_daq" in keywords is an exact key
+    lookup -- it does NOT match a test marked only requires_daq_bbp. Without an
+    explicit check, such a test would run against hardware that was never
+    requested.
+    """
+    r = _run_pytest(tmp_path, ["--device-usb", "/dev/null"], """
+        import pytest
+
+        @pytest.mark.requires_daq_bbp
+        def test_needs_the_p4_stream_too():
+            assert False, "must not run without --daq"
+    """)
+    assert r.returncode == 0
+    assert "1 skipped" in r.stdout
