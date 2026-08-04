@@ -328,3 +328,265 @@ def test_stress_point_throughput_meets_the_regression_floor(daq_safe, p4_console
             % st.get("drop_fine"))
     finally:
         p4_console.cmd("dspdecim 8", deadline=10.0)
+
+
+# ---------------------------------------------------------------------------
+# DSP correctness
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_rms_squared_equals_std_squared_plus_mean_squared(daq_safe):
+    """The variance identity, checked against independent accumulators.
+
+    rms^2 == std^2 + mean^2 holds for any signal. It is a strong check here
+    because the P4 computes rms, std and mean through SEPARATE accumulation
+    paths -- so agreement means all three survived the blocked (two-level)
+    summation introduced in 8504122, where float accumulators fold into double
+    totals every PDSP_FOLD_N=512 samples.
+
+    The P4 FPU is SINGLE precision: every double op on a per-sample path is
+    software-emulated. A regression here typically means someone reintroduced
+    a double into the hot path, or broke the fold boundary.
+    """
+    cap = capture(daq_safe, 5.0, settle=1.0)
+    assert cap.stats, "no STATS records in 5s"
+    s = cap.stats[-1]
+
+    for name, blk in (("i", s.i), ("v", s.v), ("p", s.p)):
+        if blk.count == 0:
+            continue
+        lhs = blk.rms ** 2
+        rhs = blk.std ** 2 + blk.mean ** 2
+        scale = max(abs(lhs), abs(rhs), 1e-12)
+        assert abs(lhs - rhs) / scale < 1e-4, (
+            "%s: rms^2 (%.9g) != std^2 + mean^2 (%.9g), rel err %.3g — the "
+            "statistics accumulators disagree"
+            % (name, lhs, rhs, abs(lhs - rhs) / scale))
+
+
+def test_stats_min_le_mean_le_max(daq_safe):
+    cap = capture(daq_safe, 2.0)
+    assert cap.stats, "no STATS records"
+    s = cap.stats[-1]
+    for name, blk in (("i", s.i), ("v", s.v), ("p", s.p)):
+        if blk.count == 0:
+            continue
+        assert blk.min <= blk.mean <= blk.max, (
+            "%s: min=%.6g mean=%.6g max=%.6g is not ordered"
+            % (name, blk.min, blk.mean, blk.max))
+        assert blk.std >= 0.0, "%s: negative std %.6g" % (name, blk.std)
+
+
+@pytest.mark.slow
+def test_charge_integral_equals_mean_current_times_elapsed(daq_safe):
+    """d(charge) == mean_i * d(elapsed), checked across two ENERGY records.
+
+    Charge is accumulated as a per-sample trapezoid; mean_i comes from the
+    statistics path. They are independent computations of the same physical
+    quantity, so agreement validates the energy/charge trapezoids AND the
+    dt-factoring introduced when dt moved out of the per-sample work and got
+    applied once per 512-sample block.
+    """
+    cap = capture(daq_safe, 6.0, settle=1.0)
+    assert len(cap.energy) >= 2, (
+        "need >= 2 ENERGY records to difference, got %d" % len(cap.energy))
+    assert cap.stats, "no STATS records to source mean current from"
+
+    first, last = cap.energy[0], cap.energy[-1]
+    d_charge = last.charge_c - first.charge_c
+    d_elapsed = last.elapsed_s - first.elapsed_s
+    assert d_elapsed > 0.5, "elapsed barely advanced (%.3fs)" % d_elapsed
+
+    mean_i = cap.stats[-1].i.mean
+    expected = mean_i * d_elapsed
+
+    # Absolute floor guards the near-zero-current case, where a relative
+    # comparison is meaningless and would flake on an unloaded bench.
+    tol = max(abs(expected) * 0.05, 1e-6)
+    assert abs(d_charge - expected) <= tol, (
+        "charge integral %.9g C disagrees with mean_i * elapsed %.9g C "
+        "(mean_i=%.9g A, elapsed=%.3f s)"
+        % (d_charge, expected, mean_i, d_elapsed))
+
+
+@pytest.mark.slow
+def test_elapsed_tracks_wall_clock(daq_safe):
+    """The device's own elapsed accumulator must track real time.
+
+    elapsed cannot be a period-count * dt, because dt changes with rate and
+    dspdecim -- so this catches the class of bug where a rate change silently
+    corrupts the time base.
+    """
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(0.5)
+    daq_safe.drain()
+
+    t0 = time.monotonic()
+    cap = daq_safe.collect(6.0)
+    wall = time.monotonic() - t0
+    daq_safe.stop()
+
+    assert len(cap.energy) >= 2, "need >= 2 ENERGY records"
+    d_elapsed = cap.energy[-1].elapsed_s - cap.energy[0].elapsed_s
+    assert d_elapsed == pytest.approx(wall, rel=0.10, abs=0.5), (
+        "device elapsed advanced %.3fs over %.3fs of wall clock" % (d_elapsed, wall))
+
+
+def test_reset_energy_zeroes_the_accumulators(daq_safe):
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(1.5)                    # let energy/charge accumulate
+    before = daq_safe.collect(1.0)
+    assert before.energy, "no ENERGY records before reset"
+    assert before.energy[-1].elapsed_s > 0
+
+    daq_safe.reset_energy()
+    time.sleep(0.3)
+    daq_safe.drain()
+    after = daq_safe.collect(1.5)
+    daq_safe.stop()
+
+    assert after.energy, "no ENERGY records after reset"
+    e = after.energy[0]
+    assert e.elapsed_s < before.energy[-1].elapsed_s, (
+        "elapsed did not restart after CMD_RESET_ENERGY (%.3f -> %.3f)"
+        % (before.energy[-1].elapsed_s, e.elapsed_s))
+    assert abs(e.charge_c) < abs(before.energy[-1].charge_c) + 1e-9
+
+
+def test_reset_stats_restarts_the_sample_count(daq_safe):
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(1.5)
+    before = daq_safe.collect(1.0)
+    assert before.stats, "no STATS records before reset"
+
+    daq_safe.reset_stats()
+    time.sleep(0.2)
+    daq_safe.drain()
+    after = daq_safe.collect(1.0)
+    daq_safe.stop()
+
+    assert after.stats, "no STATS records after reset"
+    assert after.stats[0].i.count < before.stats[-1].i.count, (
+        "stats sample count did not restart after CMD_RESET_STATS "
+        "(%d -> %d)" % (before.stats[-1].i.count, after.stats[0].i.count))
+
+
+# ---------------------------------------------------------------------------
+# FFT
+# ---------------------------------------------------------------------------
+
+def test_fft_config_produces_records_with_the_requested_bin_count(daq_safe):
+    daq_safe.set_fft(nbins=256, source=0, window=1, enabled=True)
+    try:
+        cap = capture(daq_safe, 3.0, settle=0.5)
+        assert cap.fft, "no FFT records after CMD_FFT_CONFIG enabled=1"
+        for f in cap.fft:
+            assert f.nbins == 256, "requested 256 bins, got %d" % f.nbins
+            assert len(f.bins) == f.nbins
+    finally:
+        daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FIRMWARE BUG (found by this suite, 2026-08-04): disabling the FFT stops "
+        "COMPUTATION but not TRANSMISSION. spectrum_push() correctly gates on "
+        "s->enabled (dsp/spectrum.c:134), so no new FFTs are computed -- but the "
+        "emit path in board/daq_board.c:836 only checks `nb > 0` and keeps "
+        "shipping the last computed magnitude buffer forever. Measured: 30 FFT "
+        "records in 3s while disabled, of which 1/30 were distinct (i.e. all "
+        "stale); enabled, 20/20 were distinct. Costs stream bandwidth and feeds "
+        "a host stale spectra it explicitly asked to stop receiving. Fix: gate "
+        "the send on spectrum enabled state. This xfail is strict, so it will "
+        "FAIL once the firmware is fixed -- delete the marker then."
+    ),
+)
+def test_fft_can_be_disabled(daq_safe):
+    daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
+    cap = capture(daq_safe, 2.0, settle=0.5)
+    assert not cap.fft, "%d FFT records arrived while disabled" % len(cap.fft)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FIRMWARE BUG (found by this suite, 2026-08-04): the FFT header's window "
+        "byte is hardcoded to SPEC_WIN_HANN in board/daq_board.c:843 rather than "
+        "reporting the configured window. Measured: requesting window=0 (RECT) "
+        "or window=2 (BLACKMAN_HARRIS) both report 1 (HANN). The window is "
+        "correctly APPLIED to the computation (spectrum_configure stores it and "
+        "build_window uses it) -- only the reported id is wrong, so a host cannot "
+        "tell which window produced a spectrum. Strict xfail: delete when fixed."
+    ),
+)
+def test_fft_header_reports_the_configured_window(daq_safe):
+    for window in (0, 2):          # RECT and BLACKMAN_HARRIS; neither is HANN(1)
+        daq_safe.set_fft(nbins=256, source=0, window=window, enabled=True)
+        cap = capture(daq_safe, 1.5, settle=0.5)
+        assert cap.fft, "no FFT records for window=%d" % window
+        reported = {f.window for f in cap.fft}
+        assert reported == {window}, (
+            "requested window=%d but the FFT header reports %r" % (window, reported))
+
+
+def test_changing_the_window_changes_the_spectrum(daq_safe):
+    """Different window functions must produce different magnitudes.
+
+    If the window id is ignored, both captures return identical spectra.
+    """
+    spectra = {}
+    try:
+        for window in (0, 1):
+            daq_safe.set_fft(nbins=256, source=0, window=window, enabled=True)
+            cap = capture(daq_safe, 2.0, settle=0.5)
+            assert cap.fft, "no FFT records for window=%d" % window
+            spectra[window] = cap.fft[-1].bins
+    finally:
+        daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
+
+    assert spectra[0] != spectra[1], (
+        "window 0 and window 1 produced byte-identical spectra — the window "
+        "selection is being ignored")
+
+
+@pytest.mark.slow
+def test_spectrum_keeps_updating_over_thousands_of_ffts(daq_safe):
+    """Regression guard for the Welch spectrum freeze fixed in 7cdef43.
+
+    The spectrum silently stopped updating after a few thousand FFTs. A short
+    capture cannot see it -- the failure needs sustained running, which is
+    precisely why it survived manual bench checks. This test runs long enough
+    to cross that threshold and asserts the spectrum is still changing at the
+    END of the window, not just that FFT records are still arriving (they kept
+    arriving during the bug; they were just stale).
+    """
+    daq_safe.set_fft(nbins=256, source=0, window=1, enabled=True)
+    try:
+        daq_safe.drain()
+        daq_safe.start()
+        time.sleep(0.5)
+        daq_safe.drain()
+
+        cap = daq_safe.collect(20.0)
+        daq_safe.stop()
+
+        assert len(cap.fft) >= 100, (
+            "only %d FFT records in 20s — too few to exercise the freeze"
+            % len(cap.fft))
+
+        # Compare consecutive spectra in the LAST 20% of the capture. On live
+        # analogue input no two consecutive spectra are ever bit-identical, so
+        # any identical adjacent pair late in the run means the buffer froze.
+        tail = cap.fft[int(len(cap.fft) * 0.8):]
+        assert len(tail) >= 5
+        changed = sum(1 for a, b in zip(tail, tail[1:]) if a.bins != b.bins)
+        assert changed >= len(tail) // 2, (
+            "spectrum stopped updating: only %d of %d consecutive pairs "
+            "differed in the final fifth of a %d-FFT run"
+            % (changed, len(tail) - 1, len(cap.fft)))
+    finally:
+        daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
