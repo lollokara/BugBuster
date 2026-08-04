@@ -5,8 +5,20 @@ GPIO modes, waveform types, power controls, and all binary command IDs.
 
 from enum import IntEnum
 
-# Must match #define BBP_PROTO_VERSION in Firmware/ESP32/src/bbp/bbp.h
-BBP_PROTO_VERSION = 9
+# BBP_PROTO_VERSION deliberately does NOT live here.
+#
+# The canonical copy is `bugbuster/protocol.py`, which is what the wire, the
+# tests and Firmware/tools/check_proto_version.py all read. A duplicate literal
+# used to sit here; nothing ever imported it, and it silently stayed at 9 while
+# the three canonical sources moved to 10 -- wire-wrong and unguarded, since
+# check_proto_version.py only reads bbp.h, protocol.py and bbp.rs.
+#
+# It cannot be re-exported from protocol.py either: protocol.py imports from
+# this module, so that would be a circular import. Import it from
+# bugbuster.protocol directly.
+#
+# check_proto_version.py now fails if a literal reappears here.
+# See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-14.
 
 # ---------------------------------------------------------------------------
 # Channel functions (AD74416H CH_FUNC_SETUP register codes)

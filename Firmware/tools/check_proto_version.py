@@ -47,8 +47,39 @@ def extract_version(label: str, path: Path, pattern: str) -> int:
     return int(match.group(1))
 
 
+def check_no_shadow_copies() -> int:
+    """Fail if a second BBP_PROTO_VERSION literal reappears outside SOURCES.
+
+    python/bugbuster/constants.py used to carry its own copy. Nothing imported
+    it, so it drifted to 9 unnoticed while the three checked files moved to 10
+    -- this gate never saw it. A shadow copy that disagrees with the wire is a
+    latent regression waiting for its first importer.
+    See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-14.
+    """
+    shadow = ROOT / "python" / "bugbuster" / "constants.py"
+    if not shadow.exists():
+        return 0
+    text = shadow.read_text(encoding="utf-8")
+    if re.search(r"(?m)^BBP_PROTO_VERSION\s*=\s*\d+", text):
+        print(
+            "FAIL  python/bugbuster/constants.py defines its own "
+            "BBP_PROTO_VERSION literal.",
+            file=sys.stderr,
+        )
+        print(
+            "      The canonical copy is python/bugbuster/protocol.py; import "
+            "it from there.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
+
+    if check_no_shadow_copies() != 0:
+        return 1
 
     versions: list[tuple[str, int]] = []
     for label, path, pattern in SOURCES:
