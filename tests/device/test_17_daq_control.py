@@ -247,3 +247,97 @@ def test_daq_cal_abort_is_idempotent(daq_bbp):
     """Aborting when no calibration is running must not error."""
     daq_bbp.daq.cal_abort()
     daq_bbp.daq.cal_abort()
+
+
+# ---------------------------------------------------------------------------
+# DAQ_TRIG -- trigger/flag IO configuration
+# ---------------------------------------------------------------------------
+
+def test_trigger_get_all_enumerates_twelve_ios(daq_bbp):
+    st = daq_bbp.daq_trigger.get_all()
+    assert "ios" in st, "get_all returned %r" % (st,)
+    assert len(st["ios"]) == 12, "expected 12 IOs, got %d" % len(st["ios"])
+    assert {io["io"] for io in st["ios"]} == set(range(1, 13))
+
+
+@pytest.mark.parametrize("io", range(1, 13))
+def test_trigger_set_io_roundtrip(daq_bbp, io):
+    """Every one of the 12 mainboard IOs must round-trip its role."""
+    original = daq_bbp.daq_trigger.get_io(io)
+    try:
+        daq_bbp.daq_trigger.set_io(io, role=DaqTrigRole.FLAG, edge=DaqTrigEdge.RISING)
+        time.sleep(0.1)
+        got = daq_bbp.daq_trigger.get_io(io)
+        assert int(got["role"]) == int(DaqTrigRole.FLAG), (
+            "IO %d: set role FLAG, read back %r" % (io, got["role"]))
+    finally:
+        try:
+            daq_bbp.daq_trigger.set_io(
+                io, role=DaqTrigRole(int(original["role"])),
+                edge=DaqTrigEdge(int(original["edge"])))
+        except Exception:
+            pass
+
+
+@pytest.mark.parametrize("logic", [DaqTrigLogic.OR, DaqTrigLogic.AND])
+def test_trigger_logic_roundtrip(daq_bbp, logic):
+    original = daq_bbp.daq_trigger.get_all()["logic"]
+    try:
+        daq_bbp.daq_trigger.set_logic(logic)
+        time.sleep(0.1)
+        assert int(daq_bbp.daq_trigger.get_all()["logic"]) == int(logic)
+    finally:
+        try:
+            daq_bbp.daq_trigger.set_logic(DaqTrigLogic(int(original)))
+        except Exception:
+            pass
+
+
+def test_trigger_arm_and_disarm_roundtrip(daq_bbp):
+    try:
+        daq_bbp.daq_trigger.arm(True, pre_samples=1024)
+        time.sleep(0.2)
+        assert daq_bbp.daq_trigger.status()["armed"] is True, "arm not reflected"
+    finally:
+        daq_bbp.daq_trigger.arm(False)
+    time.sleep(0.2)
+    assert daq_bbp.daq_trigger.status()["armed"] is False, "disarm not reflected"
+
+
+# ---------------------------------------------------------------------------
+# Cross-layer: S3 trigger engine -> HAT UART -> P4 -> USB stream
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_flag_event_reaches_the_p4_stream_as_a_marker(daq_bbp, daq_safe):
+    """Configure an S3 IO as a FLAG, drive it, and expect a MARKER on the stream.
+
+    Traverses every hop in the trigger feature: S3 event engine ->
+    HAT_CMD_DAQ_MARK 0x5C over the HAT UART -> P4 marker emission -> USB
+    stream. Also the only automated check that a marker is stamped with the
+    LIVE fused-sample index rather than a stale one.
+
+    Currently CANNOT fire, and this is proven rather than suspected:
+
+      - daq_trigger_poll_digital() (Firmware/ESP32/src/dio/daq_trigger.cpp:162)
+        reads all_dio[i].input_level to detect edges.
+      - dio_poll_inputs() (Firmware/ESP32/src/dio/dio.cpp:165) only refreshes
+        input_level when mode == DIO_MODE_INPUT.
+      - Outputs are configured GPIO_MODE_OUTPUT, not GPIO_MODE_INPUT_OUTPUT
+        (Firmware/ESP32/src/dio/dio.cpp:101), so a driven pin's own level is
+        never read back into input_level.
+
+    So an S3 IO the S3 itself drives can never be seen by its own trigger
+    poll -- there is no self-stimulus path today. Enabling GPIO_MODE_INPUT_OUTPUT
+    (or a separate loopback) is planned as separate firmware work; this test
+    will run once that lands. It is intentionally skipped, not xfailed: this
+    is a missing capability, not a bug to chase.
+    """
+    pytest.skip(
+        "no self-stimulus path exists yet: daq_trigger_poll_digital() "
+        "(Firmware/ESP32/src/dio/daq_trigger.cpp:162) only sees edges via "
+        "dio_poll_inputs() (Firmware/ESP32/src/dio/dio.cpp:165), which refreshes "
+        "input_level only for mode == DIO_MODE_INPUT; outputs are configured "
+        "GPIO_MODE_OUTPUT rather than GPIO_MODE_INPUT_OUTPUT (dio.cpp:101), so a "
+        "pin the S3 drives cannot be read back to stimulate its own trigger. "
+        "Will run once outputs read back (separate firmware work).")

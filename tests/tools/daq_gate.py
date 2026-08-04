@@ -22,6 +22,7 @@ import sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TIER_FILES = [
     ("Tier 1 — P4 USB-HS stream", "tests/device/test_16_daq_stream.py"),
+    ("Tier 2 — BBP control plane", "tests/device/test_17_daq_control.py"),
 ]
 
 
@@ -35,6 +36,8 @@ def main() -> int:
     ap.add_argument("--load-ohms", type=float, default=None,
                     help="nominal DUT load, reporting only")
     ap.add_argument("--p4-serial", default=None, help="P4 console port")
+    ap.add_argument("--device-usb", default=None,
+                    help="S3 mainboard CDC0 port, required for tier 2")
     args = ap.parse_args()
 
     failed = []
@@ -52,6 +55,8 @@ def main() -> int:
             cmd += ["--daq-load-ohms", str(args.load_ohms)]
         if args.p4_serial:
             cmd += ["--daq-p4-serial", args.p4_serial]
+        if args.device_usb:
+            cmd += ["--device-usb", args.device_usb]
 
         print("\n=== %s ===" % label)
         env = dict(os.environ, PYTHONPATH="python")
