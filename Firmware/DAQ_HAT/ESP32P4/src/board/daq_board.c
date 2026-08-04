@@ -325,8 +325,16 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
     if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
         int32_t vr = 0;
         if (adaq7769_read_sample(&b->adaq[ADAQ_ROLE_VOLTAGE], &vr) == ESP_OK) {
-            float v = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_VOLTAGE], vr);
-            // TODO: apply the V_DUT sense divider scale once characterised.
+            float v = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_VOLTAGE], vr)
+                      * V_DUT_SENSE_SCALE;
+            // Applied here even though V_DUT_SENSE_SCALE is currently 1.0f:
+            // fast_emit() and smu_cal.c's sample_vdut() both already scale, so
+            // leaving this path unscaled meant the constant had two different
+            // meanings. The moment the divider is characterised and the
+            // constant changes, this path would have under-reported V_DUT --
+            // and power is v*i, so P, the P statistics, energy_j and mWh would
+            // all have been wrong by the divider ratio, silently.
+            // TODO(bench): set V_DUT_SENSE_SCALE to the measured ratio.
             power_dsp_set_voltage(&b->dsp, v);
         }
     }
@@ -1239,6 +1247,15 @@ static void wifi_stream_bringup_task(void *arg)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "wifi stream start failed: %s", esp_err_to_name(err));
         tcp_backend_stop();
+        // Re-register the USB transport, mirroring wifi_stream_teardown() and
+        // wifi_stream_bringup_cancel_unwind(). tcp_backend_start() swaps the
+        // transport BEFORE it can fail (usb_stream_set_transport() runs ahead
+        // of its xTaskCreate), so without this the stream stays pointed at a
+        // dead TCP backend: backend_write() sees s_client_fd < 0 and drops
+        // every frame forever. Nothing else recovers it -- the idle teardown
+        // only runs in READY, and the FAILED->IDLE decay never touches the
+        // transport -- so USB streaming stayed dead until reboot.
+        usb_backend_start(&b->usb);
         captive_dns_stop();
         wifi_ap_stop();
         ddp_master_set_wifi_stream_mode(&b->ddp, false);

@@ -43,8 +43,11 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "tasks.h"
 #include "config.h"
@@ -1084,20 +1087,83 @@ static char *api_ota_status(void)
     return r ? json_take(r) : api_error("ota status unavailable");
 }
 
+// GitHub release queries MUST NOT run on the calling task.
+//
+// update_manager_check() and _release_options() both perform an HTTPS fetch:
+// esp_http_client_perform() plus software-AES mbedTLS. That chain needs ~16 KB
+// of stack (see .mex/patterns/firmware-autoupdate.md; the CLI already sizes its
+// own worker at 16384 for exactly this). Calling them inline overflowed the
+// stack of whichever task ran the dispatcher and REBOOTED the device --
+// reproduced on hardware 2026-07-29 via GET /api/update/check, which reset the
+// board every time.
+//
+// NOTE on that reproducer: /api/update/check does NOT reach this dispatcher.
+// It is registered in webserver.cpp directly to its own inline handler, and
+// api_core's /api/ota/check has no HTTP route at all -- it is BLE-only. So
+// this worker originally fixed only the BLE path while the HTTP route that
+// actually rebooted the board kept calling update_manager_check() on the
+// 4 KB httpd stack. handle_get_update_check() now delegates here.
+// See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-2.
+//
+// The stack is SPIRAM-backed: this path only reads, it never writes flash or
+// NVS, so it is not subject to the internal-RAM rule that applies to the apply
+// path. It must still be torn down with vTaskDeleteWithCaps() -- a plain
+// vTaskDelete() cannot free a WithCaps allocation and leaks the whole stack
+// every call (that bug already cost one release; see commit 971714e).
+typedef struct {
+    bool releases;          // false = check, true = release options
+    cJSON *out;
+    esp_err_t err;
+    SemaphoreHandle_t done;
+} OtaQueryCtx;
+
+static void ota_query_task(void *arg)
+{
+    OtaQueryCtx *ctx = (OtaQueryCtx *)arg;
+    if (ctx->releases) {
+        ctx->err = update_manager_release_options(10, &ctx->out);
+    } else {
+        ctx->err = update_manager_check(&ctx->out);
+    }
+    xSemaphoreGive(ctx->done);
+    vTaskDeleteWithCaps(NULL);
+}
+
+// Runs a release query on a dedicated 16 KB worker and waits for it.
+static char *ota_query_blocking(bool releases, const char *empty_msg)
+{
+    OtaQueryCtx ctx = {};
+    ctx.releases = releases;
+    ctx.err = ESP_FAIL;
+    ctx.done = xSemaphoreCreateBinary();
+    if (!ctx.done) return api_error("out of memory");
+
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
+        ota_query_task, "ota_query", 16384, &ctx, 5, NULL,
+        tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ok != pdPASS) {
+        vSemaphoreDelete(ctx.done);
+        return api_error("failed to start update query task");
+    }
+
+    // The worker owns ctx until it signals; it must never be abandoned while
+    // still referencing this stack frame, so wait indefinitely rather than
+    // timing out. The underlying HTTP client has its own timeouts.
+    xSemaphoreTake(ctx.done, portMAX_DELAY);
+    vSemaphoreDelete(ctx.done);
+
+    if (ctx.out) return json_take(ctx.out);
+    return api_error(ctx.err == ESP_OK ? empty_msg : esp_err_to_name(ctx.err));
+}
+
 static char *api_ota_check(void)
 {
-    cJSON *out = NULL;
-    esp_err_t e = update_manager_check(&out);
-    if (out) return json_take(out);
-    return api_error(e == ESP_OK ? "no result" : esp_err_to_name(e));
+    return ota_query_blocking(false, "no result");
 }
 
 static char *api_ota_releases(void)
 {
-    cJSON *out = NULL;
-    update_manager_release_options(10, &out);
-    if (out) return json_take(out);
-    return api_error("no releases");
+    return ota_query_blocking(true, "no releases");
 }
 
 static char *api_ota_apply(const cJSON *body)
@@ -1451,9 +1517,13 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/ota/releases") == 0) return api_ota_releases();
     if (strcmp(path, "/api/selftest") == 0)    return api_selftest_get();
     if (strncmp(path, "/api/idac/cal/points", 20) == 0) {
+        // Match the query key precisely. A bare strstr(path, "ch=") also
+        // matches the tail of any other parameter -- "?xch=5" or "?arch=2"
+        // parsed as ch=5 / ch=2.
         int ch = 0;
-        const char *q = strstr(path, "ch=");
-        if (q != NULL) ch = atoi(q + 3);
+        const char *q = strstr(path, "?ch=");
+        if (q == NULL) q = strstr(path, "&ch=");
+        if (q != NULL) ch = atoi(q + 4);
         return api_idac_cal_points(ch);
     }
     if (strcmp(path, "/api/daq/vdut/status") == 0) return api_daq_vdut_status();

@@ -20,6 +20,37 @@ export const deviceMac = computed(() =>
 /** Last /api/status snapshot. Typed as `any` for now — refine incrementally. */
 export const deviceStatus = signal<any>(null);
 
+/* ---- Device reachability ---- */
+
+/**
+ * Consecutive `/api/status` failures, owned by App.tsx's poller.
+ *
+ * Exposed because App.tsx's backoff (500 ms → 30 s) used to be private to its
+ * own effect, so every other poller in the app kept hammering a device that
+ * was already known to be unreachable — SignalPath alone fired two requests
+ * per second, forever, at a device that had rebooted or left WiFi range.
+ *
+ * Poll loops should consult `deviceReachable` / `pollIntervalFor()` rather
+ * than using a bare fixed `setInterval`.
+ * See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-9.
+ */
+export const deviceFailureStreak = signal<number>(0);
+
+/** False once /api/status has failed twice in a row (one blip is not an outage). */
+export const deviceReachable = computed(() => deviceFailureStreak.value < 2);
+
+/**
+ * Back-off multiplier for secondary pollers, derived from the global streak.
+ * Returns the caller's normal interval while healthy, and stretches it toward
+ * a 30 s ceiling as failures accumulate.
+ */
+export function pollIntervalFor(baseMs: number): number {
+  const streak = deviceFailureStreak.value;
+  if (streak === 0) return baseMs;
+  const stretched = baseMs * Math.pow(2, Math.min(streak, 6));
+  return Math.min(stretched, 30000);
+}
+
 /* ---- Selftest monitor ---- */
 
 export const selftestStatus = signal<SelftestStatus | null>(null);

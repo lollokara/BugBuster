@@ -787,20 +787,27 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
 
     // ---- Logical API -> physical AD74416H + connector MUX ------------------
     // Public channel APIs are logical/user-facing A/B/C/D. Only the AD74416H
-    // register index is swapped C<->D. The MUX device must stay with the
-    // user-facing IO_Block/connector:
+    // register index is swapped C<->D. The ADGS2414D MUX device index is
+    // ALSO physically swapped between IO_Block 3 and IO_Block 4 (confirmed by
+    // hardware probing: IO_Block 3's switches live on MUX device 3, not
+    // device 2, and vice versa for IO_Block 4):
     //   logical 0 (A) -> AD74416H phys 0, MUX 0 (IO3 / IO_Block 1)
     //   logical 1 (B) -> AD74416H phys 1, MUX 1 (IO6 / IO_Block 2)
-    //   logical 2 (C) -> AD74416H phys 3, MUX 2 (IO9 / IO_Block 3)
-    //   logical 3 (D) -> AD74416H phys 2, MUX 3 (IO12 / IO_Block 4)
+    //   logical 2 (C) -> AD74416H phys 3, MUX 3 (IO9 / IO_Block 3)
+    //   logical 3 (D) -> AD74416H phys 2, MUX 2 (IO12 / IO_Block 4)
+    //
+    // SYNC: python/bugbuster/hal.py DEFAULT_ROUTING, bus_planner.cpp
+    // IO_ROUTES, hat.cpp block_to_mux_dev, DesktopApp signal_path.rs and web
+    // SignalPath.tsx MUX_DEVICE_BY_LOGICAL all encode this same swap.
+    // tests/unit/test_mux_device_parity.py enforces it.
     uint8_t physical_ch = logical_channel;
     uint8_t mux_dev = logical_channel;
     if (logical_channel == 2) {
         physical_ch = 3;
-        mux_dev = 2;
+        mux_dev = 3;
     } else if (logical_channel == 3) {
         physical_ch = 2;
-        mux_dev = 3;
+        mux_dev = 2;
     }
 
     if (!s_device->setChannelFunction(physical_ch, func)) {

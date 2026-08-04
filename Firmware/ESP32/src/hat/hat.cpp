@@ -1287,7 +1287,9 @@ static void hat_compute_ch_codes(uint8_t out[4])
 {
     const DioState *dio = dio_get_all();
     const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
-    static const uint8_t block_to_mux_dev[4] = { 0, 1, 2, 3 };
+    // IO_Block 3/4 sit on swapped ADGS2414D device indices -- see the
+    // logical->physical note in tasks.cpp. SYNC: hal.py DEFAULT_ROUTING.
+    static const uint8_t block_to_mux_dev[4] = { 0, 1, 3, 2 };
     for (int j = 0; j < 4; j++) {
         bool fault  = pca && pca->efuse_flt[j];
         bool supply = pca && pca->efuse_en[j];
@@ -1884,7 +1886,8 @@ void hat_update_leds(void)
     // Block 4 (LED 7): EFUSE4 + IO10–IO12.
     //
     // MUX device per logical IO block (matches MUX_DEVICE_BY_LOGICAL in SignalPath.tsx):
-    //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 2, block 3 → ADGS dev 3
+    //   block 0 → ADGS dev 0, block 1 → ADGS dev 1, block 2 → ADGS dev 3, block 3 → ADGS dev 2
+    //   (blocks 2/3 are swapped -- see tasks.cpp)
     {
         uint8_t codes[4];
         hat_compute_ch_codes(codes);

@@ -95,6 +95,18 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [preact(), preloadPolyfill(), gzipEmitter()],
+    resolve: {
+      // TypeScript sources MUST win over any stray .jsx/.js of the same name.
+      //
+      // Vite's default order is ['.mjs','.js','.mts','.ts','.jsx','.tsx','.json']
+      // -- .jsx resolves BEFORE .tsx. Every local import here is extensionless
+      // ("./App", "./api/client"), so when a parallel .jsx/.js tree existed
+      // alongside the .tsx sources, vite bundled the .jsx twins while
+      // `tsc --noEmit` typechecked the .tsx files nobody was shipping. Roughly
+      // two months of .tsx commits never reached a device.
+      // See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-10.
+      extensions: [".mts", ".ts", ".tsx", ".mjs", ".js", ".jsx", ".json"],
+    },
     root: ".",
     base: "./",
     build: {

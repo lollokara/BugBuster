@@ -87,23 +87,31 @@ def test_json_malformed_value_fails(sim_device):
 # ---------------------------------------------------------------------------
 
 def test_dio_hal_read_uses_correct_io_index_analog(usb_client, sim_device):
-    """hal.read_digital(io=1) should use AD74416H DIN when in DIGITAL_IN mode."""
+    """hal.read_digital() uses the AD74416H DIN comparator for analog IOs.
+
+    Must use an ANALOG-CAPABLE IO. read_digital() only takes the DIN branch
+    when `rt.channel is not None` (hal.py:617); the analog IOs are 3/6/9/12
+    (position 1). This test previously used IO 1, which has channel=None, so
+    it silently exercised the ESP-GPIO branch instead of the DIN branch it
+    claims to test -- and then failed because no GPIO state was set up.
+    IO 3 is the channel-0 analog IO, matching sim_device.channels[0] below.
+    """
     usb_client.connect()
     hal = usb_client.hal
     hal.begin()
-    
-    # Configure IO 1 as digital input (routed to AD74416H ch 0)
+
+    # Configure IO 3 as digital input (analog-capable, routed to AD74416H ch 0)
     from bugbuster.hal import PortMode
-    hal.configure(1, PortMode.DIGITAL_IN)
-    
+    hal.configure(3, PortMode.DIGITAL_IN)
+
     # Set simulated DIN state for channel 0
     sim_device.channels[0]["din_state"] = True
-    
-    val = hal.read_digital(1)
+
+    val = hal.read_digital(3)
     assert val is True
-    
+
     sim_device.channels[0]["din_state"] = False
-    assert hal.read_digital(1) is False
+    assert hal.read_digital(3) is False
 
 def test_dio_hal_read_uses_correct_io_index_digital_only(usb_client, sim_device):
     """hal.read_digital(io=2) should call dio_read(2)."""
@@ -115,13 +123,16 @@ def test_dio_hal_read_uses_correct_io_index_digital_only(usb_client, sim_device)
     from bugbuster.hal import PortMode
     hal.configure(2, PortMode.DIGITAL_IN)
     
-    # Set simulated GPIO state for IO 2 (index 1 in sim_device.dio)
-    sim_device.dio[1]["output"] = True 
-    
+    # Set simulated GPIO state for IO 2 (index 1 in sim_device.dio).
+    # The DIO_READ handler reads the "input" key (tests/mock/handlers/gpio.py
+    # _dio_read); this previously set "output", which nothing reads, so the
+    # value was always False and the test could never pass.
+    sim_device.dio[1]["input"] = True
+
     val = hal.read_digital(2)
     assert val is True
-    
-    sim_device.dio[1]["output"] = False
+
+    sim_device.dio[1]["input"] = False
     assert hal.read_digital(2) is False
 
 # ---------------------------------------------------------------------------
