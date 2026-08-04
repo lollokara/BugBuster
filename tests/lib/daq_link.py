@@ -235,18 +235,40 @@ class DaqLink:
     # -- safety --------------------------------------------------------------
 
     def safe_state(self) -> None:
-        """Best-effort return to a safe state. Never raises.
+        """Return the device to a safe state. Attempts EVERY step, always.
 
-        Order matters: stop the stream first so the device is not mid-emit,
-        then kill the DUT supply, then release the range lock.
+        Two safety properties, both learned the hard way on real hardware:
+
+        1. The DUT supply is disabled FIRST. It is the only step whose omission
+           is physically hazardous -- a live rail into whatever is wired to the
+           terminals -- so it must not sit behind a step that can fail or be
+           interrupted. Stopping the stream and releasing the range lock are
+           merely tidy.
+
+        2. Every step catches BaseException, not Exception. KeyboardInterrupt
+           and SystemExit are BaseExceptions, so `except Exception` does not
+           catch them: a Ctrl-C landing inside an earlier step used to abort
+           teardown outright. Measured before this fix: interrupting a test
+           left 12 V live on the DUT terminals in 1 of 3 trials.
+
+        Each step gets one retry, because the failure mode being defended
+        against is a single interrupted USB write, not a dead link. An
+        interrupt is re-raised only after every step has been attempted, so the
+        caller still sees the Ctrl-C it asked for.
         """
-        for fn in (self.stop,
-                   lambda: self.set_source(0.0, ILIMIT_SAFE_A, False),
+        pending = None
+        for fn in (lambda: self.set_source(0.0, ILIMIT_SAFE_A, False),
+                   self.stop,
                    lambda: self.set_range_lock(P.RANGE_AUTO)):
-            try:
-                fn()
-            except Exception:
-                pass
+            for _ in range(2):
+                try:
+                    fn()
+                    break
+                except BaseException as exc:  # noqa: BLE001 -- see docstring
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        pending = exc
+        if pending is not None:
+            raise pending
 
     def close(self) -> None:
         try:

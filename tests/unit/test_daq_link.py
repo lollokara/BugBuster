@@ -102,10 +102,60 @@ def test_safe_state_stops_disables_smu_and_unlocks_range():
     io = FakeIO()
     DaqLink(io).safe_state()
     cmds = [c for c, _ in sent_frames(io)]
-    assert cmds == [P.CMD_STOP, P.CMD_SET_SOURCE, P.CMD_RANGE_LOCK]
-    _, src = sent_frames(io)[1]
+    # Supply-disable leads: see test_safe_state_disables_the_supply_before_anything_else.
+    assert cmds == [P.CMD_SET_SOURCE, P.CMD_STOP, P.CMD_RANGE_LOCK]
+    _, src = sent_frames(io)[0]
     assert struct.unpack_from("<ffB", src, 0)[2] == 0     # enable = 0
     assert sent_frames(io)[2][1] == bytes([P.RANGE_AUTO])
+
+
+def test_safe_state_disables_the_supply_before_anything_else():
+    """Ordering is a safety decision, not a style one.
+
+    Disabling the DUT supply is the only step whose omission is physically
+    hazardous, so it must go first -- if the process dies partway through
+    teardown, the rail is already down.
+    """
+    io = FakeIO()
+    DaqLink(io).safe_state()
+    cmds = [c for c, _ in sent_frames(io)]
+    assert cmds[0] == P.CMD_SET_SOURCE, (
+        "safe_state must disable the DUT supply first, got order %r" % cmds)
+    _, src = sent_frames(io)[0]
+    assert struct.unpack_from("<ffB", src, 0)[2] == 0, "supply not disabled"
+
+
+def test_safe_state_completes_every_step_despite_a_keyboard_interrupt():
+    """A Ctrl-C mid-teardown must not strand the DUT supply enabled.
+
+    KeyboardInterrupt is a BaseException, so `except Exception` does NOT catch
+    it. Observed on real hardware: interrupting a test left 12 V live on the
+    DUT terminals in 1 of 3 trials because the interrupt landed in an earlier
+    teardown step and the supply-disable never ran.
+    """
+    class InterruptOnFirstWrite(FakeIO):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def write(self, data):
+            self.calls += 1
+            if self.calls == 1:
+                raise KeyboardInterrupt
+            super().write(data)
+
+    io = InterruptOnFirstWrite()
+    # The interrupt is honoured -- but only after every safety step ran.
+    with pytest.raises(KeyboardInterrupt):
+        DaqLink(io).safe_state()
+
+    cmds = [c for c, _ in sent_frames(io)]
+    assert P.CMD_SET_SOURCE in cmds, (
+        "DUT supply was never disabled after an interrupt; wrote %r" % cmds)
+    src = next(p for c, p in sent_frames(io) if c == P.CMD_SET_SOURCE)
+    assert struct.unpack_from("<ffB", src, 0)[2] == 0, "supply left enabled"
+    assert P.CMD_STOP in cmds and P.CMD_RANGE_LOCK in cmds, (
+        "remaining teardown steps were skipped: %r" % cmds)
 
 
 def test_safe_state_never_raises_on_a_broken_link():
