@@ -24,6 +24,7 @@ TIER_FILES = [
     ("Tier 1 — P4 USB-HS stream", "tests/device/test_16_daq_stream.py"),
     ("Tier 2 — BBP control plane", "tests/device/test_17_daq_control.py"),
     ("Tier 3 — api_core HTTP routes", "tests/device/test_18_daq_api.py"),
+    ("Tier 4a — WiFi provisioning", "tests/device/test_19_daq_wifi.py"),
 ]
 
 
