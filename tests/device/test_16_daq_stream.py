@@ -951,3 +951,193 @@ def test_autorange_transitions_during_a_sweep(daq_safe, daq_load_ohms, daq_load)
                min(currents), max(currents), daq_load_ohms))
 
     assert seen <= {P.RANGE_HI, P.RANGE_MID, P.RANGE_LO}
+
+
+# ---------------------------------------------------------------------------
+# STATUS counters
+# ---------------------------------------------------------------------------
+
+def test_status_reports_no_drops_at_the_default_rate(daq_safe):
+    """At the shipping default the ADC-pairing pipeline must be lossless.
+
+    This checks only the ADC-side counters (drop_fine/drop_coarse/
+    overflow_count), which are genuinely zero at the default rate on this
+    hardware. The USB-side fifo_drop_frames counter is NOT asserted here --
+    see test_fifo_drop_frames_at_default_rate, which is a documented xfail:
+    it is reproducibly nonzero even in a clean, single-consumer capture.
+    """
+    cap = capture(daq_safe, 3.0, settle=0.5)
+    st = cap.last_status
+    assert st, "no STATUS record"
+
+    assert st.get("drop_fine", 0) == 0, "drop_fine=%d" % st.get("drop_fine", 0)
+    assert st.get("drop_coarse", 0) == 0, "drop_coarse=%d" % st.get("drop_coarse", 0)
+    assert st.get("overflow_count", 0) == 0, (
+        "overflow_count=%d" % st.get("overflow_count", 0))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FIRMWARE BUG (found by this suite, 2026-08-04): fifo_drop_frames is "
+        "reproducibly nonzero at the shipping default rate (odr ratio 256 -> "
+        "32000 SPS/ch on FINE/COARSE), even in a single isolated capture with "
+        "no other USB consumer and no load on the DUT terminals. Measured "
+        "over 3 independent 3.5s captures: fifo_drop_frames=44,50,42; "
+        "drop_fine=drop_coarse=0 every time (ADC pairing itself is healthy --"
+        " see test_status_reports_no_drops_at_the_default_rate, which passes)."
+        " The drops are attributable almost entirely to WAVE_V: wave_v_drops"
+        "=33-36 vs wave_i_drops=4, out of ~260 WAVE_V frames/window. Root "
+        "cause per src/stream/usb_stream.c: USB_WAVE_V_BATCH is 800 samples "
+        "(usb_stream.h:56) and the VOLTAGE ADAQ runs at 64000 SPS, so "
+        "usb_stream_flush_wave_v (usb_stream.c:295) fires ~80 times/sec -- "
+        "an order of magnitude more often than the ~10/sec WAVE_I flush "
+        "(3200-sample batch, usb_stream.h:54) -- each a small (~3.2KB) "
+        "write. Aggregate throughput is only ~430 KB/s, far under USB-HS "
+        "bandwidth, so this is not a bandwidth ceiling: it is the "
+        "writable()-based back-pressure check in emit_frame_inplace "
+        "(usb_stream.c:175-186) tripping transiently on the bursty small-"
+        "frame V cadence. Fix: either coalesce WAVE_V flushes (larger batch "
+        "or a time-based flush cap) or size the transport's TX buffering to "
+        "absorb the burst. Strict xfail: delete when fixed."
+    ),
+)
+def test_fifo_drop_frames_at_default_rate(daq_safe):
+    """At the shipping default the pipeline must be lossless end to end."""
+    cap = capture(daq_safe, 3.0, settle=0.5)
+    st = cap.last_status
+    assert st, "no STATUS record"
+    assert st.get("fifo_drop_frames", 0) == 0, (
+        "fifo_drop_frames=%d — frames dropped for back-pressure at the "
+        "DEFAULT rate, which should have headroom"
+        % st.get("fifo_drop_frames"))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FIRMWARE BUG (found by this suite, 2026-08-04): same root cause as "
+        "test_fifo_drop_frames_at_default_rate -- wave_i_drops and "
+        "wave_v_drops are the per-type breakdown of fifo_drop_frames, and "
+        "both are reproducibly nonzero at the default rate (wave_i_drops=4, "
+        "wave_v_drops=33-36 across repeated 3.5s captures with no other USB "
+        "consumer). See that test for the full analysis. Strict xfail: "
+        "delete when fixed."
+    ),
+)
+def test_status_wave_drop_counters_are_zero(daq_safe):
+    cap = capture(daq_safe, 3.0, settle=0.5)
+    st = cap.last_status
+    assert st.get("wave_i_drops", 0) == 0, "wave_i_drops=%d" % st.get("wave_i_drops", 0)
+    assert st.get("wave_v_drops", 0) == 0, "wave_v_drops=%d" % st.get("wave_v_drops", 0)
+
+
+def test_status_perf_counters_advance_while_streaming(daq_safe):
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(0.5)
+    first = daq_safe.collect(1.0)
+    second = daq_safe.collect(2.0)
+    daq_safe.stop()
+
+    assert first.last_status and second.last_status
+    assert second.last_status["frames_tx"] > first.last_status["frames_tx"], (
+        "frames_tx did not advance (%d -> %d)"
+        % (first.last_status["frames_tx"], second.last_status["frames_tx"]))
+    assert second.last_status.get("bytes_per_sec", 0) > 0, (
+        "bytes_per_sec is zero while streaming")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "FIRMWARE BUG (found by this suite, 2026-08-04): ring_high_water is "
+        "wired to always report 0. board/daq_board.c:891 sets "
+        "`.ring_high_water = 0` in the STATUS-building struct literal, with "
+        "the comment 'filled if adaq_stream exposes it; else 0 (documented)' "
+        "-- adaq_stream never exposes a high-water figure, so the field is "
+        "permanently a hardcoded constant, not a live counter. Measured: "
+        "ring_high_water=0 across every STATUS record in a 3s capture at the "
+        "shipping ODR (32000 SPS), consistent with the source. This is not a "
+        "test assumption error -- the plan's original assertion (hw > 0) "
+        "encoded the field's documented INTENT, and the firmware simply "
+        "never implements it. Fix: either wire adaq_stream's ring fill level "
+        "into daq_board.c, or remove the field from usb_proto.h so hosts "
+        "stop being told a bogus 0. Strict xfail: delete when fixed."
+    ),
+)
+def test_ring_high_water_stays_within_bounds(daq_safe):
+    """High-water rising to the ring's full depth means the consumer is losing.
+
+    We cannot know the ring size from here, so assert the weaker but still
+    meaningful property: high-water is non-zero (the ring is being used) and
+    no frames were dropped alongside it.
+    """
+    cap = capture(daq_safe, 3.0, settle=0.5)
+    st = cap.last_status
+    hw = st.get("ring_high_water", 0)
+    assert hw > 0, "ring_high_water is 0 — the ring is not being exercised"
+    assert st.get("fifo_drop_frames", 0) == 0, (
+        "ring high-water %d with %d dropped frames — the ring is saturating"
+        % (hw, st.get("fifo_drop_frames")))
+
+
+def test_status_reports_streaming_state_correctly(daq_safe):
+    cap_on = capture(daq_safe, 1.5, settle=0.5)
+    assert cap_on.last_status.get("streaming") == 1, (
+        "STATUS reports streaming=0 while frames are arriving")
+
+
+def test_status_adaq_health_bits_are_all_ok(daq_safe):
+    """adaq_ok_bits: bit0=FINE, bit1=COARSE, bit2=VOLT."""
+    cap = capture(daq_safe, 2.0, settle=0.5)
+    bits = cap.last_status.get("adaq_ok_bits")
+    assert bits is not None, "STATUS carries no adaq_ok_bits"
+    unhealthy = [name for i, name in enumerate(("FINE", "COARSE", "VOLT"))
+                 if not (bits & (1 << i))]
+    assert not unhealthy, (
+        "ADAQ chains unhealthy: %s (adaq_ok_bits=0x%02X)"
+        % (", ".join(unhealthy), bits))
+    assert cap.last_status.get("fine_err_pct", 0) < 5, (
+        "FINE STATUS_ERR at %d%% of the last window"
+        % cap.last_status.get("fine_err_pct"))
+
+
+# ---------------------------------------------------------------------------
+# Arm / markers
+# ---------------------------------------------------------------------------
+
+def test_arm_and_disarm_are_accepted(daq_safe):
+    """CMD_ARM must not disturb the stream.
+
+    Marker EMISSION is driven by the S3's trigger engine and is covered in
+    tier 2 (test_17_daq_control.py); here we only verify the P4 accepts the
+    command and keeps streaming.
+    """
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(0.3)
+
+    daq_safe.arm(True, trig_logic=1, pre_samples=4096)
+    time.sleep(0.3)
+    armed = daq_safe.collect(1.0)
+    assert armed.wave_i_samples > 0, "stream stalled after CMD_ARM"
+    assert armed.resyncs == 0
+
+    daq_safe.arm(False)
+    time.sleep(0.3)
+    disarmed = daq_safe.collect(1.0)
+    daq_safe.stop()
+    assert disarmed.wave_i_samples > 0, "stream stalled after disarm"
+
+
+def test_arm_with_zero_pre_roll_is_accepted(daq_safe):
+    daq_safe.drain()
+    daq_safe.start()
+    time.sleep(0.3)
+    daq_safe.arm(True, trig_logic=0, pre_samples=0)
+    time.sleep(0.3)
+    cap = daq_safe.collect(1.0)
+    daq_safe.arm(False)
+    daq_safe.stop()
+    assert cap.wave_i_samples > 0
