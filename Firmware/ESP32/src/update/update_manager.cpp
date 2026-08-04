@@ -1,5 +1,6 @@
 #include "update_manager.h"
 
+#include <atomic>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -93,6 +94,48 @@ static UpdateRuntime s_update = {
     .state = UPDATE_STATE_IDLE,
 };
 static bool s_reboot_pending = false;
+
+// ---------------------------------------------------------------------------
+// Apply reentrancy guard.
+//
+// There are FOUR independent entry points into an apply: the HTTP worker
+// (webserver.cpp handle_post_update_apply), the BLE dispatcher
+// (api_core.cpp api_ota_apply), the CLI command (cli_cmds_sys.cpp) and the
+// TUI menu (cli_menu.cpp). The latter two each had their own private
+// done/busy flag; HTTP and BLE had none, and no flag was visible to any other
+// entry point.
+//
+// Two concurrent applies resolve the SAME esp_ota_get_next_update_partition()
+// and both esp_ota_begin() it -- the second erases the partition under the
+// first -- then interleave 4 KB writes into it. Whichever finishes first sets
+// the boot partition to a byte-interleaved image of two downloads. That is a
+// rollback at best and a brick where rollback is disabled. HTTP-apply
+// concurrent with TUI-menu-apply is genuinely reachable: different tasks,
+// different guards.
+//
+// Guarding inside update_manager itself (rather than at each call site) means
+// every present and future entry point is covered without having to remember.
+// See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-3.
+static std::atomic<bool> s_apply_busy{false};
+
+// RAII so that every early return in the long apply functions releases the
+// guard. esp_restart() paths skip the destructor, but the device is rebooting.
+namespace {
+struct ApplyGuard {
+    bool held;
+    ApplyGuard()
+    {
+        bool expected = false;
+        held = s_apply_busy.compare_exchange_strong(expected, true);
+    }
+    ~ApplyGuard()
+    {
+        if (held) s_apply_busy.store(false);
+    }
+    ApplyGuard(const ApplyGuard &) = delete;
+    ApplyGuard &operator=(const ApplyGuard &) = delete;
+};
+}  // namespace
 
 // Phase name for a target, used in the status JSON alongside the numeric mask.
 static const char *target_name(uint32_t target)
@@ -1101,6 +1144,12 @@ esp_err_t update_manager_apply(uint32_t targets, cJSON **out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
 
+    ApplyGuard guard;
+    if (!guard.held) {
+        set_error("an update is already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     char why[96];
     if (!targets_are_valid(targets, why, sizeof(why))) {
         set_error(why);
@@ -1261,6 +1310,12 @@ esp_err_t update_manager_release_options(uint8_t max_options, cJSON **out)
 esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJSON **out)
 {
     if (!out || index >= 5) return ESP_ERR_INVALID_ARG;
+
+    ApplyGuard guard;
+    if (!guard.held) {
+        set_error("an update is already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     char why[96];
     if (!targets_are_valid(targets, why, sizeof(why))) {

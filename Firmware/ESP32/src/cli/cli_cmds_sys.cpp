@@ -29,6 +29,7 @@
 #include "esp_partition.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "hat/hat.h"
 
 #include "driver/gpio.h"
@@ -840,7 +841,7 @@ static TaskHandle_t s_cli_update_task = NULL;
 static CliUpdateTaskArgs s_cli_update_args = {};
 static volatile bool s_cli_update_done = true;
 static esp_err_t s_cli_update_err = ESP_OK;
-static char s_cli_update_result[512] = {};
+static char s_cli_update_result[2048] = {};
 
 static const char *update_state_name(int state)
 {
@@ -931,7 +932,20 @@ static void cli_update_apply_task(void *ctx)
     if (out) {
         char *printed = cJSON_PrintUnformatted(out);
         if (printed) {
-            snprintf(s_cli_update_result, sizeof(s_cli_update_result), "%s", printed);
+            // Truncating here used to produce a silently malformed string that
+            // the caller then failed to cJSON_Parse(), reporting the useless
+            // "invalid result JSON" while the download had in fact succeeded.
+            // A check result carries a 64-char sha256 per component, so it
+            // outgrew the old 512-byte buffer as soon as it listed two.
+            int need = snprintf(s_cli_update_result, sizeof(s_cli_update_result),
+                                "%s", printed);
+            if (need < 0 || (size_t)need >= sizeof(s_cli_update_result)) {
+                s_cli_update_result[0] = '\0';
+                ESP_LOGE("cli_update",
+                         "update result JSON is %d bytes, buffer is %u -- "
+                         "enlarge s_cli_update_result",
+                         need, (unsigned)sizeof(s_cli_update_result));
+            }
             cJSON_free(printed);
         }
         cJSON_Delete(out);
