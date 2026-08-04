@@ -839,8 +839,15 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     usb_stream_send_energy(&b->usb, &b->dsp);
 
     // Continuous spectrum: send the latest averaged magnitude bins.
+    // Gate on `enabled` as well as bin count: spectrum_push() stops COMPUTING
+    // when disabled, but the magnitude buffer retains its last contents, so
+    // without this check the device keeps transmitting a frozen spectrum
+    // forever after CMD_FFT_CONFIG{enabled=0} -- burning stream bandwidth and
+    // feeding the host stale data it explicitly asked to stop receiving.
     static float mags[SPECTRUM_MAX_BINS];
-    uint16_t nb = spectrum_get_magnitude(&b->spectrum, mags, SPECTRUM_MAX_BINS);
+    uint16_t nb = b->spectrum.enabled
+                ? spectrum_get_magnitude(&b->spectrum, mags, SPECTRUM_MAX_BINS)
+                : 0;
     if (nb > 0) {
         // Spectrum is fed the DECIMATED tap, so its sample rate (and thus the
         // FFT frequency axis) is the fused ODR / dsp_decim.
@@ -848,7 +855,7 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         uint32_t rate =
             (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]) / dd;
         usb_stream_send_fft(&b->usb, mags, nb, rate, b->fft_source,
-                            (uint8_t)SPEC_WIN_HANN);
+                            (uint8_t)b->spectrum.window);
     }
 
     // Device status (range, streaming, SMU set-points, FINE ADC health).

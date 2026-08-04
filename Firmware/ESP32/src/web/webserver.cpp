@@ -2379,6 +2379,19 @@ static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
     return rc;
 }
 
+// GET /api/daq - top-level DAQ status. api_core_handle() already dispatches
+// this path (used by BLE), but no httpd_uri_t was ever registered for it, so
+// HTTP callers got a 404. Mirror /api/daq/vdut/status: read-only, no admin
+// auth required.
+static esp_err_t handle_get_daq(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", "/api/daq", NULL);
+    if (!resp) return send_error(req, 500, "daq status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
 // GET /api/daq/vdut/status
 static esp_err_t handle_get_daq_vdut_status(httpd_req_t *req)
 {
@@ -5162,6 +5175,11 @@ bool initWebServer(void)
         .uri = "/api/daq/wifi_stream/status", .method = HTTP_GET, .handler = handle_get_daq_wifi_stream_status, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_wifi_stream_status);
+
+    httpd_uri_t uri_daq = {
+        .uri = "/api/daq", .method = HTTP_GET, .handler = handle_get_daq, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq);
 
     httpd_uri_t uri_daq_vdut_status = {
         .uri = "/api/daq/vdut/status", .method = HTTP_GET, .handler = handle_get_daq_vdut_status, .user_ctx = NULL
