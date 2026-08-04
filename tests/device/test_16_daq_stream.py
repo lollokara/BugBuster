@@ -502,39 +502,12 @@ def test_fft_config_produces_records_with_the_requested_bin_count(daq_safe):
         daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FIRMWARE BUG (found by this suite, 2026-08-04): disabling the FFT stops "
-        "COMPUTATION but not TRANSMISSION. spectrum_push() correctly gates on "
-        "s->enabled (dsp/spectrum.c:134), so no new FFTs are computed -- but the "
-        "emit path in board/daq_board.c:836 only checks `nb > 0` and keeps "
-        "shipping the last computed magnitude buffer forever. Measured: 30 FFT "
-        "records in 3s while disabled, of which 1/30 were distinct (i.e. all "
-        "stale); enabled, 20/20 were distinct. Costs stream bandwidth and feeds "
-        "a host stale spectra it explicitly asked to stop receiving. Fix: gate "
-        "the send on spectrum enabled state. This xfail is strict, so it will "
-        "FAIL once the firmware is fixed -- delete the marker then."
-    ),
-)
 def test_fft_can_be_disabled(daq_safe):
     daq_safe.set_fft(nbins=256, source=0, window=1, enabled=False)
     cap = capture(daq_safe, 2.0, settle=0.5)
     assert not cap.fft, "%d FFT records arrived while disabled" % len(cap.fft)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FIRMWARE BUG (found by this suite, 2026-08-04): the FFT header's window "
-        "byte is hardcoded to SPEC_WIN_HANN in board/daq_board.c:843 rather than "
-        "reporting the configured window. Measured: requesting window=0 (RECT) "
-        "or window=2 (BLACKMAN_HARRIS) both report 1 (HANN). The window is "
-        "correctly APPLIED to the computation (spectrum_configure stores it and "
-        "build_window uses it) -- only the reported id is wrong, so a host cannot "
-        "tell which window produced a spectrum. Strict xfail: delete when fixed."
-    ),
-)
 def test_fft_header_reports_the_configured_window(daq_safe):
     for window in (0, 2):          # RECT and BLACKMAN_HARRIS; neither is HANN(1)
         daq_safe.set_fft(nbins=256, source=0, window=window, enabled=True)
