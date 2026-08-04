@@ -184,6 +184,13 @@ def _daq_skips(config, items):
             if "daq_wifi" in item.keywords:
                 item.add_marker(skip)
 
+    if not config.getoption("--device-usb", default=None):
+        skip = pytest.mark.skip(
+            reason="needs --device-usb (the S3 BBP control plane) as well as --daq")
+        for item in items:
+            if "requires_daq_bbp" in item.keywords:
+                item.add_marker(skip)
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
@@ -1008,3 +1015,32 @@ def daq_safe(daq_link):
 def daq_load_ohms(request):
     """Reporting-only hint. Never assert against this."""
     return request.config.getoption("--daq-load-ohms")
+
+
+@pytest.fixture(scope="session")
+def daq_bbp(request):
+    """The Python client over the S3 mainboard's CDC0, for the DAQ control plane.
+
+    Session-scoped to match `daq_link`: CDC0 holds a single-client lock, so
+    reconnecting per test is both slow and a good way to collide with anything
+    else that wants the port.
+    """
+    port = request.config.getoption("--device-usb")
+    if not port:
+        pytest.skip("no --device-usb given")
+
+    import bugbuster as bb
+    from bugbuster.transport.usb import USBTransport
+
+    try:
+        dev = bb.BugBuster(USBTransport(port))
+        dev.connect()
+    except Exception as exc:
+        pytest.skip("S3 control plane unavailable on %s: %s" % (port, exc))
+
+    yield dev
+
+    try:
+        dev.disconnect()
+    except Exception:
+        pass

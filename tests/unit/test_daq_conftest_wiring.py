@@ -73,3 +73,26 @@ def test_daq_load_ohms_option_is_accepted(tmp_path):
             pass
     """)
     assert r.returncode == 0
+
+
+def test_requires_daq_bbp_marker_is_registered(tmp_path):
+    r = _run_pytest(tmp_path, ["--strict-markers", "--collect-only"], """
+        import pytest
+
+        @pytest.mark.requires_daq_bbp
+        def test_noop():
+            pass
+    """)
+    assert r.returncode == 0
+
+
+def test_daq_bbp_tests_skip_without_device_usb(tmp_path):
+    r = _run_pytest(tmp_path, ["--daq"], """
+        import pytest
+
+        @pytest.mark.requires_daq_bbp
+        def test_needs_both_links():
+            assert False, "must not run without --device-usb"
+    """)
+    assert r.returncode == 0
+    assert "1 skipped" in r.stdout
