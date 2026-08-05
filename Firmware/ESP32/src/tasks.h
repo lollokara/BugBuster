@@ -390,6 +390,8 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 #define TASK_STACK_FAULTMON  2560
 #define TASK_STACK_CMDPROC   2048
 #define TASK_STACK_WAVEGEN   2048
+#define TASK_STACK_MAINLOOP  5120  // Core-0 main loop; sized from measured 2684 bytes peak
+#define TASK_STACK_BBPCLI    8192  // Core-1 CLI/BBP; DO NOT shrink (see main.cpp comment)
 
 void tasks_log_stack_hwm(void);
 

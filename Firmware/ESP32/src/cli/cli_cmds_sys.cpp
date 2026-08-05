@@ -1207,8 +1207,8 @@ extern "C" void cli_cmd_stack_hwm(const char* args)
         { "faultMon", xTaskGetHandle("faultMon"),  TASK_STACK_FAULTMON },
         { "cmdProc",  xTaskGetHandle("cmdProc"),   TASK_STACK_CMDPROC  },
         { "wavegen",  g_wavegenTask,               TASK_STACK_WAVEGEN  },
-        { "mainLoop", xTaskGetHandle("mainLoop"),  8192 },
-        { "bbpCli",   xTaskGetHandle("bbpCli"),    8192 },
+        { "mainLoop", xTaskGetHandle("mainLoop"),  TASK_STACK_MAINLOOP },
+        { "bbpCli",   xTaskGetHandle("bbpCli"),    TASK_STACK_BBPCLI   },
     };
     // NOTE: on ESP-IDF uxTaskGetStackHighWaterMark() returns BYTES, not words
     // (IDF sizes stacks in bytes too). An earlier version of this command

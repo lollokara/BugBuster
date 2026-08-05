@@ -64,7 +64,7 @@ static StaticTask_t s_mainLoopTcb;
 // below (bbpCli, 8192) or to ble_api's 8192-byte stack in net/ble_service.cpp
 // -- both are load-bearing for known-open defects and must stay exactly as
 // they are; see the comment on s_bbpTaskStack for why.
-static StackType_t s_mainLoopStack[5120 / sizeof(StackType_t)];
+static StackType_t s_mainLoopStack[TASK_STACK_MAINLOOP / sizeof(StackType_t)];
 
 // Dedicated task for CLI / BBP processing, pinned to Core 1.
 // Separating this from the main loop (Core 0) means a blocking HAT relay in
@@ -72,14 +72,14 @@ static StackType_t s_mainLoopStack[5120 / sizeof(StackType_t)];
 // and vice versa.  Both tasks compete for s_hat_mutex when they need UART
 // access, serialising HAT traffic correctly.
 //
-// DO NOT shrink this 8192-byte stack (2026-08-05): cli_menu.cpp:1809 calls
+// DO NOT shrink this TASK_STACK_BBPCLI-byte stack (2026-08-05): cli_menu.cpp:1809 calls
 // update_manager_release_options() on this task, which runs an HTTPS/mbedTLS
 // chain measured at ~16 KB elsewhere in this codebase. It is arguably already
 // too small. Leave it exactly as is -- see also net/ble_service.cpp:464
 // (ble_api, also 8192, also untouched): the BLE OTA apply path runs
 // update_manager_apply() inline on it and writes flash.
 static StaticTask_t s_bbpTaskTcb;
-static StackType_t  s_bbpTaskStack[8192 / sizeof(StackType_t)];
+static StackType_t  s_bbpTaskStack[TASK_STACK_BBPCLI / sizeof(StackType_t)];
 
 static void bbpCliTask(void *)
 {

@@ -970,6 +970,7 @@ def test_release_path_and_push_local_use_the_shared_product_id_constants():
 # ---------------------------------------------------------------------------
 MAIN_CPP = Path("Firmware/ESP32/src/main.cpp").read_text()
 BLE_C = Path("Firmware/ESP32/src/net/ble_service.cpp").read_text()
+CLI_SYS_CPP = Path("Firmware/ESP32/src/cli/cli_cmds_sys.cpp").read_text()
 
 
 def test_reduced_task_stack_sizes_are_exactly_the_new_values():
@@ -989,8 +990,8 @@ def test_main_loop_static_stack_is_exactly_the_new_value():
     always-resident internal RAM freed for the lifetime of the process --
     the single most valuable trim in this pass."""
     code = _strip_noise(MAIN_CPP)
-    assert re.search(r"s_mainLoopStack\[\s*5120\s*/\s*sizeof\(StackType_t\)\s*\]", code), \
-        "mainLoop's static stack must be exactly 5120 bytes (measured peak 2684, margin 2436)"
+    assert re.search(r"s_mainLoopStack\[\s*TASK_STACK_MAINLOOP\s*/\s*sizeof\(StackType_t\)\s*\]", code), \
+        "mainLoop's static stack must reference TASK_STACK_MAINLOOP (exactly 5120 bytes, measured peak 2684, margin 2436)"
 
 
 def test_daq_activate_worker_stack_is_exactly_the_new_value():
@@ -1001,8 +1002,14 @@ def test_daq_activate_worker_stack_is_exactly_the_new_value():
 
 def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
     main_code = _strip_noise(MAIN_CPP)
-    m = re.search(r"s_bbpTaskStack\[\s*(\d+)\s*/\s*sizeof\(StackType_t\)\s*\]", main_code)
-    assert m, "could not find s_bbpTaskStack declaration in main.cpp"
+    # Check that bbpCli references TASK_STACK_BBPCLI constant
+    assert "s_bbpTaskStack[TASK_STACK_BBPCLI" in main_code, \
+        "bbpCli's stack must reference TASK_STACK_BBPCLI constant in main.cpp"
+
+    # Verify the constant value in tasks.h
+    tasks_code = _strip_noise(TASKS_H)
+    m = re.search(r"#define\s+TASK_STACK_BBPCLI\s+(\d+)", tasks_code)
+    assert m, "could not find TASK_STACK_BBPCLI definition in tasks.h"
     assert int(m.group(1)) >= 8192, (
         "bbpCli's stack must stay >= 8192: cli_menu.cpp:1809 calls "
         "update_manager_release_options() on this task, which runs an "
@@ -1018,3 +1025,53 @@ def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
         "update_manager_apply() inline on this task while writing flash -- "
         "shrinking it turns a latent bug into a guaranteed crash"
     )
+
+
+def test_stack_hwm_table_uses_shared_constants_not_literals():
+    """The stack_hwm CLI diagnostic must reference shared TASK_STACK_* constants,
+    not duplicated hardcoded literals. This prevents the table from becoming stale
+    when actual stack sizes change (bug that motivated this fix: mainLoop was 5120
+    but the table said 8192).
+
+    This test checks that each row in the tasks[] table uses a macro constant
+    rather than a bare numeric literal for the 'declared' field."""
+    body = _fn_body(CLI_SYS_CPP, "extern \"C\" void cli_cmd_stack_hwm(")
+
+    # Extract just the tasks[] array initialization
+    # Find the struct definition with the array - needs to handle inline struct
+    array_match = re.search(
+        r"struct\s*\{[^}]*\}\s*tasks\[\]\s*=\s*\{(.*?)\n\s*\};",
+        body,
+        re.DOTALL
+    )
+    assert array_match, "could not find tasks[] array in cli_cmd_stack_hwm"
+
+    array_init = array_match.group(1)
+
+    # Check that each row uses a macro constant, not a bare number
+    # Valid patterns: TASK_STACK_ADCPOLL, TASK_STACK_FAULTMON, etc.
+    # Invalid patterns: bare numbers like 2560, 2048, 5120, 8192
+    lines = array_init.split("\n")
+    for i, line in enumerate(lines, 1):
+        if line.strip() and not line.strip().startswith("//"):
+            # Each line should be: { "name", handle, TASK_STACK_* },
+            # Check that common bare literals don't appear at the end (the declared field)
+            stripped = _strip_comments(line)
+
+            # This is a heuristic check: if a line contains common stack size literals
+            # in the declared field position (end of the tuple), fail
+            match = re.search(r",\s*(\d+)\s*\}", stripped)
+            if match:
+                literal = match.group(1)
+                # Known bad literals (common stack sizes that should be macros)
+                bad_literals = {"2560", "2048", "5120", "8192"}
+                if literal in bad_literals:
+                    # Get the task name from this line for the error message
+                    name_match = re.search(r'"(\w+)"', line)
+                    task_name = name_match.group(1) if name_match else "unknown"
+                    assert False, (
+                        f"stack_hwm table row for '{task_name}' uses bare literal {literal} "
+                        f"instead of a TASK_STACK_* constant. This will cause the table to "
+                        f"become stale when stack sizes change. Use the appropriate constant "
+                        f"from tasks.h instead."
+                    )
