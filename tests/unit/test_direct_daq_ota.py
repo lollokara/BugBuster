@@ -63,6 +63,42 @@ def _fn_body(text: str, signature: str) -> str:
     return text[brace:i]
 
 
+def _skip_comment_only(text: str, i: int, n: int):
+    """Like _skip_noise, but comments only -- string/char literal contents
+    are left intact. Used where the text under test IS a string-literal value
+    (e.g. a JSX option's "p4"), so blanking string contents (as _strip_noise
+    does) would make the assertion untestable rather than just stricter.
+    """
+    c = text[i]
+    if c == "/" and i + 1 < n and text[i + 1] == "/":
+        j = text.find("\n", i)
+        return n if j == -1 else j
+    if c == "/" and i + 1 < n and text[i + 1] == "*":
+        end = text.find("*/", i + 2)
+        return n if end == -1 else end + 2
+    return None
+
+
+def _strip_comments(text: str) -> str:
+    """Blank out // and /* */ comments only, keeping string/char literal
+    contents intact -- so a check for a literal value like "p4" cannot be
+    spoofed by writing that text inside a comment with no real implementation,
+    while the literal itself stays checkable (unlike _strip_noise, which
+    blanks string contents too).
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        skip = _skip_comment_only(text, i, n)
+        if skip is not None:
+            out.append(" " * (skip - i))
+            i = skip
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def _strip_noise(text: str) -> str:
     """Blank out // and /* */ comments and the contents of string/char
     literals, replacing each with spaces of equal length (so any surviving
@@ -459,14 +495,49 @@ def test_web_update_apply_takes_a_target_object():
         "apply() must take mac plus a targets object so p4/c6 are expressible"
 
 
+def _named_arrow_body(block: str, name: str, other_names: list) -> str:
+    """Slice `block` from `{name}:` up to the next sibling method's `{n}:`
+    marker (or the end of `block` if `name` is last). Lets a check be scoped
+    to one method's own body instead of the whole surrounding object -- a
+    substring count over the whole block cannot tell "mac forwarded to
+    request()" apart from "mac merely named in some other method's own
+    parameter list."
+    """
+    start = block.index(f"{name}:")
+    ends = [block.index(f"{n}:", start + 1) for n in other_names if f"{n}:" in block[start + 1:]]
+    end = min(ends) if ends else len(block)
+    return block[start:end]
+
+
+def _request_call_text(body: str) -> str:
+    """The `request(...)`/`request<T>(...)` call expression inside `body`,
+    from `request` through its closing `})`. Non-greedy so a `}` that closes
+    an inline generic type argument (e.g. `request<{ success: boolean }>(`)
+    is not mistaken for the call's own closing brace+paren.
+    """
+    m = re.search(r"request(?:<[^>]*>)?\(.*?\}\)", body, re.S)
+    return m.group(0) if m else ""
+
+
 def test_web_update_calls_pass_mac_so_the_token_is_attached():
     """core.ts attaches the admin token only when BOTH admin and mac are set
-    (see request() in api/core.ts), so every api.update.* call must pass mac."""
+    (see request() in api/core.ts). It is not enough for `mac` to appear
+    somewhere in a method's own arrow-function signature (e.g. `apply: (mac:
+    string, targets...) =>`) -- it must actually be forwarded into that
+    method's own request() call, or the token is never attached and the
+    signature parameter is dead. Scoped per-method so a mac used by one
+    method cannot cover for another that drops it.
+    """
     m = re.search(r"update:\s*\{(.*?)\n  \},", CLIENT_TS, re.S)
     assert m, "api.update block not found"
-    block = _strip_noise(m.group(1))
-    assert block.count("mac") >= 3, \
-        "each api.update call needs mac, or request() sends no admin token"
+    block = m.group(1)
+    names = ["check", "status", "apply"]
+    for name in names:
+        others = [n for n in names if n != name]
+        body = _named_arrow_body(block, name, others)
+        call = _strip_noise(_request_call_text(body))
+        assert re.search(r"\bmac\b", call), \
+            f"api.update.{name} must forward mac into its own request() call"
 
 
 def test_web_update_apply_does_not_double_stringify():
@@ -492,10 +563,22 @@ def test_web_daq_upload_guards_against_a_null_response_body():
         "res.body can be null; must be guarded before calling getReader()"
 
 
+def test_web_daq_upload_throws_when_the_final_record_is_not_ok():
+    """The final {"stage":"done"} record's `ok` field is the sole source of
+    truth for the outcome (the HTTP status is committed before the device
+    knows it). A stream that DOES end with a done record but ok:false must
+    still throw -- only the missing-done-record path was covered before."""
+    assert re.search(r"if\s*\(\s*!\s*final\.ok\s*\)", _strip_noise(CLIENT_TS)), \
+        "must throw when the final record has ok:false, not just when it is missing"
+
+
 def test_web_otacard_offers_p4_and_c6_targets():
-    # Raw text, not _strip_noise: these are functional string-literal values
-    # (option/target names), not identifiers that could be spoofed by a comment.
-    assert '"p4"' in OTACARD and '"c6"' in OTACARD, \
+    # Comment-stripped, not fully _strip_noise'd: these are functional
+    # string-literal values (option/target names) -- _strip_noise blanks
+    # string contents too, which would make the literal itself unassertable.
+    # Comments are still stripped, so a bare mention in a comment can't pass.
+    stripped = _strip_comments(OTACARD)
+    assert '"p4"' in stripped and '"c6"' in stripped, \
         "OtaCard's target selector must offer the DAQ HAT chips"
 
 
@@ -503,9 +586,10 @@ def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
     """The firmware/spiffs path waits ~12s for the device to reboot; the P4/C6
     push confirms the new image running before it replies, so that wait must
     not apply to the DAQ HAT path."""
-    i = OTACARD.find('target === "p4"')
+    stripped = _strip_comments(OTACARD)
+    i = stripped.find('target === "p4"')
     assert i != -1, "OtaCard must branch on the p4/c6 targets"
-    j = OTACARD.find("\n\n", i)
-    branch = _strip_noise(OTACARD[i:j if j != -1 else i + 800])
+    j = stripped.find("\n\n", i)
+    branch = _strip_noise(stripped[i:j if j != -1 else i + 800])
     assert "setTimeout" not in branch, \
         "the DAQ HAT push must not use the firmware/spiffs 12s reboot-wait timer"
