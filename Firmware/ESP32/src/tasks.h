@@ -370,10 +370,26 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 // which mattered: the OTA update worker needs a 12 KB CONTIGUOUS internal block
 // and could not get one. Each value keeps roughly 2x headroom over peak; check
 // `stack_hwm` before shrinking further, and never go below ~1 KB of headroom.
-#define TASK_STACK_ADCPOLL   3072
-#define TASK_STACK_FAULTMON  3072
-#define TASK_STACK_CMDPROC   4096
-#define TASK_STACK_WAVEGEN   3072
+//
+// Shrunk again 2026-08-05 under sustained internal-RAM pressure (measured
+// live: internal free 30 KB, all-time min 12 KB, largest contiguous block
+// 13 KB -- one allocation away from the "Failed to start update task"
+// incident recorded elsewhere in this file, where largest fell 14->8 KB).
+// New measured peaks from `stack_hwm` (bytes): adcPoll 1292, faultMon 1356,
+// cmdProc 832, wavegen 868. Resulting margins over peak: adcPoll 1268,
+// faultMon 1204, cmdProc 1216, wavegen 1180 -- all comfortably above the
+// ~1 KB minimum headroom this comment mandates.
+//
+// DO NOT extend this trim to bbpCli (main.cpp, 8192) or ble_api
+// (net/ble_service.cpp:464, 8192): bbpCli runs update_manager_release_options()
+// (an HTTPS/mbedTLS chain measured at ~16 KB elsewhere), and ble_api runs
+// update_manager_apply() inline while writing flash during BLE OTA apply.
+// Both are load-bearing for known-open defects; shrinking either turns a
+// latent bug into a guaranteed crash. See main.cpp for the matching comments.
+#define TASK_STACK_ADCPOLL   2560
+#define TASK_STACK_FAULTMON  2560
+#define TASK_STACK_CMDPROC   2048
+#define TASK_STACK_WAVEGEN   2048
 
 void tasks_log_stack_hwm(void);
 

@@ -1237,10 +1237,15 @@ static bool daq_activate_p4(char *err, size_t err_len,
 // forwards every line to emit_cb() itself, since emit_cb ultimately writes an
 // HTTP chunk tied to the httpd request and must be called from that task.
 //
-// 8192 bytes is a STARTING ESTIMATE for the worker stack, sized pending a
-// real hardware high-water-mark reading (logged just before the worker
-// deletes itself, below) -- not a measured figure.
-#define DAQ_ACTIVATE_WORKER_STACK 8192
+// Right-sized 2026-08-05 from the real hardware high-water-mark reading this
+// comment used to wait for: the worker logged "daq_activate worker stack
+// high-water mark: 5080 bytes" free of its original 8192-byte stack, i.e. a
+// measured peak of ~3112 bytes used. 5120 keeps ~2008 bytes of margin over
+// that peak -- comfortably above the ~1 KB minimum headroom mandated in
+// tasks.h:363-380, which also records the other stack trims made in this
+// same pass (and explicitly excludes bbpCli / ble_api, both still 8192 and
+// both load-bearing for known-open defects -- do not shrink those two).
+#define DAQ_ACTIVATE_WORKER_STACK 5120
 #define DAQ_ACTIVATE_QUEUE_LEN    8
 
 typedef struct {

@@ -8,6 +8,7 @@ from pathlib import Path
 
 HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
 HAT_C = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
+TASKS_H = Path("Firmware/ESP32/src/tasks.h").read_text()
 
 
 def _literal_end(text: str, i: int, n: int) -> int:
@@ -955,3 +956,65 @@ def test_release_path_and_push_local_use_the_shared_product_id_constants():
 
     push_local_body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
     assert "DAQ_PRODUCT_ID_P4" in push_local_body and "DAQ_PRODUCT_ID_C6" in push_local_body
+
+
+# ---------------------------------------------------------------------------
+# S3 internal-RAM reclamation (2026-08-05): five task/worker stacks were
+# shrunk to their measured `stack_hwm` peaks (see tasks.h:363-380 for the
+# full measured-peaks table). bbpCli and ble_api were deliberately left at
+# 8192 -- both run OTA-adjacent code (an HTTPS/mbedTLS chain and an inline
+# flash-writing BLE apply, respectively) that makes them load-bearing for
+# known-open defects. These tests pin the five new values exactly (so an
+# accidental revert is caught) and guard the two untouched stacks (so a
+# future "finish the job" pass cannot shrink them too).
+# ---------------------------------------------------------------------------
+MAIN_CPP = Path("Firmware/ESP32/src/main.cpp").read_text()
+BLE_C = Path("Firmware/ESP32/src/net/ble_service.cpp").read_text()
+
+
+def test_reduced_task_stack_sizes_are_exactly_the_new_values():
+    code = _strip_noise(TASKS_H)
+    assert re.search(r"#define\s+TASK_STACK_ADCPOLL\s+2560\b", code), \
+        "TASK_STACK_ADCPOLL must be exactly 2560 (measured peak 1292, margin 1268)"
+    assert re.search(r"#define\s+TASK_STACK_FAULTMON\s+2560\b", code), \
+        "TASK_STACK_FAULTMON must be exactly 2560 (measured peak 1356, margin 1204)"
+    assert re.search(r"#define\s+TASK_STACK_CMDPROC\s+2048\b", code), \
+        "TASK_STACK_CMDPROC must be exactly 2048 (measured peak 832, margin 1216)"
+    assert re.search(r"#define\s+TASK_STACK_WAVEGEN\s+2048\b", code), \
+        "TASK_STACK_WAVEGEN must be exactly 2048 (measured peak 868, margin 1180)"
+
+
+def test_main_loop_static_stack_is_exactly_the_new_value():
+    """s_mainLoopStack is a STATIC (.bss) array, so this saving is
+    always-resident internal RAM freed for the lifetime of the process --
+    the single most valuable trim in this pass."""
+    code = _strip_noise(MAIN_CPP)
+    assert re.search(r"s_mainLoopStack\[\s*5120\s*/\s*sizeof\(StackType_t\)\s*\]", code), \
+        "mainLoop's static stack must be exactly 5120 bytes (measured peak 2684, margin 2436)"
+
+
+def test_daq_activate_worker_stack_is_exactly_the_new_value():
+    code = _strip_noise(UPD_C)
+    assert re.search(r"#define\s+DAQ_ACTIVATE_WORKER_STACK\s+5120\b", code), \
+        "DAQ_ACTIVATE_WORKER_STACK must be exactly 5120 (measured peak ~3112, margin 2008)"
+
+
+def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
+    main_code = _strip_noise(MAIN_CPP)
+    m = re.search(r"s_bbpTaskStack\[\s*(\d+)\s*/\s*sizeof\(StackType_t\)\s*\]", main_code)
+    assert m, "could not find s_bbpTaskStack declaration in main.cpp"
+    assert int(m.group(1)) >= 8192, (
+        "bbpCli's stack must stay >= 8192: cli_menu.cpp:1809 calls "
+        "update_manager_release_options() on this task, which runs an "
+        "HTTPS/mbedTLS chain measured at ~16 KB elsewhere in this codebase -- "
+        "shrinking it turns a latent bug into a guaranteed crash"
+    )
+
+    ble_code = _strip_comments(BLE_C)
+    m2 = re.search(r'xTaskCreate\(\s*api_req_task\s*,\s*"ble_api"\s*,\s*(\d+)', ble_code)
+    assert m2, "could not find the ble_api xTaskCreate call in net/ble_service.cpp"
+    assert int(m2.group(1)) >= 8192, (
+        "ble_api's stack must stay >= 8192: the BLE OTA apply path runs "
+        "update_manager_apply() inline on this task while writing flash -- "
+        "shrinking it turns a latent bug into a guaranteed crash"
+    )
