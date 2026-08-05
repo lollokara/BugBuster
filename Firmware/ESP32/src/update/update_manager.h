@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -57,6 +58,12 @@ typedef enum {
  */
 typedef void (*DaqProgressFn)(void *ctx, const char *json);
 
+/**
+ * @brief Byte source for a local push. Returns bytes written into @p buf,
+ *        0 at clean EOF, negative on error.
+ */
+typedef int (*DaqReadFn)(void *ctx, uint8_t *buf, size_t max);
+
 void update_manager_init(void);
 esp_err_t update_manager_check(cJSON **out);
 /**
@@ -83,6 +90,31 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
 esp_err_t update_manager_flash_rp2040_stage(uint32_t expected_size);
 cJSON *update_manager_status_json(void);
 bool update_manager_reboot_pending(void);
+
+/**
+ * @brief Push a locally supplied image to the DAQ HAT's P4 or C6.
+ *
+ * Streams @p read_cb straight onto the HAT link -- there is no S3-side staging
+ * file. The S3 does not hash the image: @p sha256 travels in the OTA_BEGIN meta
+ * and the P4 verifies at OTA_END.
+ *
+ * For UPDATE_TARGET_P4 the image is transferred, the P4 is reset, the running
+ * version is checked and only then confirmed (see daq_activate_p4).
+ * For UPDATE_TARGET_C6 the image is validated as a merged image, staged (so the
+ * P4 SHA-verifies it before the ROM-loader push), then relay-applied.
+ *
+ * @param target    UPDATE_TARGET_P4 or UPDATE_TARGET_C6.
+ * @param emit_cb   Optional progress sink; may be NULL.
+ * @param err       Filled with a human-readable reason on failure.
+ * @return ESP_OK, or ESP_ERR_INVALID_STATE when another apply is in flight.
+ */
+esp_err_t update_manager_push_local(uint32_t target,
+                                    uint32_t image_size,
+                                    const uint8_t sha256[32],
+                                    DaqReadFn read_cb,
+                                    DaqProgressFn emit_cb,
+                                    void *ctx,
+                                    char *err, size_t err_len);
 
 #ifdef __cplusplus
 }

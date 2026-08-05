@@ -240,3 +240,41 @@ def test_c6_validation_checks_both_magics():
     assert "C6_PART_TABLE_OFF" in code, "must check the partition table offset"
     assert "0xAA" in code and "0x50" in code, \
         "must check ESP_PARTITION_MAGIC bytes AA 50 at 0x8000"
+
+
+UPD_H = Path("Firmware/ESP32/src/update/update_manager.h").read_text()
+
+
+def test_push_local_is_declared():
+    assert "update_manager_push_local(" in UPD_H
+
+
+def test_push_local_takes_the_apply_guard():
+    """A local push and a GitHub apply must not interleave into one partition."""
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "ApplyGuard" in body
+
+
+def test_push_local_validates_c6_images_before_staging():
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "c6_image_looks_merged(" in body
+    assert body.index("c6_image_looks_merged(") < body.index("hat_ota_begin("), \
+        "validate before any byte reaches the P4"
+
+
+def test_push_local_uses_stage_target_for_c6():
+    """Staging gets the image SHA-verified inside the P4 before the ROM push."""
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "HAT_OTA_TARGET_STAGE" in body
+    assert "HAT_OTA_TARGET_C6" not in body, \
+        "the direct C6 target has no resume and no pre-flash integrity check"
+
+
+def test_push_local_activates_the_p4():
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "daq_activate_p4(" in body
+
+
+def test_push_local_aborts_the_transfer_on_failure():
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "hat_ota_abort()" in body

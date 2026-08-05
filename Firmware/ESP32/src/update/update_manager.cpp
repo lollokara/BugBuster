@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hat.h"
@@ -1212,6 +1213,208 @@ static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
         *did_p4 = true;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Local push: caller supplies image bytes directly (Task 6's HTTP shim reads
+// them from an upload body) instead of update_manager downloading a GitHub
+// release. Everything policy-shaped (guard, C6 validation/staging, P4
+// activation) lives here so the HTTP layer stays a thin shim.
+// ---------------------------------------------------------------------------
+#define PUSH_CHUNK_BYTES   4096
+#define PUSH_EMIT_BYTES   65536
+#define PUSH_EMIT_MS        500
+#define C6_RELAY_TIMEOUT_MS (5 * 60 * 1000)
+
+esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
+                                    const uint8_t sha256[32],
+                                    DaqReadFn read_cb, DaqProgressFn emit_cb,
+                                    void *ctx, char *err, size_t err_len)
+{
+    if (!read_cb || !sha256 || image_size == 0) {
+        snprintf(err, err_len, "bad arguments");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (target != UPDATE_TARGET_P4 && target != UPDATE_TARGET_C6) {
+        snprintf(err, err_len, "target must be P4 or C6");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((update_manager_available_targets() & target) == 0) {
+        snprintf(err, err_len, "no DAQ HAT connected");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Same guard the GitHub path takes, so the two cannot interleave.
+    ApplyGuard guard;
+    if (!guard.held) {
+        snprintf(err, err_len, "an update is already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const bool is_c6 = (target == UPDATE_TARGET_C6);
+    const uint8_t hat_target = is_c6 ? HAT_OTA_TARGET_STAGE : HAT_OTA_TARGET_P4;
+    char line[192];
+
+    uint8_t *buf = (uint8_t *)malloc(PUSH_CHUNK_BYTES);
+    if (!buf) { snprintf(err, err_len, "out of memory"); return ESP_ERR_NO_MEM; }
+
+    // C6 only: hold the head so the merged-image check runs before the P4 sees
+    // a single byte. An app-only image must never reach hat_ota_begin().
+    uint8_t *head = NULL;
+    size_t head_len = 0;
+    if (is_c6) {
+        if (image_size < C6_VALIDATE_BYTES) {
+            free(buf);
+            snprintf(err, err_len,
+                     "C6 image too small to be a merged image (need >= %u bytes)",
+                     (unsigned)C6_VALIDATE_BYTES);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        head = (uint8_t *)malloc(C6_VALIDATE_BYTES);
+        if (!head) { free(buf); snprintf(err, err_len, "out of memory"); return ESP_ERR_NO_MEM; }
+        while (head_len < C6_VALIDATE_BYTES) {
+            int n = read_cb(ctx, head + head_len, C6_VALIDATE_BYTES - head_len);
+            if (n <= 0) {
+                free(head); free(buf);
+                snprintf(err, err_len, "upload ended before the image header");
+                return ESP_FAIL;
+            }
+            head_len += (size_t)n;
+        }
+        if (!c6_image_looks_merged(head, head_len)) {
+            free(head); free(buf);
+            snprintf(err, err_len,
+                     "not a merged C6 image (no partition table at 0x8000); "
+                     "the C6 needs bootloader+partitions+app merged from 0x0, "
+                     "not the app-only firmware.bin");
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    hat_ota_meta_t meta = {};
+    meta.image_size = image_size;
+    meta.version_u32 = 0;                    // local build: no version claimed
+    memcpy(meta.sha256, sha256, 32);
+    snprintf(meta.product_id, sizeof(meta.product_id), "%s",
+             is_c6 ? "bugbuster-c6" : "bugbuster-p4");
+
+    if (!hat_ota_begin(hat_target, &meta)) {
+        free(head); free(buf);
+        snprintf(err, err_len, "DAQ HAT rejected OTA_BEGIN");
+        return ESP_FAIL;
+    }
+
+    s_update.progress_total = image_size;
+    s_update.progress_done  = 0;
+    if (emit_cb) {
+        snprintf(line, sizeof(line),
+                 "{\"stage\":\"begin\",\"target\":\"%s\",\"total\":%lu}",
+                 is_c6 ? "c6" : "p4", (unsigned long)image_size);
+        emit_cb(ctx, line);
+    }
+
+    const char *xfer_stage = is_c6 ? "stage" : "upload";
+    uint32_t sent = 0, last_emit_bytes = 0;
+    int64_t  last_emit_us = esp_timer_get_time();
+    bool failed = false;
+
+    // Forward the buffered C6 head first, then stream the remainder. Every
+    // byte is accounted for exactly once: while head_pos < head_len the source
+    // is the head buffer, otherwise a fresh read_cb() call.
+    size_t head_pos = 0;
+    while (!failed && sent < image_size) {
+        const uint8_t *src;
+        size_t avail;
+        if (head && head_pos < head_len) {
+            src = head + head_pos;
+            avail = head_len - head_pos;
+        } else {
+            int n = read_cb(ctx, buf, PUSH_CHUNK_BYTES);
+            if (n <= 0) {
+                snprintf(err, err_len, "upload stream ended at %lu/%lu bytes",
+                         (unsigned long)sent, (unsigned long)image_size);
+                failed = true;
+                break;
+            }
+            src = buf;
+            avail = (size_t)n;
+        }
+
+        size_t off = 0;
+        while (off < avail) {
+            uint8_t n = (avail - off > HAT_OTA_CHUNK_MAX)
+                            ? HAT_OTA_CHUNK_MAX : (uint8_t)(avail - off);
+            if (!hat_ota_data(sent, src + off, n)) {
+                snprintf(err, err_len, "HAT link rejected data at offset %lu",
+                         (unsigned long)sent);
+                failed = true;
+                break;
+            }
+            sent += n;
+            off  += n;
+            s_update.progress_done = sent;
+        }
+        if (head && head_pos < head_len) head_pos += avail;
+
+        int64_t now = esp_timer_get_time();
+        if (emit_cb && !failed &&
+            (sent - last_emit_bytes >= PUSH_EMIT_BYTES ||
+             now - last_emit_us >= PUSH_EMIT_MS * 1000)) {
+            snprintf(line, sizeof(line),
+                     "{\"stage\":\"%s\",\"done\":%lu,\"total\":%lu}",
+                     xfer_stage, (unsigned long)sent, (unsigned long)image_size);
+            emit_cb(ctx, line);
+            last_emit_bytes = sent;
+            last_emit_us = now;
+        }
+    }
+
+    free(head);
+    free(buf);
+
+    if (failed) { hat_ota_abort(); return ESP_FAIL; }
+
+    if (emit_cb) emit_cb(ctx, "{\"stage\":\"verify\"}");
+    if (!hat_ota_end()) {
+        snprintf(err, err_len, "DAQ HAT image failed verification");
+        return ESP_FAIL;
+    }
+
+    if (!is_c6) {
+        if (!daq_activate_p4(err, err_len, emit_cb, ctx)) return ESP_FAIL;
+        return ESP_OK;
+    }
+
+    // C6: staged and verified inside the P4; now drive the ROM-loader push.
+    if (!hat_daq_relay_apply()) {
+        snprintf(err, err_len, "DAQ HAT refused the C6 relay apply");
+        return ESP_FAIL;
+    }
+    int64_t start_us = esp_timer_get_time();
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(PUSH_EMIT_MS));
+        hat_daq_ota_status_t st = {};
+        if (!hat_daq_ota_status(&st)) continue;
+        if (emit_cb) {
+            snprintf(line, sizeof(line),
+                     "{\"stage\":\"relay\",\"done\":%lu,\"total\":%lu}",
+                     (unsigned long)st.relay_pushed_bytes, (unsigned long)image_size);
+            emit_cb(ctx, line);
+        }
+        if (st.relay_state != HAT_RELAY_PUSHING) break;
+        if (esp_timer_get_time() - start_us > (int64_t)C6_RELAY_TIMEOUT_MS * 1000) {
+            snprintf(err, err_len, "C6 relay push timed out");
+            return ESP_FAIL;
+        }
+    }
+
+    hat_daq_c6_version_t cv = {};
+    if (hat_daq_c6_version(&cv) && emit_cb) {
+        snprintf(line, sizeof(line), "{\"stage\":\"version\",\"running\":\"%s\",\"build\":\"%s\"}",
+                 cv.c6_version, cv.c6_build_id);
+        emit_cb(ctx, line);
+    }
+    return ESP_OK;
 }
 
 uint32_t update_manager_available_targets(void)
