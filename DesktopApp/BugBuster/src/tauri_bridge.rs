@@ -1686,6 +1686,31 @@ pub async fn upload_firmware(path: &str) -> Result<String, String> {
     serde_wasm_bindgen::from_value::<String>(result).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadDaqArgs<'a> {
+    target: &'a str,
+    file_path: &'a str,
+}
+
+/// Push a locally built P4/C6 image to the DAQ HAT. Progress arrives as
+/// "desktop-ota-progress" events; unlike `upload_firmware`, this goes through
+/// `invoke` directly (not `try_invoke`) so the device's own error text — not a
+/// generic "command failed" — reaches the UI.
+pub async fn upload_daq_image(target: &str, path: &str) -> Result<String, String> {
+    let args = serde_wasm_bindgen::to_value(&UploadDaqArgs {
+        target,
+        file_path: path,
+    })
+    .map_err(|e| e.to_string())?;
+    match invoke("ota_upload_daq", args).await {
+        Ok(v) => serde_wasm_bindgen::from_value::<String>(v).map_err(|e| e.to_string()),
+        Err(e) => Err(e
+            .as_string()
+            .unwrap_or_else(|| "DAQ upload failed".to_string())),
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopGitRelease {

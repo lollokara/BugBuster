@@ -612,6 +612,51 @@ def test_web_otacard_offers_p4_and_c6_targets():
         "OtaCard's target selector must offer the DAQ HAT chips"
 
 
+# =============================================================================
+# Desktop (Task 11): P4/C6 upload command + UI. The desktop's existing HTTP
+# OTA path (http_upload_with_progress) fabricates its percentage on a 250ms
+# timer; the DAQ path must report the device's own byte counts instead.
+# =============================================================================
+
+CMDS_RS = Path("DesktopApp/BugBuster/src-tauri/src/commands.rs").read_text()
+LIB_RS = Path("DesktopApp/BugBuster/src-tauri/src/lib.rs").read_text()
+BRIDGE_RS = Path("DesktopApp/BugBuster/src/tauri_bridge.rs").read_text()
+
+
+def test_desktop_has_a_daq_upload_command():
+    assert "pub async fn ota_upload_daq(" in CMDS_RS
+    assert "commands::ota_upload_daq," in LIB_RS, "command must be registered"
+
+
+def test_desktop_daq_upload_reports_real_progress():
+    """The existing HTTP path fabricates a percentage on a timer; the DAQ path
+    must report the device's own byte counts from the NDJSON stream."""
+    body = _fn_body(CMDS_RS, "pub async fn ota_upload_daq(")
+    assert "stage" in body and "emit_progress" in body
+    assert "http_upload_with_progress" not in body, \
+        "must not reuse the fabricated-percentage helper"
+
+
+def test_desktop_daq_upload_treats_missing_done_record_as_failure():
+    """Same device-side semantic as the web/python clients: the device commits
+    HTTP 200 before it knows the outcome, so a stream that ends without a
+    final done record must be reported as a failure, not silent success."""
+    body = _strip_noise(_fn_body(CMDS_RS, "pub async fn ota_upload_daq("))
+    assert re.search(r"\bNone\s*=>\s*Err\(", body), \
+        "a stream that never sees a final 'done' record must return Err"
+
+
+def test_desktop_bridge_wrapper_uses_error_propagating_invoke():
+    """upload_daq_image must surface the device's own error text. try_invoke()
+    swallows Err into None, replacing the message with a generic string --
+    the CRITICAL requirement here is that the device's message reaches the
+    user, so the wrapper must call invoke() directly."""
+    body = _strip_noise(_fn_body(BRIDGE_RS, "pub async fn upload_daq_image("))
+    assert "invoke(" in body
+    assert "try_invoke(" not in body, \
+        "must use the error-propagating invoke(), not try_invoke()"
+
+
 def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
     """The firmware/spiffs path waits ~12s for the device to reboot; the P4/C6
     push confirms the new image running before it replies, so that wait must

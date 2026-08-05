@@ -594,6 +594,38 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     }
 }
 
+/// Shared progress block for any in-flight OTA (git-release, SPIFFS, or DAQ HAT
+/// push) — reads the same `ota_progress`/`ota_active` signals fed by the single
+/// "desktop-ota-progress" event stream, so no OTA flow needs its own copy.
+#[component]
+fn OtaProgressBar(ota_progress: ReadSignal<OtaProgress>) -> impl IntoView {
+    move || {
+        let prog = ota_progress.get();
+        let uploading = prog.stage == "uploading";
+        view! {
+            <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
+                <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
+                    <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage.clone()}</span>
+                    <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
+                </div>
+                <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
+                    <div
+                        style:width=move || format!("{}%", ota_progress.get().percent)
+                        style=move || if uploading {
+                            "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                        } else {
+                            "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
+                        }
+                    ></div>
+                </div>
+                <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
+                    {prog.message.clone()}
+                </div>
+            </div>
+        }
+    }
+}
+
 #[component]
 fn FirmwareSection() -> impl IntoView {
     let fw = RwSignal::new(FirmwareInfo::default());
@@ -1061,6 +1093,95 @@ fn FirmwareSection() -> impl IntoView {
                                     </div>
                                 </div>
                             }.into_any()
+                        } else {
+                            view! { <></> }.into_any()
+                        }
+                    }}
+                </div>
+            </div>
+
+            <div class="alert-panel" style="margin-top: 16px">
+                <div class="alert-panel-header">
+                    <div class="alert-panel-title">"DAQ HAT (P4/C6) UPDATE"</div>
+                </div>
+                <div class="alert-panel-scanline supply-scanline"></div>
+                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
+                    <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
+                        "Push a locally built P4 or C6 image straight to the DAQ HAT over HTTP. Progress below is the device's own byte count from the upload stream, not an estimate — the HTTP response commits before the device knows the outcome, so only the final status line is authoritative."
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center">
+                        <button class="btn btn-sm btn-primary"
+                            disabled=move || ota_active.get()
+                            style="flex: 1"
+                            on:click=move |_| {
+                                set_ota_active.set(true);
+                                set_ota_success.set(false);
+                                set_ota_error.set(None);
+                                set_ota_progress.set(OtaProgress {
+                                    stage: "starting".to_string(),
+                                    percent: 0.0,
+                                    message: "Selecting P4 image...".to_string(),
+                                });
+                                leptos::task::spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({
+                                            "title": "Select P4 Firmware Image",
+                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
+                                        })
+                                    ).unwrap();
+                                    let result = try_invoke("plugin:dialog|open", args).await;
+                                    let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
+                                    let Some(path) = path else {
+                                        set_ota_active.set(false);
+                                        return;
+                                    };
+                                    if let Err(e) = upload_daq_image("p4", &path).await {
+                                        set_ota_active.set(false);
+                                        set_ota_error.set(Some(e));
+                                    }
+                                });
+                            }
+                        >
+                            {move || if ota_active.get() { "Uploading..." } else { "Push P4 Image" }}
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                            disabled=move || ota_active.get()
+                            style="flex: 1"
+                            on:click=move |_| {
+                                set_ota_active.set(true);
+                                set_ota_success.set(false);
+                                set_ota_error.set(None);
+                                set_ota_progress.set(OtaProgress {
+                                    stage: "starting".to_string(),
+                                    percent: 0.0,
+                                    message: "Selecting C6 image...".to_string(),
+                                });
+                                leptos::task::spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(
+                                        &serde_json::json!({
+                                            "title": "Select C6 Merged Firmware Image",
+                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
+                                        })
+                                    ).unwrap();
+                                    let result = try_invoke("plugin:dialog|open", args).await;
+                                    let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
+                                    let Some(path) = path else {
+                                        set_ota_active.set(false);
+                                        return;
+                                    };
+                                    if let Err(e) = upload_daq_image("c6", &path).await {
+                                        set_ota_active.set(false);
+                                        set_ota_error.set(Some(e));
+                                    }
+                                });
+                            }
+                        >
+                            {move || if ota_active.get() { "Uploading..." } else { "Push C6 Image (merged)" }}
+                        </button>
+                    </div>
+                    {move || {
+                        if ota_active.get() {
+                            view! { <OtaProgressBar ota_progress=ota_progress /> }.into_any()
                         } else {
                             view! { <></> }.into_any()
                         }

@@ -794,6 +794,139 @@ pub async fn ota_upload_firmware(
     ))
 }
 
+/// Push a locally built P4 or C6 image to the DAQ HAT.
+///
+/// HTTP only: this goes through the S3's /api/ota/upload_{p4,c6}, which streams
+/// NDJSON progress back on the same response. Unlike http_upload_with_progress,
+/// the percentages here are the device's own byte counts, not a timer.
+///
+/// The device commits HTTP 200 before it knows the outcome, so the final
+/// {"stage":"done","ok":...} record is what decides success. A stream that
+/// ends without one means the connection dropped mid-push and is a failure.
+#[tauri::command]
+pub async fn ota_upload_daq(
+    target: String,
+    file_path: String,
+    app: tauri::AppHandle,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<String> {
+    if target != "p4" && target != "c6" {
+        return Err(format!("target must be p4 or c6, got {}", target));
+    }
+    let data = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    if data.len() < 1024 {
+        return Err(format!("Image too small: {} bytes", data.len()));
+    }
+    let _guard = mgr.ota_guard();
+
+    let base_url = mgr
+        .get_base_url()
+        .await
+        .ok_or("DAQ HAT upload requires an HTTP (WiFi) connection to the mainboard.")?;
+    let sha256_hex = sha256_hex(&data);
+    let admin_token = mgr.get_connection_status().admin_token;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(900))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client
+        .post(format!(
+            "{}/api/ota/upload_{}?sha256={}",
+            base_url, target, sha256_hex
+        ))
+        .header("Content-Type", "application/octet-stream");
+    if let Some(tok) = admin_token {
+        req = req.header("X-BugBuster-Admin-Token", tok);
+    }
+
+    emit_progress(&app, "uploading", 0.0, "Uploading image to the DAQ HAT...");
+    let resp = req
+        .body(data)
+        .send()
+        .await
+        .map_err(|e| format!("DAQ upload failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("DAQ upload failed (HTTP {}): {}", status, body));
+    }
+
+    // Consume the NDJSON stream line by line. The HTTP status above only covers
+    // pre-flight rejection (bad token, size mismatch, etc); once the body starts
+    // streaming, only the final {"stage":"done",...} record decides success.
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut final_ok: Option<bool> = None;
+    let mut final_msg = String::new();
+    let mut last_pct: f32 = 0.0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("stream error: {}", e))?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let text = String::from_utf8_lossy(&line[..line.len() - 1])
+                .trim()
+                .to_string();
+            if text.is_empty() {
+                continue;
+            }
+            let rec: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let stage = rec
+                .get("stage")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let (Some(d), Some(t)) = (
+                rec.get("done").and_then(|v| v.as_f64()),
+                rec.get("total").and_then(|v| v.as_f64()),
+            ) {
+                if t > 0.0 {
+                    last_pct = (d / t * 100.0) as f32;
+                }
+            }
+
+            if stage == "done" {
+                let ok = rec.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                final_ok = Some(ok);
+                if ok {
+                    final_msg = format!(
+                        "DAQ {} updated{}",
+                        target,
+                        rec.get("running")
+                            .and_then(|v| v.as_str())
+                            .map(|v| format!(" — now running {}", v))
+                            .unwrap_or_default()
+                    );
+                    // Only a *successful* done record should flip the frontend's
+                    // success state; app.rs treats any "done" stage as success.
+                    emit_progress(&app, "done", 100.0, &final_msg);
+                } else {
+                    final_msg = rec
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("DAQ upload failed")
+                        .to_string();
+                    // app.rs treats stage == "error" as a terminal failure event.
+                    emit_progress(&app, "error", last_pct, &final_msg);
+                }
+            } else {
+                emit_progress(&app, &stage, last_pct, &text);
+            }
+        }
+    }
+
+    match final_ok {
+        None => Err("upload stream ended without a final 'done' record".to_string()),
+        Some(true) => Ok(final_msg),
+        Some(false) => Err(final_msg),
+    }
+}
+
 #[tauri::command]
 pub async fn ota_rollback(
     app: tauri::AppHandle,
