@@ -1075,3 +1075,43 @@ def test_stack_hwm_table_uses_shared_constants_not_literals():
                         f"become stale when stack sizes change. Use the appropriate constant "
                         f"from tasks.h instead."
                     )
+
+
+# =============================================================================
+# Task 17 (fast-acq/OTA starvation): daq_fast_task (prio 12) starves the
+# s3_link dispatcher task, which must answer every HATP_CMD_OTA_DATA frame
+# within the S3's 2000 ms hat_ota_data() timeout (hat.cpp). With fast
+# acquisition running, a bench push over the HAT UART link failed partway
+# through at an offset that varied run to run ("HAT link rejected data at
+# offset N" for N in {265669, 283756, 297036, 479468}) -- a timing problem,
+# not a fixed-size buffer. `fast off` on the P4 console made the identical
+# push succeed every time. Fixed by stopping fast acquisition on
+# HATP_CMD_OTA_BEGIN (all three targets -- P4/C6/STAGE all stream just as
+# much data over this same link) and restoring it only on exit paths that
+# leave the P4 running its current image (OTA_ABORT; a failed OTA_BEGIN
+# itself; OTA_END for C6/STAGE or a failed P4-target END).
+# =============================================================================
+
+
+def test_ota_begin_stops_fast_acquisition():
+    """Comment-stripped: a comment merely mentioning daq_board_stop_fast must
+    not be able to satisfy this on its own -- the real call must be present
+    in the OTA_BEGIN case body, which covers all three OTA targets (P4-self,
+    C6, STAGE) since they all stream over the same starved s3_link."""
+    block = _strip_comments(_case_block(DAQ_C, "HATP_CMD_OTA_BEGIN"))
+    assert "daq_board_stop_fast(b)" in block, \
+        "HATP_CMD_OTA_BEGIN must stop fast acquisition before accepting a transfer"
+
+
+def test_ota_abort_restores_fast_acquisition_conditionally():
+    """The restore on OTA_ABORT must be conditional on the state OTA_BEGIN
+    actually observed (s_ota_fast_was_running) -- unconditionally restarting
+    acquisition on every abort would spin up daq_fast_task even when it
+    was never running before the transfer began."""
+    block = _strip_comments(_case_block(DAQ_C, "HATP_CMD_OTA_ABORT"))
+    assert "s_ota_fast_was_running" in block, \
+        "OTA_ABORT must consult the saved pre-transfer fast-acq state"
+    assert re.search(
+        r"if\s*\(\s*s_ota_fast_was_running\s*\)\s*\{[^}]*daq_board_run_fast\(",
+        block, re.S,
+    ), "the restore call must be guarded by s_ota_fast_was_running, not unconditional"

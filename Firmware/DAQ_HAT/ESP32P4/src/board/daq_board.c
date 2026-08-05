@@ -991,6 +991,20 @@ typedef struct __attribute__((packed)) {
 static uint8_t  s_ota_target = HATP_OTA_TARGET_P4;
 static uint32_t s_c6_ota_size = 0;
 
+// Whether daq_fast_task (prio 12) was running when the active OTA_BEGIN
+// stopped it (see the HATP_CMD_OTA_BEGIN handler below). daq_fast_task
+// starves this s3_link dispatcher task, which must answer every
+// HATP_CMD_OTA_DATA frame within the S3's 2000 ms hat_ota_data() timeout
+// (hat.cpp) -- with fast acq running, that deadline is missed partway
+// through a transfer at an offset that varies run to run (bench-observed:
+// "HAT link rejected data at offset N" for N in {265669, 283756, 297036,
+// 479468}). Set once at OTA_BEGIN, consumed by every exit path that leaves
+// the P4 running its current image (OTA_ABORT, a failed OTA_BEGIN itself,
+// and OTA_END for the C6/STAGE targets or a failed P4-target END -- a
+// successful P4-target END needs no restore, since the P4 reboots into the
+// new image shortly after via the S3's separate activation step).
+static bool s_ota_fast_was_running = false;
+
 // When s_ota_target == HATP_OTA_TARGET_STAGE, a second trailing byte on
 // OTA_BEGIN (payload[sizeof(ota_meta_t) + 1]) selects which relay target the
 // staged image is ultimately destined for (RELAY_TARGET_C6 / _S3), since the
@@ -1867,35 +1881,75 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             if (len < sizeof(ota_meta_t)) return -1;
             ota_meta_t meta;
             memcpy(&meta, payload, sizeof(meta));
-            s_ota_target = (len > sizeof(ota_meta_t)) ? payload[sizeof(ota_meta_t)]
-                                                      : HATP_OTA_TARGET_P4;
-            if (s_ota_target == HATP_OTA_TARGET_C6) {
+            uint8_t target = (len > sizeof(ota_meta_t)) ? payload[sizeof(ota_meta_t)]
+                                                         : HATP_OTA_TARGET_P4;
+
+            // Pre-validate the STAGE relay-target byte BEFORE touching
+            // acquisition state below -- a malformed frame must reject
+            // without ever stopping/restarting fast acq.
+            relay_target_t relay_target = RELAY_TARGET_C6;
+            if (target == HATP_OTA_TARGET_STAGE && len > sizeof(ota_meta_t) + 1) {
+                uint8_t raw_relay_target = payload[sizeof(ota_meta_t) + 1];
+                if (raw_relay_target != RELAY_TARGET_C6 && raw_relay_target != RELAY_TARGET_S3) {
+                    return -1;
+                }
+                relay_target = (relay_target_t)raw_relay_target;
+            }
+
+            s_ota_target = target;
+
+            // Stop fast acquisition before accepting ANY of the three
+            // targets -- P4-self, C6, and STAGE all stream just as much data
+            // over this same s3_link. daq_board_stop_fast() has a bounded
+            // (~2s worst case) wait for daq_fast_task to exit; OTA_BEGIN's
+            // own S3-side timeout is 10000ms (hat.cpp hat_ota_begin, "erasing
+            // ... takes seconds"), comfortably clear of that, so calling it
+            // inline on this dispatcher task is safe. OTA_DATA's budget
+            // (2000ms) is NOT -- that is exactly why the stop happens here,
+            // once, rather than being deferred or repeated per-chunk.
+            s_ota_fast_was_running = b->fast_running;
+            if (s_ota_fast_was_running) {
+                daq_board_stop_fast(b);
+            }
+
+            if (target == HATP_OTA_TARGET_C6) {
                 ddp_master_deinit(&b->ddp);          // hand UART2 to the flasher
                 if (c6_flasher_begin(meta.image_size, 0) != ESP_OK) {
                     // begin() may already have asserted the straps before failing.
                     c6_release_boot_straps();
                     c6_link_restart(b);
                     s_ota_target = HATP_OTA_TARGET_P4;
+                    if (s_ota_fast_was_running) {
+                        daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                        s_ota_fast_was_running = false;
+                    }
                     return -1;
                 }
                 s_c6_ota_size = meta.image_size;
                 return 0;
             }
-            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+            if (target == HATP_OTA_TARGET_STAGE) {
                 // Second trailing byte selects the eventual relay destination
                 // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it.
-                if (len > sizeof(ota_meta_t) + 1) {
-                    uint8_t raw_relay_target = payload[sizeof(ota_meta_t) + 1];
-                    if (raw_relay_target != RELAY_TARGET_C6 && raw_relay_target != RELAY_TARGET_S3) {
-                        return -1;
+                s_relay_target = relay_target;
+                if (relay_stage_begin(s_relay_target, &meta) != ESP_OK) {
+                    s_ota_target = HATP_OTA_TARGET_P4;
+                    if (s_ota_fast_was_running) {
+                        daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                        s_ota_fast_was_running = false;
                     }
-                    s_relay_target = (relay_target_t)raw_relay_target;
-                } else {
-                    s_relay_target = RELAY_TARGET_C6;
+                    return -1;
                 }
-                return (relay_stage_begin(s_relay_target, &meta) == ESP_OK) ? 0 : -1;
+                return 0;
             }
-            return (ota_begin(&meta) == ESP_OK) ? 0 : -1;
+            if (ota_begin(&meta) != ESP_OK) {
+                if (s_ota_fast_was_running) {
+                    daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                    s_ota_fast_was_running = false;
+                }
+                return -1;
+            }
+            return 0;
         }
         case HATP_CMD_OTA_DATA: {
             if (len < sizeof(s3link_ota_data_hdr_t)) return -1;
@@ -1911,34 +1965,62 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             }
             return (ota_write(offset, fw, fw_len) == ESP_OK) ? 0 : -1;
         }
-        case HATP_CMD_OTA_END:
+        case HATP_CMD_OTA_END: {
+            // Restore fast acq (if OTA_BEGIN stopped it) on every exit path
+            // here EXCEPT a successful P4-self END: that is the only case
+            // that reboots the P4 (via the S3's separate activation step
+            // afterward), so nothing needs restoring. C6/STAGE never reboot
+            // the P4 at all -- success or failure -- and a failed P4-self
+            // END leaves the current image running, so both restore.
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 c6_release_boot_straps();            // BEFORE the reset inside finish()
                 esp_err_t rc = c6_flasher_finish();
                 c6_link_restart(b);                  // C6 now runs the new image
                 s_ota_target = HATP_OTA_TARGET_P4;
+                if (s_ota_fast_was_running) {
+                    daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                    s_ota_fast_was_running = false;
+                }
                 return (rc == ESP_OK) ? 0 : -1;
             }
             if (s_ota_target == HATP_OTA_TARGET_STAGE) {
                 esp_err_t rc = relay_stage_end();
                 s_ota_target = HATP_OTA_TARGET_P4;
+                if (s_ota_fast_was_running) {
+                    daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                    s_ota_fast_was_running = false;
+                }
                 return (rc == ESP_OK) ? 0 : -1;
             }
-            return (ota_end() == ESP_OK) ? 0 : -1;
+            esp_err_t rc = ota_end();
+            if (rc != ESP_OK && s_ota_fast_was_running) {
+                // P4-self target, but END failed (size/SHA mismatch, flash
+                // verify failure) -- the P4 is NOT going to reboot, so it
+                // must not be left with acquisition permanently stopped.
+                daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                s_ota_fast_was_running = false;
+            }
+            return (rc == ESP_OK) ? 0 : -1;
+        }
         case HATP_CMD_OTA_ABORT:
             if (s_ota_target == HATP_OTA_TARGET_C6) {
                 c6_release_boot_straps();            // BEFORE the reset inside abort()
                 c6_flasher_abort();
                 c6_link_restart(b);
                 s_ota_target = HATP_OTA_TARGET_P4;
-                return 0;
-            }
-            if (s_ota_target == HATP_OTA_TARGET_STAGE) {
+            } else if (s_ota_target == HATP_OTA_TARGET_STAGE) {
                 relay_stage_reset(RELAY_FAILED);
                 s_ota_target = HATP_OTA_TARGET_P4;
-                return 0;
+            } else {
+                ota_abort();
             }
-            ota_abort();
+            // Restore fast acq iff OTA_BEGIN found it running before this
+            // transfer started -- an abort always leaves the P4 running its
+            // current image, regardless of target.
+            if (s_ota_fast_was_running) {
+                daq_board_run_fast(b, DAQ_RING_CAPACITY);
+                s_ota_fast_was_running = false;
+            }
             return 0;
         case HATP_CMD_OTA_STATUS: {
             // Reply layout is s3link_ota_status_t. The first 10 bytes are the
