@@ -228,3 +228,15 @@ def test_s3_owner_gen_is_assigned_synchronously_in_the_dispatcher():
         "s_owner_gen must NOT be (re-)assigned inside the task body -- the " \
         "dispatcher is the only writer, so a comparison (==) may remain but " \
         "an assignment here reintroduces the async race"
+
+
+def test_c6_validation_helper_exists():
+    assert "static bool c6_image_looks_merged(" in UPD_C
+
+
+def test_c6_validation_checks_both_magics():
+    code = _strip_noise(_fn_body(UPD_C, "static bool c6_image_looks_merged("))
+    assert "0xE9" in code, "must check the ESP image magic at offset 0"
+    assert "C6_PART_TABLE_OFF" in code, "must check the partition table offset"
+    assert "0xAA" in code and "0x50" in code, \
+        "must check ESP_PARTITION_MAGIC bytes AA 50 at 0x8000"

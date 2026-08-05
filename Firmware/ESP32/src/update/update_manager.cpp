@@ -746,6 +746,26 @@ static esp_err_t ota_event_handler(esp_http_client_event_t *evt)
 // would cover the wrong range.
 // ---------------------------------------------------------------------------
 
+// A C6 image is pushed by relay_c6_push() straight to flash offset 0, so it
+// must be a MERGED image (bootloader + partition table + app). The app-only
+// firmware.bin the local build produces would brick the chip: it has the ESP
+// magic at 0 like every image, but nothing valid at the partition table.
+//
+// Verified against the current C6 build:
+//   CONFIG_BOOTLOADER_OFFSET_IN_FLASH=0x0, CONFIG_PARTITION_TABLE_OFFSET=0x8000
+//   bootloader.bin starts E9 03 02 30
+//   partitions.bin starts AA 50 01 02   (ESP_PARTITION_MAGIC, LE uint16 0x50AA)
+#define C6_PART_TABLE_OFF   0x8000u
+#define C6_VALIDATE_BYTES   (C6_PART_TABLE_OFF + 2u)   // 0x8002
+
+static bool c6_image_looks_merged(const uint8_t *head, size_t len)
+{
+    if (!head || len < C6_VALIDATE_BYTES) return false;
+    if (head[0] != 0xE9) return false;                       // ESP image magic
+    return head[C6_PART_TABLE_OFF] == 0xAA &&
+           head[C6_PART_TABLE_OFF + 1] == 0x50;              // partition magic
+}
+
 typedef struct {
     uint32_t offset;     // next image offset to send, and the resume point
     bool     failed;
