@@ -412,3 +412,24 @@ def test_done_record_buffer_is_derived_from_err_buffer_size():
     assert re.search(r"\blast\s*\[\s*sizeof\s*\(\s*err\s*\)", body), \
         "the done-record buffer must be declared as char last[sizeof(err) * ... ], " \
         "not a fixed literal size that can drift out of sync with err's size"
+
+
+MCP_OTA = Path("python/bugbuster_mcp/tools/ota.py").read_text()
+
+
+def _py_signature(text: str, name: str) -> str:
+    """The parameter list of a Python def.
+
+    NOT _fn_body(): that matches curly braces, which Python does not have.
+    """
+    m = re.search(rf"def {re.escape(name)}\((.*?)\)\s*->", text, re.S)
+    assert m, f"{name} not found"
+    return m.group(1)
+
+
+def test_mcp_exposes_daq_uploads_and_targets():
+    assert "def ota_upload_p4(" in MCP_OTA
+    assert "def ota_upload_c6(" in MCP_OTA
+    sig = _py_signature(MCP_OTA, "ota_apply_update")
+    assert "p4" in sig and "c6" in sig, \
+        "the DAQ HAT targets must be reachable from MCP"

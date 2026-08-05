@@ -1,8 +1,8 @@
 """
 BugBuster MCP — Over-the-air firmware tools.
 
-Tools: ota_get_info, ota_upload_firmware, ota_upload_spiffs, ota_rollback,
-ota_check_update, ota_apply_update, ota_update_status.
+Tools: ota_get_info, ota_upload_firmware, ota_upload_spiffs, ota_upload_p4,
+ota_upload_c6, ota_rollback, ota_check_update, ota_apply_update, ota_update_status.
 
 Notes
 -----
@@ -148,6 +148,43 @@ def register(mcp) -> None:
         return r
 
     @mcp.tool()
+    def ota_upload_p4(
+        path: str,
+        host: Optional[str] = None,
+        admin_token: Optional[str] = None,
+    ) -> dict:
+        """
+        Push a locally built ESP32-P4 image to the DAQ HAT over HTTP.
+
+        Returns only after the P4 has been reset and the new version confirmed
+        running. Takes 60-90 s. The DAQ stream drops briefly during the reset.
+        """
+        ota = _make_ota(host, admin_token)
+        try:
+            return ota.upload_p4(path)
+        except OTAError as e:
+            raise RuntimeError(f"P4 upload failed: {e}") from e
+
+    @mcp.tool()
+    def ota_upload_c6(
+        path: str,
+        host: Optional[str] = None,
+        admin_token: Optional[str] = None,
+    ) -> dict:
+        """
+        Push a locally built ESP32-C6 image to the DAQ HAT over HTTP.
+
+        `path` must be a MERGED image from flash offset 0 (bootloader +
+        partition table + app); an app-only binary is rejected by the device
+        because it would brick the C6. Takes ~3 minutes.
+        """
+        ota = _make_ota(host, admin_token)
+        try:
+            return ota.upload_c6(path)
+        except OTAError as e:
+            raise RuntimeError(f"C6 upload failed: {e}") from e
+
+    @mcp.tool()
     def ota_rollback(
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
@@ -189,19 +226,24 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def ota_apply_update(
-        rp2040: bool = True,
-        esp32: bool = True,
+        rp2040: Optional[bool] = None,
+        esp32: Optional[bool] = None,
+        p4: Optional[bool] = None,
+        c6: Optional[bool] = None,
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
     ) -> dict:
         """
-        Apply newer GitHub nightly firmware. The device updates the RP2040 HAT
-        first, then the ESP32. If ESP32 updates, the device reboots after the
+        Apply newer GitHub firmware. Applied in C6 -> P4 -> ESP32 order.
+
+        Naming any target selects the set from scratch, so leaving an argument
+        unset omits it. With no targets the device defaults to RP2040 + ESP32.
+        P4/C6 require a DAQ HAT. If the ESP32 updates, it reboots after the
         response is sent.
         """
         ota = _make_ota(host, admin_token)
         try:
-            return ota.apply_update(rp2040=rp2040, esp32=esp32)
+            return ota.apply_update(rp2040=rp2040, esp32=esp32, p4=p4, c6=c6)
         except OTAError as e:
             raise RuntimeError(f"Update apply failed: {e}") from e
 
