@@ -175,3 +175,31 @@ def test_release_path_activates_the_p4():
     code = _strip_noise(_fn_body(UPD_C, "static bool apply_daq_targets("))
     assert "daq_activate_p4(" in code, \
         "the GitHub release path must activate too, or P4 updates silently revert"
+
+
+DAQ_C = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
+CLI_C = Path("Firmware/DAQ_HAT/ESP32P4/src/cli/cli.c").read_text()
+
+
+def test_c6_claim_and_release_exist():
+    assert "bool daq_c6_claim(" in _strip_noise(DAQ_C)
+    assert "void daq_c6_release(" in _strip_noise(DAQ_C)
+
+
+def test_wifi_stream_start_takes_the_c6_claim():
+    """WIFI_STREAM_START and RELAY_APPLY both drive the same C6 UART."""
+    i = DAQ_C.index("case HATP_CMD_DAQ_WIFI_STREAM_START:")
+    j = DAQ_C.index("case HATP_CMD_", i + 10)
+    assert "daq_c6_claim(" in _strip_noise(DAQ_C[i:j]), "WiFi bring-up must claim the C6 bus"
+
+
+def test_relay_apply_takes_the_c6_claim():
+    i = DAQ_C.index("case HATP_CMD_DAQ_RELAY_APPLY:")
+    j = DAQ_C.index("return 0;", i)
+    assert "daq_c6_claim(" in _strip_noise(DAQ_C[i:j]), "relay apply must claim the C6 bus"
+
+
+def test_cli_c6_commands_take_the_claim():
+    for fn in ("cmd_c6flash", "cmd_c6boot", "cmd_c6relay", "cmd_wifiap"):
+        body = _fn_body(CLI_C, f"static int {fn}(")
+        assert "daq_c6_claim(" in _strip_noise(body), f"{fn} must claim the C6 bus"

@@ -230,6 +230,11 @@ esp_err_t daq_board_s3_start(daq_board_t *b);
  */
 esp_err_t daq_board_c6_start(daq_board_t *b);
 
+/** @brief Claim exclusive use of the C6 UART. Returns false if already held. */
+bool daq_c6_claim(const char *who);
+/** @brief Release the C6 UART claim. Safe to call when not held. */
+void daq_c6_release(void);
+
 /** @brief Start streaming capture on both bus groups. */
 esp_err_t daq_board_start_streaming(daq_board_t *b, size_t ring_capacity);
 

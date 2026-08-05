@@ -2403,14 +2403,20 @@ static void c6_rst_drive_high(void)
 static int cmd_c6flash(int argc, char **argv)
 {
     daq_board_t *b = s_board;
+    if (!daq_c6_claim("cli:c6flash")) {
+        printf("C6 bus busy (an OTA or stream bring-up is running)\n");
+        return 1;
+    }
     if (argc < 2) {
         printf("usage: c6flash <total_bytes> [<hex_offset>]  (use flash_via_p4.py — not for manual entry)\n");
+        daq_c6_release();
         return 1;
     }
     uint32_t total = (uint32_t)strtoul(argv[1], NULL, 10);
     uint32_t flash_offset = (argc >= 3) ? (uint32_t)strtoul(argv[2], NULL, 0) : 0;
     if (total < 4096 || total > 8 * 1024 * 1024) {
         printf("FAIL: invalid size %u\n", (unsigned)total);
+        daq_c6_release();
         return 1;
     }
     ESP_LOGI(TAG, "c6flash: %u bytes @ 0x%x", (unsigned)total, (unsigned)flash_offset);
@@ -2448,6 +2454,7 @@ static int cmd_c6flash(int argc, char **argv)
         fflush(stdout);
         ddp_master_init(&b->ddp);
         ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+        daq_c6_release();
         return 1;
     }
 
@@ -2506,6 +2513,7 @@ static int cmd_c6flash(int argc, char **argv)
                    (unsigned)received, (unsigned)total);
             ddp_master_init(&b->ddp);
             ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+            daq_c6_release();
             return 1;
         }
 
@@ -2517,6 +2525,7 @@ static int cmd_c6flash(int argc, char **argv)
                    (unsigned)received, esp_err_to_name(err));
             ddp_master_init(&b->ddp);
             ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+            daq_c6_release();
             return 1;
         }
         received += got;
@@ -2534,6 +2543,7 @@ static int cmd_c6flash(int argc, char **argv)
                            (unsigned)received, (unsigned)total);
                     ddp_master_init(&b->ddp);
                     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
+                    daq_c6_release();
                     return 1;
                 }
             }
@@ -2566,6 +2576,7 @@ static int cmd_c6flash(int argc, char **argv)
     ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
     c6_rst_drive_high();   // ensure push-pull OUTPUT HIGH; never leave floating
 
+    daq_c6_release();
     if (err == ESP_OK) {
         printf("OK\n");
         return 0;
@@ -2616,6 +2627,10 @@ static int cmd_c6boot(int argc, char **argv)
 {
     (void)argc; (void)argv;
     daq_board_t *b = s_board;
+    if (!daq_c6_claim("cli:c6boot")) {
+        printf("C6 bus busy (an OTA or stream bring-up is running)\n");
+        return 1;
+    }
 
     // 1. Release UART2 from the DDP master.
     ESP_LOGI(TAG, "c6boot: stopping DDP master");
@@ -2734,6 +2749,7 @@ static int cmd_c6boot(int argc, char **argv)
     if (err == ESP_OK) err = ddp_master_start(&b->ddp, /*core=*/0, /*prio=*/6);
     c6_rst_drive_high();   // ensure push-pull OUTPUT HIGH; never leave floating
     printf("DDP master restarted: %s\n", esp_err_to_name(err));
+    daq_c6_release();
     return (err == ESP_OK) ? 0 : 1;
 }
 
@@ -3304,8 +3320,16 @@ static int cmd_cal(int argc, char **argv)
 static int cmd_wifiap(int argc, char **argv)
 {
     daq_board_t *b = s_board;
+    if (!daq_c6_claim("cli:wifiap")) {
+        printf("C6 bus busy (an OTA or stream bring-up is running)\n");
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "on") == 0) {
-        if (argc < 4) { printf("usage: wifiap on <ssid> <password>\n"); return 1; }
+        if (argc < 4) {
+            printf("usage: wifiap on <ssid> <password>\n");
+            daq_c6_release();
+            return 1;
+        }
         ddp_master_set_wifi_stream_mode(&b->ddp, true);
         esp_err_t err = wifi_ap_start(argv[2], argv[3]);
         if (err == ESP_OK) err = tcp_backend_start(&b->usb, DAQ_WIFI_STREAM_TCP_PORT);
@@ -3314,6 +3338,7 @@ static int cmd_wifiap(int argc, char **argv)
             tcp_backend_stop();
             wifi_ap_stop();
             ddp_master_set_wifi_stream_mode(&b->ddp, false);
+            daq_c6_release();
             return 1;
         }
         printf("wifiap: up (ssid=\"%s\", tcp port %d)\n", argv[2], DAQ_WIFI_STREAM_TCP_PORT);
@@ -3325,8 +3350,10 @@ static int cmd_wifiap(int argc, char **argv)
     } else {
         printf("usage: wifiap <on <ssid> <password>|off>  (currently %s)\n",
                wifi_ap_is_up() ? "up" : "down");
+        daq_c6_release();
         return 1;
     }
+    daq_c6_release();
     return 0;
 }
 
@@ -3401,11 +3428,16 @@ static int cmd_c6relay(int argc, char **argv)
 {
     daq_board_t *b = s_board;
     relay_status_t st;
+    if (!daq_c6_claim("cli:c6relay")) {
+        printf("C6 bus busy (an OTA or stream bring-up is running)\n");
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "push") == 0) {
         relay_stage_get_status(&st);
         if (st.target != RELAY_TARGET_C6 || (st.state != RELAY_STAGED && st.state != RELAY_PUSHING)) {
             printf("c6relay: nothing staged for C6 (state=%d target=%d) -- stage via USB_CMD_OTA_BEGIN first\n",
                    st.state, st.target);
+            daq_c6_release();
             return 1;
         }
         printf("c6relay: pushing %lu bytes to C6 (resuming from %lu)...\n",
@@ -3426,6 +3458,7 @@ static int cmd_c6relay(int argc, char **argv)
         c6_rst_drive_high();   // ensure push-pull OUTPUT HIGH; never leave floating
 
         printf("c6relay: %s\n", err == ESP_OK ? "done" : esp_err_to_name(err));
+        daq_c6_release();
         return err == ESP_OK ? 0 : 1;
     }
     relay_stage_get_status(&st);
@@ -3434,6 +3467,7 @@ static int cmd_c6relay(int argc, char **argv)
            st.target,
            (unsigned)st.state < (sizeof(state_name) / sizeof(state_name[0])) ? state_name[st.state] : "?",
            (unsigned long)st.image_size, (unsigned long)st.staged_bytes, (unsigned long)st.pushed_bytes);
+    daq_c6_release();
     return 0;
 }
 

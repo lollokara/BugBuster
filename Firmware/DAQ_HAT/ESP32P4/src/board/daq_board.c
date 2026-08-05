@@ -1018,6 +1018,47 @@ static void c6_release_boot_straps(void)
     gpio_set_level((gpio_num_t)C6_BOOT_EN_PIN, 1);
 }
 
+// ---------------------------------------------------------------------------
+// C6 bus interlock.
+//
+// The WiFi-stream bring-up, the C6 relay push and four CLI commands all drive
+// the SAME C6 over the SAME UART, and each used to guard only its own private
+// flag. A relay push holding the C6 in ROM download mode while a bring-up
+// called ddp_master_set_wifi_stream_mode() could touch a deinit'd struct whose
+// tx_lock had been freed, and a bring-up during a push could corrupt a
+// half-written image and strand the C6 in download mode.
+//
+// Rejects rather than blocks: the caller gets an error it can surface, which
+// is far better than two writers interleaving on the bus. Single-writer
+// discipline is not available here because the CLI runs on its own task.
+// See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-5.
+// ---------------------------------------------------------------------------
+static portMUX_TYPE s_c6_mux = portMUX_INITIALIZER_UNLOCKED;
+static const char  *s_c6_owner;          // NULL when free
+
+bool daq_c6_claim(const char *who)
+{
+    bool got = false;
+    taskENTER_CRITICAL(&s_c6_mux);
+    if (s_c6_owner == NULL) {
+        s_c6_owner = who ? who : "unknown";
+        got = true;
+    }
+    taskEXIT_CRITICAL(&s_c6_mux);
+    if (!got) {
+        ESP_LOGW(TAG, "C6 bus busy (held by %s), rejecting %s",
+                 s_c6_owner ? s_c6_owner : "?", who ? who : "?");
+    }
+    return got;
+}
+
+void daq_c6_release(void)
+{
+    taskENTER_CRITICAL(&s_c6_mux);
+    s_c6_owner = NULL;
+    taskEXIT_CRITICAL(&s_c6_mux);
+}
+
 // True from the moment a relay-apply worker is created until it exits. Two
 // concurrent pushes would interleave on UART2 and strand the C6 in ROM download
 // mode, so RELAY_APPLY refuses while one is live. Set before xTaskCreate(),
@@ -1069,6 +1110,7 @@ static void relay_apply_task(void *arg)
     }
 
     s_relay_apply_busy = false;
+    daq_c6_release();
     vTaskDeleteWithCaps(NULL);   // must match xTaskCreatePinnedToCoreWithCaps
 }
 
@@ -1177,6 +1219,13 @@ static void wifi_stream_bringup_cancel_unwind(daq_board_t *b, uint32_t my_gen)
         memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
         b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
         s_bringup_alive = false;
+        // Gated the same as the teardown calls above: this generation still
+        // owns the claim only while s_owner_gen == my_gen. A later generation
+        // may already have claimed the bus (via a fresh START, which only
+        // happens after RECYCLE's own wifi_stream_teardown() released the
+        // prior claim) -- releasing unconditionally here could steal that
+        // generation's live claim out from under it.
+        daq_c6_release();
     }
     vTaskDelete(NULL);
 }
@@ -1294,6 +1343,7 @@ static void wifi_stream_bringup_task(void *arg)
         b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
         b->wifi_stream_info.failed_at_ms = (uint32_t)(esp_timer_get_time() / 1000);
         s_bringup_alive = false;
+        daq_c6_release();   // this generation is still the current owner here
         vTaskDelete(NULL);
         return;
     }
@@ -1320,6 +1370,7 @@ static void wifi_stream_teardown(daq_board_t *b)
     ddp_master_set_wifi_stream_mode(&b->ddp, false);
     memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
     b->wifi_stream_info.state = DAQ_WIFI_STREAM_IDLE;
+    daq_c6_release();   // the bring-up this tears down is over either way
 }
 
 static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
@@ -1408,6 +1459,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY) {
                 return 0;
             }
+            if (!daq_c6_claim("wifi_stream")) return -1;
             memset(&b->wifi_stream_info, 0, sizeof(b->wifi_stream_info));
             b->wifi_stream_info.state = DAQ_WIFI_STREAM_STARTING;
             // Bump the generation so this attempt has an identity distinct
@@ -1434,6 +1486,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 s_bringup_alive = false;
                 b->wifi_stream_info.state = DAQ_WIFI_STREAM_FAILED;
                 b->wifi_stream_info.failed_at_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                daq_c6_release();
                 return -1;
             }
             return 0;   // accepted -> HATP_RSP_OK (bring-up continues in background)
@@ -1898,6 +1951,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // Push the already-staged C6 image. Replies immediately; the S3
             // watches progress via HATP_CMD_OTA_STATUS's relay_pushed_bytes.
             if (s_relay_apply_busy) return -1;       // a push is already running
+            if (!daq_c6_claim("relay_apply")) return -1;
 
             // Gate on RELAY_STAGED: relay_stage only reaches that state after
             // its SHA-256 check passes, so any other state means the image is
@@ -1906,8 +1960,8 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // handles from the NVS-persisted pushed_bytes.
             relay_status_t rs;
             relay_stage_get_status(&rs);
-            if (rs.target != RELAY_TARGET_C6) return -1;
-            if (rs.state != RELAY_STAGED && rs.state != RELAY_PUSHING) return -1;
+            if (rs.target != RELAY_TARGET_C6) { daq_c6_release(); return -1; }
+            if (rs.state != RELAY_STAGED && rs.state != RELAY_PUSHING) { daq_c6_release(); return -1; }
 
             // Set before the create: xTaskCreate() returning pdPASS does not
             // mean the task has run, so clearing this on the task side only
@@ -1924,6 +1978,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                     relay_apply_task, "relay_apply", 8192, b, 5, NULL, /*core=*/0,
                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
                 s_relay_apply_busy = false;
+                daq_c6_release();
                 return -1;
             }
             return 0;
