@@ -230,6 +230,75 @@ def test_s3_owner_gen_is_assigned_synchronously_in_the_dispatcher():
         "an assignment here reintroduces the async race"
 
 
+import json as _json
+import sys, types
+sys.path.insert(0, str(Path("python").resolve()))
+from bugbuster.ota import OTAClient, OTAError  # noqa: E402
+
+
+class _FakeResp:
+    def __init__(self, lines, ok=True, status=200):
+        self._lines, self.ok, self.status_code, self.text = lines, ok, status, ""
+    def iter_lines(self, decode_unicode=False):
+        for l in self._lines:
+            yield l
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def test_apply_update_omits_unset_targets():
+    """Naming ANY target key resets the selection firmware-side, so an unset
+    key must not be sent -- apply_update(p4=True) means P4 only."""
+    sent = {}
+
+    class S:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent["json"] = json
+            return types.SimpleNamespace(ok=True, json=lambda: {}, status_code=200, text="")
+
+    c = OTAClient.__new__(OTAClient)
+    c._session, c._base, c._token = S(), "http://d/api", "t"
+    c.apply_update(p4=True)
+    assert sent["json"] == {"p4": True}, sent["json"]
+
+
+def test_apply_update_with_no_args_sends_no_targets():
+    sent = {}
+
+    class S:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent["json"] = json
+            return types.SimpleNamespace(ok=True, json=lambda: {}, status_code=200, text="")
+
+    c = OTAClient.__new__(OTAClient)
+    c._session, c._base, c._token = S(), "http://d/api", "t"
+    c.apply_update()
+    assert sent["json"] in (None, {}), sent["json"]
+
+
+def test_upload_stream_without_a_done_record_is_a_failure():
+    """A truncated stream must never read as success."""
+    c = OTAClient.__new__(OTAClient)
+    lines = [b'{"stage":"begin","total":10}', b'{"stage":"upload","done":10,"total":10}']
+    try:
+        c._read_ndjson(_FakeResp(lines), None)
+    except OTAError as e:
+        assert "done" in str(e).lower()
+    else:
+        raise AssertionError("truncated stream must raise")
+
+
+def test_upload_stream_reports_the_error_from_the_done_record():
+    c = OTAClient.__new__(OTAClient)
+    lines = [b'{"stage":"done","ok":false,"error":"image failed verification"}']
+    try:
+        c._read_ndjson(_FakeResp(lines), None)
+    except OTAError as e:
+        assert "verification" in str(e)
+    else:
+        raise AssertionError("ok:false must raise")
+
+
 def test_c6_validation_helper_exists():
     assert "static bool c6_image_looks_merged(" in UPD_C
 

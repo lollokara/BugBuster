@@ -34,6 +34,7 @@ Quick start::
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -246,6 +247,90 @@ class OTAClient:
         except ValueError:
             return {"raw": r.text}
 
+    # ----------------------------------------------------------------- DAQ HAT
+
+    def _read_ndjson(self, resp, on_event) -> dict:
+        """Consume an NDJSON progress stream and return its final record.
+
+        The device commits HTTP 200 before it knows the outcome, so the status
+        code says nothing. The last record is authoritative, and a stream that
+        ends without one means the connection dropped mid-push.
+        """
+        final = None
+        for raw in resp.iter_lines(decode_unicode=False):
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            except ValueError:
+                continue
+            if on_event:
+                try:
+                    on_event(rec)
+                except Exception as e:
+                    log.warning("Progress callback raised: %s", e)
+            if rec.get("stage") == "done":
+                final = rec
+        if final is None:
+            raise OTAError("upload stream ended without a final 'done' record "
+                           "(connection dropped mid-push)")
+        if not final.get("ok"):
+            raise OTAError(final.get("error") or "upload failed")
+        return final
+
+    def upload_p4(self, path: str, *, sha256: Optional[str] = None,
+                  on_event: Optional[Callable[[dict], None]] = None,
+                  chunk_size: int = 64 * 1024, timeout: float = 600) -> dict:
+        """Push a locally built ESP32-P4 image to the DAQ HAT.
+
+        Returns only after the P4 has been reset, seen running the new version
+        and confirmed -- an unconfirmed image would be reverted by the
+        bootloader on the next boot.
+        """
+        return self._push_daq("/ota/upload_p4", path, sha256, on_event,
+                              chunk_size, timeout)
+
+    def upload_c6(self, path: str, *, sha256: Optional[str] = None,
+                  on_event: Optional[Callable[[dict], None]] = None,
+                  chunk_size: int = 64 * 1024, timeout: float = 900) -> dict:
+        """Push a locally built ESP32-C6 image to the DAQ HAT.
+
+        `path` MUST be a merged image from flash offset 0 (bootloader +
+        partition table + app). The app-only firmware.bin would brick the C6;
+        the device rejects it, but build it with tests/tools/daq_push.py.
+        """
+        return self._push_daq("/ota/upload_c6", path, sha256, on_event,
+                              chunk_size, timeout)
+
+    def _push_daq(self, endpoint, path, sha256, on_event, chunk_size, timeout) -> dict:
+        size = os.path.getsize(path)
+        if size <= 0:
+            raise OTAError(f"{path} is empty")
+        sha_hex = (sha256 or _sha256_file(path)).lower()
+        if len(sha_hex) != 64 or any(c not in "0123456789abcdef" for c in sha_hex):
+            raise OTAError(f"sha256 must be 64 lowercase hex chars (got {sha_hex!r})")
+
+        def _gen():
+            with open(path, "rb") as f:
+                while True:
+                    block = f.read(chunk_size)
+                    if not block:
+                        break
+                    yield block
+
+        headers = {
+            ADMIN_TOKEN_HEADER: self._token,
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(size),
+        }
+        with self._session.post(f"{self._base}{endpoint}",
+                                params={"sha256": sha_hex}, data=_gen(),
+                                headers=headers, timeout=timeout,
+                                stream=True) as r:
+            if not r.ok:
+                raise OTAError(f"{endpoint} -> HTTP {r.status_code}: {r.text[:300]}")
+            return self._read_ndjson(r, on_event)
+
     # --------------------------------------------------------------- rollback
 
     def rollback(self) -> dict:
@@ -284,16 +369,27 @@ class OTAClient:
             raise OTAError(f"/api/update/check -> HTTP {r.status_code}: {r.text[:300]}")
         return r.json()
 
-    def apply_update(self, *, rp2040: bool = True, esp32: bool = True) -> dict:
-        """Apply newer GitHub nightly firmware, RP2040 first, then ESP32.
+    def apply_update(self, *, rp2040: Optional[bool] = None,
+                     esp32: Optional[bool] = None,
+                     p4: Optional[bool] = None,
+                     c6: Optional[bool] = None) -> dict:
+        """Apply newer GitHub firmware. Targets are applied C6 -> P4 -> ESP32.
 
-        On ESP32 success the device reboots after the HTTP response flushes.
+        Naming ANY target selects the set from scratch device-side, so unset
+        arguments are omitted rather than defaulted -- ``apply_update(p4=True)``
+        updates the P4 alone. With no arguments the device applies its own
+        default (RP2040 + ESP32).
+
+        P4 and C6 require a DAQ HAT; the device returns an error otherwise.
         """
+        body = {k: bool(v) for k, v in
+                (("rp2040", rp2040), ("esp32", esp32), ("p4", p4), ("c6", c6))
+                if v is not None}
         r = self._session.post(
             f"{self._base}/update/apply",
-            json={"rp2040": bool(rp2040), "esp32": bool(esp32)},
+            json=body or None,
             headers={ADMIN_TOKEN_HEADER: self._token},
-            timeout=300,
+            timeout=900,
         )
         if not r.ok:
             raise OTAError(f"/api/update/apply -> HTTP {r.status_code}: {r.text[:300]}")
