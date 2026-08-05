@@ -10,6 +10,28 @@ HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
 HAT_C = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
 
 
+def _literal_end(text: str, i: int, n: int) -> int:
+    """text[i] is a quote char ('"', \"'\", or '`' -- the last for TSX template
+    literals). Return the index just past the matching closing quote, honoring
+    backslash escapes. Shared by _skip_noise() (which blanks the whole
+    literal) and _strip_comments() (which keeps literal contents verbatim) so
+    the two scanners cannot disagree about where a string ends -- in
+    particular, both must treat a `//` INSIDE a literal as ordinary text, not
+    a comment start, or _strip_comments would over-blank real code that
+    happens to follow a URL-bearing string on the same line.
+
+    Known limitation: does not special-case `${...}` template-literal
+    interpolation -- a `` ` `` or matching-quote char inside an interpolated
+    expression would be misread as the literal's end. Nothing in the files
+    this scans today uses interpolation containing that character.
+    """
+    quote = text[i]
+    j = i + 1
+    while j < n and text[j] != quote:
+        j += 2 if text[j] == "\\" else 1
+    return min(j + 1, n)
+
+
 def _skip_noise(text: str, i: int, n: int):
     """If text[i] begins a // line comment, a /* */ block comment, or a
     "..."/'...' literal, return the index just past it; otherwise return
@@ -30,11 +52,7 @@ def _skip_noise(text: str, i: int, n: int):
         end = text.find("*/", i + 2)
         return n if end == -1 else end + 2
     if c == '"' or c == "'":
-        quote = c
-        j = i + 1
-        while j < n and text[j] != quote:
-            j += 2 if text[j] == "\\" else 1
-        return min(j + 1, n)
+        return _literal_end(text, i, n)
     return None
 
 
@@ -64,10 +82,10 @@ def _fn_body(text: str, signature: str) -> str:
 
 
 def _skip_comment_only(text: str, i: int, n: int):
-    """Like _skip_noise, but comments only -- string/char literal contents
-    are left intact. Used where the text under test IS a string-literal value
-    (e.g. a JSX option's "p4"), so blanking string contents (as _strip_noise
-    does) would make the assertion untestable rather than just stricter.
+    """Like _skip_noise, but comments only -- callers are responsible for
+    routing string/char/template literals through _literal_end() themselves
+    (see _strip_comments below) so a `//` INSIDE a literal is never mistaken
+    for a comment start.
     """
     c = text[i]
     if c == "/" and i + 1 < n and text[i + 1] == "/":
@@ -80,21 +98,33 @@ def _skip_comment_only(text: str, i: int, n: int):
 
 
 def _strip_comments(text: str) -> str:
-    """Blank out // and /* */ comments only, keeping string/char literal
-    contents intact -- so a check for a literal value like "p4" cannot be
-    spoofed by writing that text inside a comment with no real implementation,
-    while the literal itself stays checkable (unlike _strip_noise, which
-    blanks string contents too).
+    """Blank out // and /* */ comments only, keeping string/char/template
+    literal contents intact -- so a check for a literal value like "p4"
+    cannot be spoofed by writing that text inside a comment with no real
+    implementation, while the literal itself stays checkable (unlike
+    _strip_noise, which blanks string contents too).
+
+    Literal-aware: a quote char is routed through the SAME _literal_end()
+    _skip_noise() uses, and its full span (including any `//` inside) is
+    copied out verbatim BEFORE comment detection runs on it -- so a URL in a
+    string, e.g. "http://x.com", is not misread as starting a line comment
+    that blanks everything after it on the line.
     """
     out = []
     i, n = 0, len(text)
     while i < n:
+        c = text[i]
+        if c in ('"', "'", "`"):
+            end = _literal_end(text, i, n)
+            out.append(text[i:end])
+            i = end
+            continue
         skip = _skip_comment_only(text, i, n)
         if skip is not None:
             out.append(" " * (skip - i))
             i = skip
             continue
-        out.append(text[i])
+        out.append(c)
         i += 1
     return "".join(out)
 
