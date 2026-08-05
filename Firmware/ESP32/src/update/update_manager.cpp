@@ -14,7 +14,10 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "hat.h"
 #include "mbedtls/sha256.h"
@@ -1216,6 +1219,120 @@ static bool daq_activate_p4(char *err, size_t err_len,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// P4 activation worker: daq_activate_p4() polls hat_connect() in a loop
+// (PING + GET_INFO framing on top of the byte-transfer's own buffers) and
+// overflows the 4 KB httpd task stack (webserver.cpp: config.stack_size) when
+// called inline from update_manager_push_local(). Only the streaming push path
+// is affected -- the GitHub apply path already runs apply_daq_targets() (and
+// therefore daq_activate_p4()) on a dedicated 12 KB worker (see
+// http_update_apply_task() in webserver.cpp).
+//
+// The byte transfer itself stays on httpd (shallow, and it reads the request
+// body directly) -- only activation moves. The client-visible NDJSON stream
+// must keep receiving progress records DURING activation, so the worker
+// cannot just run-and-report-at-the-end: it enqueues each progress line (and
+// finally a "done" record carrying success/err) onto a small FreeRTOS queue;
+// update_manager_push_local() -- still on httpd -- drains that queue and
+// forwards every line to emit_cb() itself, since emit_cb ultimately writes an
+// HTTP chunk tied to the httpd request and must be called from that task.
+//
+// 8192 bytes is a STARTING ESTIMATE for the worker stack, sized pending a
+// real hardware high-water-mark reading (logged just before the worker
+// deletes itself, below) -- not a measured figure.
+#define DAQ_ACTIVATE_WORKER_STACK 8192
+#define DAQ_ACTIVATE_QUEUE_LEN    8
+
+typedef struct {
+    bool done;               // true: success/err are valid, line is unused.
+    bool success;            // valid only when done.
+    char line[192];          // valid only when !done -- one progress record.
+    char err[96];            // valid only when done && !success.
+} DaqActivateMsg;
+
+// Runs on the worker task; forwards a daq_activate_p4() progress line into
+// the queue instead of calling emit_cb() directly (emit_cb must run on httpd).
+static void daq_activate_worker_emit(void *ctx, const char *line)
+{
+    QueueHandle_t q = (QueueHandle_t)ctx;
+    DaqActivateMsg msg = {};
+    msg.done = false;
+    snprintf(msg.line, sizeof(msg.line), "%s", line ? line : "");
+    // Block: the queue is continuously drained by the caller, so a full queue
+    // means the caller is merely behind, not stuck -- never drop a record.
+    xQueueSend(q, &msg, portMAX_DELAY);
+}
+
+static void daq_activate_worker_task(void *arg)
+{
+    QueueHandle_t q = (QueueHandle_t)arg;
+
+    char err[96] = {0};
+    bool ok = daq_activate_p4(err, sizeof(err), daq_activate_worker_emit, q);
+
+    DaqActivateMsg done_msg = {};
+    done_msg.done = true;
+    done_msg.success = ok;
+    snprintf(done_msg.err, sizeof(done_msg.err), "%s", err);
+    xQueueSend(q, &done_msg, portMAX_DELAY);
+
+    // Read this on hardware to size DAQ_ACTIVATE_WORKER_STACK for real instead
+    // of on the 8192-byte starting estimate above.
+    ESP_LOGI(TAG, "daq_activate worker stack high-water mark: %u bytes",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    // MUST be vTaskDeleteWithCaps: this task was created with
+    // xTaskCreatePinnedToCoreWithCaps, which allocates the stack and TCB
+    // itself. Plain vTaskDelete() cannot free that memory -- see the matching
+    // comment on http_update_apply_task() in webserver.cpp for the leak this
+    // caused previously (12 KB of internal RAM per update, second update in a
+    // boot failing to start).
+    vTaskDeleteWithCaps(NULL);
+}
+
+// Runs daq_activate_p4() on a dedicated internal-RAM-stack worker and relays
+// its progress to emit_cb() from THIS (httpd) task, so the NDJSON stream never
+// stalls. Blocks until the worker finishes; returns the worker's own
+// success/failure via the same (err, err_len) contract daq_activate_p4() uses.
+static bool daq_activate_p4_via_worker(char *err, size_t err_len,
+                                       DaqProgressFn emit_cb, void *emit_ctx)
+{
+    QueueHandle_t q = xQueueCreate(DAQ_ACTIVATE_QUEUE_LEN, sizeof(DaqActivateMsg));
+    if (!q) {
+        snprintf(err, err_len, "out of memory (activation queue)");
+        return false;
+    }
+
+    // 8 KB internal-RAM stack -- must NOT be PSRAM (D-cache disable during
+    // flash writes corrupts a PSRAM-backed stack). See the identical rule on
+    // http_update_apply_task()'s 12 KB worker in webserver.cpp.
+    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+        daq_activate_worker_task, "daq_activate", DAQ_ACTIVATE_WORKER_STACK,
+        q, 5, NULL, 0, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (created != pdPASS) {
+        // Do NOT fall back to running daq_activate_p4() inline here -- that is
+        // exactly the httpd-stack-overflow bug this function exists to avoid.
+        vQueueDelete(q);
+        snprintf(err, err_len, "failed to start P4 activation worker");
+        return false;
+    }
+
+    DaqActivateMsg msg;
+    bool success = false;
+    for (;;) {
+        if (xQueueReceive(q, &msg, pdMS_TO_TICKS(100)) != pdTRUE) continue;
+        if (msg.done) {
+            success = msg.success;
+            if (!success) snprintf(err, err_len, "%s", msg.err);
+            break;
+        }
+        if (emit_cb) emit_cb(emit_ctx, msg.line);
+    }
+
+    vQueueDelete(q);
+    return success;
+}
+
 // The C6 and P4 legs of a multi-target apply, in UPDATE_TARGET_ORDER. Shared by
 // both apply entry points so the ordering rule and the "release has no image"
 // checks cannot drift between them.
@@ -1429,7 +1546,12 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
     }
 
     if (!is_c6) {
-        if (!daq_activate_p4(err, err_len, emit_cb, ctx)) return ESP_FAIL;
+        // Runs on a worker task (dedicated internal-RAM stack), NOT inline on
+        // httpd -- see daq_activate_p4_via_worker()'s comment above. This is
+        // the actual fix for the httpd task stack overflow observed on
+        // hardware: daq_activate_p4()'s hat_connect() polling loop, stacked
+        // on top of the byte transfer's own buffers, overflowed httpd's 4 KB.
+        if (!daq_activate_p4_via_worker(err, err_len, emit_cb, ctx)) return ESP_FAIL;
         return ESP_OK;
     }
 

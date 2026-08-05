@@ -406,13 +406,96 @@ def test_push_local_uses_stage_target_for_c6():
 
 
 def test_push_local_activates_the_p4():
+    """Activation must go through the worker wrapper, not daq_activate_p4()
+    directly -- daq_activate_p4()'s hat_connect() polling loop, stacked on top
+    of the byte transfer's own buffers, overflows the httpd task's 4 KB stack
+    (webserver.cpp: config.stack_size). See
+    test_push_local_does_not_call_daq_activate_p4_directly below for the
+    other half of this contract."""
     body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
-    assert "daq_activate_p4(" in body
+    assert "daq_activate_p4_via_worker(" in body
 
 
 def test_push_local_aborts_the_transfer_on_failure():
     body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
     assert "hat_ota_abort()" in body
+
+
+def test_push_local_does_not_call_daq_activate_p4_directly():
+    """This is the httpd-stack-overflow bug itself: daq_activate_p4() must run
+    on the worker, never inline on update_manager_push_local()'s own (httpd)
+    stack. A bare call would reintroduce the panic:
+    ***ERROR*** A stack overflow in task httpd has been detected."""
+    body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert not re.search(r"[^_a-zA-Z0-9]daq_activate_p4\s*\(", body), \
+        "daq_activate_p4() must only be reached via daq_activate_p4_via_worker()"
+
+
+def test_daq_activate_worker_uses_an_internal_ram_stack():
+    """A PSRAM-backed task stack is corrupted when the D-cache is disabled
+    during flash writes -- the worker must use xTaskCreatePinnedToCoreWithCaps
+    with MALLOC_CAP_INTERNAL, matching the existing 12 KB GitHub-apply worker
+    (http_update_apply_task in webserver.cpp)."""
+    body = _strip_noise(_fn_body(UPD_C, "static bool daq_activate_p4_via_worker("))
+    assert "xTaskCreatePinnedToCoreWithCaps(" in body
+    assert "MALLOC_CAP_INTERNAL" in body, \
+        "the worker stack must be allocated from internal RAM"
+
+
+def test_daq_activate_worker_is_torn_down_with_delete_with_caps():
+    """A task created with xTaskCreatePinnedToCoreWithCaps MUST be deleted
+    with vTaskDeleteWithCaps -- plain vTaskDelete() cannot free the
+    WithCaps-allocated stack and TCB. This exact leak (12 KB internal RAM per
+    update) previously broke the second update in a boot; see the matching
+    comment on http_update_apply_task() in webserver.cpp."""
+    body = _strip_noise(_fn_body(UPD_C, "static void daq_activate_worker_task("))
+    assert "vTaskDeleteWithCaps(NULL)" in body
+    assert not re.search(r"[^a-zA-Z]vTaskDelete\s*\(", body), \
+        "plain vTaskDelete() cannot free a WithCaps-allocated stack/TCB"
+
+
+def test_daq_activate_worker_logs_its_stack_high_water_mark():
+    """8192 bytes is a starting estimate for the worker stack, not a measured
+    figure -- it must log uxTaskGetStackHighWaterMark() so the real bound can
+    be read off hardware."""
+    body = _strip_noise(_fn_body(UPD_C, "static void daq_activate_worker_task("))
+    assert "uxTaskGetStackHighWaterMark(NULL)" in body
+    assert body.index("uxTaskGetStackHighWaterMark(NULL)") < \
+        body.index("vTaskDeleteWithCaps(NULL)"), \
+        "the high-water mark must be read before the task deletes itself"
+
+
+def test_daq_activate_worker_creation_failure_does_not_fall_back_inline():
+    """If xTaskCreatePinnedToCoreWithCaps() fails, the caller must report a
+    normal failure -- NOT fall back to running daq_activate_p4() inline on
+    httpd, which is exactly the bug this worker exists to avoid."""
+    body = _strip_noise(_fn_body(UPD_C, "static bool daq_activate_p4_via_worker("))
+    create_call = "xTaskCreatePinnedToCoreWithCaps("
+    i = body.index(create_call)
+    # Find the `if (created != pdPASS) { ... }` block that follows the call.
+    after = body[i:]
+    if_idx = after.index("if")
+    fail_block = _fn_body(after[if_idx:], "if")
+    assert "daq_activate_p4(" not in re.sub(r"//.*", "", fail_block), \
+        "task-create failure must not fall back to an inline daq_activate_p4() call"
+    assert "vQueueDelete(" in fail_block or "vQueueDelete(" in body, \
+        "the queue must be freed even when task creation fails"
+
+
+def test_push_local_still_forwards_progress_during_activation():
+    """The streaming contract must be preserved: progress records from
+    activation must still reach emit_cb DURING activation (not batched at the
+    end) -- the client shows a live progress UI and treats a stream ending
+    without a final `done` record as failure. The worker enqueues; the caller
+    (still on httpd, so it can legally call emit_cb) drains the queue and
+    calls emit_cb for each non-final record."""
+    body = _strip_noise(_fn_body(UPD_C, "static bool daq_activate_p4_via_worker("))
+    assert "xQueueReceive(" in body
+    assert "emit_cb(" in body
+    loop = _fn_body(body[body.index("for (;;)"):], "for (;;)") \
+        if "for (;;)" in body else body
+    assert "emit_cb(" in loop, \
+        "emit_cb must be called from inside the drain loop, not only once at the end"
 
 
 def test_push_local_relay_poll_checks_timeout_before_status_continue():
