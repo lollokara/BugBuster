@@ -1355,3 +1355,102 @@ def test_s3_link_handlers_declare_no_stack_buffer_at_or_above_task_stack_size():
         f"{biggest_bytes} bytes) uses more than half the s3_link task stack "
         f"({stack_size} bytes) on its own"
     )
+
+
+# ---------------------------------------------------------------------------
+# C6 relay-push poll loop in update_manager_push_local(): a C6 firmware push
+# used to report `{"stage":"done","ok":true}` ~60 seconds before the real
+# push finished, and never checked whether it actually succeeded.
+# hat_daq_relay_apply() only SPAWNS the P4's relay_apply_task and returns
+# immediately; for a brief window afterwards relay_state is still
+# HAT_RELAY_STAGED, not yet HAT_RELAY_PUSHING. The old loop broke on the
+# first poll that saw "not PUSHING" -- which STAGED satisfies just as much as
+# DONE does -- and then unconditionally reported success.
+# ---------------------------------------------------------------------------
+
+def _push_local_relay_section_raw():
+    """Same span as _push_local_relay_section() but WITHOUT noise-stripping,
+    for checks that need to see actual string-literal contents (e.g. the
+    `"stage":"relay"` JSON literal, which _strip_noise() blanks out)."""
+    body = _fn_body(UPD_C, "esp_err_t update_manager_push_local(")
+    start = body.index("hat_daq_relay_apply()")
+    end = body.index("hat_daq_c6_version(")
+    return body[start:end]
+
+
+def _push_local_relay_section():
+    """The C6 relay-apply-and-poll section of update_manager_push_local(),
+    from the hat_daq_relay_apply() call up to (not including) the trailing
+    hat_daq_c6_version() version report, noise-stripped so comments/string
+    contents cannot spoof an identifier check."""
+    return _strip_noise(_push_local_relay_section_raw())
+
+
+def test_relay_poll_waits_for_pushing_before_treating_non_pushing_as_done():
+    """A poll that reads HAT_RELAY_STAGED (relay_apply_task not scheduled
+    yet) must keep waiting, not fall through the same exit the loop uses for
+    genuine completion. Concretely: the STAGED check must `continue` the poll
+    loop, and it must appear BEFORE the "not PUSHING -> exit" check, so a
+    STAGED read can never reach that exit."""
+    section = _push_local_relay_section()
+    assert "HAT_RELAY_STAGED" in section, \
+        "no HAT_RELAY_STAGED handling found in the C6 relay-poll section"
+    staged_idx = section.index("HAT_RELAY_STAGED")
+    exit_idx = section.index("!= HAT_RELAY_PUSHING")
+    assert staged_idx < exit_idx, \
+        "the not-yet-started (STAGED) check must be evaluated before the " \
+        "not-PUSHING exit check, or a STAGED read takes the same exit as " \
+        "a genuinely finished push"
+    between = section[staged_idx:exit_idx]
+    assert "continue" in between, \
+        "seeing HAT_RELAY_STAGED must `continue` the poll loop (keep " \
+        "waiting for the push to start), not fall through to the exit check"
+
+
+def test_relay_poll_bounds_the_wait_for_the_push_to_start():
+    """The wait for relay_state to leave STAGED must itself be bounded (a
+    push that never starts must fail loudly, not hang the request forever
+    behind the held ApplyGuard)."""
+    section = _push_local_relay_section()
+    assert "C6_RELAY_START_TIMEOUT_MS" in section, \
+        "expected a dedicated, bounded timeout for waiting on the push to start"
+    # Must actually be conditioned on "not started yet" and gate a real
+    # `return ESP_FAIL` bail-out, not just be declared and unused.
+    started_idx = section.index("!started")
+    timeout_idx = section.index("C6_RELAY_START_TIMEOUT_MS")
+    assert started_idx < timeout_idx, \
+        "the start-timeout check must be conditioned on `!started`"
+    fail_idx = section.index("return ESP_FAIL", timeout_idx)
+    assert fail_idx > timeout_idx, \
+        "no return ESP_FAIL found gated by the start-timeout"
+
+
+def test_relay_poll_checks_final_state_against_the_done_constant():
+    """The loop must exit on ANY non-PUSHING state (including
+    HAT_RELAY_FAILED), so whatever runs after the loop must inspect the final
+    state and fail unless it is specifically HAT_RELAY_DONE -- "not PUSHING"
+    alone is not a success signal."""
+    body = _fn_body(UPD_C, "esp_err_t update_manager_push_local(")
+    loop = _fn_body(body, "for (;;)")
+    after_loop = _strip_noise(body[body.index(loop) + len(loop):body.index("hat_daq_c6_version(")])
+    assert "HAT_RELAY_DONE" in after_loop, \
+        "no check against HAT_RELAY_DONE found after the relay poll loop"
+    done_idx = after_loop.index("HAT_RELAY_DONE")
+    assert "return ESP_FAIL" in after_loop[done_idx:], \
+        "a final state other than HAT_RELAY_DONE must return ESP_FAIL"
+
+
+def test_relay_poll_emits_progress_from_relay_pushed_bytes():
+    """The observed hardware bug: a ~3 minute C6 push emitted no `relay`
+    stage records at all, so a live client saw nothing move for minutes.
+    Progress must be emitted from relay_pushed_bytes on the same throttle
+    (PUSH_EMIT_MS) the byte-transfer loop above already uses."""
+    section = _push_local_relay_section()
+    raw = _push_local_relay_section_raw()
+    assert "PUSH_EMIT_MS" in section, \
+        "the relay poll must reuse the existing PUSH_EMIT_MS throttle"
+    assert '"stage\\":\\"relay\\"' in raw or '"stage":"relay"' in raw, \
+        "expected a {\"stage\":\"relay\", ...} progress record"
+    assert "relay_pushed_bytes" in section, \
+        "the relay progress record must be derived from st.relay_pushed_bytes"
+    assert "emit_cb(" in section

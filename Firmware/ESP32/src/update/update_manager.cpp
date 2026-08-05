@@ -771,7 +771,14 @@ static esp_err_t ota_event_handler(esp_http_client_event_t *evt)
 //   bootloader.bin starts E9 03 02 30
 //   partitions.bin starts AA 50 01 02   (ESP_PARTITION_MAGIC, LE uint16 0x50AA)
 #define C6_PART_TABLE_OFF   0x8000u
-#define C6_VALIDATE_BYTES   (C6_PART_TABLE_OFF + 2u)   // 0x8002
+// Rounded UP to a 4-byte multiple (0x8004, not the 0x8002 the two magic bytes
+// strictly need). The C6/STAGE path lands in relay_stage_write(), which calls
+// esp_partition_write() directly -- unlike the P4 target, whose esp_ota_write()
+// buffers internally and tolerates any alignment. Because this head buffer is
+// forwarded as one contiguous run before the rest of the stream, an odd length
+// here shifts EVERY subsequent write offset off a 4-byte boundary for the whole
+// image. Keep this 4-byte aligned.
+#define C6_VALIDATE_BYTES   (((C6_PART_TABLE_OFF + 2u) + 3u) & ~3u)   // 0x8004
 
 static bool c6_image_looks_merged(const uint8_t *head, size_t len)
 {
@@ -1395,6 +1402,11 @@ static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
 #define PUSH_EMIT_BYTES   65536
 #define PUSH_EMIT_MS        500
 #define C6_RELAY_TIMEOUT_MS (5 * 60 * 1000)
+// Bound on waiting for hat_daq_relay_apply()'s spawned relay_apply_task to
+// actually take relay_state out of HAT_RELAY_STAGED. A few seconds is plenty
+// for a task spawn + first state transition; if it never happens the P4 is
+// wedged and there is no point waiting out the full C6_RELAY_TIMEOUT_MS.
+#define C6_RELAY_START_TIMEOUT_MS (5 * 1000)
 
 esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
                                     const uint8_t sha256[32],
@@ -1566,15 +1578,26 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
         return ESP_FAIL;
     }
     int64_t start_us = esp_timer_get_time();
+    int64_t start_wait_us = start_us;
     bool relay_status_ever_ok = false;
+    // hat_daq_relay_apply() only SPAWNS the P4's relay_apply_task and returns
+    // immediately -- for a brief window afterwards relay_state is still
+    // HAT_RELAY_STAGED, not yet HAT_RELAY_PUSHING. `started` tracks whether
+    // we have seen it leave STAGED (PUSHING, or a terminal state reached so
+    // fast this loop never caught it mid-PUSHING). Until then, "not PUSHING"
+    // must NOT be read as "finished" -- that misreading is the exact bug:
+    // reporting `{"stage":"done","ok":true}` while the C6 was still mid-flash
+    // in ROM download mode, ~60 more seconds from actually finishing.
+    bool started = false;
+    hat_daq_ota_status_t st = {};
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(PUSH_EMIT_MS));
-        // Evaluate the timeout FIRST, unconditionally, before anything below
-        // can `continue` past it. hat_daq_ota_status() failing (a UART glitch,
-        // or the HAT wedged mid-push) must not be able to skip this check --
-        // ApplyGuard is stack RAII, so a loop that never returns never
-        // releases it, which bricks every future update (local push AND
-        // GitHub apply, all targets) until the S3 is power-cycled.
+        // Evaluate timeouts FIRST, unconditionally, before anything below
+        // can `continue` past them. hat_daq_ota_status() failing (a UART
+        // glitch, or the HAT wedged mid-push) must not be able to skip this
+        // check -- ApplyGuard is stack RAII, so a loop that never returns
+        // never releases it, which bricks every future update (local push
+        // AND GitHub apply, all targets) until the S3 is power-cycled.
         if (esp_timer_get_time() - start_us > (int64_t)C6_RELAY_TIMEOUT_MS * 1000) {
             snprintf(err, err_len,
                      relay_status_ever_ok
@@ -1582,7 +1605,14 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
                          : "HAT link unresponsive during C6 relay push");
             return ESP_FAIL;
         }
-        hat_daq_ota_status_t st = {};
+        if (!started &&
+            esp_timer_get_time() - start_wait_us > (int64_t)C6_RELAY_START_TIMEOUT_MS * 1000) {
+            snprintf(err, err_len,
+                     relay_status_ever_ok
+                         ? "C6 relay push never started"
+                         : "HAT link unresponsive during C6 relay push");
+            return ESP_FAIL;
+        }
         if (!hat_daq_ota_status(&st)) continue;
         relay_status_ever_ok = true;
         if (emit_cb) {
@@ -1591,7 +1621,22 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
                      (unsigned long)st.relay_pushed_bytes, (unsigned long)image_size);
             emit_cb(ctx, line);
         }
+        if (!started) {
+            if (st.relay_state == HAT_RELAY_STAGED) continue;  // not spawned yet
+            started = true;
+        }
         if (st.relay_state != HAT_RELAY_PUSHING) break;
+    }
+
+    // Inspect the FINAL relay state: the loop above exits on any non-PUSHING
+    // state, which includes HAT_RELAY_FAILED, not just HAT_RELAY_DONE. Only
+    // DONE is success -- reporting ok:true for anything else is the second
+    // half of the same class of bug (never checking whether the push that
+    // finished actually succeeded).
+    if (st.relay_state != HAT_RELAY_DONE) {
+        snprintf(err, err_len, "C6 relay push failed (relay_state=%u)",
+                 (unsigned)st.relay_state);
+        return ESP_FAIL;
     }
 
     hat_daq_c6_version_t cv = {};
