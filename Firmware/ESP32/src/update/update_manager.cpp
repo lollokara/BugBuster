@@ -1104,6 +1104,12 @@ static bool daq_activate_p4(char *err, size_t err_len,
     while (waited < DAQ_RELINK_TIMEOUT_MS) {
         vTaskDelay(pdMS_TO_TICKS(DAQ_RELINK_POLL_MS));
         waited += DAQ_RELINK_POLL_MS;
+        // hat_reset() does not clear HatState.connected -- it stays true from
+        // before the reboot until something re-probes the link. hat_connect()
+        // is that probe: it drives s_state.connected in BOTH directions (false
+        // while the HAT is unresponsive, true once it answers again), the same
+        // pattern already used by the RP2040 reconnect loop above.
+        hat_connect();
         const HatState *hs = hat_get_state();
         if (hs && hs->connected && hs->type == HAT_TYPE_DAQ_POWER) {
             relinked = true;

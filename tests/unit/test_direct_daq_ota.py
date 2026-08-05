@@ -17,6 +17,11 @@ def _fn_body(text: str, signature: str) -> str:
     and /* */ block comments do not count -- a JSON literal such as
     "{\\"stage\\":\\"done\\"}" embedded in C++ source must not desync the depth
     counter and truncate or overrun the extracted body.
+
+    Known limitation: C++11 raw string literals (R"(...)"), which can contain
+    unescaped, unbalanced braces, are NOT handled -- nothing in the files this
+    scans today uses them. If that changes, extend the '"' branch to detect
+    a preceding R"delim( prefix.
     """
     start = text.index(signature)
     brace = text.index("{", start)
@@ -111,6 +116,17 @@ def test_p4_activation_checks_the_running_version_before_confirming():
     assert "hat_get_version" in body, "must observe the new image running"
     assert body.index("hat_get_version") < body.index("hat_ota_confirm()"), \
         "never confirm an image that has not been seen running"
+
+
+def test_p4_activation_relink_loop_reprobes_the_link():
+    """hat_reset() does not clear HatState.connected, so the relink loop must
+    call hat_connect() on every iteration (the same pattern as the RP2040
+    reconnect loop) or it degrades to a fixed ~250ms sleep that reads a dead
+    link on real hardware."""
+    body = _fn_body(UPD_C, "static bool daq_activate_p4(")
+    assert "hat_connect()" in body, \
+        "relink loop must re-probe with hat_connect(); hs->connected alone is stale"
+    assert body.index("hat_reset()") < body.index("hat_connect()") < body.index("hat_ota_confirm()")
 
 
 def test_release_path_activates_the_p4():
