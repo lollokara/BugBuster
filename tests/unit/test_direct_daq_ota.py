@@ -331,3 +331,15 @@ def test_upload_handler_reports_failure_in_the_stream():
     """The 200 is committed before the outcome is known."""
     body = _fn_body(WEB_C, "static esp_err_t handle_daq_upload(")
     assert '\\"done\\"' in body or '"done"' in body
+
+
+def test_done_record_buffer_is_derived_from_err_buffer_size():
+    """cJSON_PrintUnformatted can expand `err` up to ~2x (escaped quotes/backslashes)
+    or worse (\\uXXXX control-char expansion), so the final `done` record buffer must
+    be sized off sizeof(err) rather than an independent literal -- otherwise shrinking
+    or growing `err` alone can silently reintroduce a truncated, invalid-JSON `done`
+    record, the one thing this endpoint must never emit."""
+    body = _strip_noise(_fn_body(WEB_C, "static esp_err_t handle_daq_upload("))
+    assert re.search(r"\blast\s*\[\s*sizeof\s*\(\s*err\s*\)", body), \
+        "the done-record buffer must be declared as char last[sizeof(err) * ... ], " \
+        "not a fixed literal size that can drift out of sync with err's size"

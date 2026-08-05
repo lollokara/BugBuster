@@ -3989,12 +3989,18 @@ static esp_err_t handle_daq_upload(httpd_req_t *req, uint32_t target)
                                              daq_upload_read, daq_upload_emit,
                                              &ctx, err, sizeof(err));
 
-    char last[256];
+    // Sized from sizeof(err), not an independent literal: cJSON_PrintUnformatted can
+    // double every '"'/'\\' and expand control chars to \uXXXX (6x per byte) in the
+    // worst case, so the record buffer must scale with the source buffer it escapes
+    // or a long/adversarial err string truncates mid-escape into invalid JSON -- the
+    // one thing this endpoint must never emit, since clients treat "done" as the
+    // sole authoritative outcome record.
+    char last[sizeof(err) * 2 + 64];
     if (rc == ESP_OK) {
         snprintf(last, sizeof(last), "{\"stage\":\"done\",\"ok\":true}\n");
     } else {
         cJSON *e = cJSON_CreateString(err[0] ? err : esp_err_to_name(rc));
-        char *esc = cJSON_PrintUnformatted(e);   // properly escaped JSON string
+        char *esc = e ? cJSON_PrintUnformatted(e) : NULL;   // properly escaped JSON string
         snprintf(last, sizeof(last), "{\"stage\":\"done\",\"ok\":false,\"error\":%s}\n",
                  esc ? esc : "\"unknown\"");
         if (esc) cJSON_free(esc);
