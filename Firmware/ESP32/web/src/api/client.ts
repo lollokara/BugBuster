@@ -652,14 +652,26 @@ export const api = {
     request<void>("/api/device/reset", { method: "POST", mac, admin: true }),
 
   /* ---- GitHub firmware autoupdate ---- */
+  //
+  // `mac` is REQUIRED on every call: request() attaches the admin token only
+  // when BOTH `admin` and `mac` are set (core.ts), so omitting it silently
+  // produced unauthenticated requests that the device answered with 401.
+  //
+  // `body` is passed as an object, never a string -- request() stringifies it,
+  // so pre-stringifying sent the device a JSON *string* instead of an object.
   update: {
-    check: () => request<UpdateCheckResult>("/api/update/check", { admin: true }),
-    status: () => request<UpdateStatus>("/api/update/status", { admin: true }),
-    apply: (rp2040: boolean, esp32: boolean) =>
+    check: (mac: string) =>
+      request<UpdateCheckResult>("/api/update/check", { mac, admin: true }),
+    status: (mac: string) =>
+      request<UpdateStatus>("/api/update/status", { mac, admin: true }),
+    // Naming ANY target selects the set from scratch device-side, so only send
+    // the keys the caller actually chose.
+    apply: (mac: string, targets: Partial<Record<"rp2040" | "esp32" | "p4" | "c6", boolean>>) =>
       request<{ success: boolean }>("/api/update/apply", {
         method: "POST",
+        mac,
         admin: true,
-        body: JSON.stringify({ rp2040, esp32 }),
+        body: targets,
       }),
   },
 
@@ -682,6 +694,12 @@ export const api = {
       file: Blob,
       onProgress?: (sent: number, total: number) => void,
     ) => uploadOtaImage(mac, "/api/ota/uploadfs", file, false, onProgress),
+    uploadDaq: (
+      mac: string,
+      target: "p4" | "c6",
+      file: Blob,
+      onEvent?: (e: DaqUploadEvent) => void,
+    ) => uploadDaqImage(mac, target, file, onEvent),
   },
 };
 
@@ -746,4 +764,68 @@ async function uploadOtaImage(
     xhr.onabort = () => reject(new Error("Upload aborted"));
     xhr.send(file);
   });
+}
+
+export interface DaqUploadEvent {
+  stage: string;
+  done?: number;
+  total?: number;
+  ok?: boolean;
+  error?: string;
+  running?: string;
+  previous?: string;
+  elapsed_ms?: number;
+}
+
+/**
+ * Push a P4/C6 image and consume the device's NDJSON progress stream.
+ *
+ * The device commits HTTP 200 before it knows the outcome -- the single-task
+ * HTTP server cannot answer a status poll while the push runs, so progress and
+ * the result both travel on this response. The final {"stage":"done"} record is
+ * authoritative; a stream that ends without one means the push was cut short.
+ */
+async function uploadDaqImage(
+  mac: string,
+  target: "p4" | "c6",
+  file: Blob,
+  onEvent?: (e: DaqUploadEvent) => void,
+): Promise<DaqUploadEvent> {
+  const sha = await sha256Hex(file);
+  const res = await adminRawFetch(mac, `/api/ota/upload_${target}?sha256=${sha}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  if (!res.body) throw new HttpError(0, "Stream Error", "no response body to read");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let final: DaqUploadEvent | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let rec: DaqUploadEvent;
+      try {
+        rec = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      onEvent?.(rec);
+      if (rec.stage === "done") final = rec;
+    }
+  }
+  if (!final) {
+    throw new HttpError(0, "Stream Error",
+      "upload stream ended without a final 'done' record (connection dropped mid-push)");
+  }
+  if (!final.ok) throw new HttpError(0, "Upload Failed", final.error ?? "upload failed");
+  return final;
 }

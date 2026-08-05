@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
-import { api, HttpError, OtaInfo, UpdateCheckResult, UpdateStatus } from "../../api/client";
+import { api, DaqUploadEvent, HttpError, OtaInfo, UpdateCheckResult, UpdateStatus } from "../../api/client";
 import { deviceMac } from "../../state/signals";
 
 type Stage = "idle" | "hashing" | "uploading" | "rebooting" | "error" | "done";
@@ -41,7 +41,7 @@ export function GitOtaCard() {
     if (!mac) { setMsg("Pair first"); return; }
     setGitStage("checking"); setMsg(""); setCheckResult(null);
     try {
-      const r = await api.update.check();
+      const r = await api.update.check(mac);
       setCheckResult(r);
       setApplyRp(r.rp2040.newer);
       setApplyEsp(r.esp32.newer);
@@ -57,11 +57,11 @@ export function GitOtaCard() {
     if (!mac || (!applyRp && !applyEsp)) return;
     setGitStage("applying"); setMsg("");
     try {
-      await api.update.apply(applyRp, applyEsp);
+      await api.update.apply(mac, { rp2040: applyRp, esp32: applyEsp });
       // Poll status until idle/error
       pollRef.current = setInterval(async () => {
         try {
-          const s = await api.update.status();
+          const s = await api.update.status(mac);
           setStatus(s);
           if (s.step === "idle" || s.lastError) {
             stopPoll();
@@ -163,7 +163,8 @@ export function OtaCard() {
   const [stage, setStage] = useState<Stage>("idle");
   const [progress, setProgress] = useState({ sent: 0, total: 0 });
   const [message, setMessage] = useState<string>("");
-  const [target, setTarget] = useState<"firmware" | "spiffs">("firmware");
+  const [target, setTarget] = useState<"firmware" | "spiffs" | "p4" | "c6">("firmware");
+  const [phase, setPhase] = useState<string>("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Refresh the info snapshot on mount and after every action.
@@ -184,7 +185,30 @@ export function OtaCard() {
     const f = fileRef.current?.files?.[0];
     if (!f) { setMessage("Pick a .bin file"); setStage("error"); return; }
 
-    setMessage(""); setProgress({ sent: 0, total: f.size });
+    setMessage(""); setProgress({ sent: 0, total: f.size }); setPhase("");
+
+    if (target === "p4" || target === "c6") {
+      setStage("uploading");
+      try {
+        const r = await api.ota.uploadDaq(mac, target, f, (e: DaqUploadEvent) => {
+          setPhase(e.stage);
+          if (typeof e.done === "number" && typeof e.total === "number") {
+            setProgress({ sent: e.done, total: e.total });
+          }
+        });
+        setStage("done");
+        setMessage(
+          r.running
+            ? `Updated — now running ${r.running}`
+            : "Update complete",
+        );
+      } catch (e) {
+        setStage("error");
+        setMessage((e as Error).message);
+      }
+      return;   // no 12 s reboot wait: the device confirms before replying
+    }
+
     setStage(target === "firmware" ? "hashing" : "uploading");
 
     try {
@@ -265,11 +289,15 @@ export function OtaCard() {
           class="input"
           value={target}
           onChange={(e) =>
-            setTarget((e.currentTarget as HTMLSelectElement).value as "firmware" | "spiffs")
+            setTarget(
+              (e.currentTarget as HTMLSelectElement).value as "firmware" | "spiffs" | "p4" | "c6",
+            )
           }
         >
           <option value="firmware">firmware.bin (app partition)</option>
           <option value="spiffs">spiffs.bin (web UI)</option>
+          <option value="p4">DAQ HAT — ESP32-P4</option>
+          <option value="c6">DAQ HAT — ESP32-C6 (merged image)</option>
         </select>
         <input
           ref={fileRef}
@@ -307,6 +335,7 @@ export function OtaCard() {
           <span class="mono text-dim">
             {fmtBytes(progress.sent)} / {fmtBytes(progress.total)}
           </span>
+          {phase && <span class="uppercase-tag">{phase}</span>}
         </div>
       )}
 

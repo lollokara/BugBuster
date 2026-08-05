@@ -433,3 +433,79 @@ def test_mcp_exposes_daq_uploads_and_targets():
     sig = _py_signature(MCP_OTA, "ota_apply_update")
     assert "p4" in sig and "c6" in sig, \
         "the DAQ HAT targets must be reachable from MCP"
+
+
+# =============================================================================
+# Web UI (Task 10): P4/C6 upload with streamed progress, plus two pre-existing
+# api.update.* bugs that made the GitHub-update feature unauthenticated/broken.
+# =============================================================================
+
+CLIENT_TS = Path("Firmware/ESP32/web/src/api/client.ts").read_text()
+OTACARD = Path("Firmware/ESP32/web/src/tabs/system/OtaCard.tsx").read_text()
+
+
+def test_web_client_has_a_daq_upload_helper():
+    assert "uploadDaq" in CLIENT_TS
+
+
+def test_web_daq_upload_reads_the_ndjson_stream():
+    assert "getReader()" in _strip_noise(CLIENT_TS), \
+        "must read the streamed progress body"
+
+
+def test_web_update_apply_takes_a_target_object():
+    """apply(rp2040, esp32) could not express p4/c6 at all."""
+    assert re.search(r"apply:\s*\(\s*mac[^,]*,\s*targets", _strip_noise(CLIENT_TS)), \
+        "apply() must take mac plus a targets object so p4/c6 are expressible"
+
+
+def test_web_update_calls_pass_mac_so_the_token_is_attached():
+    """core.ts attaches the admin token only when BOTH admin and mac are set
+    (see request() in api/core.ts), so every api.update.* call must pass mac."""
+    m = re.search(r"update:\s*\{(.*?)\n  \},", CLIENT_TS, re.S)
+    assert m, "api.update block not found"
+    block = _strip_noise(m.group(1))
+    assert block.count("mac") >= 3, \
+        "each api.update call needs mac, or request() sends no admin token"
+
+
+def test_web_update_apply_does_not_double_stringify():
+    m = re.search(r"apply:\s*\(targets.*?\}\),", CLIENT_TS, re.S)
+    if not m:
+        m = re.search(r"apply:\s*\(mac.*?\}\),", CLIENT_TS, re.S)
+    assert m, "api.update.apply not found"
+    assert "JSON.stringify" not in _strip_noise(m.group(0)), \
+        "request() stringifies body itself; passing a string double-encodes it"
+
+
+def test_web_daq_upload_treats_missing_done_record_as_failure():
+    """The device commits HTTP 200 before it knows the outcome, so a stream
+    that ends without a final {"stage":"done"} record means the connection
+    dropped mid-push and must be surfaced as an error, not silent success."""
+    assert "done" in _strip_noise(CLIENT_TS)
+    assert re.search(r"if\s*\(\s*!\s*final\s*\)", _strip_noise(CLIENT_TS)), \
+        "must throw when the stream ends without a final done record"
+
+
+def test_web_daq_upload_guards_against_a_null_response_body():
+    assert re.search(r"if\s*\(\s*!\s*res\.body\s*\)", _strip_noise(CLIENT_TS)), \
+        "res.body can be null; must be guarded before calling getReader()"
+
+
+def test_web_otacard_offers_p4_and_c6_targets():
+    # Raw text, not _strip_noise: these are functional string-literal values
+    # (option/target names), not identifiers that could be spoofed by a comment.
+    assert '"p4"' in OTACARD and '"c6"' in OTACARD, \
+        "OtaCard's target selector must offer the DAQ HAT chips"
+
+
+def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
+    """The firmware/spiffs path waits ~12s for the device to reboot; the P4/C6
+    push confirms the new image running before it replies, so that wait must
+    not apply to the DAQ HAT path."""
+    i = OTACARD.find('target === "p4"')
+    assert i != -1, "OtaCard must branch on the p4/c6 targets"
+    j = OTACARD.find("\n\n", i)
+    branch = _strip_noise(OTACARD[i:j if j != -1 else i + 800])
+    assert "setTimeout" not in branch, \
+        "the DAQ HAT push must not use the firmware/spiffs 12s reboot-wait timer"
