@@ -1780,6 +1780,20 @@ bool hat_daq_vdut_status(hat_vdut_status_t *out)
     return true;
 }
 
+bool hat_daq_get_status(hat_daq_status_t *out)
+{
+    if (!out) return false;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    uint8_t rsp[sizeof(hat_daq_status_t)] = {};
+    uint8_t rsp_len = 0;
+    uint8_t cmd = hat_command(HAT_CMD_DAQ_GET_STATUS, NULL, 0, rsp, &rsp_len, 200, sizeof(rsp));
+    if (cmd != HAT_RSP_DAQ_STATUS || rsp_len < sizeof(hat_daq_status_t)) return false;
+
+    memcpy(out, rsp, sizeof(hat_daq_status_t));
+    return true;
+}
+
 bool hat_daq_vdut_enable(bool enable)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;

@@ -947,11 +947,30 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
 esp_err_t daq_board_set_source(daq_board_t *b, float vdut, float ilimit,
                                bool enable)
 {
+    // Reject out-of-range setpoints rather than silently clamping, matching
+    // HATP_CMD_DAQ_VDUT_SETPOINT (the HAT/HTTP/BLE path, see the reject check
+    // a few hundred lines below in this file) -- same physical action, same
+    // outcome regardless of which client (desktop over USB CMD_SET_SOURCE,
+    // or iOS over HTTP/BLE) sent it. On reject, the previously programmed
+    // setpoint is left in effect: this only skips the smu_set_* call, it does
+    // not touch b->smu.vdut_set/ilimit_set. <= 0.0f is the sentinel for "leave
+    // this axis unchanged" (see the callers of daq_board_set_source) and is
+    // deliberately not treated as out-of-range.
     if (ilimit > 0.0f) {
-        smu_set_current_limit(&b->smu, ilimit);
+        if (ilimit < SMU_ILIMIT_MIN_A || ilimit > SMU_ILIMIT_FULLSCALE_A) {
+            ESP_LOGW(TAG, "SET_SOURCE: ilimit %.4f A out of range [%.3f, %.3f] -- rejected",
+                     ilimit, SMU_ILIMIT_MIN_A, SMU_ILIMIT_FULLSCALE_A);
+        } else {
+            smu_set_current_limit(&b->smu, ilimit);
+        }
     }
     if (vdut > 0.0f) {
-        smu_set_voltage(&b->smu, vdut);
+        if (vdut < SMU_VDUT_MIN || vdut > SMU_VDUT_MAX) {
+            ESP_LOGW(TAG, "SET_SOURCE: vdut %.3f V out of range [%.3f, %.3f] -- rejected",
+                     vdut, SMU_VDUT_MIN, SMU_VDUT_MAX);
+        } else {
+            smu_set_voltage(&b->smu, vdut);
+        }
     }
     esp_err_t err = smu_enable(&b->smu, enable);
     return err;
@@ -1690,6 +1709,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 .last_v         = power_dsp_last_v(&b->dsp),
                 .last_p         = power_dsp_last_p(&b->dsp),
                 .energy_mwh     = (float)power_dsp_energy_mwh(&b->dsp),
+                .sta_count      = wifi_ap_sta_count(),
             };
             memcpy(resp, &st, sizeof(st));
             return (int)sizeof(st);

@@ -393,6 +393,17 @@ static char *api_daq_wifi_stream_status(void)
         cJSON_AddStringToObject(root, "host", host_str);
         cJSON_AddNumberToObject(root, "port", info.port);
     }
+    // Live softAP station count: queried fresh on every call (unlike the
+    // cached `info` above, which is a one-shot snapshot from bring-up and
+    // never updates again -- see hat_daq_get_status()). Lets a poller
+    // distinguish a broken 60s idle-teardown timer (daq_board.c:1981) from a
+    // phone that silently auto-joined the DAQ hotspot. Omitted (not zeroed)
+    // when the P4 doesn't answer, so callers can tell "0 stations" from
+    // "don't know".
+    hat_daq_status_t st;
+    if (hat_daq_get_status(&st)) {
+        cJSON_AddNumberToObject(root, "staCount", st.sta_count);
+    }
     return json_take(root);
 }
 

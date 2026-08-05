@@ -50,11 +50,13 @@ def test_vdut_setpoint_roundtrip(daq_http, daq_http_base):
 def test_vdut_setpoint_rejects_out_of_range_with_http_400(daq_http, daq_http_base, body):
     """The HTTP path REJECTS out-of-range setpoints with a 400.
 
-    Note the contrast with USB: `CMD_SET_SOURCE` silently CLAMPS to the
-    config.h bounds (smu.c:181), while this path re-validates and rejects. Same
-    user action, different outcome depending on client -- desktop drives USB,
-    iOS drives HTTP/BLE. Documented in test_16_daq_stream.py's
-    test_out_of_range_setpoints_are_clamped_to_the_documented_limits.
+    USB `CMD_SET_SOURCE` now agrees: it also rejects (daq_board_set_source()
+    in daq_board.c re-validates against SMU_VDUT_MIN/MAX and
+    SMU_ILIMIT_MIN_A/FULLSCALE_A before touching the setpoint, leaving the
+    previous value in effect on reject) rather than the silent clamp it used
+    to do. Same user action, same outcome now regardless of client -- desktop
+    drives USB, iOS drives HTTP/BLE. See test_16_daq_stream.py's
+    test_out_of_range_setpoints_are_rejected_and_previous_setpoint_holds.
 
     This specifically exercises `send_api_core_result()`, which translates an
     `{"error": ...}` body into an HTTP status -- api_core_handle() itself has

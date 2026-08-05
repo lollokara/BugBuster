@@ -2051,9 +2051,9 @@ fn SettingsPanel(
                         <span>"V_DUT"</span>
                         <strong style="color:#10b981;">{move || format!("{:.3} V", vdut_mv.get() as f64 / 1000.0)}</strong>
                     </div>
-                    <input type="range" min="1800" max="20000" step="50" style="width:100%;accent-color:#10b981;"
+                    <input type="range" min="1800" max="19940" step="50" style="width:100%;accent-color:#10b981;"
                         prop:value=move || vdut_mv.get().to_string()
-                        on:input=move |ev| vdut_mv.set(event_target_value(&ev).parse().unwrap_or(3300).clamp(1800, 20000)) />
+                        on:input=move |ev| vdut_mv.set(event_target_value(&ev).parse().unwrap_or(3300).clamp(1800, 19940)) />
                 </div>
                 <div class="daq-field col">
                     <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">

@@ -211,7 +211,12 @@ extern "C" {
 #define S3LINK_FW_MAJOR      1u
 #define S3LINK_FW_MINOR      0u
 
-// DAQ status payload (response to DAQ_GET_STATUS).
+// DAQ status payload (response to DAQ_GET_STATUS). MUST stay byte-for-byte
+// identical to the S3-side mirror hat_daq_status_t in
+// Firmware/ESP32/src/hat/hat.h. 24 bytes -- well under the 32-byte
+// HAT_WIRE_FRAME_MAX_LEN wire cap the S3's hat_recv_frame() enforces (see the
+// HATP_MAX_PAYLOAD-vs-reply-cap note above handle_config_get_all()), so this
+// reply needs no paging.
 typedef struct __attribute__((packed)) {
     uint8_t  range;          // current_range_t
     uint8_t  streaming;      // bool
@@ -221,6 +226,15 @@ typedef struct __attribute__((packed)) {
     float    last_v;
     float    last_p;
     float    energy_mwh;
+    // Live softAP association count (wifi_ap_sta_count()), added so
+    // GET /api/daq/wifi_stream/status can tell a broken 60s idle-teardown
+    // timer (daq_board.c:1981, resets while any station is associated) from
+    // a phone that silently auto-joined the DAQ hotspot. 0 when the softAP
+    // is not up. Queried live on every HTTP poll rather than folded into the
+    // WIFI_STREAM_INFO bring-up blob, because that blob is only reassembled
+    // once per bring-up (S3 stops polling it after reaching READY) and would
+    // go stale for exactly the window this field needs to stay live in.
+    uint32_t sta_count;
 } s3link_daq_status_t;
 
 // HATP_CMD_DAQ_VDUT_SETPOINT (0x78) payload. MUST stay byte-for-byte identical

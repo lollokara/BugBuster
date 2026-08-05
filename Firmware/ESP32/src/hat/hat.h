@@ -286,6 +286,15 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_DAQ_VDUT_ENABLE   0x77u   // payload: u8 enable -> OK/ERROR
 #define HAT_CMD_DAQ_VDUT_SETPOINT 0x78u   // payload: hat_vdut_setpoint_t -> OK/ERROR
 
+// DAQ general status (range/streaming/energy summary + softAP station count).
+// Pre-existing P4-side command (s3_link.h HATP_CMD_DAQ_GET_STATUS /
+// HATP_RSP_DAQ_STATUS) that the S3 never called until the wifi_ap_sta_count()
+// addition needed a live, on-demand read decoupled from the one-shot
+// WIFI_STREAM_INFO bring-up blob (see hat_daq_status_t below). Same
+// request/reply shape as VDUT_STATUS above: no payload -> HAT_RSP_DAQ_STATUS.
+// MUST match P4 s3_link.h HATP_CMD_DAQ_GET_STATUS exactly.
+#define HAT_CMD_DAQ_GET_STATUS    0x53u   // no payload -> HAT_RSP_DAQ_STATUS
+
 // Multi-MCU OTA orchestration. Must match P4 HATP_CMD_DAQ_RELAY_APPLY /
 // HATP_CMD_DAQ_C6_VERSION (s3_link.h) exactly — see s3_link.h for why this is
 // two commands and not four: OTA status comes from the pre-existing 0x65 (whose
@@ -386,6 +395,8 @@ typedef struct __attribute__((packed)) {
 #define HAT_RSP_DAQ_WIFI_STREAM_INFO 0x8C  // Response cmd byte for HAT_CMD_DAQ_WIFI_STREAM_INFO poll
 #define HAT_RSP_DAQ_VDUT_STATUS 0x98u  // Response to HAT_CMD_DAQ_VDUT_STATUS: hat_vdut_status_t.
                                         // Must match P4 HATP_RSP_DAQ_VDUT_STATUS (s3_link.h) exactly.
+#define HAT_RSP_DAQ_STATUS      0x90u  // Response to HAT_CMD_DAQ_GET_STATUS: hat_daq_status_t.
+                                        // Must match P4 HATP_RSP_DAQ_STATUS (s3_link.h) exactly.
 // The P4 answers these three with a dedicated response byte, NOT HAT_RSP_OK --
 // send_ok() on that side carries a zero-length payload, so a caller that checks
 // for HAT_RSP_OK would reject every one of these and lose the payload. Must
@@ -438,6 +449,22 @@ typedef struct __attribute__((packed)) {
     float    meas_v;
     float    meas_i;
 } hat_vdut_status_t;
+
+// HAT_RSP_DAQ_STATUS payload: response to HAT_CMD_DAQ_GET_STATUS. MUST stay
+// byte-for-byte identical to the P4-side mirror s3link_daq_status_t
+// (Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h). 24 bytes, comfortably under
+// the 32-byte HAT wire frame cap -- no chunking needed.
+typedef struct __attribute__((packed)) {
+    uint8_t  range;
+    uint8_t  streaming;
+    uint8_t  source_enabled;
+    uint8_t  _pad;
+    float    last_i;
+    float    last_v;
+    float    last_p;
+    float    energy_mwh;
+    uint32_t sta_count;    // wifi_ap_sta_count() on the P4; 0 if softAP is down
+} hat_daq_status_t;
 
 // HAT_CMD_OTA_STATUS (0x65) reply. MUST stay byte-for-byte identical to the
 // P4-side mirror s3link_ota_status_t in Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
@@ -885,6 +912,18 @@ bool hat_daq_c6_version(hat_daq_c6_version_t *out);
  *        No-op (returns false) unless a DAQ HAT is connected.
  */
 bool hat_daq_vdut_status(hat_vdut_status_t *out);
+
+/**
+ * @brief Read the DAQ HAT's general status: range/streaming/source_enabled +
+ *        last I/V/P + energy_mwh + the live softAP station count
+ *        (wifi_ap_sta_count()). A fresh, single-round-trip query -- unlike
+ *        the WIFI_STREAM_INFO bring-up blob (hat_daq_wifi_stream_get_status),
+ *        this is safe to call on every HTTP poll, which is what makes
+ *        sta_count usable for telling a broken idle-teardown timer from a
+ *        station legitimately keeping the softAP alive.
+ *        No-op (returns false) unless a DAQ HAT is connected.
+ */
+bool hat_daq_get_status(hat_daq_status_t *out);
 
 /**
  * @brief Enable/disable the DAQ HAT's VDUT (DUT power supply).

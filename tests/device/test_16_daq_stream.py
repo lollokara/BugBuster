@@ -750,38 +750,38 @@ SMU_ILIMIT_MIN_A = 0.05
 SMU_ILIMIT_FULLSCALE_A = 2.636
 
 
-@pytest.mark.parametrize("vdut,ilimit,exp_vdut,exp_ilimit", [
-    (0.5, 0.5, SMU_VDUT_MIN, 0.5),                     # below SMU_VDUT_MIN
-    (25.0, 0.5, SMU_VDUT_MAX, 0.5),                    # above SMU_VDUT_MAX
-    (10.0, 0.001, 10.0, SMU_ILIMIT_MIN_A),             # below SMU_ILIMIT_MIN_A
-    (10.0, 5.0, 10.0, SMU_ILIMIT_FULLSCALE_A),         # above FULLSCALE
+@pytest.mark.parametrize("vdut,ilimit", [
+    (0.5, 0.5),     # vdut below SMU_VDUT_MIN
+    (25.0, 0.5),    # vdut above SMU_VDUT_MAX
+    (10.0, 0.001),  # ilimit below SMU_ILIMIT_MIN_A
+    (10.0, 5.0),    # ilimit above SMU_ILIMIT_FULLSCALE_A
 ])
-def test_out_of_range_setpoints_are_clamped_to_the_documented_limits(
-        daq_safe, vdut, ilimit, exp_vdut, exp_ilimit):
-    """Over USB, out-of-range setpoints are CLAMPED to the config.h bounds.
+def test_out_of_range_setpoints_are_rejected_and_previous_setpoint_holds(
+        daq_safe, vdut, ilimit):
+    """Over USB, out-of-range setpoints are REJECTED -- the previously
+    programmed setpoint stays in effect, exactly as the HAT/HTTP/BLE path
+    behaves.
 
-    This pins the clamp bounds against the firmware constants, so a change to
-    SMU_VDUT_MIN/MAX or SMU_ILIMIT_MIN_A/FULLSCALE_A that is not intended to be
-    user-visible shows up here.
+    Previously (until this test was rewritten) USB CMD_SET_SOURCE silently
+    CLAMPED to the config.h bounds -- smu.c:181
+    `s->ilimit_set = clampf(amps, MIN, FULLSCALE)`, and the voltage path
+    likewise resolved to a boundary code -- while the HAT/HTTP/BLE VDUT path
+    (HAT_CMD_DAQ_VDUT_SETPOINT -> api_daq_vdut_setpoint, and its P4-side
+    mirror HATP_CMD_DAQ_VDUT_SETPOINT in daq_board.c) explicitly re-validated
+    and rejected with an error. Same user action, different outcome
+    depending on client: desktop drives USB, iOS drives HTTP/BLE.
 
-    INCONSISTENCY WORTH KNOWING (found by this suite, 2026-08-04): the two
-    control paths disagree about out-of-range handling.
-
-      * USB CMD_SET_SOURCE (this path) CLAMPS silently --
-        smu.c:181 `s->ilimit_set = clampf(amps, MIN, FULLSCALE)`, and the
-        voltage path likewise resolves to a boundary code.
-      * The HAT/HTTP/BLE VDUT path (HAT_CMD_DAQ_VDUT_SETPOINT ->
-        api_daq_vdut_setpoint) explicitly RE-VALIDATES and REJECTS with an
-        error, per the daq-hat manifest.
-
-    So the same user action produces different results depending on the client:
-    the desktop app drives USB and gets a silent clamp; iOS drives HTTP/BLE and
-    gets a 400. Measured clamps: 0.5 V -> 1.760, 25.0 V -> 19.940,
-    0.001 A -> 0.050, 5.0 A -> 2.636 -- every one exactly on a documented limit.
+    The two paths now agree: `daq_board_set_source()` (daq_board.c, the
+    CMD_SET_SOURCE handler shared by the USB ctrl-task path and forwarded
+    from the S3) re-validates against SMU_VDUT_MIN/MAX and
+    SMU_ILIMIT_MIN_A/FULLSCALE_A before calling smu_set_voltage() /
+    smu_set_current_limit(), and simply skips the call (leaving the
+    previous setpoint untouched) when out of range -- mirroring
+    HATP_CMD_DAQ_VDUT_SETPOINT's reject-not-clamp behavior.
     """
     daq_safe.set_source(10.0, 0.5, True)
     time.sleep(0.8)
-    capture(daq_safe, 1.0, settle=0.3)
+    before = capture(daq_safe, 1.0, settle=0.3).last_status
 
     daq_safe.set_source(vdut, ilimit, True)
     time.sleep(0.8)
@@ -789,12 +789,16 @@ def test_out_of_range_setpoints_are_clamped_to_the_documented_limits(
 
     daq_safe.set_source(0.0, SMU_ILIMIT_MIN_A, False)
 
-    assert after.get("vdut_set") == pytest.approx(exp_vdut, rel=0.02), (
-        "requested %.3f V, expected a clamp to %.3f, STATUS reports %.3f"
-        % (vdut, exp_vdut, after.get("vdut_set", -1)))
-    assert after.get("ilimit_set") == pytest.approx(exp_ilimit, rel=0.02), (
-        "requested %.4f A, expected a clamp to %.4f, STATUS reports %.4f"
-        % (ilimit, exp_ilimit, after.get("ilimit_set", -1)))
+    assert after.get("vdut_set") == pytest.approx(before.get("vdut_set"), rel=0.02), (
+        "out-of-range request (vdut=%.3f, ilimit=%.4f) changed vdut_set: "
+        "%.3f -> %.3f -- it should have been rejected, preserving the "
+        "previous setpoint"
+        % (vdut, ilimit, before.get("vdut_set", -1), after.get("vdut_set", -1)))
+    assert after.get("ilimit_set") == pytest.approx(before.get("ilimit_set"), rel=0.02), (
+        "out-of-range request (vdut=%.3f, ilimit=%.4f) changed ilimit_set: "
+        "%.4f -> %.4f -- it should have been rejected, preserving the "
+        "previous setpoint"
+        % (vdut, ilimit, before.get("ilimit_set", -1), after.get("ilimit_set", -1)))
 
 
 @pytest.mark.slow
