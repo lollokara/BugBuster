@@ -532,6 +532,28 @@ bool hat_ota_confirm(void)
     return hat_ota_txn(HAT_CMD_OTA_CONFIRM, NULL, 0, 2000);
 }
 
+bool hat_get_version(uint32_t *version_u32, char *version_str, uint8_t str_len)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+
+    // Reply layout (HAT_RSP_VERSION): u32 packed version + NUL-terminated
+    // version string, both bounded by HAT_FRAME_MAX_LEN on this link.
+    uint8_t rsp[HAT_FRAME_MAX_LEN];
+    uint8_t rsp_len = 0;
+    uint8_t code = hat_command(HAT_CMD_GET_VERSION, NULL, 0,
+                               rsp, &rsp_len, 500, sizeof(rsp));
+    if (code != HAT_RSP_VERSION || rsp_len < 4) return false;
+
+    if (version_u32) memcpy(version_u32, rsp, sizeof(*version_u32));
+    if (version_str && str_len) {
+        size_t slen = rsp_len - 4;
+        if (slen > (size_t)str_len - 1) slen = (size_t)str_len - 1;
+        memcpy(version_str, rsp + 4, slen);
+        version_str[slen] = '\0';
+    }
+    return true;
+}
+
 // Length of the legacy OTA_STATUS reply: {state, pending_verify, received,
 // image_size}. A P4 that predates the relay_* tail answers exactly this much,
 // which is a valid reply meaning "relay fields unknown" -- not an error.

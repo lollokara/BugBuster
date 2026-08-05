@@ -48,6 +48,15 @@ typedef enum {
 #define UPDATE_TARGET_ORDER \
     { UPDATE_TARGET_RP2040, UPDATE_TARGET_C6, UPDATE_TARGET_P4, UPDATE_TARGET_ESP32 }
 
+/**
+ * @brief Progress sink for a DAQ HAT push.
+ *
+ * @param ctx   Opaque caller context.
+ * @param json  A complete JSON object, no trailing newline. The caller is
+ *              responsible for framing (the HTTP shim appends "\n").
+ */
+typedef void (*DaqProgressFn)(void *ctx, const char *json);
+
 void update_manager_init(void);
 esp_err_t update_manager_check(cJSON **out);
 /**

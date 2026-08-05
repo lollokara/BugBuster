@@ -890,6 +890,18 @@ bool hat_ota_abort(void);
 bool hat_ota_confirm(void);
 
 /**
+ * @brief Read the P4's running firmware version (HAT_CMD_GET_VERSION). Used to
+ *        observe a freshly-reset P4 actually booted into the new image BEFORE
+ *        confirming it (see hat_ota_confirm()) -- confirming without having
+ *        read this first would cancel rollback protection blind.
+ * @param version_u32  Packed version, or 0 if unset.
+ * @param version_str  Human-readable version string, NUL-terminated.
+ * @param str_len       Size of @p version_str.
+ * @return true on a valid reply, false on transport error or no DAQ HAT.
+ */
+bool hat_get_version(uint32_t *version_u32, char *version_str, uint8_t str_len);
+
+/**
  * @brief Read the P4's OTA progress (HAT_CMD_OTA_STATUS), covering both
  *        durability models: @c received for a P4-target transfer and
  *        @c relay_staged_bytes for a C6-target one.

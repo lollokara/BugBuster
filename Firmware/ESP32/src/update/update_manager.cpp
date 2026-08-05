@@ -1066,6 +1066,81 @@ esp_err_t update_manager_check(cJSON **out)
     return ESP_OK;
 }
 
+// Bring a freshly-installed P4 image into service.
+//
+// ota_end() only ARMS the image: it calls esp_ota_set_boot_partition() and
+// deliberately does not reboot. With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+// the new app boots in PENDING_VERIFY, and the bootloader reverts it on the
+// NEXT boot unless ota_confirm() runs. Nothing used to do that, so every P4
+// update silently reverted.
+//
+// Order matters and is asserted by tests: reset -> wait for the link -> read
+// the running version -> only then confirm. Confirming a build we have not
+// seen boot would defeat rollback, which is the one thing protecting the P4
+// from a bad image.
+#define DAQ_RELINK_TIMEOUT_MS 20000
+#define DAQ_RELINK_POLL_MS      250
+
+static bool daq_activate_p4(char *err, size_t err_len,
+                            DaqProgressFn emit, void *ctx)
+{
+    char line[192];
+
+    uint32_t prev_ver = 0;
+    char prev_str[32] = {0};
+    (void)hat_get_version(&prev_ver, prev_str, sizeof(prev_str));
+
+    if (emit) emit(ctx, "{\"stage\":\"reset\"}");
+    if (!hat_reset()) {
+        snprintf(err, err_len, "P4 reset failed");
+        return false;
+    }
+
+    // The link drops here. Wait for it to come back BEFORE reading the
+    // version, so "link not up yet" cannot be mistaken for "old image still
+    // running".
+    uint32_t waited = 0;
+    bool relinked = false;
+    while (waited < DAQ_RELINK_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(DAQ_RELINK_POLL_MS));
+        waited += DAQ_RELINK_POLL_MS;
+        const HatState *hs = hat_get_state();
+        if (hs && hs->connected && hs->type == HAT_TYPE_DAQ_POWER) {
+            relinked = true;
+            break;
+        }
+    }
+    if (!relinked) {
+        snprintf(err, err_len, "DAQ HAT did not come back after reset");
+        return false;   // unconfirmed -> the bootloader reverts on its own
+    }
+    if (emit) {
+        snprintf(line, sizeof(line),
+                 "{\"stage\":\"relink\",\"elapsed_ms\":%lu}", (unsigned long)waited);
+        emit(ctx, line);
+    }
+
+    uint32_t new_ver = 0;
+    char new_str[32] = {0};
+    if (!hat_get_version(&new_ver, new_str, sizeof(new_str))) {
+        snprintf(err, err_len, "could not read P4 version after reset");
+        return false;
+    }
+    if (emit) {
+        snprintf(line, sizeof(line),
+                 "{\"stage\":\"version\",\"running\":\"%s\",\"previous\":\"%s\"}",
+                 new_str, prev_str);
+        emit(ctx, line);
+    }
+
+    if (emit) emit(ctx, "{\"stage\":\"confirm\"}");
+    if (!hat_ota_confirm()) {
+        snprintf(err, err_len, "P4 refused OTA_CONFIRM; image will revert");
+        return false;
+    }
+    return true;
+}
+
 // The C6 and P4 legs of a multi-target apply, in UPDATE_TARGET_ORDER. Shared by
 // both apply entry points so the ordering rule and the "release has no image"
 // checks cannot drift between them.
@@ -1103,6 +1178,11 @@ static bool apply_daq_targets(uint32_t targets, const UpdateManifest *manifest,
         set_target(UPDATE_TARGET_P4);
         set_state(UPDATE_STATE_DOWNLOADING_P4, "download_p4");
         if (!apply_daq_ota(&manifest->p4, HAT_OTA_TARGET_P4)) return false;
+        char aerr[96] = {0};
+        if (!daq_activate_p4(aerr, sizeof(aerr), NULL, NULL)) {
+            set_error(aerr);
+            return false;
+        }
         *did_p4 = true;
     }
     return true;
