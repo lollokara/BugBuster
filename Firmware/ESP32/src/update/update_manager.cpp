@@ -1112,6 +1112,8 @@ esp_err_t update_manager_check(cJSON **out)
 // from a bad image.
 #define DAQ_RELINK_TIMEOUT_MS 20000
 #define DAQ_RELINK_POLL_MS      250
+#define DAQ_DROP_TIMEOUT_MS    5000
+#define DAQ_DROP_POLL_MS        100
 
 static bool daq_activate_p4(char *err, size_t err_len,
                             DaqProgressFn emit, void *ctx)
@@ -1128,9 +1130,44 @@ static bool daq_activate_p4(char *err, size_t err_len,
         return false;
     }
 
-    // The link drops here. Wait for it to come back BEFORE reading the
-    // version, so "link not up yet" cannot be mistaken for "old image still
-    // running".
+    // Phase 1: wait for the link to actually go DOWN. This is the only
+    // direct evidence the P4 rebooted at all. hat_reset() does not clear
+    // HatState.connected, so without this phase the old code's very first
+    // relink poll saw a link that had never dropped, read the OLD image's
+    // version, and confirmed IT -- reporting success while the newly-armed
+    // image sat unconfirmed and reverted on the next real power cycle. As
+    // with the relink loop below, hat_connect() must be called every
+    // iteration: it is what re-probes and re-derives s_state.connected in
+    // both directions (false while unresponsive, true once it answers).
+    uint32_t drop_waited = 0;
+    bool dropped = false;
+    while (drop_waited < DAQ_DROP_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(DAQ_DROP_POLL_MS));
+        drop_waited += DAQ_DROP_POLL_MS;
+        hat_connect();
+        const HatState *hs = hat_get_state();
+        if (!hs || !hs->connected) {
+            dropped = true;
+            break;
+        }
+    }
+    if (emit) {
+        snprintf(line, sizeof(line),
+                 "{\"stage\":\"drop\",\"elapsed_ms\":%lu,\"dropped\":%s}",
+                 (unsigned long)drop_waited, dropped ? "true" : "false");
+        emit(ctx, line);
+    }
+    if (!dropped) {
+        // The reset did not take. Do NOT confirm -- never confirming is the
+        // safe outcome here: the bootloader reverts an unconfirmed image on
+        // its own, which is the whole rollback safety property this function
+        // exists to preserve.
+        snprintf(err, err_len, "P4 did not reset (link never dropped)");
+        return false;
+    }
+
+    // Phase 2: wait for the link to come back BEFORE reading the version, so
+    // "link not up yet" cannot be mistaken for "old image still running".
     uint32_t waited = 0;
     bool relinked = false;
     while (waited < DAQ_RELINK_TIMEOUT_MS) {

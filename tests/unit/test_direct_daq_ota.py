@@ -774,6 +774,94 @@ def test_s3_c6_product_id_matches_the_c6_device():
         "consistency, and for the day relay_stage_begin() starts checking it too"
 
 
+# =============================================================================
+# Task 14 (bench gate): the P4's HATP_CMD_RESET handler acked but never
+# rebooted, so daq_activate_p4() confirmed the OLD image every time and
+# reported success while the newly-armed image reverted on the next real
+# power cycle. Fixed by (1) making the P4 actually call esp_restart() after
+# draining the ack out of the UART, and (2) making daq_activate_p4() require
+# the link to go DOWN before it will wait for it to come back UP -- an
+# ineffective reset never dropped the link, which is exactly why the old
+# single-phase wait passed on its very first poll.
+# =============================================================================
+S3LINK_C = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
+
+
+def _case_block(text: str, case_label: str) -> str:
+    """Text from `case {case_label}:` up to the next sibling `case HATP_CMD_`
+    (or `default:`), matching the slicing pattern already used elsewhere in
+    this file (test_wifi_stream_start_takes_the_c6_claim etc.) for switch-case
+    bodies that _fn_body()'s brace matcher cannot isolate on its own."""
+    i = text.index(f"case {case_label}:")
+    candidates = [p for p in (
+        text.find("case HATP_CMD_", i + len(case_label) + 6),
+        text.find("default:", i + len(case_label) + 6),
+    ) if p != -1]
+    assert candidates, f"no terminator found after {case_label}"
+    j = min(candidates)
+    return text[i:j]
+
+
+def test_p4_reset_handler_calls_esp_restart():
+    """Comment-stripped: the pre-existing "A real reset is handled by the
+    board" comment must not be able to satisfy this on its own -- it never
+    was backed by a real esp_restart() call."""
+    block = _strip_comments(_case_block(S3LINK_C, "HATP_CMD_RESET"))
+    assert "esp_restart()" in block, \
+        "HATP_CMD_RESET must actually reboot the P4, not just ack"
+
+
+def test_p4_reset_handler_drains_the_uart_before_restarting():
+    """send_ok()'s ack sits in the UART TX FIFO until the driver flushes it.
+    Restarting before that flush completes loses the ack, and the S3's
+    daq_activate_p4() sees a failed RESET command and aborts."""
+    block = _strip_comments(_case_block(S3LINK_C, "HATP_CMD_RESET"))
+    assert "uart_wait_tx_done(" in block, \
+        "must drain the UART TX FIFO before esp_restart(), or the ack is lost"
+    assert block.index("uart_wait_tx_done(") < block.index("esp_restart()"), \
+        "the UART drain must happen BEFORE the restart, never after"
+    assert block.index("send_ok()") < block.index("uart_wait_tx_done("), \
+        "must ack first, then drain, then restart"
+
+
+def test_p4_activation_waits_for_the_link_to_drop_before_waiting_for_it_to_come_back():
+    """The old code only waited for the link to come back UP, which is
+    trivially true immediately after an ineffective reset (the link never
+    went down) -- that is the exact mechanism of this bug. A DOWN-phase must
+    run first, timed separately from the relink budget, and must re-probe
+    with hat_connect() just like the relink loop (hs->connected alone is
+    stale -- see test_p4_activation_relink_loop_reprobes_the_link above)."""
+    code = _strip_noise(_fn_body(UPD_C, "static bool daq_activate_p4("))
+    assert "DAQ_DROP_TIMEOUT_MS" in code, "no bounded down-phase wait found"
+    assert code.index("hat_reset()") < code.index("DAQ_DROP_TIMEOUT_MS") < \
+           code.index("DAQ_RELINK_TIMEOUT_MS"), \
+        "must wait for the link to drop BEFORE waiting for it to come back up"
+    drop_phase = code[code.index("DAQ_DROP_TIMEOUT_MS"):code.index("DAQ_RELINK_TIMEOUT_MS")]
+    assert "hat_connect()" in drop_phase, \
+        "the drop-wait loop must re-probe with hat_connect(), not read a stale flag"
+
+
+def test_p4_activation_returns_without_confirming_when_the_link_never_drops():
+    """Never confirming is the safe outcome: an unconfirmed image reverts on
+    the bootloader's own initiative. If the down-phase times out, the
+    function must return false BEFORE it ever reaches hat_ota_confirm()."""
+    code = _strip_noise(_fn_body(UPD_C, "static bool daq_activate_p4("))
+    assert re.search(r"if\s*\(\s*!\s*dropped\s*\)\s*\{[^}]*return\s+false\s*;", code, re.S), \
+        "a failed down-phase must return false immediately, not fall through"
+    fail_block = re.search(r"if\s*\(\s*!\s*dropped\s*\)\s*\{.*?return\s+false\s*;", code, re.S)
+    assert fail_block.end() < code.index("hat_ota_confirm()"), \
+        "the never-dropped failure return must be reached before any confirm call"
+
+
+def test_p4_activation_emits_a_progress_record_for_the_drop_phase():
+    """Consistent with the existing {"stage":"relink","elapsed_ms":N} shape,
+    so a bench operator watching the NDJSON stream can see the down-phase
+    happen (or time out) instead of a silent multi-second gap."""
+    code = _strip_comments(_fn_body(UPD_C, "static bool daq_activate_p4("))
+    assert '\\"stage\\":\\"drop\\"' in code, \
+        "must emit a stage=drop progress record, like the existing relink stage"
+
+
 def test_release_path_and_push_local_use_the_shared_product_id_constants():
     """Both OTA_BEGIN call sites must reference the shared constants rather
     than re-embedding their own literals -- that duplication is exactly how

@@ -7,6 +7,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "config.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
@@ -181,7 +182,27 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
 
         case HATP_CMD_RESET:
             send_ok();
-            // A real reset is handled by the board; ack first.
+            // The S3's daq_activate_p4() blocks on HAT_RSP_OK before it will
+            // even start waiting for the link to drop -- if we restart before
+            // that ack has left the UART TX FIFO, the byte is lost mid-flush
+            // and the S3 sees a failed RESET and aborts the whole activation.
+            // uart_wait_tx_done() blocks until the FIFO is empty (this is the
+            // s3_link service_task, not an ISR/RX callback, so blocking here
+            // cannot deadlock frame reception -- no frame can legitimately
+            // follow a RESET). The extra vTaskDelay() covers the S3-side UART
+            // receive path latching the last byte before the wire goes dead.
+            //
+            // No orderly shutdown of daq_fast_task / the ADAQ stream / the C6
+            // link is done first: esp_restart() is the same code path a
+            // watchdog or power-cycle reset takes, and the rollback-safety
+            // design this fix exists to protect (the bootloader reverts an
+            // unconfirmed image) already has to tolerate that mid-acquisition
+            // reset happening at any time, for any reason. Adding a special
+            // "clean" shutdown just for this one path would be new, untested
+            // behavior no other reset source gets.
+            uart_wait_tx_done(S3LINK_UART_NUM, pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(20));
+            esp_restart();
             break;
 
         // Settings/config commands -> global settings store.
