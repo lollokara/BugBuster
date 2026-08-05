@@ -203,3 +203,28 @@ def test_cli_c6_commands_take_the_claim():
     for fn in ("cmd_c6flash", "cmd_c6boot", "cmd_c6relay", "cmd_wifiap"):
         body = _fn_body(CLI_C, f"static int {fn}(")
         assert "daq_c6_claim(" in _strip_noise(body), f"{fn} must claim the C6 bus"
+
+
+def test_s3_owner_gen_is_assigned_synchronously_in_the_dispatcher():
+    """S1-6 / claim-vs-ownership race: s_owner_gen used to be written
+    asynchronously inside wifi_stream_bringup_task() once it reached the AP
+    stage, while the C6 claim is taken synchronously in the dispatcher's
+    WIFI_STREAM_START case. That gap let a stale, orphaned task's cancel
+    checkpoint see a matching (but stale) s_owner_gen and release a claim a
+    freshly-started successor generation had already re-acquired.
+
+    s_owner_gen must now be assigned in the same dispatcher call that bumps
+    s_bringup_gen and takes the C6 claim -- not from inside the task body --
+    so there is exactly one (synchronous) writer.
+    """
+    i = DAQ_C.index("case HATP_CMD_DAQ_WIFI_STREAM_START:")
+    j = DAQ_C.index("case HATP_CMD_", i + 10)
+    dispatcher_case = _strip_noise(DAQ_C[i:j])
+    assert re.search(r"\bs_owner_gen\s*=(?!=)", dispatcher_case), \
+        "s_owner_gen must be assigned in the dispatcher's START case"
+
+    task_body = _strip_noise(_fn_body(DAQ_C, "static void wifi_stream_bringup_task(void *arg)"))
+    assert not re.search(r"\bs_owner_gen\s*=(?!=)", task_body), \
+        "s_owner_gen must NOT be (re-)assigned inside the task body -- the " \
+        "dispatcher is the only writer, so a comparison (==) may remain but " \
+        "an assignment here reintroduces the async race"

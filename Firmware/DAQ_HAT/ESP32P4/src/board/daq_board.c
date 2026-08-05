@@ -1143,16 +1143,25 @@ static volatile bool s_bringup_alive;
 // cancelled regardless of what happens afterward.
 static volatile uint32_t s_bringup_gen;
 
-// The generation that currently OWNS the AP/DNS/TCP resources (i.e. is the
-// most recent task to have started touching them). Set by a bring-up task
-// the moment it begins its AP stage, right before it first calls
-// wifi_ap_start(). wifi_stream_bringup_cancel_unwind() only tears down those
-// resources when its caller's generation still matches this -- otherwise a
-// stale, cancelled task that is only now unwinding (because RECYCLE's bounded
-// wait timed out while it was blocked deep in a single wifi_ap_start() call)
-// would destroy a SUCCESSOR generation's live softAP/DNS/TCP instead of its
-// own, and report IDLE over a link that is actually READY. Single-writer:
-// only ever assigned by whichever bring-up task is currently in the AP stage.
+// The generation that currently OWNS the AP/DNS/TCP resources AND the C6 bus
+// claim (daq_c6_claim()). Written synchronously by the S3-link dispatcher
+// task in the WIFI_STREAM_START handler, in the same breath as bumping
+// s_bringup_gen and taking the C6 claim -- NOT asynchronously from inside the
+// bring-up task once it reaches its AP stage, which is where this used to be
+// set. That asynchronous assignment left a window between the dispatcher
+// claiming the C6 bus and the task actually reaching the AP stage during
+// which a stale, orphaned predecessor's cancel checkpoint could still read a
+// match against this generation's number and release the claim/resources the
+// new generation had just acquired -- see the C6 bus interlock comment.
+// wifi_stream_bringup_cancel_unwind() only tears down resources (and
+// releases the C6 claim) when its caller's generation still matches this --
+// otherwise a stale, cancelled task that is only now unwinding (because
+// RECYCLE's bounded wait timed out while it was blocked deep in a single
+// wifi_ap_start() call) would destroy a SUCCESSOR generation's live
+// softAP/DNS/TCP instead of its own, and report IDLE over a link that is
+// actually READY, or steal a claim it no longer holds. Single-writer: only
+// ever assigned by the S3-link dispatcher task (same single writer as
+// s_bringup_gen), never from within the bring-up task itself.
 static volatile uint32_t s_owner_gen;
 
 // Small heap-allocated (not static/shared) argument block for
@@ -1292,12 +1301,17 @@ static void wifi_stream_bringup_task(void *arg)
     // one every time, wiping the very flag this command just set -- see
     // .mex/patterns/daq-hat-ios-wifi-streaming.md for that whole saga.)
     b->wifi_stream_info.stage = DAQ_WIFI_STAGE_AP;
-    // Claim ownership of the AP/DNS/TCP resources now, before the first call
-    // that actually touches them (wifi_ap_start() below). From this point on,
-    // wifi_stream_bringup_cancel_unwind() will tear down on our behalf only
-    // as long as no later generation has since claimed ownership out from
-    // under us.
-    s_owner_gen = my_gen;
+    // Ownership of the AP/DNS/TCP resources (s_owner_gen) is claimed by the
+    // S3-link dispatcher BEFORE this task was even spawned -- see the START
+    // handler's comment. Do NOT (re-)assign s_owner_gen here: this used to
+    // be set at this point, asynchronously from inside the task, which left
+    // a window between the dispatcher's synchronous daq_c6_claim() and this
+    // task actually reaching the AP stage during which a stale, orphaned
+    // predecessor's cancel checkpoint could still see a match on s_owner_gen
+    // and release/tear down a claim this generation already held. From here
+    // on, wifi_stream_bringup_cancel_unwind() tears down (and releases the
+    // C6 claim) on our behalf only as long as no later generation has since
+    // claimed ownership out from under us.
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < 6; attempt++) {
         // Cancel check: bail out of the retry loop between attempts rather
@@ -1472,6 +1486,23 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // at the RECYCLE handler below); it is never bumped concurrently
             // from another task.
             uint32_t gen = ++s_bringup_gen;
+            // Claim ownership of the AP/DNS/TCP resources HERE, synchronously
+            // in the dispatcher, not later inside the task body. s_owner_gen
+            // gates both wifi_stream_bringup_cancel_unwind()'s resource
+            // teardown AND (as of the C6 bus interlock) daq_c6_release() --
+            // and daq_c6_claim("wifi_stream") above already took the claim
+            // synchronously right here. Setting s_owner_gen asynchronously
+            // from inside the task (as an earlier version did, at the AP
+            // stage) left a window: RECYCLE can time out waiting for a stale
+            // task and proceed to release the claim via wifi_stream_teardown()
+            // before a fresh START's task has re-written s_owner_gen, during
+            // which the stale task's own cancel checkpoint would see
+            // s_owner_gen still equal to ITS generation and release the claim
+            // the new generation had just re-acquired. Writing s_owner_gen in
+            // the same dispatcher call that takes the claim (both are only
+            // ever touched by this single-writer S3-link dispatcher task, per
+            // the s_bringup_gen comment above) closes that window entirely.
+            s_owner_gen = gen;
             s_bringup_alive = true;
             bringup_task_arg_t *targ = (bringup_task_arg_t *)malloc(sizeof(*targ));
             BaseType_t ok = pdFALSE;
