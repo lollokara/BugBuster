@@ -1200,3 +1200,158 @@ def test_ota_abort_restores_fast_acquisition_conditionally():
         r"if\s*\(\s*s_ota_fast_was_running\s*\)\s*\{[^}]*daq_board_run_fast\(",
         block, re.S,
     ), "the restore call must be guarded by s_ota_fast_was_running, not unconditional"
+
+
+# =============================================================================
+# Task 19 (bench gate): pushing a merged C6 image always failed verification
+# because relay_stage_end() declared a 4096-byte LOCAL array (`uint8_t
+# buf[4096]`) for its SHA-256 read-back, and that function runs synchronously
+# on the s3_link dispatcher task -- which is created with only a 4096-byte
+# FreeRTOS stack (s3_link.c's xTaskCreatePinnedToCore(service_task, "s3_link",
+# 4096, ...)). A 4KB local on a 4KB stack is a guaranteed overflow: on real
+# hardware this surfaced as "Guru Meditation Error: ... Stack protection
+# fault" the instant relay stage verification began, rebooting the P4 mid-OTA
+# and leaving the S3 to report "DAQ HAT image failed verification". Fixed by
+# heap-allocating the read-back buffer (freed on every exit path) instead of
+# putting it on the stack.
+# =============================================================================
+RELAY_STAGE_C = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_stage.c").read_text()
+OTA_C = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/ota.c").read_text()
+
+# Files containing every handler reachable from the s3_link dispatcher task:
+# s3_link.c itself (frame parser + generic dispatch), daq_board.c
+# (s3_cmd_handler, the actual HATP_CMD_* switch), ota.c (ota_begin/_write/
+# _end/_abort, called from daq_board.c's OTA_* cases) and relay_stage.c
+# (relay_stage_begin/_write/_end, called from the STAGE-target OTA_* cases).
+S3LINK_TASK_SOURCES = {
+    "s3_link.c": S3LINK_C,
+    "daq_board.c": DAQ_C,
+    "ota.c": OTA_C,
+    "relay_stage.c": RELAY_STAGE_C,
+}
+
+
+def _local_stack_array_sizes(code: str):
+    """Best-effort scan of _strip_noise()'d C source for LOCAL (non-static,
+    non-pointer) array declarations of the form `<type> name[<digits>];`, in
+    bytes, using each named type's sizeof. Returns a list of (name, bytes).
+
+    This is a source-scanning heuristic, not a real stack-usage analyzer: it
+    cannot see array declarations split across lines, arrays sized by a
+    macro/expression rather than a literal integer, structs-by-value that are
+    themselves large, or compiler-inserted spills. It also does not attempt
+    to determine reachability from any particular task -- callers are
+    expected to pass in only source known to run on the task in question.
+    What it DOES catch is exactly the class of bug this file guards against:
+    a plain fixed-size byte/word buffer declared straight on the stack.
+    """
+    sizeof = {
+        "uint8_t": 1, "int8_t": 1, "char": 1, "bool": 1,
+        "uint16_t": 2, "int16_t": 2,
+        "uint32_t": 4, "int32_t": 4, "float": 4,
+        "uint64_t": 8, "int64_t": 8, "double": 8,
+    }
+    out = []
+    pattern = re.compile(
+        r"(?<!static\s)\b(" + "|".join(sizeof) + r")\s+(\w+)\s*\[\s*(\d+)\s*\]\s*;"
+    )
+    noise_free = _strip_noise(code)
+    for line in noise_free.splitlines():
+        if "static" in line:
+            continue
+        for m in pattern.finditer(line):
+            typ, name, count = m.group(1), m.group(2), int(m.group(3))
+            out.append((name, sizeof[typ] * count))
+    return out
+
+
+def _s3_link_task_stack_size() -> int:
+    m = re.search(
+        r'xTaskCreatePinnedToCore\(\s*service_task\s*,\s*"s3_link"\s*,\s*(\d+)',
+        S3LINK_C,
+    )
+    assert m, "could not find the s3_link service_task stack size"
+    return int(m.group(1))
+
+
+def test_relay_stage_end_has_no_multikb_stack_array():
+    body = _fn_body(RELAY_STAGE_C, "esp_err_t relay_stage_end(void)")
+    sizes = _local_stack_array_sizes(body)
+    offenders = [(name, n) for name, n in sizes if n >= 1024]
+    assert not offenders, (
+        f"relay_stage_end() must not declare a multi-KB local stack array "
+        f"(found {offenders}) -- it runs on the 4096-byte s3_link task stack"
+    )
+
+
+def test_relay_stage_end_heap_allocates_and_frees_its_readback_buffer():
+    """The fix: a heap buffer sized for the SHA-256 read-back, freed before
+    every return from the function (not just the success path)."""
+    body = _strip_noise(_fn_body(RELAY_STAGE_C, "esp_err_t relay_stage_end(void)"))
+    assert re.search(r"malloc\s*\(\s*4096\s*\)", body), \
+        "expected a heap allocation for the read-back buffer"
+    frees = len(re.findall(r"\bfree\s*\(\s*buf\s*\)", body))
+    # One free() on the way through the success path, reachable from both the
+    # read-back-failure and SHA-mismatch returns below it, plus the
+    # allocation-failure path takes an early return with nothing to free.
+    assert frees >= 1, "the heap buffer must be freed somewhere on the way out"
+    # No return between the malloc() and the (only) free() may skip it: every
+    # return after the malloc call must occur AFTER the free call in program
+    # order, since this function has no early-return between them other than
+    # the allocation-failure check (which returns before ever allocating).
+    malloc_pos = body.index("malloc(")
+    free_pos = body.index("free(")
+    assert free_pos > malloc_pos, "free() must appear after malloc() in program order"
+    tail = body[free_pos:]
+    # Every remaining `return` after the free() is safe by construction; make
+    # sure there ISN'T a return sitting between the malloc and the free that
+    # would leak (other than the allocation-failure check itself, which is
+    # before malloc_pos and thus not in this slice).
+    between = body[malloc_pos:free_pos]
+    # Strip out the "if (!buf) { ... return ...; }" allocation-failure guard,
+    # which legitimately returns without freeing (there is nothing to free).
+    between_after_guard = re.sub(r"if\s*\(\s*!\s*buf\s*\)\s*\{.*?\}", "", between, flags=re.S)
+    assert "return" not in between_after_guard, (
+        "found a return between malloc() and free() that would leak the "
+        "heap read-back buffer"
+    )
+
+
+def test_s3_link_handlers_declare_no_stack_buffer_at_or_above_task_stack_size():
+    """Honesty note: this scans the known s3_link-task-reachable source files
+    (s3_link.c, daq_board.c's s3_cmd_handler, ota.c, relay_stage.c) for LOCAL
+    fixed-size array declarations and checks each one is comfortably smaller
+    than the task's own stack. It does NOT prove full reachability (a helper
+    called only indirectly through a function pointer would be missed) or
+    account for call-graph depth/compiler stack usage -- it is a cheap,
+    honest tripwire for the exact bug class this task fixed (a single large
+    fixed buffer declared straight on a 4KB task stack), not a substitute for
+    a real static stack analyzer.
+    """
+    stack_size = _s3_link_task_stack_size()
+    assert stack_size > 0
+
+    worst = []
+    for fname, code in S3LINK_TASK_SOURCES.items():
+        for name, nbytes in _local_stack_array_sizes(code):
+            worst.append((nbytes, fname, name))
+    worst.sort(reverse=True)
+
+    assert worst, "expected at least one local stack array across the scanned sources"
+    biggest_bytes, biggest_file, biggest_name = worst[0]
+    assert biggest_bytes < stack_size, (
+        f"largest local stack array found is {biggest_name} in {biggest_file} "
+        f"({biggest_bytes} bytes), which is not comfortably smaller than the "
+        f"s3_link task stack ({stack_size} bytes) -- a handler this size "
+        f"cannot safely run on that task"
+    )
+    # Leave meaningful headroom, not just "less than": the frame-parser
+    # buffers (payload[HATP_MAX_PAYLOAD]=240, crc_input[241], frame[244]) plus
+    # local variables, saved registers and call-graph depth all eat into the
+    # same 4096 bytes. Anything at or above half the stack for a SINGLE array
+    # is worth a second look even if nominally "under" the limit.
+    assert biggest_bytes < stack_size // 2, (
+        f"largest local stack array ({biggest_name} in {biggest_file}, "
+        f"{biggest_bytes} bytes) uses more than half the s3_link task stack "
+        f"({stack_size} bytes) on its own"
+    )

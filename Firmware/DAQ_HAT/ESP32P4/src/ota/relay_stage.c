@@ -4,6 +4,7 @@
 
 #include "relay_stage.h"
 #include <string.h>
+#include <stdlib.h>
 #include "esp_partition.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -185,16 +186,42 @@ esp_err_t relay_stage_end(void)
         return ESP_ERR_NOT_FOUND;
     }
 
+    // Read-back buffer: this function runs synchronously on the s3_link
+    // dispatcher task, which has only a 4096-byte FreeRTOS stack (see
+    // s3_link.c's xTaskCreatePinnedToCore(service_task, "s3_link", 4096, ...)).
+    // A 4096-byte LOCAL array here was a guaranteed stack overflow the
+    // instant this function ran (a "Stack protection fault" panic on real
+    // hardware, confirmed on the P4 console). Heap-allocate instead of
+    // shrinking to a tiny stack buffer: 4KB amortizes esp_partition_read()
+    // calls over a ~1.3MB image (only ~328 reads) without materially
+    // increasing heap pressure, since it is allocated and freed within this
+    // single call and never held across a flash-cache-disabled window.
+    // Plain malloc() is deliberate, not MALLOC_CAP_INTERNAL: this build sets
+    // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y, which only affects TASK
+    // STACKS placed via xTaskCreate*(), not heap allocations -- malloc()
+    // here draws from the internal heap by ESP-IDF's default heap priority
+    // (external/PSRAM is only reached for allocations that explicitly
+    // request MALLOC_CAP_SPIRAM or exceed internal heap availability), so
+    // this is not at risk from persist_status()'s NVS commit disabling the
+    // D-cache that PSRAM is reached through.
+    uint8_t *buf = (uint8_t *)malloc(4096);
+    if (!buf) {
+        ESP_LOGE(TAG, "relay_stage_end: no memory for read-back buffer");
+        s_relay.status.state = RELAY_FAILED;
+        persist_status();
+        unlock();
+        return ESP_ERR_NO_MEM;
+    }
+
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
     mbedtls_sha256_starts(&sha, 0);
 
-    uint8_t buf[4096];
     uint32_t remaining = s_relay.status.image_size;
     uint32_t off = 0;
     esp_err_t err = ESP_OK;
     while (remaining > 0) {
-        size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        size_t chunk = remaining < 4096u ? remaining : 4096u;
         err = esp_partition_read(part, off, buf, chunk);
         if (err != ESP_OK) break;
         mbedtls_sha256_update(&sha, buf, chunk);
@@ -205,6 +232,7 @@ esp_err_t relay_stage_end(void)
     uint8_t digest[32];
     mbedtls_sha256_finish(&sha, digest);
     mbedtls_sha256_free(&sha);
+    free(buf);
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "staged image read-back failed: %d", err);
