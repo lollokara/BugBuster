@@ -526,6 +526,12 @@ bool hat_ota_abort(void)
     return hat_ota_txn(HAT_CMD_OTA_ABORT, NULL, 0, 2000);
 }
 
+bool hat_ota_confirm(void)
+{
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
+    return hat_ota_txn(HAT_CMD_OTA_CONFIRM, NULL, 0, 2000);
+}
+
 // Length of the legacy OTA_STATUS reply: {state, pending_verify, received,
 // image_size}. A P4 that predates the relay_* tail answers exactly this much,
 // which is a valid reply meaning "relay fields unknown" -- not an error.

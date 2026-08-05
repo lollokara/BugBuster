@@ -318,6 +318,7 @@ typedef struct __attribute__((packed)) {
 #define HAT_CMD_OTA_END         0x63u   // finalise + verify (SHA-256)
 #define HAT_CMD_OTA_ABORT       0x64u   // abort an in-progress transfer
 #define HAT_CMD_OTA_STATUS      0x65u   // -> hat_daq_ota_status_t (19 B, or 10 B legacy)
+#define HAT_CMD_OTA_CONFIRM     0x66u   // confirm running image (cancel rollback)
 
 // Wide-frame budget for the OTA data path only. HAT_OTA_WIDE_MAX MUST equal the
 // P4's HATP_MAX_PAYLOAD; HAT_OTA_CHUNK_MAX is what is left for image bytes after
@@ -871,6 +872,22 @@ bool hat_ota_end(void);
  * @return true on P4 HAT_RSP_OK, false otherwise.
  */
 bool hat_ota_abort(void);
+
+/**
+ * @brief Cancel the P4's pending rollback, marking the running image valid.
+ *
+ * The P4 builds with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y, so an image
+ * installed by hat_ota_end() boots in ESP_OTA_IMG_PENDING_VERIFY and the
+ * bootloader REVERTS it on the next boot unless this is sent. Call it only
+ * after the P4 has been reset and observed running the new version -- an
+ * unconfirmed bad image self-reverts, which is the point.
+ *
+ * Wire: HAT_CMD_OTA_CONFIRM (0x66), mirroring HATP_CMD_OTA_CONFIRM in
+ * Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h.
+ *
+ * @return true when the P4 acknowledges.
+ */
+bool hat_ota_confirm(void);
 
 /**
  * @brief Read the P4's OTA progress (HAT_CMD_OTA_STATUS), covering both
