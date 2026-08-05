@@ -657,6 +657,63 @@ def test_desktop_bridge_wrapper_uses_error_propagating_invoke():
         "must use the error-propagating invoke(), not try_invoke()"
 
 
+# =============================================================================
+# Task 12 (iOS): OtaUpdateStatus decoded a status/progress/version shape the
+# device never sends. `status` was non-optional, so JSONDecoder threw on
+# every response and the try? at the call site swallowed it -- the OTA status
+# line silently never updated.
+# =============================================================================
+
+IOS_DIAG = Path("iOSApp/Sources/Views/DiagnosticsTab.swift").read_text()
+
+
+def test_ios_update_status_matches_the_firmware_json():
+    """The device sends state/step/progressDone/progressTotal -- not status/progress."""
+    m = re.search(r"struct OtaUpdateStatus: Codable \{(.*?)\n\}", IOS_DIAG, re.S)
+    assert m, "OtaUpdateStatus not found"
+    body = m.group(1)
+    assert "step" in body, "must decode the device's `step` field"
+    assert "progressDone" in body and "progressTotal" in body
+    assert not re.search(r"let status:\s*String\b", body), \
+        "`status` is not a field the device sends; decoding it fails the whole struct"
+
+
+def test_ios_update_status_fields_are_all_optional():
+    """A firmware that later adds or drops a key must not break decoding of
+    the whole object again -- every declared field must be Optional."""
+    m = re.search(r"struct OtaUpdateStatus: Codable \{(.*?)\n\}", IOS_DIAG, re.S)
+    assert m, "OtaUpdateStatus not found"
+    body = m.group(1)
+    field_lines = [
+        line for line in body.splitlines()
+        if re.match(r"\s*let\s+\w+\s*:", line)
+    ]
+    assert field_lines, "no `let` fields found in OtaUpdateStatus"
+    for line in field_lines:
+        assert re.search(r":\s*[\w\[\]]+\?\s*$", line.strip()), \
+            f"field must be declared Optional: {line!r}"
+
+
+def test_ios_ota_poll_budget_is_at_least_80_attempts():
+    """The device now performs the whole DAQ activation sequence (reset ->
+    relink -> version -> confirm) inside an apply, and a C6 relay push alone
+    can take ~3 minutes -- 20 attempts x 3s (60s) is far too short."""
+    body = _fn_body(IOS_DIAG, "private func startOtaPolling()")
+    m = re.search(r"attempts\s*<\s*(\d+)", _strip_noise(body))
+    assert m, "poll loop bound not found"
+    assert int(m.group(1)) >= 80, \
+        f"poll budget must be >= 80 attempts, found {m.group(1)}"
+
+
+def test_ios_ota_poll_does_not_stop_on_the_first_idle_read():
+    """step == 'idle' can legitimately be the FIRST poll's reading, before the
+    device has started work -- treating that as completion terminates the
+    loop immediately and the status line never shows real progress."""
+    body = _strip_noise(_fn_body(IOS_DIAG, "private func startOtaPolling()"))
+    assert re.search(r'attempts\s*>\s*1', body), \
+        "must require at least one prior iteration before idle means done"
+
+
 def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
     """The firmware/spiffs path waits ~12s for the device to reboot; the P4/C6
     push confirms the new image running before it replies, so that wait must

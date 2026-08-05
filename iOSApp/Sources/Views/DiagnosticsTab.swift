@@ -8,10 +8,30 @@ struct WifiNetworkScanItem: Identifiable, Codable {
     let auth: Int
 }
 
+/// Mirrors update_manager_status_json() in Firmware/ESP32/src/update/update_manager.cpp.
+///
+/// This previously declared `status: String` and `progress: Int?`, neither of
+/// which the device sends. `status` was non-optional, so every decode threw and
+/// the `try?` at the call site swallowed it -- the OTA status line simply never
+/// updated. All fields are optional here so a firmware that adds or drops one
+/// cannot silently break the whole view again.
 struct OtaUpdateStatus: Codable {
-    let status: String
-    let progress: Int?
-    let version: String?
+    let state: Int?
+    let step: String?
+    let lastError: String?
+    let progressDone: Int?
+    let progressTotal: Int?
+    let currentRp2040: String?
+    let currentEsp32: String?
+    let activeTarget: Int?
+    let activeTargetName: String?
+    let availableTargets: Int?
+
+    /// Percent complete, or nil when the device has not published a total yet.
+    var percent: Int? {
+        guard let done = progressDone, let total = progressTotal, total > 0 else { return nil }
+        return min(100, done * 100 / total)
+    }
 }
 
 struct DiagnosticsTab: View {
@@ -1240,7 +1260,7 @@ struct DiagnosticsTab: View {
                 DispatchQueue.main.async {
                     if ok {
                         self.otaApplyStatus = "Update started — device will reboot when done."
-                        // Poll status for 60 seconds
+                        // Poll status until the activation sequence finishes
                         self.startOtaPolling()
                     } else {
                         self.otaApplyStatus = "Error: device rejected the request."
@@ -1258,19 +1278,30 @@ struct DiagnosticsTab: View {
 
     private func startOtaPolling() {
         var attempts = 0
-        // Use a repeating async task instead of Timer to avoid Sendable issues
+        // Use a repeating async task instead of Timer to avoid Sendable issues.
+        // The device now performs the whole DAQ activation sequence (reset ->
+        // relink -> version -> confirm) inside the apply, so the step string
+        // moves through more phases than it used to. Poll long enough to
+        // cover a C6 relay push (~3 min) plus a P4 activation.
         Task {
-            while attempts < 20 {
+            while attempts < 80 {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 attempts += 1
-                if let status: OtaUpdateStatus = try? await connectionManager.getRequest(path: "/api/update/status") {
-                    let pct = status.progress.map { " (\($0)%)" } ?? ""
-                    DispatchQueue.main.async {
-                        self.otaApplyStatus = "Status: \(status.status)\(pct)"
-                    }
-                    if status.status == "idle" || status.status == "done" {
-                        break
-                    }
+                guard let status: OtaUpdateStatus = try? await connectionManager.getRequest(path: "/api/update/status") else {
+                    continue
+                }
+                let step = status.step ?? "working"
+                let pct = status.percent.map { " (\($0)%)" } ?? ""
+                let hasError = status.lastError?.isEmpty == false
+                let err = hasError ? " — \(status.lastError!)" : ""
+                DispatchQueue.main.async {
+                    self.otaApplyStatus = "Status: \(step)\(pct)\(err)"
+                }
+                // Only "idle" AFTER work has started means finished; the
+                // first poll can legitimately still read idle before the
+                // device has begun the activation sequence.
+                if (attempts > 1 && step == "idle") || hasError {
+                    break
                 }
             }
             DispatchQueue.main.async { self.isApplyingOta = false }
