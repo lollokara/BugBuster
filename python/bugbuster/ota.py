@@ -280,29 +280,27 @@ class OTAClient:
 
     def upload_p4(self, path: str, *, sha256: Optional[str] = None,
                   on_event: Optional[Callable[[dict], None]] = None,
-                  chunk_size: int = 64 * 1024, timeout: float = 600) -> dict:
+                  timeout: float = 600) -> dict:
         """Push a locally built ESP32-P4 image to the DAQ HAT.
 
         Returns only after the P4 has been reset, seen running the new version
         and confirmed -- an unconfirmed image would be reverted by the
         bootloader on the next boot.
         """
-        return self._push_daq("/ota/upload_p4", path, sha256, on_event,
-                              chunk_size, timeout)
+        return self._push_daq("/ota/upload_p4", path, sha256, on_event, timeout)
 
     def upload_c6(self, path: str, *, sha256: Optional[str] = None,
                   on_event: Optional[Callable[[dict], None]] = None,
-                  chunk_size: int = 64 * 1024, timeout: float = 900) -> dict:
+                  timeout: float = 900) -> dict:
         """Push a locally built ESP32-C6 image to the DAQ HAT.
 
         `path` MUST be a merged image from flash offset 0 (bootloader +
         partition table + app). The app-only firmware.bin would brick the C6;
         the device rejects it, but build it with tests/tools/daq_push.py.
         """
-        return self._push_daq("/ota/upload_c6", path, sha256, on_event,
-                              chunk_size, timeout)
+        return self._push_daq("/ota/upload_c6", path, sha256, on_event, timeout)
 
-    def _push_daq(self, endpoint, path, sha256, on_event, chunk_size, timeout) -> dict:
+    def _push_daq(self, endpoint, path, sha256, on_event, timeout) -> dict:
         size = os.path.getsize(path)
         if size <= 0:
             raise OTAError(f"{path} is empty")
@@ -310,26 +308,29 @@ class OTAClient:
         if len(sha_hex) != 64 or any(c not in "0123456789abcdef" for c in sha_hex):
             raise OTAError(f"sha256 must be 64 lowercase hex chars (got {sha_hex!r})")
 
-        def _gen():
-            with open(path, "rb") as f:
-                while True:
-                    block = f.read(chunk_size)
-                    if not block:
-                        break
-                    yield block
-
         headers = {
             ADMIN_TOKEN_HEADER: self._token,
             "Content-Type": "application/octet-stream",
             "Content-Length": str(size),
         }
-        with self._session.post(f"{self._base}{endpoint}",
-                                params={"sha256": sha_hex}, data=_gen(),
-                                headers=headers, timeout=timeout,
-                                stream=True) as r:
-            if not r.ok:
-                raise OTAError(f"{endpoint} -> HTTP {r.status_code}: {r.text[:300]}")
-            return self._read_ndjson(r, on_event)
+        # `data=` must be the open file object, NOT a generator. `requests`
+        # detects a generator body and adds `Transfer-Encoding: chunked`
+        # regardless of a manually-set Content-Length, so the request goes
+        # out with BOTH headers -- invalid per RFC 7230 3.3.3, and ESP-IDF's
+        # httpd rejects it outright ("Bad request syntax") before the
+        # handler even runs. A file object has a known length, so `requests`
+        # streams it under plain Content-Length with no chunking, which is
+        # what the firmware's content_len-based size accounting requires.
+        # The file must stay open for the whole request, hence the `with`
+        # wraps the `post()` call itself rather than just the open.
+        with open(path, "rb") as fh:
+            with self._session.post(f"{self._base}{endpoint}",
+                                    params={"sha256": sha_hex}, data=fh,
+                                    headers=headers, timeout=timeout,
+                                    stream=True) as r:
+                if not r.ok:
+                    raise OTAError(f"{endpoint} -> HTTP {r.status_code}: {r.text[:300]}")
+                return self._read_ndjson(r, on_event)
 
     # --------------------------------------------------------------- rollback
 

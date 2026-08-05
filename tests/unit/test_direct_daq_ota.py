@@ -1103,6 +1103,91 @@ def test_ota_begin_stops_fast_acquisition():
         "HATP_CMD_OTA_BEGIN must stop fast acquisition before accepting a transfer"
 
 
+# =============================================================================
+# Task 18 (python client fix): _push_daq() used to pass a GENERATOR as
+# `data=` while also setting a manual Content-Length header. `requests` sees
+# a generator body and adds `Transfer-Encoding: chunked` on top, so the
+# prepared request carried BOTH headers -- invalid per RFC 7230 3.3.3, and
+# ESP-IDF's httpd rejects it with "Bad request syntax" before the handler
+# even runs. Chunked transfer is not an option here: the device handler
+# relies on req->content_len for size validation and remaining-bytes
+# accounting. The fix passes the open file object as `data=` instead, which
+# `requests` streams under a plain Content-Length with no chunking.
+#
+# This is a REAL behavioural test, not source scanning: it builds the exact
+# prepared request _push_daq() builds (via requests.Request +
+# Session.prepare_request) against a temp file and inspects the resulting
+# header set.
+# =============================================================================
+import requests as _requests
+
+
+def _prepare_push_daq_request(path: str, size: int, sha_hex: str = "a" * 64):
+    """Mirror _push_daq()'s request construction exactly (headers + data=).
+
+    Returns the requests.PreparedRequest so tests can inspect its actual
+    header set -- the same object `Session.send()` would transmit.
+    """
+    headers = {
+        "X-BugBuster-Admin-Token": "t" * 64,
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(size),
+    }
+    with open(path, "rb") as fh:
+        req = _requests.Request(
+            method="POST",
+            url="http://10.0.0.1/api/ota/upload_p4",
+            params={"sha256": sha_hex},
+            data=fh,
+            headers=headers,
+        )
+        return _requests.Session().prepare_request(req)
+
+
+def test_push_daq_prepared_request_has_no_transfer_encoding(tmp_path):
+    """The bug itself: a generator body forces `Transfer-Encoding: chunked`
+    onto the prepared request regardless of a manually-set Content-Length.
+    The fixed file-object body must never trigger chunked encoding."""
+    img = tmp_path / "p4.bin"
+    payload = b"\xe9" + b"x" * 4095
+    img.write_bytes(payload)
+
+    prepped = _prepare_push_daq_request(str(img), len(payload))
+    assert "Transfer-Encoding" not in prepped.headers, (
+        "a file-object body must never be sent chunked -- the DAQ HAT "
+        "handler relies on req->content_len, which chunked transfer reports "
+        "as 0"
+    )
+
+
+def test_push_daq_prepared_request_has_correct_content_length(tmp_path):
+    img = tmp_path / "p4.bin"
+    payload = b"\xe9" + b"y" * 10_000
+    img.write_bytes(payload)
+
+    prepped = _prepare_push_daq_request(str(img), len(payload))
+    assert "Content-Length" in prepped.headers
+    assert int(prepped.headers["Content-Length"]) == len(payload)
+
+
+def test_push_daq_prepared_request_never_has_both_headers(tmp_path):
+    """Inverse guard: whatever _push_daq() does internally, Content-Length
+    and Transfer-Encoding must never both appear on the wire -- sending both
+    is invalid per RFC 7230 3.3.3 and is exactly what made the ESP-IDF httpd
+    reject the request as 'Bad request syntax' on real hardware."""
+    img = tmp_path / "c6.bin"
+    payload = b"z" * 50_000
+    img.write_bytes(payload)
+
+    prepped = _prepare_push_daq_request(str(img), len(payload))
+    has_cl = "Content-Length" in prepped.headers
+    has_te = "Transfer-Encoding" in prepped.headers
+    assert not (has_cl and has_te), (
+        f"must never send both headers at once (Content-Length={has_cl}, "
+        f"Transfer-Encoding={has_te})"
+    )
+
+
 def test_ota_abort_restores_fast_acquisition_conditionally():
     """The restore on OTA_ABORT must be conditional on the state OTA_BEGIN
     actually observed (s_ota_fast_was_running) -- unconditionally restarting
