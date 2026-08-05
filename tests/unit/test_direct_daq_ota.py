@@ -278,3 +278,22 @@ def test_push_local_activates_the_p4():
 def test_push_local_aborts_the_transfer_on_failure():
     body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
     assert "hat_ota_abort()" in body
+
+
+def test_push_local_relay_poll_checks_timeout_before_status_continue():
+    """A hat_daq_ota_status() read failure used to `continue` past both the
+    HAT_RELAY_PUSHING exit check and the C6_RELAY_TIMEOUT_MS timeout check, so
+    a UART glitch (or a wedged HAT) during the ~3 minute relay push spun the
+    loop forever. ApplyGuard is stack RAII: a function that never returns
+    never releases it, so a single transient read error bricks every future
+    update -- local push AND GitHub apply, all targets -- until the S3 is
+    power-cycled. The timeout must be evaluated unconditionally on every
+    iteration, before any `continue` can skip it."""
+    body = _fn_body(UPD_C, "esp_err_t update_manager_push_local(")
+    loop = _fn_body(body, "for (;;)")
+    code = _strip_noise(loop)
+    assert "C6_RELAY_TIMEOUT_MS" in code
+    assert "continue" in code
+    assert code.index("C6_RELAY_TIMEOUT_MS") < code.index("continue"), \
+        "the relay-poll timeout must be checked before the status-read " \
+        "failure continue, or a stuck HAT link can spin this loop forever"

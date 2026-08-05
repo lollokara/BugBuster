@@ -1354,7 +1354,7 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
             off  += n;
             s_update.progress_done = sent;
         }
-        if (head && head_pos < head_len) head_pos += avail;
+        if (!failed && head && head_pos < head_len) head_pos += avail;
 
         int64_t now = esp_timer_get_time();
         if (emit_cb && !failed &&
@@ -1391,10 +1391,25 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
         return ESP_FAIL;
     }
     int64_t start_us = esp_timer_get_time();
+    bool relay_status_ever_ok = false;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(PUSH_EMIT_MS));
+        // Evaluate the timeout FIRST, unconditionally, before anything below
+        // can `continue` past it. hat_daq_ota_status() failing (a UART glitch,
+        // or the HAT wedged mid-push) must not be able to skip this check --
+        // ApplyGuard is stack RAII, so a loop that never returns never
+        // releases it, which bricks every future update (local push AND
+        // GitHub apply, all targets) until the S3 is power-cycled.
+        if (esp_timer_get_time() - start_us > (int64_t)C6_RELAY_TIMEOUT_MS * 1000) {
+            snprintf(err, err_len,
+                     relay_status_ever_ok
+                         ? "C6 relay push timed out"
+                         : "HAT link unresponsive during C6 relay push");
+            return ESP_FAIL;
+        }
         hat_daq_ota_status_t st = {};
         if (!hat_daq_ota_status(&st)) continue;
+        relay_status_ever_ok = true;
         if (emit_cb) {
             snprintf(line, sizeof(line),
                      "{\"stage\":\"relay\",\"done\":%lu,\"total\":%lu}",
@@ -1402,10 +1417,6 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
             emit_cb(ctx, line);
         }
         if (st.relay_state != HAT_RELAY_PUSHING) break;
-        if (esp_timer_get_time() - start_us > (int64_t)C6_RELAY_TIMEOUT_MS * 1000) {
-            snprintf(err, err_len, "C6 relay push timed out");
-            return ESP_FAIL;
-        }
     }
 
     hat_daq_c6_version_t cv = {};
