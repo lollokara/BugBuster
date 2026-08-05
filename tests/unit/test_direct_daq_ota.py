@@ -725,3 +725,62 @@ def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
     branch = _strip_noise(stripped[i:j if j != -1 else i + 800])
     assert "setTimeout" not in branch, \
         "the DAQ HAT push must not use the firmware/spiffs 12s reboot-wait timer"
+
+
+# ---------------------------------------------------------------------------
+# Product-id parity: the S3's DAQ_PRODUCT_ID_P4/C6 constants (used at both the
+# release-path apply_daq_ota() and the local-upload update_manager_push_local()
+# OTA_BEGIN call sites) must match the devices' own FW_PRODUCT_ID. The P4's
+# ota_begin() strncmp()s meta.product_id against FW_PRODUCT_ID and rejects the
+# OTA_BEGIN with ESP_ERR_INVALID_ARG on a mismatch -- confirmed on hardware as
+# `{"stage":"done","ok":false,"error":"DAQ HAT rejected OTA_BEGIN"}`, before a
+# single byte of the image is written. A stale comment can't catch that drift;
+# only a failing test can.
+#
+# The values under test are the string-literal *contents* themselves, so
+# _strip_noise() (which blanks literal contents) would erase exactly what we
+# need to assert on. Use _strip_comments() (comments blanked, literals kept)
+# instead, and parse the #define lines directly for the device side since
+# that's plain C macro text, not a function body.
+P4_VERSION_H = Path("Firmware/DAQ_HAT/ESP32P4/include/version.h").read_text()
+C6_VERSION_H = Path("Firmware/DAQ_HAT/ESP32C6/include/version.h").read_text()
+
+
+def _fw_product_id(text: str) -> str:
+    m = re.search(r'#define\s+FW_PRODUCT_ID\s+"([^"]*)"', _strip_comments(text))
+    assert m, "FW_PRODUCT_ID #define not found"
+    return m.group(1)
+
+
+def _s3_product_id_const(name: str) -> str:
+    m = re.search(
+        r'static const char \*' + re.escape(name) + r'\s*=\s*"([^"]*)"',
+        _strip_comments(UPD_C),
+    )
+    assert m, f"{name} not found in update_manager.cpp"
+    return m.group(1)
+
+
+def test_s3_p4_product_id_matches_the_p4_device():
+    assert _s3_product_id_const("DAQ_PRODUCT_ID_P4") == _fw_product_id(P4_VERSION_H), \
+        "S3's DAQ_PRODUCT_ID_P4 must match the P4's FW_PRODUCT_ID or the P4 " \
+        "rejects OTA_BEGIN with ESP_ERR_INVALID_ARG and the push dies before " \
+        "a single byte is written"
+
+
+def test_s3_c6_product_id_matches_the_c6_device():
+    assert _s3_product_id_const("DAQ_PRODUCT_ID_C6") == _fw_product_id(C6_VERSION_H), \
+        "S3's DAQ_PRODUCT_ID_C6 must match the C6's FW_PRODUCT_ID for " \
+        "consistency, and for the day relay_stage_begin() starts checking it too"
+
+
+def test_release_path_and_push_local_use_the_shared_product_id_constants():
+    """Both OTA_BEGIN call sites must reference the shared constants rather
+    than re-embedding their own literals -- that duplication is exactly how
+    this bug shipped (the release path and the local-upload path drifted
+    from the devices independently)."""
+    release_body = _strip_noise(_fn_body(UPD_C, "static bool apply_daq_ota("))
+    assert "DAQ_PRODUCT_ID_P4" in release_body and "DAQ_PRODUCT_ID_C6" in release_body
+
+    push_local_body = _strip_noise(_fn_body(UPD_C, "esp_err_t update_manager_push_local("))
+    assert "DAQ_PRODUCT_ID_P4" in push_local_body and "DAQ_PRODUCT_ID_C6" in push_local_body

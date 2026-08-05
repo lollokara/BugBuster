@@ -26,6 +26,17 @@ static const char *RELEASES_API_URL =
     "https://api.github.com/repos/lollokara/BugBuster/releases?per_page=20";
 static const char *RP2040_STAGE_PATH = "/scripts/update-rp2040.bin";
 
+// MUST match FW_PRODUCT_ID in Firmware/DAQ_HAT/ESP32P4/include/version.h and
+// Firmware/DAQ_HAT/ESP32C6/include/version.h respectively. The P4's
+// ota_begin() strncmp()s the incoming meta.product_id against its own
+// FW_PRODUCT_ID and returns ESP_ERR_INVALID_ARG on any mismatch, which kills
+// the push before a single byte is written (surfaced to the client as
+// "DAQ HAT rejected OTA_BEGIN"). The C6 target currently goes through
+// relay_stage_begin(), which does not check product_id, but keep this
+// correct anyway for consistency and for the day staging does check.
+static const char *DAQ_PRODUCT_ID_P4 = "bb-daq-p4";
+static const char *DAQ_PRODUCT_ID_C6 = "bb-daq-c6";
+
 typedef struct {
     update_state_t state;
     char last_error[128];
@@ -835,7 +846,7 @@ static bool apply_daq_ota(const UpdateComponent *component, uint8_t hat_target)
     (void)version_to_u32(component->version, &meta.version_u32);
     memcpy(meta.sha256, sha, sizeof(meta.sha256));
     snprintf(meta.product_id, sizeof(meta.product_id), "%s",
-             (hat_target == HAT_OTA_TARGET_P4) ? "bugbuster-p4" : "bugbuster-c6");
+             (hat_target == HAT_OTA_TARGET_P4) ? DAQ_PRODUCT_ID_P4 : DAQ_PRODUCT_ID_C6);
 
     if (!hat_ota_begin(hat_target, &meta)) {
         set_error("DAQ HAT rejected OTA_BEGIN");
@@ -1296,7 +1307,7 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
     meta.version_u32 = 0;                    // local build: no version claimed
     memcpy(meta.sha256, sha256, 32);
     snprintf(meta.product_id, sizeof(meta.product_id), "%s",
-             is_c6 ? "bugbuster-c6" : "bugbuster-p4");
+             is_c6 ? DAQ_PRODUCT_ID_C6 : DAQ_PRODUCT_ID_P4);
 
     if (!hat_ota_begin(hat_target, &meta)) {
         free(head); free(buf);
