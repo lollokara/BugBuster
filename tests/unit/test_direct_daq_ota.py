@@ -297,3 +297,37 @@ def test_push_local_relay_poll_checks_timeout_before_status_continue():
     assert code.index("C6_RELAY_TIMEOUT_MS") < code.index("continue"), \
         "the relay-poll timeout must be checked before the status-read " \
         "failure continue, or a stuck HAT link can spin this loop forever"
+
+
+WEB_C = Path("Firmware/ESP32/src/web/webserver.cpp").read_text()
+
+
+def test_both_upload_routes_are_registered():
+    assert '.uri = "/api/ota/upload_p4"' in WEB_C
+    assert '.uri = "/api/ota/upload_c6"' in WEB_C
+
+
+def test_upload_handlers_require_admin_auth():
+    body = _fn_body(WEB_C, "static esp_err_t handle_daq_upload(")
+    assert "check_admin_auth(req)" in body
+
+
+def test_upload_handler_delegates_to_update_manager():
+    """No second copy of the OTA lifecycle rules in webserver.cpp."""
+    body = _fn_body(WEB_C, "static esp_err_t handle_daq_upload(")
+    assert "update_manager_push_local(" in body
+    for forbidden in ("hat_ota_begin(", "hat_ota_end(", "hat_daq_relay_apply("):
+        assert forbidden not in body, \
+            f"{forbidden} belongs in update_manager, not the HTTP shim"
+
+
+def test_upload_handler_streams_ndjson():
+    body = _fn_body(WEB_C, "static esp_err_t handle_daq_upload(")
+    assert "application/x-ndjson" in body
+    assert "httpd_resp_send_chunk" in body
+
+
+def test_upload_handler_reports_failure_in_the_stream():
+    """The 200 is committed before the outcome is known."""
+    body = _fn_body(WEB_C, "static esp_err_t handle_daq_upload(")
+    assert '\\"done\\"' in body or '"done"' in body

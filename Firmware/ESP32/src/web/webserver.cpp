@@ -3917,6 +3917,105 @@ static esp_err_t handle_rp2040_upload(httpd_req_t *req)
     return send_json(req, root);
 }
 
+// ---------------------------------------------------------------------------
+// DAQ HAT (P4 / C6) direct image upload.
+//
+// Progress rides this request's own response stream. esp_http_server is
+// single-task, so during the ~60-90 s (P4) or ~3 min (C6) push NO other HTTP
+// request is served -- a client polling /api/update/status would simply hang.
+// The stream also reports the honest number: bytes the P4 acknowledged, not
+// bytes buffered into our socket, which an upload-progress bar would race
+// ahead of and finish early.
+//
+// The 200 status is committed before the outcome is known, so failures appear
+// ONLY as a final {"stage":"done","ok":false,...} record. Clients must treat a
+// stream that ends without a done record as a failure.
+// ---------------------------------------------------------------------------
+typedef struct {
+    httpd_req_t *req;
+    int          remaining;   // body bytes not yet handed to update_manager
+    bool         send_failed;
+} DaqUploadCtx;
+
+static int daq_upload_read(void *vctx, uint8_t *buf, size_t max)
+{
+    DaqUploadCtx *c = (DaqUploadCtx *)vctx;
+    if (c->remaining <= 0) return 0;
+    size_t want = ((size_t)c->remaining < max) ? (size_t)c->remaining : max;
+    while (true) {
+        int n = httpd_req_recv(c->req, (char *)buf, want);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;   // same retry as the other uploads
+        if (n <= 0) return -1;
+        c->remaining -= n;
+        return n;
+    }
+}
+
+static void daq_upload_emit(void *vctx, const char *json)
+{
+    DaqUploadCtx *c = (DaqUploadCtx *)vctx;
+    if (c->send_failed) return;
+    char line[224];
+    int n = snprintf(line, sizeof(line), "%s\n", json);
+    if (n <= 0 || n >= (int)sizeof(line)) return;
+    if (httpd_resp_send_chunk(c->req, line, n) != ESP_OK) c->send_failed = true;
+}
+
+static esp_err_t handle_daq_upload(httpd_req_t *req, uint32_t target)
+{
+    if (check_admin_auth(req) != ESP_OK) {
+        return send_error(req, 401, "Admin token required");
+    }
+
+    uint8_t sha[32];
+    bool have_sha = false;
+    if (!parse_sha256_query(req, sha, &have_sha) || !have_sha) {
+        return send_error(req, 400, "sha256 query must be 64 lowercase hex chars");
+    }
+    if (req->content_len <= 0 || req->content_len > 3584 * 1024) {
+        return send_error(req, 400, "Invalid firmware size (max 3.5MB)");
+    }
+    if ((update_manager_available_targets() & target) == 0) {
+        return send_error(req, 409, "No DAQ HAT connected");
+    }
+
+    // Past this point the status is committed; every outcome is a stream record.
+    httpd_resp_set_type(req, "application/x-ndjson");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    DaqUploadCtx ctx = { .req = req, .remaining = (int)req->content_len, .send_failed = false };
+    char err[160] = {0};
+    esp_err_t rc = update_manager_push_local(target, (uint32_t)req->content_len, sha,
+                                             daq_upload_read, daq_upload_emit,
+                                             &ctx, err, sizeof(err));
+
+    char last[256];
+    if (rc == ESP_OK) {
+        snprintf(last, sizeof(last), "{\"stage\":\"done\",\"ok\":true}\n");
+    } else {
+        cJSON *e = cJSON_CreateString(err[0] ? err : esp_err_to_name(rc));
+        char *esc = cJSON_PrintUnformatted(e);   // properly escaped JSON string
+        snprintf(last, sizeof(last), "{\"stage\":\"done\",\"ok\":false,\"error\":%s}\n",
+                 esc ? esc : "\"unknown\"");
+        if (esc) cJSON_free(esc);
+        cJSON_Delete(e);
+        ESP_LOGE(TAG, "DAQ upload failed: %s", err);
+    }
+    httpd_resp_send_chunk(req, last, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send_chunk(req, NULL, 0);          // terminate the chunked response
+    return ESP_OK;
+}
+
+static esp_err_t handle_p4_upload(httpd_req_t *req)
+{
+    return handle_daq_upload(req, UPDATE_TARGET_P4);
+}
+
+static esp_err_t handle_c6_upload(httpd_req_t *req)
+{
+    return handle_daq_upload(req, UPDATE_TARGET_C6);
+}
+
 
 // Helper: stringify esp_ota_img_states_t for JSON.
 static const char* ota_state_str(esp_ota_img_states_t s)
@@ -5389,6 +5488,16 @@ bool initWebServer(void)
         .uri = "/api/ota/upload_rp2040", .method = HTTP_POST, .handler = handle_rp2040_upload, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_ota_rp2040);
+
+    httpd_uri_t uri_ota_upload_p4 = {
+        .uri = "/api/ota/upload_p4", .method = HTTP_POST, .handler = handle_p4_upload, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota_upload_p4);
+
+    httpd_uri_t uri_ota_upload_c6 = {
+        .uri = "/api/ota/upload_c6", .method = HTTP_POST, .handler = handle_c6_upload, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_ota_upload_c6);
 
 
     httpd_uri_t uri_uploadfs = {
