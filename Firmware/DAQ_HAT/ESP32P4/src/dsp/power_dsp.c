@@ -98,8 +98,14 @@ static void stat_finish(const running_stat_t *s, stat_result_t *out)
     out->min  = (s->min == INFINITY)  ? 0.0f : s->min;
     out->max  = (s->max == -INFINITY) ? 0.0f : s->max;
     out->mean = (float)mean;
-    out->rms  = (float)sqrt(var + mean * mean);
-    out->std  = (float)sqrt(var);
+    // Narrow to float BEFORE the sqrt, not after. The P4 FPU is single
+    // precision (see the header's note), so a double sqrt() is a soft-float
+    // call costing hundreds of cycles -- and its extra precision was being
+    // thrown away by the cast into these float fields anyway. The sums stay
+    // double, so only the final rounding differs, by at most 1 float ULP.
+    // Measured: 6 of these per 10 Hz summary dominated usb_stream_send_stats.
+    out->rms  = sqrtf((float)(var + mean * mean));
+    out->std  = sqrtf((float)var);
 }
 
 // -----------------------------------------------------------------------------

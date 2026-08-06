@@ -71,6 +71,17 @@ typedef enum {
     DAQ_PERF_FAST_DSP,      // decimated DSP tail: power_dsp + spectrum_push
     DAQ_PERF_FAST_WIRE,     // usb_stream_push_sample() (frame assembly + TX)
     DAQ_PERF_FAST_SUMMARY,  // daq_board_stream_summary() (10 Hz STATS/ENERGY/FFT)
+    // Breakdown of DAQ_PERF_FAST_SUMMARY. It runs INLINE on daq_fast, so every
+    // microsecond here is a microsecond the consumer loop is not draining the
+    // rings — which is why it is worth splitting apart.
+    DAQ_PERF_SUM_WAVE,      // flush_wave_i + flush_wave_v (the big 16 KB frames)
+    DAQ_PERF_SUM_STATS,     // send_stats + send_energy
+    DAQ_PERF_SUM_MATH,      // ...of which: the stats arithmetic alone, no emit
+    DAQ_PERF_SUM_FFT,       // spectrum_get_magnitude + send_fft
+    DAQ_PERF_SUM_STATUS,    // status assembly + relay_stage_get_status + send
+    DAQ_PERF_TX_WRITE,      // tud_vendor_write() — copy into the TX FIFO
+    DAQ_PERF_TX_FLUSH,      // tud_vendor_write_flush() — kick the IN transfer
+    DAQ_PERF_TX_AVAIL,      // tud_vendor_write_available() — the space probe
     DAQ_PERF_FAST_IDLE,     // vTaskDelay(1) taken because both rings were empty
     DAQ_PERF_FAST_YIELD,    // the forced every-1024-iterations vTaskDelay(1)
 

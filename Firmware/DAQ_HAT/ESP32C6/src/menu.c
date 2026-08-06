@@ -100,7 +100,21 @@ static void val_decim(char *b, int n)  { snprintf(b, n, "%s", daq_config_schema(
 static void pick_decim(int v)          { g_settings.decim_idx = v; settings_commit(); }
 static void val_reject(char *b, int n) { v_onoff(b, n, g_settings.reject_5060); }
 static void ok_reject(void)            { g_settings.reject_5060 = !g_settings.reject_5060; settings_commit(); }
-static bool vis_sinc3(void)            { return g_settings.filter_idx == DAQ_FILT_SINC3; }
+
+// Super Resolution: the P4 pins the ADAQs to Sinc3 at maximum decimation and
+// low-pass/decimates to DAQ_SR_CURRENT_SPS / DAQ_SR_VOLTAGE_SPS, so while it is
+// on the Sample Rate / Filter / Decimation rows would be lying — hide them.
+static void val_sr(char *b, int n)     { v_onoff(b, n, g_settings.sr_mode); }
+static void ok_sr(void)                { g_settings.sr_mode = !g_settings.sr_mode; settings_commit(); }
+static bool vis_not_sr(void)           { return !g_settings.sr_mode; }
+static bool vis_sr(void)               { return g_settings.sr_mode; }
+static void val_sr_rate(char *b, int n)
+{
+    snprintf(b, n, "%u/%u sps", (unsigned)DAQ_SR_CURRENT_SPS,
+             (unsigned)DAQ_SR_VOLTAGE_SPS);
+}
+// 50/60 Hz rejection is a Sinc3 option, and SR always runs Sinc3.
+static bool vis_sinc3(void)            { return g_settings.sr_mode || g_settings.filter_idx == DAQ_FILT_SINC3; }
 
 // FFT (P4 DSP) — labels read from the registry schema (single source of truth).
 static void val_fft(char *b, int n)    { v_onoff(b, n, g_settings.fft_enable); }
@@ -458,6 +472,7 @@ static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag, m_cal;
 static const menu_t m_diag_temp, m_diag_power, m_diag_rails, m_diag_p4, m_diag_c6;
 static const menu_t m_srate, m_filter, m_decim;
 static void scripts_open(void);   // opens the custom MicroPython Scripts screen
+static void fw_open(void);        // opens the custom Firmware / update screen
 static void cal_open_volt(void);  // DUT source calibration wizard entry points
 static void cal_open_curr(void);
 static void cal_open_base(void);
@@ -468,16 +483,58 @@ static const menu_item_t root_items[] = {
     { .label = "Main Board Settings", .type = IT_SUBMENU, .sub = &m_mainboard },
     { .label = "WiFi Settings",       .type = IT_SUBMENU, .sub = &m_wifi },
     { .label = "Diagnostics",         .type = IT_SUBMENU, .sub = &m_diag },
+    { .label = "Firmware",            .type = IT_CYCLE,   .ok  = fw_open },
 };
-static const menu_t m_root = { "Settings", root_items, 5 };
+static const menu_t m_root = { "Settings", root_items, 6 };
+
+// DUT supply. Also on the home screen (hold BACK), but that shortcut is
+// undiscoverable, so mirror it here. The 9 V / 3 A USB-PD guard matches
+// main.c's -- the P4 enforces it independently either way.
+static void val_source(char *b, int n) { v_onoff(b, n, ui_source_on()); }
+static bool alert_source(void)         { return ui_source_on(); }
+static void ok_source(void)
+{
+    bool want_on = !ui_source_on();
+    if (want_on && !(dvalid(DDP_DIAG_V_S3PD) && s_dg.pd_mv >= 9000 && s_dg.pd_ma >= 3000)) {
+        ui_show_warning("Need USB-PD 9V/3A");
+        return;
+    }
+    c6_config_send_source_enable(want_on);
+}
+
+// Stateless one-shot operations (daq_action_t). These reset accumulators on the
+// P4; there is nothing to persist locally, so they bypass settings_commit().
+static void ok_reset_energy(void) { ddp_send_config_action(DAQ_ACT_ENERGY_RESET); ui_show_warning("Energy reset"); }
+static void ok_reset_charge(void) { ddp_send_config_action(DAQ_ACT_CHARGE_RESET); ui_show_warning("Charge reset"); }
+static void ok_factory_reset(void)
+{
+    // Two-press confirm: a stray OK on a 3-button UI must not wipe calibration.
+    static uint32_t s_armed_ms = 0;
+    if (s_armed_ms && (s_anim_ms - s_armed_ms) < 4000) {
+        s_armed_ms = 0;
+        ddp_send_config_action(DAQ_ACT_FACTORY_RESET);
+        ui_show_warning("Factory reset sent");
+    } else {
+        s_armed_ms = s_anim_ms ? s_anim_ms : 1;
+        ui_show_warning("Press OK again");
+    }
+}
 
 static const menu_item_t hat_items[] = {
+    { .label = "DUT Supply",       .type = IT_TOGGLE, .value = val_source, .ok = ok_source,
+      .value_alert = alert_source },
     { .label = "Autoranging",      .type = IT_TOGGLE, .value = val_autorange, .ok = ok_autorange },
     { .label = "Range Setting",    .type = IT_CYCLE,  .value = val_range, .ok = ok_range,
       .visible = vis_manual, .warn = warn_manual },
-    { .label = "Sample Rate",      .type = IT_SUBMENU, .sub = &m_srate,  .value = val_srate },
-    { .label = "Filter",           .type = IT_SUBMENU, .sub = &m_filter, .value = val_filter },
-    { .label = "Decimation",       .type = IT_SUBMENU, .sub = &m_decim,  .value = val_decim },
+    { .label = "Super Resolution", .type = IT_TOGGLE, .value = val_sr, .ok = ok_sr },
+    { .label = "  SR Output",      .type = IT_INFO,   .value = val_sr_rate,
+      .visible = vis_sr },
+    { .label = "Sample Rate",      .type = IT_SUBMENU, .sub = &m_srate,  .value = val_srate,
+      .visible = vis_not_sr },
+    { .label = "Filter",           .type = IT_SUBMENU, .sub = &m_filter, .value = val_filter,
+      .visible = vis_not_sr },
+    { .label = "Decimation",       .type = IT_SUBMENU, .sub = &m_decim,  .value = val_decim,
+      .visible = vis_not_sr },
     { .label = "50/60Hz Reject",   .type = IT_TOGGLE, .value = val_reject, .ok = ok_reject,
       .visible = vis_sinc3 },
     { .label = "DUT Current Limit",.type = IT_BARGRAPH, .value = val_current,
@@ -494,8 +551,11 @@ static const menu_item_t hat_items[] = {
     { .label = "FFT Source",       .type = IT_CYCLE,  .value = val_fftsrc, .ok = ok_fftsrc,
       .visible = vis_fft },
     { .label = "Calibration",      .type = IT_SUBMENU, .sub = &m_cal },
+    { .label = "Reset Energy",     .type = IT_CYCLE,  .ok = ok_reset_energy },
+    { .label = "Reset Charge",     .type = IT_CYCLE,  .ok = ok_reset_charge },
+    { .label = "Factory Reset",    .type = IT_CYCLE,  .ok = ok_factory_reset },
 };
-static const menu_t m_hat = { "HAT Settings", hat_items, 13 };
+static const menu_t m_hat = { "HAT Settings", hat_items, 19 };
 
 static const menu_item_t screen_items[] = {
     { .label = "Brightness", .type = IT_BARGRAPH, .value = val_bright,
@@ -676,6 +736,20 @@ static bool             s_in_cal = false;
 static uint8_t          s_cal_mode = 0;    // DDP_CAL_MODE_*
 static ddp_cal_status_t s_calst;           // latest status from the P4
 static uint32_t         s_cal_last_req = 0;
+
+// Firmware screen: installed-vs-available per MCU, tunneled C6 -> P4 -> S3.
+// Three stages on one screen: the device table, a release picker for the
+// selected device, then a confirmation before anything is flashed.
+#define FW_STAGE_TABLE   0
+#define FW_STAGE_PICK    1
+#define FW_STAGE_CONFIRM 2
+static bool             s_in_fw = false;
+static uint8_t          s_fw_stage = FW_STAGE_TABLE;
+static ddp_mb_fwinfo_t  s_fwi;
+static bool             s_fwi_have = false;
+static int              s_fw_dev = 0;      // DDP_FW_IDX_*
+static int              s_fw_rel = 0;      // index into s_fwi.rel[]
+static uint32_t         s_fw_last_req = 0;
 static const menu_t *cur_menu(void) { return s_stack[s_depth].menu; }
 static int          *cur_sel(void)  { return &s_stack[s_depth].sel; }
 
@@ -725,6 +799,7 @@ void menu_open(uint32_t now_ms)
     s_in_detail = false;
     s_in_scripts = false;
     s_in_cal = false;
+    s_in_fw = false;
     s_depth = 0;
     s_stack[0].menu = &m_root;
     s_stack[0].sel = 0;
@@ -944,6 +1019,98 @@ static void handle_scripts_event(uint32_t ev)
     }
 }
 
+// ---- Firmware / update screen ----------------------------------------------
+// Device labels + the update-target bit each row maps to, in DDP_FW_IDX_ order.
+static const char *const FW_DEV_NAME[DDP_FW_DEV_MAX] = { "RP2040", "ESP32-S3", "ESP32-P4", "ESP32-C6" };
+static const uint8_t     FW_DEV_BIT[DDP_FW_DEV_MAX]  = { DDP_FW_T_RP2040, DDP_FW_T_S3,
+                                                         DDP_FW_T_P4, DDP_FW_T_C6 };
+
+// A row is selectable only when the S3 reported a version for it — an absent
+// MCU (no HAT, or a C6 that has not answered yet) must not be flashable.
+static bool fw_dev_present(int i)
+{
+    return i >= 0 && i < (int)DDP_FW_DEV_MAX && s_fwi.installed[i][0] != '\0';
+}
+
+static void fw_open(void)
+{
+    s_in_fw = true;
+    s_fw_stage = FW_STAGE_TABLE;
+    s_fw_dev = 0;
+    s_fw_rel = 0;
+    s_fw_last_req = 0;   // fetch immediately in fw_refresh()
+    for (int i = 0; i < (int)DDP_FW_DEV_MAX; i++) {
+        if (fw_dev_present(i)) { s_fw_dev = i; break; }
+    }
+}
+
+static void fw_step_dev(int dir)
+{
+    for (int n = 0; n < (int)DDP_FW_DEV_MAX; n++) {
+        s_fw_dev += dir;
+        if (s_fw_dev < 0) { s_fw_dev = 0; return; }
+        if (s_fw_dev >= (int)DDP_FW_DEV_MAX) { s_fw_dev = DDP_FW_DEV_MAX - 1; return; }
+        if (fw_dev_present(s_fw_dev)) return;
+    }
+}
+
+// Poll the S3 while the screen is open. The first reply is usually state
+// CHECKING with an empty release list (the S3 kicks off the GitHub query on the
+// worker); polling faster while checking makes the list appear promptly.
+static void fw_refresh(uint32_t now_ms)
+{
+    if (!s_in_fw) return;
+    uint32_t period = (s_fwi.state == DDP_FW_ST_CHECKING) ? 1500 : 4000;
+    if (now_ms - s_fw_last_req >= period) {
+        s_fw_last_req = now_ms;
+        ddp_send_mb_request(DDP_MB_FWINFO, NULL, 0);
+    }
+    ddp_mb_fwinfo_t f; uint32_t age;
+    if (ddp_get_mb_fwinfo(&f, &age) && age < 15000) {
+        s_fwi = f;
+        s_fwi_have = true;
+        if (s_fw_rel >= s_fwi.rel_count) s_fw_rel = s_fwi.rel_count ? s_fwi.rel_count - 1 : 0;
+        if (!fw_dev_present(s_fw_dev)) fw_step_dev(0);
+    }
+    // A flash takes far longer than the idle timeout and must not be
+    // interrupted by the menu closing under it.
+    if (s_fwi.state == DDP_FW_ST_APPLYING) s_last_input = now_ms;
+}
+
+static void handle_fw_event(uint32_t ev)
+{
+    switch (s_fw_stage) {
+    case FW_STAGE_TABLE:
+        if (ev & BTN_EV_UP)   fw_step_dev(-1);
+        if (ev & BTN_EV_DOWN) fw_step_dev(+1);
+        if (ev & BTN_EV_BACK) { s_in_fw = false; return; }
+        if (ev & BTN_EV_OK) {
+            if (s_fwi.rel_count > 0 && fw_dev_present(s_fw_dev)) {
+                s_fw_rel = 0;
+                s_fw_stage = FW_STAGE_PICK;
+            }
+        }
+        break;
+
+    case FW_STAGE_PICK:
+        if ((ev & BTN_EV_UP)   && s_fw_rel > 0) s_fw_rel--;
+        if ((ev & BTN_EV_DOWN) && s_fw_rel < s_fwi.rel_count - 1) s_fw_rel++;
+        if (ev & BTN_EV_BACK) { s_fw_stage = FW_STAGE_TABLE; return; }
+        if (ev & BTN_EV_OK)   s_fw_stage = FW_STAGE_CONFIRM;
+        break;
+
+    case FW_STAGE_CONFIRM:
+        if (ev & BTN_EV_BACK) { s_fw_stage = FW_STAGE_PICK; return; }
+        if (ev & BTN_EV_OK) {
+            uint8_t args[2] = { (uint8_t)s_fw_rel, FW_DEV_BIT[s_fw_dev] };
+            ddp_send_mb_request(DDP_MB_FW_APPLY, args, sizeof(args));
+            s_fw_last_req = 0;              // show the new state promptly
+            s_fw_stage = FW_STAGE_TABLE;
+        }
+        break;
+    }
+}
+
 // ---- DUT source calibration wizard ----------------------------------------
 static void cal_open(uint8_t mode)
 {
@@ -999,11 +1166,13 @@ menu_status_t menu_update(uint32_t events, uint32_t now_ms, bool *need_render)
     mb_refresh(now_ms);
     scr_refresh(now_ms);
     cal_refresh(now_ms);
+    fw_refresh(now_ms);
     bool render = false;
 
     if (events) {
         s_last_input = now_ms;
         if (s_in_cal)         handle_cal_event(events);
+        else if (s_in_fw)     handle_fw_event(events);
         else if (s_in_scripts) handle_scripts_event(events);
         else if (s_in_detail) handle_detail_event(events);
         else if (s_in_editor) handle_editor_event(events);
@@ -1349,6 +1518,99 @@ static void render_cal(void)
     if (fillw > 0) gfx_round_rect(bx + 2, by + 2, fillw, bh - 4, 2, g_theme.sel);
 }
 
+// Firmware screen. The 284 px width fits a real table, so all four MCUs show
+// installed and available side by side without scrolling; OK drills into a
+// release picker for the highlighted MCU and then a confirmation.
+static void render_fw(void)
+{
+    gfx_clear(g_theme.bg);
+    gfx_fill_rect(0, 0, DISP_WIDTH, TITLE_H, g_theme.header);
+    gfx_hline(0, TITLE_H, DISP_WIDTH, g_theme.border);
+
+    const char *sstate; uint16_t scol;
+    switch (s_fwi.state) {
+        case DDP_FW_ST_CHECKING: sstate = "CHECKING"; scol = g_theme.amber; break;
+        case DDP_FW_ST_APPLYING: sstate = "UPDATING"; scol = g_theme.cyan;  break;
+        case DDP_FW_ST_ERROR:    sstate = "NO NET";   scol = g_theme.rose;  break;
+        default:                 sstate = "OK";       scol = g_theme.green; break;
+    }
+    int stw = gfx_text_w(sstate, 1);
+    ui_draw_dot(DISP_WIDTH - stw - 12, 9, scol);
+    gfx_text(DISP_WIDTH - stw - 6, 5, sstate, 1, scol);
+
+    if (s_fw_stage == FW_STAGE_CONFIRM) {
+        gfx_text(6, 5, "Confirm Update", 1, g_theme.dim);
+        char line[64];
+        snprintf(line, sizeof(line), "Update %s to %s?",
+                 FW_DEV_NAME[s_fw_dev], s_fwi.rel[s_fw_rel]);
+        gfx_text(8, TITLE_H + 12, line, 1, g_theme.text);
+        gfx_text(8, TITLE_H + 26, "Do not power off during the update.", 1, g_theme.amber);
+        gfx_text(8, TITLE_H + 42, "OK = update      BACK = cancel", 1, g_theme.muted);
+        return;
+    }
+
+    if (s_fw_stage == FW_STAGE_PICK) {
+        char title[40];
+        snprintf(title, sizeof(title), "%s - select version", FW_DEV_NAME[s_fw_dev]);
+        gfx_text(6, 5, title, 1, g_theme.dim);
+
+        const int RH = 11;
+        int top = TITLE_H + 3;
+        int rows_vis = (DISP_HEIGHT - top) / RH;
+        if (rows_vis < 1) rows_vis = 1;
+        int first = s_fw_rel - rows_vis / 2;
+        if (first > s_fwi.rel_count - rows_vis) first = s_fwi.rel_count - rows_vis;
+        if (first < 0) first = 0;
+
+        for (int r = 0; r < rows_vis && (first + r) < s_fwi.rel_count; r++) {
+            int idx = first + r;
+            int y = top + r * RH;
+            bool sel = (idx == s_fw_rel);
+            if (sel) gfx_round_rect(3, y - 1, DISP_WIDTH - 6, RH, 3, g_theme.sel);
+            uint16_t tc = sel ? g_theme.sel_text : g_theme.text;
+            gfx_text(8, y + 1, s_fwi.rel[idx], 1, tc);
+            if (idx == 0) gfx_text(120, y + 1, "(latest)", 1, sel ? g_theme.sel_text : g_theme.muted);
+            // Mark the release the selected MCU is already running.
+            if (strcmp(s_fwi.rel[idx], s_fwi.installed[s_fw_dev]) == 0)
+                gfx_text(DISP_WIDTH - 60, y + 1, "installed", 1, sel ? g_theme.sel_text : g_theme.green);
+        }
+        return;
+    }
+
+    // ---- Stage 1: the device table -----------------------------------------
+    gfx_text(6, 5, "Firmware", 1, g_theme.dim);
+
+    const int COL_DEV = 8, COL_INST = 96, COL_AVAIL = 186;
+    const int RH = 12;
+    int top = TITLE_H + 2;
+
+    gfx_text(COL_DEV,   top, "DEVICE",    1, g_theme.muted);
+    gfx_text(COL_INST,  top, "INSTALLED", 1, g_theme.muted);
+    gfx_text(COL_AVAIL, top, "AVAILABLE", 1, g_theme.muted);
+    top += 10;
+
+    const char *latest = (s_fwi.rel_count > 0) ? s_fwi.rel[0] : "--";
+
+    for (int i = 0; i < (int)DDP_FW_DEV_MAX; i++) {
+        int y = top + i * RH;
+        bool present = fw_dev_present(i);
+        bool sel = (i == s_fw_dev) && present;
+        if (sel) gfx_round_rect(3, y - 1, DISP_WIDTH - 6, RH, 3, g_theme.sel);
+
+        uint16_t tc = sel ? g_theme.sel_text
+                          : (present ? g_theme.text : g_theme.muted);
+        gfx_text(COL_DEV, y + 1, FW_DEV_NAME[i], 1, tc);
+        gfx_text(COL_INST, y + 1, present ? s_fwi.installed[i] : "absent", 1, tc);
+
+        if (!present) continue;
+
+        bool upd = (s_fwi.update_avail & FW_DEV_BIT[i]) != 0;
+        uint16_t ac = sel ? g_theme.sel_text : (upd ? g_theme.amber : g_theme.green);
+        gfx_text(COL_AVAIL, y + 1, latest, 1, ac);
+        if (upd) gfx_text(DISP_WIDTH - 26, y + 1, "NEW", 1, ac);
+    }
+}
+
 // MicroPython Scripts screen: engine status pill + a scrollable list of stored
 // scripts. OK runs the selected script (or stops the running one via the "Stop"
 // row); BACK returns to the menu. Data is tunneled from the S3 on demand.
@@ -1417,6 +1679,7 @@ void menu_render(uint32_t now_ms)
     s_last_paint = now_ms;
     if (s_in_detail)      render_detail();
     else if (s_in_editor) render_editor();
+    else if (s_in_fw)     render_fw();
     else if (s_in_scripts) render_scripts();
     else if (s_in_cal)    render_cal();
     else                  render_menu();

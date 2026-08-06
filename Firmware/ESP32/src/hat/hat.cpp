@@ -18,6 +18,8 @@
 #include "husb238.h"
 #include "scripting.h"
 #include "script_storage.h"
+#include "update/update_manager.h"
+#include "net/api_core.h"
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "driver/gpio.h"
@@ -1524,6 +1526,48 @@ void hat_daq_poll_mb(void)
         return;
     }
 
+    // -------- Firmware info / update: answer from the cached snapshot -------
+    // update_manager's GitHub queries take seconds; this poll must answer
+    // inside the HAT link timeout, so it never blocks here. A stale or empty
+    // cache triggers a background refresh and reports CHECKING so the C6
+    // screen shows a spinner and re-polls.
+    if (type == HAT_MB_FWINFO || type == HAT_MB_FW_APPLY) {
+        uint8_t status = HAT_MB_ST_OK;
+
+        if (type == HAT_MB_FW_APPLY) {
+            // [type][rel_index u8][targets u8]
+            if (req_len >= 3) {
+                if (api_core_fw_apply_async(req[1], req[2]) != ESP_OK)
+                    status = HAT_MB_ST_BUSY;
+            } else {
+                status = HAT_MB_ST_ERR;
+            }
+        }
+
+        update_snapshot_t snap;
+        api_core_fw_get_snapshot(&snap);
+        if (!snap.valid) api_core_fw_refresh_async();
+
+        hat_mb_fwinfo_t fw;
+        memset(&fw, 0, sizeof(fw));
+        strlcpy(fw.installed[HAT_FW_IDX_RP2040], snap.rp2040, HAT_FW_STR);
+        strlcpy(fw.installed[HAT_FW_IDX_S3],     snap.esp32,  HAT_FW_STR);
+        strlcpy(fw.installed[HAT_FW_IDX_P4],     snap.p4,     HAT_FW_STR);
+        strlcpy(fw.installed[HAT_FW_IDX_C6],     snap.c6,     HAT_FW_STR);
+        fw.rel_count = (snap.rel_count > HAT_FW_REL_MAX) ? HAT_FW_REL_MAX : snap.rel_count;
+        for (uint8_t i = 0; i < fw.rel_count; ++i) strlcpy(fw.rel[i], snap.rel[i], HAT_FW_STR);
+        fw.update_avail = (uint8_t)snap.update_avail;
+
+        if (snap.state == UPDATE_STATE_CHECKING)      fw.state = HAT_FW_ST_CHECKING;
+        else if (snap.state == UPDATE_STATE_FAILED)   fw.state = HAT_FW_ST_ERROR;
+        else if (snap.state != UPDATE_STATE_IDLE)     fw.state = HAT_FW_ST_APPLYING;
+        else if (!snap.valid)                         fw.state = HAT_FW_ST_CHECKING;
+        else                                          fw.state = HAT_FW_ST_IDLE;
+
+        hat_mb_result_send(type, status, (const uint8_t *)&fw, sizeof(fw));
+        return;
+    }
+
     // -------- Power requests: report/write, then return the power snapshot ----
     uint8_t status = HAT_MB_ST_OK;
     switch (type) {
@@ -1852,13 +1896,14 @@ bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
     return code == HAT_RSP_OK;
 }
 
-bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec)
+bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec, bool sr_mode)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;
 
     hat_acq_config_t req = {};
     req.filter  = filter;
     req.adc_dec = adc_dec;
+    req.sr_mode = sr_mode ? 1u : 0u;
 
     uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
     uint8_t code = hat_command(HAT_CMD_DAQ_SET_ACQ_CONFIG, (const uint8_t *)&req, sizeof(req),

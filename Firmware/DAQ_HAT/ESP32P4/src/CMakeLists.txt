@@ -12,6 +12,7 @@ idf_component_register(
         "dsp/power_dsp.c"
         "dsp/multires.c"
         "dsp/spectrum.c"
+        "dsp/sr_filter.c"
         "smu/smu.c"
         "cal/smu_cal.c"
         "cal/range_cal.c"

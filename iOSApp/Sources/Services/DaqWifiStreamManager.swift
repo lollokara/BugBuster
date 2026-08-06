@@ -1541,11 +1541,21 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
     /// ODR — there is no client-driven stream-decimation path. STATUS still
     /// reports the device's stream_decim read-only.
     func setAcquisitionConfig(filter: DaqFilter, adcDec: DaqAdcDecimation, streamDecim: UInt16? = nil) {
-        guard let ble else { return }
-        let body: [String: Any] = [
+        setAcquisitionConfig(body: [
             "filter": Int(filter.rawValue),
             "adc_dec": Int(adcDec.rawValue)
-        ]
+        ])
+    }
+
+    /// Toggle Super Resolution. The device pins the ADCs to their lowest-noise
+    /// filter at maximum decimation and DSP-decimates to 1 ksps current /
+    /// 500 sps voltage, so no filter/ODR is sent alongside it.
+    func setSuperResolution(_ on: Bool) {
+        setAcquisitionConfig(body: ["sr_mode": on])
+    }
+
+    private func setAcquisitionConfig(body: [String: Any]) {
+        guard let ble else { return }
         // C1: this round trip covers daq_board_stop_fast() + a blocking SPI
         // reprogram of both current ADAQs + daq_board_run_fast() on the
         // device — no frames for that whole window. Left unguarded, the 1 Hz

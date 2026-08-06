@@ -6,6 +6,7 @@
 #include "ddp.h"
 #include "perf.h"
 #include "theme.h"
+#include "settings.h"
 
 #include <math.h>
 #include <string.h>
@@ -178,6 +179,17 @@ static void draw_header(uint32_t t_ms)
         pill_left = src_badge_x - 4;            // bolts stop left of the badge
     }
 
+    // Super-Resolution badge: cyan "SR" pill shown while the P4 is running the
+    // oversampled 1 ksps / 500 sps acquisition, so the low waveform rate on the
+    // tiles is never mistaken for a stalled stream.
+    bool sr_on = g_settings.sr_mode;
+    int sr_badge_x = 0, sr_tw = 0;
+    if (sr_on) {
+        sr_tw = gfx_text_w("SR", 1);
+        sr_badge_x = pill_left - sr_tw - 9;
+        pill_left = sr_badge_x - 4;
+    }
+
     // Temperature indicator: highest of the two AD7415 board sensors, shown as
     // a small readout in the header. Reserving its width here shortens the bolt
     // travel, trading Pac-Man animation space for the temp readout.
@@ -240,6 +252,10 @@ static void draw_header(uint32_t t_ms)
     // Status pill (drawn last so it's always on top of the bolt stream).
     if (temp_valid) {
         gfx_text(temp_x, 6, temp_s, 1, C_DIM);
+    }
+    if (sr_on) {
+        ui_draw_dot(sr_badge_x, 9, C_CYAN);
+        gfx_text(sr_badge_x + 5, 6, "SR", 1, C_CYAN);
     }
     if (src_on) {
         ui_draw_dot(src_badge_x, 9, C_GREEN);

@@ -177,6 +177,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let decimation = RwSignal::new(1u16);        // USB decimation 1..256
     let hw_filter_idx = RwSignal::new(0u8);      // 0=Wideband 1=Sinc5 2=Sinc3
     let hw_decim_idx = RwSignal::new(3u8);       // 0=×32 .. 5=×1024 (default ×256)
+    let sr_mode = RwSignal::new(false);          // Super Resolution (1 ksps I / 500 sps V)
     let range_lock_idx = RwSignal::new(0u8); // 0 = Auto, 1..3 = HI/MID/LO+1
     let vdut_mv = RwSignal::new(3300u32);
     let ilimit_ma = RwSignal::new(500u32);
@@ -1125,7 +1126,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     <div class="daq-settings" style="width:332px;overflow-y:auto;background:#0f172a;border-radius:8px;padding:12px;font-size:13px;">
                         <SettingsPanel
                             sample_rate_idx=sample_rate_idx voltage_rate_idx=voltage_rate_idx
-                            decimation=decimation hw_filter_idx=hw_filter_idx hw_decim_idx=hw_decim_idx
+                            decimation=decimation hw_filter_idx=hw_filter_idx hw_decim_idx=hw_decim_idx sr_mode=sr_mode
                             status=status
                             range_lock_idx=range_lock_idx smooth_window=smooth_window filter_type=filter_type
                             raw_filter=raw_filter
@@ -1795,6 +1796,7 @@ fn SettingsPanel(
     decimation: RwSignal<u16>,
     hw_filter_idx: RwSignal<u8>,
     hw_decim_idx: RwSignal<u8>,
+    sr_mode: RwSignal<bool>,
     status: RwSignal<Option<DaqStreamRuntimeStatus>>,
     range_lock_idx: RwSignal<u8>,
     smooth_window: RwSignal<u32>,
@@ -1835,6 +1837,8 @@ fn SettingsPanel(
     // Hardware filter / decimation key constants (DAQ_K_FILTER=0x0106, DAQ_K_DECIMATION=0x0107)
     const HW_FILT_KEY: u16 = 0x0106;
     const HW_DECIM_KEY: u16 = 0x0107;
+    // DAQ_K_SR_MODE = DAQ_KEY(GRP_ACQ=0x01, idx=0x09).
+    const SR_MODE_KEY: u16 = 0x0109;
     let hw_filter_labels = [("Wideband", 0u8), ("Sinc5", 1), ("Sinc3", 2)];
     let hw_decim_labels  = [("x32", 0u8), ("x64", 1), ("x128", 2), ("x256", 3), ("x512", 4), ("x1024", 5)];
     view! {
@@ -1844,6 +1848,32 @@ fn SettingsPanel(
             </div>
             <section class="daq-card">
                 <h3>"Acquisition"</h3>
+                <div class="daq-field col">
+                    <span>"Super Resolution"
+                        <em style="color:#64748b;font-style:normal;">" \u{2022} 1 ksps I / 500 sps V, oversampled"</em>
+                    </span>
+                    <div class="daq-seg neon-cyan">
+                        {[("Off", false), ("On", true)].iter().map(|(l, on)| {
+                            let on = *on;
+                            view!{
+                                <button class:active=move || sr_mode.get() == on
+                                    on:click=move |_| {
+                                        sr_mode.set(on);
+                                        spawn_local(async move {
+                                            if daq_cfg_set_bool(SR_MODE_KEY, on).await {
+                                                show_toast(
+                                                    if on { "Super Resolution on — ADC at max decimation + DSP low-pass" }
+                                                    else  { "Super Resolution off — rate/filter controls restored" },
+                                                    "ok");
+                                            } else {
+                                                show_toast("Super Resolution: send failed — BBP busy, retry", "err");
+                                            }
+                                        });
+                                    }>{*l}</button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </div>
                 <div class="daq-field col">
                     <span>"Current Rate (FINE/COARSE)"</span>
                     <div class="daq-seg neon-blue">

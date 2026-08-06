@@ -30,6 +30,7 @@
 #include "power_dsp.h"
 #include "multires.h"
 #include "spectrum.h"
+#include "sr_filter.h"
 #include "freertos/queue.h"
 #include "usb_stream.h"
 #include "smu.h"
@@ -138,6 +139,14 @@ typedef struct daq_board {
     uint32_t                dsp_emit_periods;
     uint32_t                fine_rate_hz; // cached FINE ODR for the fast path (avoids
                                           // a per-sample adaq7769_output_data_rate() call)
+
+    // Super-Resolution (DAQ_K_SR_MODE): the ADAQs run Sinc3 at maximum
+    // decimation and these FIRs low-pass + decimate the result to
+    // DAQ_SR_CURRENT_SPS / DAQ_SR_VOLTAGE_SPS. Written only by the settings
+    // glue with the fast path stopped; read by daq_fast_task.
+    bool                    sr_mode;
+    sr_filter_t             sr_i;
+    sr_filter_t             sr_v;
     uint8_t                 perf_div;     // 10 Hz summary calls -> 1 Hz usb_stream_perf_tick
 
     // Control command queue: heavy USB commands (SET_RATE, SET_SOURCE) are

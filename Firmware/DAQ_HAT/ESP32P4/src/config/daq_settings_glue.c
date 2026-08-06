@@ -116,6 +116,81 @@ static void apply_sample_rate(daq_board_t *b)
     power_dsp_reset_energy(&b->dsp);
     if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
+// Integer decimation from a measured ADC ODR down to a target output rate,
+// clamped to what sr_filter can build. Rounds to nearest so a slightly
+// off-nominal ODR still selects the intended factor.
+static uint16_t sr_decim_for(float odr, uint32_t target_sps)
+{
+    if (odr <= 0.0f || target_sps == 0) return 1;
+    int d = (int)(odr / (float)target_sps + 0.5f);
+    if (d < 1) d = 1;
+    if (d > SR_FILTER_MAX_DECIM) d = SR_FILTER_MAX_DECIM;
+    return (uint16_t)d;
+}
+
+// Apply Super-Resolution mode.
+//
+// ON:  put all three ADAQs on Sinc3 at DAQ_SR_ADC_DECIM — the narrowest noise
+//      bandwidth the part offers — then design the stage-2 FIR decimators that
+//      take the resulting ODR down to DAQ_SR_CURRENT_SPS / DAQ_SR_VOLTAGE_SPS.
+//      The decimation factors are derived from the ODR the ADC actually reports
+//      rather than assumed, so a different MCLK or MCLK divider still lands on
+//      the advertised output rates.
+// OFF: restore whatever Filter/Decimation/Sample Rate the store holds.
+//
+// ADAQ config registers are inaccessible during continuous-read capture, so
+// this is bracketed by a fast-acquisition pause/resume like apply_adaq_filter().
+static void apply_sr_mode(daq_board_t *b)
+{
+    int32_t on = 0;
+    daq_settings_get_i32(DAQ_K_SR_MODE, &on);
+
+    bool was = b->fast_running;
+    if (was) daq_board_stop_fast(b);
+
+    if (!on) {
+        b->sr_mode = false;
+        if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
+        // Restoring the operator's filter/rate needs the fast path stopped too,
+        // and both helpers bracket themselves, so run them after the resume.
+        apply_adaq_filter(b);
+        apply_sample_rate(b);
+        return;
+    }
+
+    int32_t rej = 0;
+    daq_settings_get_i32(DAQ_K_REJECT_5060, &rej);
+
+    for (int i = 0; i < ADAQ_COUNT; ++i) {
+        if (!b->adaq_ok[i]) continue;
+        adaq7769_set_sinc3(&b->adaq[i], DAQ_SR_ADC_DECIM, rej != 0);
+    }
+
+    float i_odr = b->adaq_ok[ADAQ_ROLE_FINE]
+                      ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]) : 0.0f;
+    float v_odr = b->adaq_ok[ADAQ_ROLE_VOLTAGE]
+                      ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE]) : 0.0f;
+
+    uint16_t i_dec = sr_decim_for(i_odr, DAQ_SR_CURRENT_SPS);
+    uint16_t v_dec = sr_decim_for(v_odr, DAQ_SR_VOLTAGE_SPS);
+    sr_filter_init(&b->sr_i, i_dec);
+    sr_filter_init(&b->sr_v, v_dec);
+    sr_filter_reset(&b->sr_i);
+    sr_filter_reset(&b->sr_v);
+    b->sr_mode = true;
+
+    // The DSP tail integrates energy/charge off the pre-SR fused stream, so it
+    // still has to track the raw ODR, not the SR output rate.
+    power_dsp_set_rate(&b->dsp, i_odr > 0.0f ? i_odr : 1.0f);
+    power_dsp_reset_energy(&b->dsp);
+
+    ESP_LOGI(TAG, "SR mode ON: adc %.0f/%.0f sps -> decim %u/%u -> %u/%u sps (I/V)",
+             i_odr, v_odr, (unsigned)i_dec, (unsigned)v_dec,
+             (unsigned)DAQ_SR_CURRENT_SPS, (unsigned)DAQ_SR_VOLTAGE_SPS);
+
+    if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
+}
+
 static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
 {
     daq_board_t *b = (daq_board_t *)user;
@@ -164,11 +239,21 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
 
     case DAQ_K_FILTER:
     case DAQ_K_DECIMATION:
-    case DAQ_K_REJECT_5060:
+        if (b->sr_mode) break;          // SR owns the ADAQ filter configuration
         apply_adaq_filter(b);
+        break;
+    case DAQ_K_REJECT_5060:
+        // 50/60 Hz rejection is a Sinc3 option, so it stays meaningful under SR.
+        if (b->sr_mode) apply_sr_mode(b);
+        else            apply_adaq_filter(b);
+        break;
+
+    case DAQ_K_SR_MODE:
+        apply_sr_mode(b);
         break;
 
     case DAQ_K_SAMPLE_RATE_IDX:
+        if (b->sr_mode) break;          // SR pins the ODR to its own choice
         apply_sample_rate(b);
         break;
 

@@ -18,6 +18,8 @@
 // =============================================================================
 
 #include "cJSON.h"
+#include "esp_err.h"
+#include "update/update_manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +38,26 @@ extern "C" {
  *         failure.
  */
 char *api_core_handle(const char *method, const char *path, const cJSON *body);
+
+// ---------------------------------------------------------------------------
+// Non-blocking firmware snapshot, for callers that cannot wait on a GitHub
+// query — currently the DAQ HAT mainboard tunnel poll (hat_daq_poll_mb).
+//
+// These own the cache and reuse this file's single TLS worker; do not add
+// another one (.mex/patterns/tls-call-needs-dedicated-worker.md).
+// ---------------------------------------------------------------------------
+
+/** @brief Copy the cached snapshot, with installed versions refreshed. Never blocks. */
+void api_core_fw_get_snapshot(update_snapshot_t *out);
+
+/** @brief Kick a background release-list refresh. No-op while one is in flight. */
+void api_core_fw_refresh_async(void);
+
+/**
+ * @brief Apply release @p index to @p targets on a background task.
+ * @return ESP_ERR_INVALID_STATE when a refresh or apply is already running.
+ */
+esp_err_t api_core_fw_apply_async(uint8_t index, uint32_t targets);
 
 #ifdef __cplusplus
 }

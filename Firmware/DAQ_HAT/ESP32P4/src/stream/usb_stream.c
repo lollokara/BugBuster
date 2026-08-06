@@ -6,6 +6,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "daq_perf.h"
 
 static const char *TAG = "usb_stream";
 
@@ -88,6 +89,10 @@ void usb_stream_reset_apply(usb_stream_t *s)
     s->perf_last_us         = 0;
     s->perf_last_sample_seq = 0;
     s->reset_pending        = false;
+    // Discard anything staged: it belongs to the session being torn down, and
+    // emitting it after the reset would put pre-reset frames on the new stream.
+    s->tx_batch_len         = 0;
+    s->tx_batching          = false;
     // tx_seq is intentionally left untouched — it is the outbound frame
     // sequence and must stay monotonic across sessions.
 }
@@ -118,6 +123,33 @@ static void count_by_type(usb_stream_t *s, uint8_t type, bool sent)
     } else if (type == USB_REC_WAVE_V) {
         if (sent) s->wv_frames++; else s->wv_drops++;
     }
+}
+
+// Push whatever is staged in tx_batch out as a single transport write.
+// Callers have already validated FIFO space per frame as they were staged, so
+// a short write here means the FIFO drained differently than observed; the
+// bytes are dropped and the loss is visible to the host as a tx_seq gap.
+static void batch_flush(usb_stream_t *s)
+{
+    if (!s->tx_batch_len) return;
+    uint16_t len = s->tx_batch_len;
+    s->tx_batch_len = 0;   // clear first: transport.write must never re-enter
+    if (s->have_transport && s->transport.write) {
+        s->transport.write(s->tx_batch, len, s->transport.ctx);
+    }
+}
+
+void usb_stream_batch_begin(usb_stream_t *s)
+{
+    if (!s) return;
+    s->tx_batching = true;
+}
+
+void usb_stream_batch_end(usb_stream_t *s)
+{
+    if (!s) return;
+    batch_flush(s);
+    s->tx_batching = false;
 }
 
 static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
@@ -166,6 +198,36 @@ static esp_err_t emit_frame_inplace(usb_stream_t *s, usb_rec_type_t type,
     }
 
     uint32_t total = crc_off + USB_FRAME_CRC_LEN;
+
+    // Coalescing path: stage the finished frame instead of issuing its own
+    // transport write. The back-pressure test still runs per frame, against the
+    // batch's cumulative size, so drop accounting is identical to the direct
+    // path -- a frame is only ever counted as sent once the FIFO has proven it
+    // has room for it.
+    if (s->tx_batching && total <= sizeof(s->tx_batch)) {
+        if (s->tx_batch_len + total > sizeof(s->tx_batch)) {
+            batch_flush(s);
+        }
+        if (s->transport.writable &&
+            s->transport.writable(s->transport.ctx) < s->tx_batch_len + total) {
+            s->dropped_frames++;
+            count_by_type(s, (uint8_t)type, false);
+            s->tx_seq++;
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(&s->tx_batch[s->tx_batch_len], f, total);
+        s->tx_batch_len += (uint16_t)total;
+        s->tx_seq++;
+        s->tx_frames++;
+        s->tx_bytes_window += total;
+        count_by_type(s, (uint8_t)type, true);
+        return ESP_OK;
+    }
+    // Too big to stage: anything already batched must go out first so the host
+    // never sees frames out of emission order.
+    if (s->tx_batching && s->tx_batch_len) {
+        batch_flush(s);
+    }
 
     // Back-pressure: drop the frame if the TX FIFO cannot take it whole. This
     // frame's tx_seq was already stamped into the header above but never
@@ -227,6 +289,16 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
 
 // -----------------------------------------------------------------------------
 // WAVE_I / WAVE_V batching (SoA; matches wire layout so flush is two memcpys)
+
+// Samples that fit in one 1/USB_WAVE_FLUSH_HZ window at @rate, clamped to the
+// frame capacity. Evaluated once per batch, never per sample.
+static inline uint16_t wave_flush_limit(uint32_t rate, uint16_t cap)
+{
+    uint32_t n = rate / USB_WAVE_FLUSH_HZ;
+    if (n < 1)   n = 1;
+    if (n > cap) n = cap;
+    return (uint16_t)n;
+}
 // -----------------------------------------------------------------------------
 esp_err_t usb_stream_flush_wave_i(usb_stream_t *s)
 {
@@ -280,6 +352,7 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
         s->wi_timestamp_us = (uint64_t)esp_timer_get_time();
         s->wi_rate         = sample_rate;
         s->wi_decim        = decimation ? decimation : 1;
+        s->wi_limit        = wave_flush_limit(sample_rate, USB_WAVE_I_BATCH);
     }
     s->wi_i[s->wi_count] = fo->amps;
     s->wi_meta[s->wi_count] =
@@ -287,7 +360,7 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
         | (uint8_t)((fo->source & 0x03) << 2)
         | (fo->saturated ? USB_META_SATURATED : 0)
         | (settling      ? USB_META_SETTLING  : 0);
-    if (++s->wi_count >= USB_WAVE_I_BATCH) {
+    if (++s->wi_count >= s->wi_limit) {
         usb_stream_flush_wave_i(s);
     }
 }
@@ -334,9 +407,10 @@ void usb_stream_push_voltage(usb_stream_t *s, float v, uint32_t sample_rate)
         s->wv_start_index  = idx;
         s->wv_timestamp_us = (uint64_t)esp_timer_get_time();
         s->wv_rate         = sample_rate;
+        s->wv_limit        = wave_flush_limit(sample_rate, USB_WAVE_V_BATCH);
     }
     s->wv_v[s->wv_count] = v;
-    if (++s->wv_count >= USB_WAVE_V_BATCH) {
+    if (++s->wv_count >= s->wv_limit) {
         usb_stream_flush_wave_v(s);
     }
 }
@@ -358,9 +432,11 @@ esp_err_t usb_stream_send_stats(usb_stream_t *s, const power_dsp_t *d)
 {
     usb_stats_payload_t p;
     stat_result_t r;
+    DAQ_PERF_BEGIN(t_math);
     power_dsp_get_stats(d, PDSP_SIG_I, &r); fill_stat(&p.i, &r);
     power_dsp_get_stats(d, PDSP_SIG_V, &r); fill_stat(&p.v, &r);
     power_dsp_get_stats(d, PDSP_SIG_P, &r); fill_stat(&p.p, &r);
+    DAQ_PERF_END(DAQ_PERF_SUM_MATH, t_math);
     return emit_frame(s, USB_REC_STATS, &p, sizeof(p));
 }
 

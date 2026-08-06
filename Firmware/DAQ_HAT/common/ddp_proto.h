@@ -30,7 +30,11 @@
 
 #define DDP_SYNC            0xAAu
 #define DDP_MAX_PAYLOAD     240u
-#define DDP_PROTO_VERSION   8u
+#define DDP_PROTO_VERSION   9u
+// v9 (2026-08-06): Super-Resolution setting (DAQ_K_SR_MODE) rides the existing
+// TLV config path, and the mainboard tunnel gains DDP_MB_FWINFO /
+// DDP_MB_FW_APPLY so the C6 Firmware screen can show installed-vs-available
+// versions for all four MCUs and drive a GitHub release update.
 // v8 (2026-07-21): WiFi streaming mode handoff (DDP_CMD_WIFI_STREAM_MODE). The
 // P4 tells the C6 when it is about to hand the shared SDIO link over to
 // ESP-Hosted (iOS DAQ streaming) so the C6 can stop its own display refresh
@@ -73,6 +77,7 @@
 // the P4 (the authoritative store) can apply + re-broadcast them.
 #define DDP_CMD_SET_CONFIG      0x60u  // ddp_config_t — legacy fixed snapshot (deprecated)
 #define DDP_CMD_CONFIG_SET      0x61u  // one or more TLVs — preferred key-addressed event
+#define DDP_CMD_CONFIG_ACTION   0x62u  // u8 action_id (daq_action_t) — stateless one-shot
 
 // --- Responses (slave -> master), 0x80..0xFF -------------------------------
 #define DDP_RSP_OK              0x80u
@@ -204,6 +209,8 @@ typedef struct __attribute__((packed)) {
 #define DDP_MB_SCRIPT_RUN   0x05u  // args: u8 name_len, char[name_len]
 #define DDP_MB_SCRIPT_STOP  0x06u  // stop the running script (no args)
 #define DDP_MB_SET_RAIL_EN  0x07u  // args: u8 rail (0=VLOGIC/lshift,1=VADJ1,2=VADJ2), u8 on
+#define DDP_MB_FWINFO       0x08u  // read firmware versions + GitHub releases (no args)
+#define DDP_MB_FW_APPLY     0x09u  // args: u8 rel_index, u8 targets (DDP_FW_T_* mask)
 
 // DDP_CMD_MB_RESPONSE payload: [u8 req_type][u8 status][data...]
 #define DDP_MB_ST_OK        0x00u
@@ -230,6 +237,53 @@ typedef struct __attribute__((packed)) {
 #define DDP_MB_RAILEN_VLOGIC  (1u << 0)   // level-shifter OE
 #define DDP_MB_RAILEN_VADJ1   (1u << 1)
 #define DDP_MB_RAILEN_VADJ2   (1u << 2)
+
+// ---------------------------------------------------------------------------
+// Firmware versions + GitHub updates (DDP_MB_FWINFO / DDP_MB_FW_APPLY).
+// ---------------------------------------------------------------------------
+// Only the S3 has a radio, so it is the only chip that can reach GitHub. The C6
+// Firmware screen therefore asks through the same C6 -> P4 -> S3 tunnel used by
+// the mainboard menus. The S3 answers from a CACHED snapshot and refreshes it on
+// a worker task -- an HTTPS release query must never run inside the tunnel poll,
+// which has to answer within the HAT link timeout.
+//
+// Release choices are identified by INDEX into the S3's release list rather than
+// by tag string, because that is exactly what update_manager_apply_release_index()
+// consumes; the tags below are for display only.
+
+// Per-MCU bits for update_avail / DDP_MB_FW_APPLY targets. These MUST match
+// update_target_t in Firmware/ESP32/src/update/update_manager.h.
+#define DDP_FW_T_RP2040   0x01u
+#define DDP_FW_T_S3       0x02u
+#define DDP_FW_T_P4       0x04u
+#define DDP_FW_T_C6       0x08u
+
+#define DDP_FW_STR        16u   // version string field width (NUL-terminated)
+#define DDP_FW_DEV_MAX     4u   // installed[] slots, indexed by DDP_FW_IDX_*
+#define DDP_FW_REL_MAX     5u   // matches update_manager's 5-option ceiling
+
+// Indices into ddp_mb_fwinfo_t.installed[].
+#define DDP_FW_IDX_RP2040  0u
+#define DDP_FW_IDX_S3      1u
+#define DDP_FW_IDX_P4      2u
+#define DDP_FW_IDX_C6      3u
+
+// ddp_mb_fwinfo_t.state
+#define DDP_FW_ST_IDLE     0u
+#define DDP_FW_ST_CHECKING 1u   // a GitHub query is in flight; retry shortly
+#define DDP_FW_ST_APPLYING 2u   // an update is being applied; do not start another
+#define DDP_FW_ST_ERROR    3u   // last check failed (no network / API error)
+
+// DDP_MB_FWINFO result data (follows [req_type][status]). 164 bytes, which fits
+// both the 210-byte tunnel blob cap and a single 240-byte DDP frame.
+typedef struct __attribute__((packed)) {
+    char    installed[DDP_FW_DEV_MAX][DDP_FW_STR]; // running version per MCU ("" = unknown)
+    char    rel[DDP_FW_REL_MAX][DDP_FW_STR];       // GitHub release tags, newest first
+    uint8_t rel_count;      // valid entries in rel[]
+    uint8_t update_avail;   // DDP_FW_T_* bits whose newest release differs from installed
+    uint8_t state;          // DDP_FW_ST_*
+    uint8_t _rsv;
+} ddp_mb_fwinfo_t;
 
 // ---------------------------------------------------------------------------
 // DUT source (SMU) calibration wizard (C6 <-> P4 direct; no S3 involvement).

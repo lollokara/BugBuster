@@ -2270,6 +2270,20 @@ pub async fn daq_cfg_set_enum(key: u16, idx: u8) -> bool {
     try_invoke("daq_cfg_set", args).await.is_some()
 }
 
+/// Set a DAQ BOOL config key (type tag 1 = DAQ_T_BOOL) via the BBP config plane.
+pub async fn daq_cfg_set_bool(key: u16, on: bool) -> bool {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { key: u16, type_tag: u8, value: Vec<u8> }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        key,
+        type_tag: 1,
+        value: vec![on as u8],
+    })
+    .unwrap();
+    try_invoke("daq_cfg_set", args).await.is_some()
+}
+
 pub async fn daq_set_source(vdut_mv: u32, ilimit_ma: u32, enable: bool) {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]

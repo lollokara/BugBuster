@@ -47,6 +47,7 @@ static const daq_setting_schema_t s_table[] = {
     { DAQ_K_FILTER,          DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   2,    1,    0,    "Filter",             OPT_FILTER },
     { DAQ_K_DECIMATION,      DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   5,    1,    3,    "Decimation",         OPT_DECIM },
     { DAQ_K_REJECT_5060,     DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    0,    "50/60Hz Reject",     NULL },
+    { DAQ_K_SR_MODE,         DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    0,    "Super Resolution",   NULL },
     // --- Source / SMU ---
     { DAQ_K_SOURCE_ENABLE,   DAQ_T_BOOL, DAQ_F_P4_LOCAL,                       0,   1,    1,    0,    "Source Enable",      NULL },
     { DAQ_K_DUT_VOLTAGE_MV,  DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1800,20000,100,  5000, "DUT Voltage",        NULL },

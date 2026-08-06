@@ -201,6 +201,7 @@ ESP32P4/
 │   ├── stream/           usb_proto · usb_stream (framer) · usb_backend (TinyUSB HS)
 │   ├── link/             s3_link — HAT-protocol slave to the ESP32-S3 mainboard
 │   ├── ota/              streaming dual-slot OTA with SHA-256 + rollback
+│   ├── perf/             daq_perf — per-stage cycle profiler (see §10a)
 │   ├── board/            daq_board — full board integration + command dispatch
 │   └── main.c            bring-up + processing/stream loop
 └── partitions.csv        dual-OTA partition table (ota_0 / ota_1 / otadata)
@@ -254,6 +255,42 @@ python -m platformio run -e esp32p4 -t upload --upload-port <COMx>
 - The USB-HS vendor class is enabled in `sdkconfig.defaults`
   (`CONFIG_TINYUSB_VENDOR_COUNT=1`); the dual-OTA partition table is selected via
   `CONFIG_PARTITION_TABLE_CUSTOM` → `partitions.csv`.
+- **PlatformIO does not merge new `sdkconfig.defaults` values into an existing
+  generated `sdkconfig.esp32p4`.** After editing defaults, grep the generated
+  file to confirm the value landed. A `CONFIG_TINYUSB_VENDOR_TX_BUFSIZE` that
+  never applied silently dropped 100% of waveform frames.
+- Built at `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`): +9.2% capture
+  throughput and a smaller image than the IDF default `-Og`.
+
+---
+
+## 10a. Profiling the acquisition pipeline
+
+`faststat` tells you how many samples survived; it cannot tell you *where* the
+time went. The `perf` console command (`src/perf/daq_perf.h`) timestamps every
+stage of both hot loops with the RISC-V cycle counter:
+
+```bash
+# on the P4 console (prompt "daq> ")
+perf on            # arm sampling (also resets counters + task snapshot)
+perf off           # stop BEFORE dumping, or the console print pollutes it
+perf show          # stages + per-task CPU/stack + heap + active tunables
+
+# from the host
+python tests/tools/daq_p4_profile.py --window 5          # ODR sweep + budgets
+python tests/tools/daq_p4_sanity.py                      # sample integrity
+```
+
+Reading it:
+- **`k` column** — `C` is CPU work, `W` is blocked/waiting wall time. Never add
+  a `W` row to a CPU budget.
+- **Read `min` next to `avg`.** `daq_fast` runs at priority 12 and is preempted
+  by TinyUSB (13), `daq_ctrl`/`s3_link` (14) and `daq_repl` (15), so averages
+  include preemption. `min` is the uncontended cost.
+- **`adaq_cap` reports 0 runtime in the task table** — FreeRTOS credits run time
+  at context switches, and that task never yields. Use the `cap.*` stages.
+- Set `-DDAQ_PERF_ENABLED=0` in `platformio.ini` to compile the profiler out
+  completely (−1152 B RAM, −7754 B flash, no residual branch).
 
 ---
 

@@ -63,6 +63,23 @@ typedef void (*usb_cmd_cb_t)(usb_rec_type_t cmd, const uint8_t *payload,
 // tests/device/test_16_daq_stream.py for the measured before/after.
 #define USB_WAVE_V_BATCH   3200u
 
+// Minimum waveform frame rate, and therefore the worst-case latency a host
+// waits for the next batch (1/10 s).
+//
+// The batch sizes above are a THROUGHPUT knob chosen for high ODRs -- at
+// 256 ksps a 3200-sample WAVE_I is 12.5 ms. They are a LATENCY trap at low
+// ones: nothing else bounded how long a partial batch could sit, so Super
+// Resolution (1 ksps current / 500 sps voltage) would have held a frame for
+// 3.2 s / 6.4 s, and the scope would look frozen rather than slow.
+//
+// usb_stream_push_sample()/_push_voltage() derive a per-batch sample limit
+// from the rate at batch-open time instead of consulting the clock per sample
+// -- the hot path runs at up to 256 ksps, where even an esp_timer_get_time()
+// call is worth avoiding (the same reason daq_board caches fine_rate_hz).
+// Rates at or above 32 ksps still clamp to the full batch, so high-rate
+// behaviour is byte-for-byte unchanged.
+#define USB_WAVE_FLUSH_HZ  10u
+
 // Compile-time proof that the worst-case WAVE_I / WAVE_V payloads actually
 // fit in one frame. usb_stream_flush_wave_i()/_v() only caught an overflow at
 // RUNTIME (an ESP_LOGE after emit_frame_inplace() rejected an oversized len),
@@ -76,6 +93,30 @@ _Static_assert(sizeof(usb_wave_hdr_t) + (size_t)USB_WAVE_I_BATCH * (sizeof(float
 _Static_assert(sizeof(usb_wave_hdr_t) + (size_t)USB_WAVE_V_BATCH * sizeof(float)
                <= USB_MAX_PAYLOAD,
                "WAVE_V worst-case payload exceeds USB_MAX_PAYLOAD");
+
+// ...and the frame must also fit the TX FIFO, which is a SEPARATE limit that
+// the two asserts above do not cover. emit_frame_inplace() drops any frame the
+// FIFO cannot take whole, so a batch larger than the FIFO is not back-pressure,
+// it is a permanent 100% drop of that record type with no way to recover.
+// This shipped: CONFIG_TINYUSB_VENDOR_TX_BUFSIZE was 8192 while WAVE_I framed
+// at 16038 B, so the PC stream carried only 10 Hz summaries and never a single
+// waveform sample.
+#ifdef CONFIG_TINYUSB_VENDOR_TX_BUFSIZE
+_Static_assert(USB_FRAME_OVERHEAD + sizeof(usb_wave_hdr_t)
+               + (size_t)USB_WAVE_I_BATCH * (sizeof(float) + sizeof(uint8_t))
+               <= CONFIG_TINYUSB_VENDOR_TX_BUFSIZE,
+               "WAVE_I frame is larger than the USB TX FIFO -> every frame drops");
+_Static_assert(USB_FRAME_OVERHEAD + sizeof(usb_wave_hdr_t)
+               + (size_t)USB_WAVE_V_BATCH * sizeof(float)
+               <= CONFIG_TINYUSB_VENDOR_TX_BUFSIZE,
+               "WAVE_V frame is larger than the USB TX FIFO -> every frame drops");
+#endif
+
+// Staging buffer for usb_stream_batch_begin/end. Sized to hold one summary
+// burst (STATS + ENERGY + STATUS is ~200 B, plus a typical FFT) in a single
+// transport write. Frames that do not fit simply bypass the batch, so this is
+// a throughput/latency knob, never a correctness limit.
+#define USB_TX_BATCH_SIZE  4096u
 
 typedef struct {
     usb_transport_t transport;
@@ -99,10 +140,22 @@ typedef struct {
     // Staging buffer for a frame being built (header + payload + crc).
     uint8_t         frame_buf[USB_FRAME_OVERHEAD + USB_MAX_PAYLOAD];
 
+    // TX coalescing. Measured on hardware: each tud_vendor_write() costs ~100 us
+    // on the calling task even with the link 4x under-subscribed (min 5 us, so
+    // it is contention on the endpoint, not FIFO space). A summary burst issued
+    // 6 of them back-to-back, which is most of why daq_board_stream_summary()
+    // stalled daq_fast for ~1.5 ms at 10 Hz. Frames emitted between
+    // usb_stream_batch_begin/end are staged here and leave as ONE write.
+    // Frames larger than this buffer (waveform, big FFT) bypass it untouched.
+    uint8_t         tx_batch[USB_TX_BATCH_SIZE];
+    uint16_t        tx_batch_len;
+    bool            tx_batching;
+
     // WAVE_I batching (SoA, matches wire layout so flush is two memcpys).
     float    wi_i[USB_WAVE_I_BATCH];
     uint8_t  wi_meta[USB_WAVE_I_BATCH];
     uint16_t wi_count;
+    uint16_t wi_limit;          // samples before flush; from wi_rate at batch open
     uint64_t wi_start_index;
     uint64_t wi_timestamp_us;   // esp_timer at slot 0
     uint32_t wi_rate;
@@ -112,6 +165,7 @@ typedef struct {
     // WAVE_V batching.
     float    wv_v[USB_WAVE_V_BATCH];
     uint16_t wv_count;
+    uint16_t wv_limit;          // samples before flush; from wv_rate at batch open
     uint64_t wv_start_index;
     uint64_t wv_timestamp_us;
     uint32_t wv_rate;
@@ -167,6 +221,17 @@ void usb_stream_set_cmd_cb(usb_stream_t *s, usb_cmd_cb_t cb, void *user);
 
 /** @brief Enable/disable outbound streaming (data frames dropped when off). */
 void usb_stream_set_streaming(usb_stream_t *s, bool on);
+
+/**
+ * @brief Start coalescing emitted frames into one transport write.
+ *
+ * Must be paired with usb_stream_batch_end(). Nesting is not supported. Only
+ * safe to call from the single task that owns this usb_stream_t (daq_fast).
+ */
+void usb_stream_batch_begin(usb_stream_t *s);
+
+/** @brief Flush any staged frames and stop coalescing. */
+void usb_stream_batch_end(usb_stream_t *s);
 
 /**
  * @brief Reset per-session state at the start of a new capture: zeroes

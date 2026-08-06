@@ -28,16 +28,32 @@ class DaqLinkUnavailable(Exception):
 class UsbIO:
     """pyusb bulk transport for the P4's vendor interface."""
 
+    @staticmethod
+    def _backend():
+        """Resolve a libusb backend, or None to let pyusb search on its own.
+
+        pyusb's default search wants libusb-1.0 on the system loader path, which
+        holds on Linux/macOS but not on Windows, where there is no such default
+        location. libusb_package ships the DLL and is preferred when installed;
+        returning None simply falls back to pyusb's own search.
+        """
+        try:
+            import libusb_package
+            return libusb_package.get_libusb1_backend()
+        except Exception:
+            return None
+
     def __init__(self, timeout_ms: int = 1000):
         try:
             import usb.core
             import usb.util
         except ImportError as exc:
             raise DaqLinkUnavailable(
-                "pyusb is required: pip3 install pyusb (and: brew install libusb)"
+                "pyusb is required: pip install pyusb libusb-package"
             ) from exc
 
-        dev = usb.core.find(idVendor=P.VID, idProduct=P.PID)
+        dev = usb.core.find(idVendor=P.VID, idProduct=P.PID,
+                            backend=self._backend())
         if dev is None:
             raise DaqLinkUnavailable(
                 "DAQ HAT not found on USB (%04X:%04X)" % (P.VID, P.PID))

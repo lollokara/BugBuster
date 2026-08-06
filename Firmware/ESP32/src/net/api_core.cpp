@@ -525,6 +525,22 @@ static char *api_daq_acq_config(const cJSON *body)
 {
     cJSON *jfilter = body_get(body, "filter");
     cJSON *jdec    = body_get(body, "adc_dec");
+    cJSON *jsr     = body_get(body, "sr_mode");
+    const bool sr  = cJSON_IsTrue(jsr) || (cJSON_IsNumber(jsr) && jsr->valueint != 0);
+
+    // In SR mode the P4 pins the ADAQs itself, so filter/adc_dec are optional
+    // and ignored -- requiring them would force clients to send meaningless
+    // values just to turn the mode on.
+    if (sr) {
+        if (!hat_daq_set_acq_config(0, 0, true)) {
+            return api_error("HAT not responding, not a DAQ HAT, or config rejected");
+        }
+        cJSON *ok = cJSON_CreateObject();
+        cJSON_AddBoolToObject(ok, "ok", true);
+        cJSON_AddBoolToObject(ok, "srMode", true);
+        return json_take(ok);
+    }
+
     if (!cJSON_IsNumber(jfilter) || !cJSON_IsNumber(jdec)) {
         return api_error("filter and adc_dec required");
     }
@@ -549,7 +565,7 @@ static char *api_daq_acq_config(const cJSON *body)
             return api_error("adc_dec out of range");
         }
     }
-    if (!hat_daq_set_acq_config((uint8_t)filter, (uint8_t)adc_dec)) {
+    if (!hat_daq_set_acq_config((uint8_t)filter, (uint8_t)adc_dec, false)) {
         return api_error("HAT not responding, not a DAQ HAT, or config rejected");
     }
     cJSON *root = cJSON_CreateObject();
@@ -1226,6 +1242,135 @@ static char *api_ota_check(void)
 static char *api_ota_releases(void)
 {
     return ota_query_blocking(true, "no releases");
+}
+
+// ---------------------------------------------------------------------------
+// Firmware snapshot cache for the DAQ HAT C6 Firmware screen.
+// ---------------------------------------------------------------------------
+// The C6 reaches this through the C6 -> P4 -> S3 mainboard tunnel, whose poll
+// must answer inside the HAT link timeout and therefore cannot block on a
+// GitHub query. It reads the cache below; refreshing it happens on a shim task.
+//
+// The shim does NOT perform TLS itself -- it calls ota_query_blocking(), the
+// single shared worker, exactly as patterns/tls-call-needs-dedicated-worker.md
+// requires. That keeps the ~16 KB TLS stack in one place; the shim only waits
+// and parses, so it is small. It is still allocated WithCaps/SPIRAM and torn
+// down with vTaskDeleteWithCaps() because a plain vTaskDelete() cannot free a
+// WithCaps stack.
+static update_snapshot_t s_fw_snap = {};
+static portMUX_TYPE      s_fw_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool     s_fw_busy = false;
+
+static void fw_snap_store_releases(const char *json)
+{
+    update_snapshot_t local = {};
+    update_manager_fill_installed(&local);
+
+    cJSON *root = json ? cJSON_Parse(json) : NULL;
+    cJSON *opts = root ? cJSON_GetObjectItem(root, "options") : NULL;
+    int n = cJSON_IsArray(opts) ? cJSON_GetArraySize(opts) : 0;
+
+    for (int i = 0; i < n && local.rel_count < UPDATE_SNAP_REL; ++i) {
+        cJSON *o = cJSON_GetArrayItem(opts, i);
+        cJSON *tag = cJSON_GetObjectItem(o, "tag");
+        if (cJSON_IsString(tag) && tag->valuestring[0]) {
+            strlcpy(local.rel[local.rel_count++], tag->valuestring, UPDATE_SNAP_STR);
+        }
+    }
+    local.valid = local.rel_count > 0;
+
+    // Per-component "updateAvailable" from the newest option. Computed by
+    // update_manager against the manifest's component version/build id, NOT by
+    // comparing a version against a release tag (those never match).
+    if (n > 0) {
+        cJSON *newest = cJSON_GetArrayItem(opts, 0);
+        static const struct { const char *key; uint32_t bit; } kMap[] = {
+            { "rp2040", UPDATE_TARGET_RP2040 },
+            { "esp32",  UPDATE_TARGET_ESP32  },
+            { "p4",     UPDATE_TARGET_P4     },
+            { "c6",     UPDATE_TARGET_C6     },
+        };
+        for (size_t k = 0; k < sizeof(kMap) / sizeof(kMap[0]); ++k) {
+            cJSON *c = cJSON_GetObjectItem(newest, kMap[k].key);
+            if (c && cJSON_IsTrue(cJSON_GetObjectItem(c, "updateAvailable"))) {
+                local.update_avail |= kMap[k].bit;
+            }
+        }
+        local.update_avail &= update_manager_available_targets();
+    }
+    if (root) cJSON_Delete(root);
+
+    portENTER_CRITICAL(&s_fw_lock);
+    s_fw_snap = local;
+    portEXIT_CRITICAL(&s_fw_lock);
+}
+
+static void fw_refresh_task(void *arg)
+{
+    (void)arg;
+    char *json = ota_query_blocking(true, "no releases");
+    fw_snap_store_releases(json);
+    if (json) free(json);
+    s_fw_busy = false;
+    vTaskDeleteWithCaps(NULL);
+}
+
+typedef struct { uint8_t index; uint32_t targets; } FwApplyCtx;
+static FwApplyCtx s_fw_apply_ctx;
+
+static void fw_apply_task(void *arg)
+{
+    (void)arg;
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "index", s_fw_apply_ctx.index);
+    if (s_fw_apply_ctx.targets & UPDATE_TARGET_RP2040) cJSON_AddBoolToObject(body, "rp2040", true);
+    if (s_fw_apply_ctx.targets & UPDATE_TARGET_ESP32)  cJSON_AddBoolToObject(body, "esp32", true);
+    if (s_fw_apply_ctx.targets & UPDATE_TARGET_P4)     cJSON_AddBoolToObject(body, "p4", true);
+    if (s_fw_apply_ctx.targets & UPDATE_TARGET_C6)     cJSON_AddBoolToObject(body, "c6", true);
+
+    char *rsp = api_core_handle("POST", "/api/ota/apply", body);
+    cJSON_Delete(body);
+    if (rsp) free(rsp);
+    s_fw_busy = false;
+    vTaskDeleteWithCaps(NULL);
+}
+
+void api_core_fw_get_snapshot(update_snapshot_t *out)
+{
+    if (!out) return;
+    portENTER_CRITICAL(&s_fw_lock);
+    *out = s_fw_snap;
+    portEXIT_CRITICAL(&s_fw_lock);
+    update_manager_fill_installed(out);   // cheap, and always current
+}
+
+void api_core_fw_refresh_async(void)
+{
+    if (s_fw_busy) return;
+    s_fw_busy = true;
+    if (xTaskCreatePinnedToCoreWithCaps(
+            fw_refresh_task, "fw_snap", 6144, NULL, 4, NULL,
+            tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        s_fw_busy = false;
+    }
+}
+
+esp_err_t api_core_fw_apply_async(uint8_t index, uint32_t targets)
+{
+    if (index >= UPDATE_SNAP_REL || targets == 0) return ESP_ERR_INVALID_ARG;
+    if (s_fw_busy) return ESP_ERR_INVALID_STATE;
+    s_fw_busy = true;
+    s_fw_apply_ctx.index = index;
+    s_fw_apply_ctx.targets = targets;
+    // Internal RAM: this path writes flash/NVS (see the TLS-worker pattern's
+    // read-vs-write rule), so it must not sit in SPIRAM.
+    if (xTaskCreatePinnedToCoreWithCaps(
+            fw_apply_task, "fw_apply", 12288, NULL, 4, NULL,
+            tskNO_AFFINITY, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+        s_fw_busy = false;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 static char *api_ota_apply(const cJSON *body)

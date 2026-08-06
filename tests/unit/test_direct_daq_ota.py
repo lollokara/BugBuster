@@ -983,6 +983,7 @@ BLE_C = read_source("Firmware/ESP32/src/net/ble_service.cpp")
 CLI_SYS_CPP = read_source("Firmware/ESP32/src/cli/cli_cmds_sys.cpp")
 CLI_MENU_CPP = read_source("Firmware/ESP32/src/cli/cli_menu.cpp")
 API_CORE_CPP = read_source("Firmware/ESP32/src/net/api_core.cpp")
+HAT_CPP = read_source("Firmware/ESP32/src/hat/hat.cpp")
 
 
 def test_reduced_task_stack_sizes_are_exactly_the_new_values():
@@ -1612,3 +1613,57 @@ def test_ota_query_worker_stack_lives_in_spiram():
     creator = _strip_noise(_fn_body(API_CORE_CPP, "static char *ota_query_blocking("))
     assert "MALLOC_CAP_SPIRAM" in creator, \
         "the read-only release-query worker stack must be SPIRAM-backed"
+
+
+# -----------------------------------------------------------------------------
+# DAQ HAT C6 Firmware screen: the mainboard tunnel poll (hat_daq_poll_mb) has to
+# answer inside the HAT link timeout, so it reads a cached snapshot instead of
+# querying GitHub. The refresh shim must delegate to api_core's single TLS
+# worker rather than becoming a third one -- the same rule the two tests above
+# enforce for the CLI release picker.
+# -----------------------------------------------------------------------------
+
+def test_hat_tunnel_does_not_call_update_manager_queries_directly():
+    """hat_daq_poll_mb() runs on the ~1 Hz main task. A direct release/check
+    call there would both overflow that stack and stall the tunnel for seconds,
+    which the C6 would see as a dead link."""
+    code = _strip_noise(HAT_CPP)
+    assert not re.search(r"[^_a-zA-Z0-9]update_manager_release_options\s*\(", code), \
+        "hat.cpp must not call update_manager_release_options() directly"
+    assert not re.search(r"[^_a-zA-Z0-9]update_manager_check\s*\(", code), \
+        "hat.cpp must not call update_manager_check() directly"
+
+
+def test_fw_snapshot_refresh_delegates_to_shared_ota_worker():
+    """The shim must reuse ota_query_blocking() (the one shared TLS worker)
+    rather than performing the HTTPS fetch on its own stack."""
+    worker = _strip_comments(_fn_body(API_CORE_CPP, "static void fw_refresh_task("))
+    assert "ota_query_blocking(" in worker, \
+        "fw_refresh_task() must delegate the release query to ota_query_blocking()"
+    assert not re.search(r"[^_a-zA-Z0-9]update_manager_release_options\s*\(", worker), \
+        "fw_refresh_task() must not run the release query itself"
+
+
+def test_fw_snapshot_tasks_use_matching_withcaps_pair():
+    """Both shims are WithCaps-allocated, so both must tear down with
+    vTaskDeleteWithCaps() -- a plain vTaskDelete() leaks the whole stack."""
+    for fn in ("static void fw_refresh_task(", "static void fw_apply_task("):
+        worker = _strip_noise(_fn_body(API_CORE_CPP, fn))
+        assert "vTaskDeleteWithCaps(NULL)" in worker, \
+            f"{fn}) must tear itself down with vTaskDeleteWithCaps()"
+        assert not re.search(r"[^a-zA-Z]vTaskDelete\s*\(", worker), \
+            f"{fn}) must not use plain vTaskDelete() on a WithCaps stack"
+
+
+def test_fw_apply_worker_uses_internal_ram_and_refresh_uses_spiram():
+    """Read-only refresh belongs in SPIRAM; the apply path writes flash/NVS and
+    therefore needs contiguous internal RAM (the read-vs-write rule in
+    .mex/patterns/tls-call-needs-dedicated-worker.md)."""
+    refresh = _strip_noise(_fn_body(API_CORE_CPP, "void api_core_fw_refresh_async("))
+    assert "MALLOC_CAP_SPIRAM" in refresh, \
+        "the read-only snapshot refresh worker must be SPIRAM-backed"
+
+    apply_fn = _strip_noise(_fn_body(API_CORE_CPP, "esp_err_t api_core_fw_apply_async("))
+    assert "MALLOC_CAP_INTERNAL" in apply_fn, \
+        "the flash-writing apply worker must use internal RAM"
+

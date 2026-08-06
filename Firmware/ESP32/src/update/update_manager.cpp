@@ -537,6 +537,60 @@ static const char *current_rp2040_build_id(void)
     return buf;
 }
 
+// The DAQ HAT's P4 application version.
+//
+// NOT hat_get_state()->fw_version_major/minor: that comes from HAT_CMD_GET_INFO
+// and is the HAT *board* revision, which reads 1.0 on a DAQ HAT no matter which
+// P4 image is running (bench-confirmed 2026-08-06 — it still said 1.0 straight
+// after a successful P4 OTA). Only HAT_CMD_GET_VERSION reports the running app.
+//
+// Cached: hat_get_version() is a blocking HAT round trip (up to 500 ms) and this
+// is reached from hat_daq_poll_mb(), which must answer inside the link timeout.
+static const char *current_p4_build_id(void)
+{
+    static char buf[UPDATE_SNAP_STR];
+    static uint32_t last_ms = 0;
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+    const HatState *st = hat_get_state();
+    if (!st || !st->connected || st->type != HAT_TYPE_DAQ_POWER) {
+        buf[0] = '\0';
+        last_ms = 0;
+        return buf;
+    }
+    if (last_ms != 0 && (now - last_ms) < 10000) return buf;
+
+    char ver[32] = {};
+    if (hat_get_version(NULL, ver, sizeof(ver)) && ver[0]) {
+        strlcpy(buf, ver, sizeof(buf));
+        last_ms = now;
+    }
+    return buf;
+}
+
+// Same caching rationale as current_p4_build_id(): another blocking HAT round trip.
+static const char *current_c6_build_id(void)
+{
+    static char buf[UPDATE_SNAP_STR];
+    static uint32_t last_ms = 0;
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+    const HatState *st = hat_get_state();
+    if (!st || !st->connected || st->type != HAT_TYPE_DAQ_POWER) {
+        buf[0] = '\0';
+        last_ms = 0;
+        return buf;
+    }
+    if (last_ms != 0 && (now - last_ms) < 10000) return buf;
+
+    hat_daq_c6_version_t v = {};
+    if (hat_daq_c6_version(&v) && v.c6_version[0]) {
+        strlcpy(buf, v.c6_version, sizeof(buf));
+        last_ms = now;
+    }
+    return buf;
+}
+
 static cJSON *component_json(const char *current, const UpdateComponent *available)
 {
     cJSON *obj = cJSON_CreateObject();
@@ -566,6 +620,12 @@ static cJSON *option_json(uint8_t index, const UpdateOption *option)
                           component_json(current_rp2040_build_id(), &option->manifest.rp2040));
     cJSON_AddItemToObject(obj, "esp32",
                           component_json(current_esp32_build_id(), &option->manifest.esp32));
+    // The DAQ HAT components were parsed into the manifest but never serialised,
+    // so no client could see P4/C6 update state from a release option.
+    cJSON_AddItemToObject(obj, "p4",
+                          component_json(current_p4_build_id(), &option->manifest.p4));
+    cJSON_AddItemToObject(obj, "c6",
+                          component_json(current_c6_build_id(), &option->manifest.c6));
     return obj;
 }
 
@@ -1948,3 +2008,28 @@ bool update_manager_reboot_pending(void)
 {
     return s_reboot_pending;
 }
+
+// ---------------------------------------------------------------------------
+// Installed-version snapshot (local reads only; see update_manager.h).
+//
+// Deliberately does NOT query GitHub: per patterns/tls-call-needs-dedicated-worker.md
+// there must be exactly two TLS workers in this firmware, and the release query
+// belongs to api_core's. This half is safe to call from any task.
+// ---------------------------------------------------------------------------
+void update_manager_fill_installed(update_snapshot_t *s)
+{
+    if (!s) return;
+    strlcpy(s->esp32, current_esp32_build_id(), UPDATE_SNAP_STR);
+    strlcpy(s->p4, current_p4_build_id(), UPDATE_SNAP_STR);
+    strlcpy(s->c6, current_c6_build_id(), UPDATE_SNAP_STR);
+
+    const HatState *st = hat_get_state();
+    const bool daq = st && st->connected && st->type == HAT_TYPE_DAQ_POWER;
+    // A DAQ HAT occupies the HAT link, so there is no RP2040 in that stack.
+    if (daq) s->rp2040[0] = '\0';
+    else     strlcpy(s->rp2040, current_rp2040_build_id(), UPDATE_SNAP_STR);
+
+    s->state = (uint8_t)s_update.state;
+}
+
+

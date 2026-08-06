@@ -27,6 +27,8 @@
 #include "daq_wifi_ident.h"
 #include "captive_dns.h"
 #include "daq_perf.h"
+#include "daq_config_registry.h"
+#include "daq_settings.h"
 
 static const char *TAG = "daq_board";
 
@@ -399,6 +401,7 @@ typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
 typedef struct {
     uint8_t filter;    // ADAQ_FILTER_*
     uint8_t adc_dec;   // ADAQ_DEC_*, or SINC3 decimation/32
+    uint8_t sr_mode;   // 1 = Super Resolution (overrides filter/adc_dec)
 } ctrl_acq_config_t;
 
 typedef struct {
@@ -527,6 +530,17 @@ static void daq_ctrl_task(void *arg)
                 // own digital filter/decimation, which needs no such caveat.
                 const uint8_t filter  = msg.acq_config.filter;
                 const uint8_t adc_dec = msg.acq_config.adc_dec;
+
+                // SR mode is a settings-store value, not a direct register
+                // write: routing it through the store runs apply_sr_mode()
+                // (which owns the ADAQ programming AND the FIR design) and
+                // echoes a CONFIG_PUSH to the C6, so the display badge and the
+                // menu toggle track an S3-initiated change for free.
+                if (msg.acq_config.sr_mode) {
+                    daq_settings_set_i32(DAQ_K_SR_MODE, 1, DAQ_SRC_S3);
+                    break;
+                }
+                daq_settings_set_i32(DAQ_K_SR_MODE, 0, DAQ_SRC_S3);
 
                 bool was_running = b->fast_running;
                 if (was_running) {
@@ -834,11 +848,21 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     if (!b->usb.streaming) {
         return ESP_OK;
     }
+    DAQ_PERF_BEGIN(t_sw);
     usb_stream_flush_wave_i(&b->usb);
     usb_stream_flush_wave_v(&b->usb);
+    DAQ_PERF_END(DAQ_PERF_SUM_WAVE, t_sw);
+
+    // The four summary frames below are small and always emitted together, so
+    // coalesce them into one transport write instead of four (~100 us each).
+    usb_stream_batch_begin(&b->usb);
+
+    DAQ_PERF_BEGIN(t_ss);
     usb_stream_send_stats(&b->usb, &b->dsp);
     usb_stream_send_energy(&b->usb, &b->dsp);
+    DAQ_PERF_END(DAQ_PERF_SUM_STATS, t_ss);
 
+    DAQ_PERF_BEGIN(t_sf);
     // Continuous spectrum: send the latest averaged magnitude bins.
     // Gate on `enabled` as well as bin count: spectrum_push() stops COMPUTING
     // when disabled, but the magnitude buffer retains its last contents, so
@@ -858,7 +882,9 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         usb_stream_send_fft(&b->usb, mags, nb, rate, b->fft_source,
                             (uint8_t)b->spectrum.window);
     }
+    DAQ_PERF_END(DAQ_PERF_SUM_FFT, t_sf);
 
+    DAQ_PERF_BEGIN(t_st);
     // Device status (range, streaming, SMU set-points, FINE ADC health).
     //
     // fine_err_pct: ratio of FINE ADAQ status-header reads that carried an
@@ -935,6 +961,9 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
                      : 0u;
 
     usb_stream_send_status(&b->usb, &st);
+    DAQ_PERF_END(DAQ_PERF_SUM_STATUS, t_st);
+
+    usb_stream_batch_end(&b->usb);
 
     // usb_stream_perf_tick() computes the TX throughput EMA and emits a 1 Hz
     // perf log; this summary path runs at 10 Hz, so tick every 10th call.
@@ -1433,22 +1462,28 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         // learns the ACTUALLY-applied result via the next STATUS poll
         // (usb_status_payload_t v6 fields), not from this response.
         case HATP_CMD_DAQ_SET_ACQ_CONFIG: {
-            if (len < sizeof(s3link_acq_config_t)) return -1;
+            // sr_mode is an APPENDED field: a 2-byte payload from an older S3
+            // build is still valid and means "SR off".
+            if (len < 2) return -1;
             const s3link_acq_config_t *c = (const s3link_acq_config_t *)payload;
-            switch (c->filter) {
-                case ADAQ_FILTER_SINC5:
-                case ADAQ_FILTER_SINC5_X8:
-                case ADAQ_FILTER_SINC5_X16:
-                case ADAQ_FILTER_SINC3:
-                case ADAQ_FILTER_WIDEBAND:
-                    break;
-                default:
-                    return -1;   // unrecognized filter code
+            const uint8_t sr = (len >= sizeof(s3link_acq_config_t)) ? c->sr_mode : 0u;
+            if (!sr) {
+                switch (c->filter) {
+                    case ADAQ_FILTER_SINC5:
+                    case ADAQ_FILTER_SINC5_X8:
+                    case ADAQ_FILTER_SINC5_X16:
+                    case ADAQ_FILTER_SINC3:
+                    case ADAQ_FILTER_WIDEBAND:
+                        break;
+                    default:
+                        return -1;   // unrecognized filter code
+                }
             }
             if (!b->ctrl_queue) return -1;
             ctrl_msg_t msg = { .type = CTRL_MSG_SET_ACQ_CONFIG };
             msg.acq_config.filter  = c->filter;
             msg.acq_config.adc_dec = c->adc_dec;
+            msg.acq_config.sr_mode = sr;
             return (xQueueSend(b->ctrl_queue, &msg, 0) == pdTRUE) ? 0 : -1;
         }
 
@@ -2510,7 +2545,21 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // fine_rate_hz is cached once in daq_board_run_fast (constant while the
     // fast path runs) to avoid a per-sample adaq7769_output_data_rate() call
     // at up to 256 ksps.
-    if (++b->wave_count >= b->wave_decim) {
+    //
+    // SR mode replaces that naive keep-1-of-N with an anti-aliasing FIR: the
+    // wire only sees a sample when sr_filter_push() completes a decimation
+    // block, and the header carries the SR output rate rather than the ODR.
+    if (b->sr_mode) {
+        float sr_i_out;
+        if (sr_filter_push(&b->sr_i, emit_fo.amps, &sr_i_out)) {
+            DAQ_PERF_BEGIN(t_wire);
+            fusion_output_t sr_fo = emit_fo;
+            sr_fo.amps = sr_i_out;
+            usb_stream_push_sample(&b->usb, &sr_fo, DAQ_SR_CURRENT_SPS,
+                                   /*decimation=*/1, emit_settling);
+            DAQ_PERF_END(DAQ_PERF_FAST_WIRE, t_wire);
+        }
+    } else if (++b->wave_count >= b->wave_decim) {
         b->wave_count = 0;
         DAQ_PERF_BEGIN(t_wire);
         usb_stream_push_sample(&b->usb, &emit_fo, b->fine_rate_hz, b->wave_decim,
@@ -2590,7 +2639,13 @@ static void daq_fast_task(void *arg)
                         // the *effective* rate so hosts that ignore the
                         // header's decimation byte still get a correct
                         // timebase.
-                        if (++b->volt_count >= b->volt_decim) {
+                        if (b->sr_mode) {
+                            float sr_v_out;
+                            if (sr_filter_push(&b->sr_v, emit_v, &sr_v_out)) {
+                                usb_stream_push_voltage(&b->usb, sr_v_out,
+                                                        DAQ_SR_VOLTAGE_SPS);
+                            }
+                        } else if (++b->volt_count >= b->volt_decim) {
                             b->volt_count = 0;
                             uint32_t vdec = b->volt_decim ? b->volt_decim : 1;
                             usb_stream_push_voltage(&b->usb, emit_v,

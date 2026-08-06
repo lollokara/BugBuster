@@ -172,6 +172,7 @@ struct ScopeTab: View {
     }
 
     // DAQ settings
+    @State private var superResolution = false
     @State private var sampleRateIndex = 1 // default: 10 kSps
     @State private var showVoltage = true
     @State private var showCurrent = true
@@ -266,6 +267,10 @@ struct ScopeTab: View {
                 daqStatus: daqStream.lastStatus,
                 onAcqConfigChange: { filter, adcDec in
                     daqStream.setAcquisitionConfig(filter: filter, adcDec: adcDec)
+                },
+                superResolution: $superResolution,
+                onSuperResolutionChange: { on in
+                    daqStream.setSuperResolution(on)
                 }
             )
         }
@@ -902,6 +907,8 @@ struct ScopeSettingsView: View {
     /// actually applied — never the client's own optimistic request.
     let daqStatus: DaqStatus?
     let onAcqConfigChange: (DaqFilter, DaqAdcDecimation) -> Void
+    @Binding var superResolution: Bool
+    let onSuperResolutionChange: (Bool) -> Void
 
     @State private var selectedFilter: DaqFilter = .wideband
     @State private var selectedAdcDec: DaqAdcDecimation = .x32
@@ -1057,6 +1064,18 @@ struct ScopeSettingsView: View {
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
+            Toggle(isOn: $superResolution) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Super Resolution")
+                    Text("Oversampled 1 ksps current / 500 sps voltage")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .onChange(of: superResolution) { _, newValue in
+                onSuperResolutionChange(newValue)
+            }
+
             HStack {
                 Text("Filter").frame(width: 60, alignment: .leading)
                 Picker("Filter", selection: $selectedFilter) {
@@ -1069,6 +1088,8 @@ struct ScopeSettingsView: View {
                     onAcqConfigChange(newValue, selectedAdcDec)
                 }
             }
+            .disabled(superResolution)
+            .opacity(superResolution ? 0.4 : 1.0)
 
             HStack {
                 Text("ADC Dec").frame(width: 60, alignment: .leading)
@@ -1092,6 +1113,13 @@ struct ScopeSettingsView: View {
                     guard selectedFilter != .sinc3 else { return }
                     onAcqConfigChange(selectedFilter, newValue)
                 }
+            }
+            .disabled(superResolution)
+            .opacity(superResolution ? 0.4 : 1.0)
+            if superResolution {
+                Text("Super Resolution owns the filter and ODR while it is on.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             }
             if selectedFilter == .sinc3 {
                 Text("Sinc3 uses its own fixed decimation, not this control.")

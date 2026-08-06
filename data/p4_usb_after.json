@@ -1,0 +1,99 @@
+{
+  "seconds": 6.0,
+  "bytes_rx": 5409410,
+  "frames": {
+    "WAVE_I": 241,
+    "WAVE_V": 126,
+    "STATS": 61,
+    "ENERGY": 61,
+    "STATUS": 61
+  },
+  "wave_i_samples": 768598,
+  "wave_v_samples": 384123,
+  "seq_first": 0,
+  "seq_last": 549,
+  "seq_gaps": 0,
+  "seq_lost": 0,
+  "resyncs": 0,
+  "device": {
+    "sample_rate": 128000,
+    "overflow_count": 0,
+    "range": 0,
+    "streaming": 1,
+    "range_locked": 0,
+    "source_enabled": 0,
+    "vdut_set": 12.0,
+    "ilimit_set": 0.10000000149011612,
+    "in_voltage": 0.0,
+    "in_current": 0.0,
+    "adaq_ok_bits": 7,
+    "fine_err_pct": 0,
+    "drop_fine": 0,
+    "drop_coarse": 0,
+    "fine_diag_sticky": 129,
+    "frames_tx": 549,
+    "bytes_per_sec": 900807,
+    "fifo_drop_frames": 0,
+    "ring_high_water": 10512,
+    "wave_i_index_lo": 768598,
+    "relay_target": 0,
+    "relay_state": 0,
+    "relay_image_size": 0,
+    "relay_staged_bytes": 0,
+    "relay_pushed_bytes": 0,
+    "wave_i_frames": 241,
+    "wave_v_frames": 126,
+    "wave_i_drops": 0,
+    "wave_v_drops": 0,
+    "filter": 4,
+    "adc_dec": 1,
+    "stream_decim": 1,
+    "odr_mhz": 128000000
+  },
+  "stats": {
+    "i": {
+      "min": -0.0006578515749424696,
+      "max": -0.0006538155139423907,
+      "mean": -0.0006544836796820164,
+      "rms": 0.0006544836796820164,
+      "std": 1.454537965628333e-07,
+      "count": 500799
+    },
+    "v": {
+      "min": 0.009178321808576584,
+      "max": 0.14736533164978027,
+      "mean": 0.14678464829921722,
+      "rms": 0.14678548276424408,
+      "std": 0.0004938367637805641,
+      "count": 500799
+    },
+    "p": {
+      "min": -9.646238322602585e-05,
+      "max": -6.00903331360314e-06,
+      "mean": -9.606815001461655e-05,
+      "rms": 9.606869571143761e-05,
+      "std": 3.231613163734437e-07,
+      "count": 500799
+    }
+  },
+  "energy": {
+    "energy_mwh": -0.0008352558647715734,
+    "energy_j": -0.003006921113177664,
+    "charge_mah": -0.005690349127010761,
+    "charge_c": -0.02048525685723874,
+    "elapsed_s": 31.299875000000025,
+    "last_i": -0.0006543304189108312,
+    "last_v": 0.14684630930423737,
+    "last_p": -9.608600521460176e-05
+  },
+  "energy_first": {
+    "charge_c": -0.016558420052751925,
+    "energy_j": -0.0024296099704224586,
+    "elapsed_s": 25.299875000000018
+  },
+  "error": "",
+  "mb_per_s": 0.8598025639851888,
+  "wave_i_sps": 128099.66666666667,
+  "wave_v_sps": 64020.5,
+  "frame_loss_pct": 0.0
+}

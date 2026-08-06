@@ -77,6 +77,7 @@ typedef enum {
     DAQ_K_FILTER          = DAQ_KEY(DAQ_GRP_ACQ, 0x06),  // enum wideband/sinc5/sinc3 (FINE+COARSE)
     DAQ_K_DECIMATION      = DAQ_KEY(DAQ_GRP_ACQ, 0x07),  // enum x32..x1024
     DAQ_K_REJECT_5060     = DAQ_KEY(DAQ_GRP_ACQ, 0x08),  // bool (Sinc3 50/60 Hz reject)
+    DAQ_K_SR_MODE         = DAQ_KEY(DAQ_GRP_ACQ, 0x09),  // bool (super-resolution)
 
     // --- Source / SMU ---
     DAQ_K_SOURCE_ENABLE   = DAQ_KEY(DAQ_GRP_SMU, 0x01),  // bool
@@ -134,6 +135,22 @@ enum { DAQ_WIFI_AP = 0, DAQ_WIFI_STA = 1, DAQ_WIFI_MODE_COUNT };
 enum { DAQ_FILT_WIDEBAND = 0, DAQ_FILT_SINC5, DAQ_FILT_SINC3, DAQ_FILT_COUNT };
 enum { DAQ_DEC_32 = 0, DAQ_DEC_64, DAQ_DEC_128, DAQ_DEC_256, DAQ_DEC_512,
        DAQ_DEC_1024, DAQ_DEC_COUNT };
+
+// -----------------------------------------------------------------------------
+// Super-Resolution mode (DAQ_K_SR_MODE).
+//
+// Trades bandwidth for resolution: the ADAQ7769-1 runs Sinc3 at maximum
+// decimation (lowest noise bandwidth the part offers) and the P4 then applies a
+// windowed-sinc FIR low-pass before decimating to the rates below. Averaging N
+// samples buys ~sqrt(N) noise reduction; the FIR supplies the anti-alias
+// filtering that keeps the stage-1 noise from folding back into the passband.
+//
+// Every surface (P4, C6, S3, desktop, iOS) must agree on these rates, so they
+// live here rather than being duplicated per-surface.
+// -----------------------------------------------------------------------------
+#define DAQ_SR_ADC_DECIM      1024u   // ADAQ Sinc3 decimation in SR mode
+#define DAQ_SR_CURRENT_SPS    1000u   // fused-current output rate
+#define DAQ_SR_VOLTAGE_SPS     500u   // V_DUT output rate
 
 // Sample-rate index -> samples per second.
 extern const uint32_t DAQ_SAMPLE_RATE_SPS[DAQ_SR_COUNT];

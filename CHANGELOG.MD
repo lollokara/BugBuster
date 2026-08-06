@@ -4,6 +4,154 @@
 
 ### Added
 
+- **Super Resolution acquisition mode (DAQ HAT).** Trades bandwidth for
+  resolution: the ADAQ7769-1s run Sinc3 at maximum decimation — the narrowest
+  noise bandwidth the part offers — and the P4 then applies a windowed-sinc FIR
+  low-pass before decimating to **1 ksps current / 500 sps voltage**. Averaging
+  N samples buys ~sqrt(N) noise reduction; the FIR supplies the anti-alias
+  filtering that keeps stage-1 broadband noise from folding back into the
+  passband, which a plain keep-1-of-N decimator cannot do.
+  - New `Firmware/DAQ_HAT/ESP32P4/src/dsp/sr_filter.{c,h}` — allocation-free
+    decimating FIR built on esp-dsp's `dsps_dotprod_f32`, mirrored history
+    buffer (no modulo in the inner loop), coefficients normalised to unity DC
+    gain so the filter cannot bias the calibrated amps/volts scale.
+  - New shared registry key `DAQ_K_SR_MODE` plus the agreed rate constants
+    (`DAQ_SR_ADC_DECIM`, `DAQ_SR_CURRENT_SPS`, `DAQ_SR_VOLTAGE_SPS`) in
+    `Firmware/DAQ_HAT/common/daq_config_registry.{h,c}`, so P4, C6, S3, desktop
+    and iOS cannot disagree about the output rates.
+  - The FIR decimation is derived from the ODR the ADC actually reports rather
+    than assumed, so a different MCLK or MCLK divider still lands on the
+    advertised rates. While SR is on it owns Filter / Decimation / Sample Rate;
+    50/60 Hz rejection still applies (SR is always Sinc3). The DSP energy /
+    charge tail keeps integrating at the raw ODR, so totals stay correct.
+  - Wire: `s3link_acq_config_t` / `hat_acq_config_t` gain an appended `sr_mode`
+    byte (a 2-byte payload from an older S3 still parses and means "off"), and
+    `POST /api/daq/acq_config` accepts `{"sr_mode": true}` without requiring a
+    meaningless filter/decimation alongside it.
+  - Toggles on the C6 menu, the desktop DAQ settings panel and the iOS
+    acquisition sheet; the rate/filter controls disable themselves while SR is
+    active on every surface.
+
+- **C6 "SR" home-screen badge.** Cyan badge in the header, width-reserved like
+  the SRC badge so the Pac-Man bolt stream never overdraws it — the low
+  waveform rate is never mistaken for a stalled stream.
+
+- **DAQ HAT pipeline cycle profiler + `perf` CLI command.** `faststat` reports
+  how many samples survived, which says nothing about *where* the time went —
+  so a saturating pipeline could not be attributed to the SPI capture core, the
+  DSP consumer, or the wire push without guessing. New
+  `Firmware/DAQ_HAT/ESP32P4/src/perf/daq_perf.{c,h}` timestamps every stage of
+  both hot loops with the RISC-V cycle counter, and `perf <on|off|reset|show|
+  tasks>` dumps per-stage count/avg/min/max/%core alongside FreeRTOS per-task
+  CPU shares, stack high-water marks, heap and the active tunables.
+  - Compiled out entirely with `-DDAQ_PERF_ENABLED=0` (in `platformio.ini`):
+    verified to remove 1152 B of RAM and 7754 B of flash and leave no residual
+    branch in either hot loop. Sampling is also off at runtime until `perf on`.
+  - Records are padded to a full 64-byte L2 line so the two cores never share
+    one, and `daq_perf_reset()` self-calibrates the probe's own overhead so
+    measurements can be read net of the instrument.
+  - Enables `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` /
+    `USE_TRACE_FACILITY` (esp_timer source) for the task table.
+  - New host tools `tests/tools/daq_p4_profile.py` (ODR sweep that attaches a
+    cycle budget to every throughput point, plus bottleneck attribution and a
+    projected ceiling) and `tests/tools/daq_p4_sanity.py` (proves samples are
+    real: variation, raw-code variation, response to a DUT-supply step, and a
+    voltage linearity sweep).
+
+- **`ADAQ_RING_PREFER_INTERNAL` capture-ring placement knob** (`config.h`,
+  default 0 = PSRAM). Measured: internal SRAM at 4096 samples/bus lifts the
+  saturation point 443 → 469 kSPS (+5.9%) and captures 320001/320000 with zero
+  missed edges, but costs ~200 KB of internal SRAM that WiFi and OTA also need
+  and cuts stall tolerance from 256 ms to 16 ms — hence off by default.
+
+
+- **C6 Firmware screen (installed vs available, with update).** Uses the full
+  284 px width for a four-MCU table (RP2040 / S3 / P4 / C6) showing installed
+  and available versions side by side; OK opens a release picker for the
+  highlighted MCU, OK again confirms before anything is flashed. Absent MCUs
+  are unselectable rather than flashable.
+  - Reaches GitHub through the existing C6 → P4 → S3 mainboard tunnel via new
+    request types `DDP_MB_FWINFO` / `DDP_MB_FW_APPLY` and `ddp_mb_fwinfo_t`;
+    no new HAT commands, so it inherits the tunnel's chunking and reassembly.
+  - `DDP_PROTO_VERSION` 8 → 9.
+
+### Fixed
+
+- **Waveform frames had no latency bound, only a size bound.** `WAVE_I` /
+  `WAVE_V` flushed solely on reaching 3200 samples, a throughput figure chosen
+  for high ODRs ("12.5 ms batches at typical ODRs"). Nothing capped how long a
+  *partial* batch could sit, so the lower the rate the longer the host waited —
+  at Super Resolution's 1 ksps / 500 sps a frame would have been held for
+  **3.2 s / 6.4 s**, making the scope look frozen rather than slow.
+  `usb_stream_push_sample()` / `_push_voltage()` now derive a per-batch sample
+  limit from the rate at batch-open time (`USB_WAVE_FLUSH_HZ`, 100 ms worst
+  case). The limit is computed once per batch rather than consulting the clock
+  per sample, because the hot path runs at up to 256 ksps; rates at or above
+  32 ksps clamp to the full batch, so high-rate behaviour is unchanged.
+
+- **The USB waveform stream delivered nothing — every WAVE frame was dropped.**
+  `sdkconfig.defaults` asked for `CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=32768`, but
+  PlatformIO never merges new defaults into an already-generated `sdkconfig`,
+  so the build shipped the 8192-byte default. `WAVE_I` frames are 16038 B and
+  `WAVE_V` 12838 B, so `emit_frame_inplace()`'s `writable() < total` check
+  could **never** pass: this was not back-pressure but a permanent 100% drop of
+  both waveform record types, leaving a connected host with only 10 Hz summary
+  frames. Measured on hardware, before → after: `WAVE_I` **149 → 128,100 Sa/s**
+  (exactly the configured ODR), `bytes_per_sec` 2,620 → 900,807,
+  `fifo_drop_frames` 147-of-151 → 0-of-549, wire frame loss 49.5% → 0.000%.
+  New `_Static_assert`s tie `USB_WAVE_*_BATCH` to the FIFO size; the existing
+  asserts only checked `USB_MAX_PAYLOAD` (16384), which is exactly why a
+  16038-byte frame slipped through.
+
+- **Summary emission stalled the acquisition consumer.** At 10 Hz,
+  `daq_board_stream_summary()` runs inline on `daq_fast` and was measured at
+  ~1.5 ms per call. Profiling ruled out the obvious suspects — the 4096-point
+  FFT is 9 µs, `write_flush()` 0.7 µs and the `write_available()` probe 2.2 µs.
+  Two real costs were found and fixed: `power_dsp.c:stat_finish()` used
+  double-precision `sqrt()` twice (software-emulated on the P4's
+  single-precision FPU) and discarded the extra precision in a `float` cast —
+  now `sqrtf`; and the four small summary frames each issued their own
+  `tud_vendor_write()` — they are now coalesced into one via
+  `usb_stream_batch_begin/end()`. Uncontended cost (the `min` column, free of
+  preemption) **748 → 347 µs, −54%**. The remaining gap between min and average
+  is higher-priority USB work preempting the window, not compute.
+
+- **Connecting to the P4 console reset the board.** Opening or closing the
+  USB-Serial-JTAG port asserted DTR/RTS, rebooting the P4 — so any measurement
+  that touched the console silently restarted the device first (energy and
+  charge accumulators reset to zero mid-run). `tests/lib/p4_console.py` now
+  holds both lines deasserted on open *and* close.
+
+- **`find_p4_port()` only worked on macOS** — it globbed `/dev/cu.usbmodem*`,
+  so every P4 host tool auto-detected nothing on Windows and Linux. It now
+  probes pyserial's port enumeration as well. Likewise `tests/lib/daq_link.py`
+  resolves a libusb backend via `libusb_package`, since pyusb's default search
+  finds no libusb on Windows (the firmware's MS OS 2.0 descriptors already make
+  Windows auto-bind WinUSB, so no Zadig step is needed).
+
+- **`/api/ota/releases` never reported DAQ HAT update state.** `option_json()`
+  serialised only the `rp2040` and `esp32` components even though
+  `UpdateManifest` already parsed `p4` and `c6`, so every client silently got
+  nothing for the DAQ HAT. Both components are now emitted, with new
+  `current_p4_build_id()` / `current_c6_build_id()` helpers.
+
+### Changed
+
+- **DAQ HAT P4 now builds at `-O2`** (`CONFIG_COMPILER_OPTIMIZATION_PERF`)
+  instead of the IDF default `-Og`. Both hot loops are hand-written C on a
+  360 MHz RISC-V core with no DMA assist, so they are exactly the shape `-O2`
+  helps most. Measured at the saturation point (ODR ratio 32): aggregate
+  capture **405 → 443 kSPS (+9.2%)**, with per-stage costs down 13–18%
+  (`cap.scan` −18.2%, `fast.loop` −17.2%, `fast.fusion` −13.2%). It is also
+  *smaller*: 1,101,942 B flash vs 1,115,446 B and 16,560 B RAM vs 17,144 B.
+  Revert to `COMPILER_OPTIMIZATION_DEBUG` only for step-debugging.
+
+- Firmware versions: ESP32-S3 `5.0.0` → `5.1.0`, DAQ HAT P4 `2.0.5` → `2.1.0`,
+  DAQ HAT C6 `2.0.0` → `2.1.0`, Desktop `2.0.0` → `2.1.0`. BBP wire stays at
+  v10 (no BBP command or payload changed).
+- C6 `SETTINGS_VERSION` 5 → 6 (the settings struct grew an `sr_mode` field, so
+  the previous NVS blob must be rejected rather than misread).
+
 - **Live ESP32-S3 memory telemetry across every surface.** The S3 runs tight on
   internal SRAM, but heap and per-task stack headroom were only visible through
   the `heap` / `stack_hwm` serial CLI commands, which need exclusive use of

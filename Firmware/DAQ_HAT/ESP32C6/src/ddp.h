@@ -31,6 +31,9 @@ void ddp_send_config(const ddp_config_t *cfg);
 // by c6_config_send() when the user commits a menu edit.
 void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len);
 
+// Trigger a stateless one-shot operation on the P4 (daq_action_t).
+void ddp_send_config_action(uint8_t action_id);
+
 // Send a "Main Board Settings" request upstream to the P4 (C6 -> P4 -> S3).
 // req_type is a DDP_MB_* value; args is the request-specific payload (may be
 // NULL). The P4 forwards it to the S3 (only while not streaming) and relays the
@@ -54,6 +57,9 @@ typedef struct {
 // Latest mainboard script snapshot returned by the S3. Returns true if one has
 // ever been received; *age_ms = ms since the most recent.
 bool ddp_get_mb_scripts(ddp_mb_scripts_t *out, uint32_t *age_ms);
+
+// Latest firmware versions + GitHub release list relayed from the S3.
+bool ddp_get_mb_fwinfo(ddp_mb_fwinfo_t *out, uint32_t *age_ms);
 
 // DUT source calibration wizard (C6 -> P4 direct). op = DDP_CAL_OP_*, arg =
 // mode for START (DDP_CAL_MODE_*). Every control frame also triggers a status

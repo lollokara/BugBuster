@@ -115,7 +115,7 @@ static inline bool mb_req_is_write(uint8_t type)
 {
     return type == DDP_MB_SET_RAIL || type == DDP_MB_SET_EFUSE ||
            type == DDP_MB_SET_RAIL_EN || type == DDP_MB_SCRIPT_RUN ||
-           type == DDP_MB_SCRIPT_STOP;
+           type == DDP_MB_SCRIPT_STOP || type == DDP_MB_FW_APPLY;
 }
 
 static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
@@ -149,6 +149,12 @@ static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
             }
             break;
         }
+        case DDP_CMD_CONFIG_ACTION:
+            // Energy/charge/factory reset from the C6 menu. The registry always
+            // documented this leg; only the S3's HATP_CMD_CONFIG_ACTION was ever
+            // wired, so the C6 had no way to trigger an action until now.
+            if (len >= 1) daq_settings_action(payload[0], DAQ_SRC_C6);
+            break;
         case DDP_RSP_INFO:
             if (len >= 4) {
                 m->c6_present  = true;

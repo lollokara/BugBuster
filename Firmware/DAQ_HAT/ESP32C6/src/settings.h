@@ -20,6 +20,7 @@ typedef struct {
     int  filter_idx;        // 0=Wideband,1=Sinc5,2=Sinc3 (FINE+COARSE ADAQs)
     int  decim_idx;         // 0..5 (x32..x1024)
     bool reject_5060;       // Sinc3 50/60 Hz rejection
+    bool sr_mode;           // Super Resolution (ADC max decimation + DSP low-pass)
 
     // --- DSP / FFT (P4-owned, mirrored) ---
     bool fft_enable;

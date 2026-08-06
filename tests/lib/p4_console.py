@@ -66,7 +66,20 @@ class P4Console:
         if not port:
             raise P4ConsoleUnavailable("no P4 console port given or detected")
         try:
-            self.ser = serial.Serial(port, baud, timeout=timeout)
+            # Do NOT let pyserial assert DTR/RTS. On the P4's USB-Serial-JTAG
+            # those lines drive the reset/boot straps, so a plain
+            # serial.Serial(port, baud) REBOOTS THE BOARD on open (and again on
+            # close). That silently kills any in-flight USB vendor-bulk stream
+            # and resets the DSP integrators, which makes back-to-back
+            # measurements disagree for no visible reason. They must be cleared
+            # before open(), hence the unconfigured-then-open dance.
+            self.ser = serial.Serial()
+            self.ser.port = port
+            self.ser.baudrate = baud
+            self.ser.timeout = timeout
+            self.ser.dtr = False
+            self.ser.rts = False
+            self.ser.open()
         except Exception as exc:
             raise P4ConsoleUnavailable("cannot open %s — %s" % (port, exc)) from exc
         # The USB-serial-JTAG link needs a moment after open, and whatever the

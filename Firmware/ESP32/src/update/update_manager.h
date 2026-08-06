@@ -91,6 +91,32 @@ esp_err_t update_manager_flash_rp2040_stage(uint32_t expected_size);
 cJSON *update_manager_status_json(void);
 bool update_manager_reboot_pending(void);
 
+// ---------------------------------------------------------------------------
+// Firmware snapshot (installed versions + cached GitHub release list).
+// ---------------------------------------------------------------------------
+// The cache and its refresh live in net/api_core.{h,cpp} because the release
+// query must go through that file's single shared TLS worker
+// (see .mex/patterns/tls-call-needs-dedicated-worker.md). Only the
+// installed-version half — pure local reads — lives here.
+
+#define UPDATE_SNAP_STR   24
+#define UPDATE_SNAP_REL   5
+
+typedef struct {
+    char     rp2040[UPDATE_SNAP_STR];   // "" when a DAQ HAT occupies the link
+    char     esp32[UPDATE_SNAP_STR];
+    char     p4[UPDATE_SNAP_STR];       // "" when no DAQ HAT
+    char     c6[UPDATE_SNAP_STR];
+    char     rel[UPDATE_SNAP_REL][UPDATE_SNAP_STR];  // release tags, newest first
+    uint8_t  rel_count;
+    uint32_t update_avail;              // update_target_t mask
+    uint8_t  state;                     // update_state_t
+    bool     valid;                     // a successful check has populated rel[]
+} update_snapshot_t;
+
+/** @brief Fill the installed-version + state fields. Local reads only, never blocks. */
+void update_manager_fill_installed(update_snapshot_t *s);
+
 /**
  * @brief Push a locally supplied image to the DAQ HAT's P4 or C6.
  *

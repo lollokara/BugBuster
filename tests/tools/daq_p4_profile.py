@@ -224,8 +224,14 @@ def measure(con: P4Console, odr: int, settle: float, window: float,
     parse_faststat(con.cmd("faststat", deadline=15.0), p)
     con.cmd("perf on", deadline=15.0)
     time.sleep(window)
-    parse_perf(con.cmd("perf show", deadline=40.0), p)
+    # Stop sampling BEFORE reading. `perf show` prints a lot over the console
+    # from daq_repl (prio 15), which preempts daq_fast (prio 12) for
+    # milliseconds at a time. The cycle counter keeps running while a task is
+    # descheduled, so leaving sampling on during the dump charges that
+    # preemption to whatever stage happened to be open -- it showed up as
+    # single-sample maxima of ~1 s that dwarfed every real measurement.
     con.cmd("perf off", deadline=15.0)
+    parse_perf(con.cmd("perf show", deadline=40.0), p)
     parse_status(con.cmd("status", deadline=15.0), p)
     parse_faststat(con.cmd("faststat", deadline=15.0), p)
     return p

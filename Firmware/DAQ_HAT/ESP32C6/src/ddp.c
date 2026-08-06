@@ -39,6 +39,9 @@ static bool           s_mb_have = false;
 static ddp_mb_scripts_t s_mb_scr;
 static int64_t          s_mb_scr_us = 0;
 static bool             s_mb_scr_have = false;
+static ddp_mb_fwinfo_t  s_mb_fw;
+static int64_t          s_mb_fw_us = 0;
+static bool             s_mb_fw_have = false;
 
 static ddp_cal_status_t s_cal;
 static int64_t          s_cal_us = 0;
@@ -191,6 +194,13 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
                 s_mb_scr_us = esp_timer_get_time();
                 s_mb_scr_have = true;
                 taskEXIT_CRITICAL(&s_mux);
+            } else if ((req_type == DDP_MB_FWINFO || req_type == DDP_MB_FW_APPLY) &&
+                       len >= 2 + sizeof(ddp_mb_fwinfo_t)) {
+                taskENTER_CRITICAL(&s_mux);
+                memcpy(&s_mb_fw, &payload[2], sizeof(s_mb_fw));
+                s_mb_fw_us = esp_timer_get_time();
+                s_mb_fw_have = true;
+                taskEXIT_CRITICAL(&s_mux);
             }
         }
         send_frame(DDP_RSP_OK, NULL, 0);
@@ -294,6 +304,11 @@ void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len)
     send_frame(DDP_CMD_CONFIG_SET, tlvs, len);
 }
 
+void ddp_send_config_action(uint8_t action_id)
+{
+    send_frame(DDP_CMD_CONFIG_ACTION, &action_id, 1);
+}
+
 void ddp_send_mb_request(uint8_t req_type, const uint8_t *args, uint8_t args_len)
 {
     uint8_t buf[1 + 30];
@@ -322,6 +337,18 @@ bool ddp_get_mb_scripts(ddp_mb_scripts_t *out, uint32_t *age_ms)
     have = s_mb_scr_have;
     if (out) *out = s_mb_scr;
     int64_t rx = s_mb_scr_us;
+    taskEXIT_CRITICAL(&s_mux);
+    if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
+    return have;
+}
+
+bool ddp_get_mb_fwinfo(ddp_mb_fwinfo_t *out, uint32_t *age_ms)
+{
+    bool have;
+    taskENTER_CRITICAL(&s_mux);
+    have = s_mb_fw_have;
+    if (out) *out = s_mb_fw;
+    int64_t rx = s_mb_fw_us;
     taskEXIT_CRITICAL(&s_mux);
     if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
     return have;

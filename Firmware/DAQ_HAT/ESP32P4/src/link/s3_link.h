@@ -260,6 +260,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  adc_dec;   // ADAQ_DEC_* for every filter except SINC3, where it
                         // instead carries (decimation / 32) since SINC3 takes
                         // an arbitrary multiple of 32 rather than a fixed step
+    uint8_t  sr_mode;   // 1 = Super Resolution: the P4 ignores filter/adc_dec
+                        // above and pins the ADAQs to Sinc3 at max decimation,
+                        // then FIR-decimates to DAQ_SR_*_SPS. APPENDED field --
+                        // a 2-byte payload from an older S3 means "SR off".
 } s3link_acq_config_t;
 
 // HATP_RSP_DAQ_VDUT_STATUS (0x98) payload: response to HATP_CMD_DAQ_VDUT_STATUS.

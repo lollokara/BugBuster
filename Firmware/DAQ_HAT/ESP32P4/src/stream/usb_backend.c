@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "tinyusb.h"
+#include "daq_perf.h"
 
 // Force a virtual re-plug after this many consecutive unmounted poll ticks
 // (poll runs at ~1 Hz). Kept generous so it never disrupts a normal
@@ -209,8 +210,12 @@ static uint32_t backend_write(const uint8_t *data, uint32_t len, void *ctx)
 {
     (void)ctx;
     if (!tud_mounted()) return 0;
+    DAQ_PERF_BEGIN(t_w);
     uint32_t wrote = tud_vendor_write(data, len);
+    DAQ_PERF_END(DAQ_PERF_TX_WRITE, t_w);
+    DAQ_PERF_BEGIN(t_f);
     tud_vendor_write_flush();
+    DAQ_PERF_END(DAQ_PERF_TX_FLUSH, t_f);
     return wrote;
 }
 
@@ -218,7 +223,10 @@ static uint32_t backend_writable(void *ctx)
 {
     (void)ctx;
     if (!tud_mounted()) return 0;
-    return tud_vendor_write_available();
+    DAQ_PERF_BEGIN(t_a);
+    uint32_t avail = tud_vendor_write_available();
+    DAQ_PERF_END(DAQ_PERF_TX_AVAIL, t_a);
+    return avail;
 }
 
 static bool backend_connected(void *ctx)

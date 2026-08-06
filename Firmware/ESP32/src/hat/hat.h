@@ -204,9 +204,41 @@ typedef struct {
 #define HAT_MB_SCRIPT_RUN   0x05u
 #define HAT_MB_SCRIPT_STOP  0x06u
 #define HAT_MB_SET_RAIL_EN  0x07u  // args: u8 rail (0=VLOGIC/lshift,1=VADJ1,2=VADJ2), u8 on
+#define HAT_MB_FWINFO       0x08u  // read firmware versions + GitHub releases
+#define HAT_MB_FW_APPLY     0x09u  // args: u8 rel_index, u8 targets (HAT_FW_T_* mask)
 #define HAT_MB_ST_OK        0x00u
 #define HAT_MB_ST_BUSY      0x01u
 #define HAT_MB_ST_ERR       0x02u
+
+// Firmware-info payload. MUST match ddp_proto.h ddp_mb_fwinfo_t / DDP_FW_*.
+// The per-MCU bits also match update_target_t in update/update_manager.h.
+#define HAT_FW_T_RP2040     0x01u
+#define HAT_FW_T_S3         0x02u
+#define HAT_FW_T_P4         0x04u
+#define HAT_FW_T_C6         0x08u
+
+#define HAT_FW_STR          16u
+#define HAT_FW_DEV_MAX       4u
+#define HAT_FW_REL_MAX       5u
+
+#define HAT_FW_IDX_RP2040    0u
+#define HAT_FW_IDX_S3        1u
+#define HAT_FW_IDX_P4        2u
+#define HAT_FW_IDX_C6        3u
+
+#define HAT_FW_ST_IDLE       0u
+#define HAT_FW_ST_CHECKING   1u
+#define HAT_FW_ST_APPLYING   2u
+#define HAT_FW_ST_ERROR      3u
+
+typedef struct __attribute__((packed)) {
+    char    installed[HAT_FW_DEV_MAX][HAT_FW_STR];
+    char    rel[HAT_FW_REL_MAX][HAT_FW_STR];
+    uint8_t rel_count;
+    uint8_t update_avail;
+    uint8_t state;
+    uint8_t _rsv;
+} hat_mb_fwinfo_t;
 
 // MicroPython engine states (first byte of the scripts result blob). MUST match
 // ddp_proto.h DDP_MB_SCR_*.
@@ -436,6 +468,7 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t filter;    // ADAQ_FILTER_* (P4 adaq7769_regs.h numeric values)
     uint8_t adc_dec;   // ADAQ_DEC_*, or (SINC3 decimation / 32)
+    uint8_t sr_mode;   // 1 = Super Resolution (P4 overrides filter/adc_dec)
 } hat_acq_config_t;
 
 // HAT_RSP_DAQ_VDUT_STATUS payload: response to HAT_CMD_DAQ_VDUT_STATUS. MUST
@@ -977,7 +1010,7 @@ bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a);
  *        back from the STATUS stream (usb_status_payload_t v6 fields).
  * @return true on P4 HAT_RSP_OK, false otherwise (including no DAQ HAT).
  */
-bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec);
+bool hat_daq_set_acq_config(uint8_t filter, uint8_t adc_dec, bool sr_mode = false);
 
 // Mirrored from the P4's authoritative
 // Firmware/DAQ_HAT/ESP32P4/src/adaq7769/adaq7769_regs.h ADAQ_FILTER_* /

@@ -25,6 +25,7 @@ static bool field_get_i32(uint16_t key, int32_t *out)
     case DAQ_K_FILTER:          *out = g_settings.filter_idx;      return true;
     case DAQ_K_DECIMATION:      *out = g_settings.decim_idx;       return true;
     case DAQ_K_REJECT_5060:     *out = g_settings.reject_5060;     return true;
+    case DAQ_K_SR_MODE:         *out = g_settings.sr_mode;         return true;
     case DAQ_K_FFT_ENABLE:      *out = g_settings.fft_enable;      return true;
     case DAQ_K_FFT_LENGTH:      *out = g_settings.fft_length_idx;  return true;
     case DAQ_K_FFT_WINDOW:      *out = g_settings.fft_window_idx;  return true;
@@ -53,6 +54,7 @@ static void field_apply_i32(uint16_t key, int32_t v)
     case DAQ_K_FILTER:          g_settings.filter_idx      = v;        break;
     case DAQ_K_DECIMATION:      g_settings.decim_idx       = v;        break;
     case DAQ_K_REJECT_5060:     g_settings.reject_5060     = (v != 0); break;
+    case DAQ_K_SR_MODE:         g_settings.sr_mode         = (v != 0); break;
     case DAQ_K_FFT_ENABLE:      g_settings.fft_enable      = (v != 0); break;
     case DAQ_K_FFT_LENGTH:      g_settings.fft_length_idx  = v;        break;
     case DAQ_K_FFT_WINDOW:      g_settings.fft_window_idx  = v;        break;
@@ -91,7 +93,7 @@ static void str_apply(uint16_t key, const uint8_t *val, uint8_t vlen)
 static const uint16_t SEND_KEYS[] = {
     DAQ_K_AUTORANGING, DAQ_K_RANGE_IDX, DAQ_K_SAMPLE_RATE_IDX,
     DAQ_K_DUT_ILIMIT_MA, DAQ_K_DUT_VOLTAGE_MV,
-    DAQ_K_FILTER, DAQ_K_DECIMATION, DAQ_K_REJECT_5060,
+    DAQ_K_FILTER, DAQ_K_DECIMATION, DAQ_K_REJECT_5060, DAQ_K_SR_MODE,
     DAQ_K_FFT_ENABLE, DAQ_K_FFT_LENGTH, DAQ_K_FFT_WINDOW, DAQ_K_FFT_SOURCE,
     DAQ_K_BRIGHTNESS_PCT, DAQ_K_DARK_MODE,
     DAQ_K_NPX_MODE, DAQ_K_NPX_BRIGHTNESS, DAQ_K_NPX_COLOR,
