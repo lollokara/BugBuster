@@ -5,6 +5,9 @@ Routes GET/POST requests to the appropriate handler and returns dicts
 that match what _normalize_http_* functions in client.py expect.
 """
 
+from bugbuster.constants import CmdId
+
+
 def check_admin_auth(device, headers: dict) -> bool:
     """Checks for X-BugBuster-Admin-Token header (case-insensitive per HTTP spec)."""
     # HTTP headers are case-insensitive; WSGI normalises them to uppercase so we
@@ -71,6 +74,11 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # Full status snapshot
     if key == ("GET", "/status"):
         return _status_dict(device)
+
+    # Live memory pressure — served from the same model as the BBP handler so
+    # the two transports cannot drift.
+    if key == ("GET", "/system/memory"):
+        return _memory_dict(device)
 
     # Faults
     if key == ("GET", "/faults"):
@@ -140,6 +148,37 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             return {"code": code}
         except ValueError:
             return {"error": "invalid channel index"}
+
+    # Digital-output driver config — POST /api/channel/<ch>/do/config
+    if method == "POST" and path.startswith("/channel/") and path.endswith("/do/config"):
+        parts = path.split("/")
+        try:
+            ch_idx = int(parts[2])
+        except ValueError:
+            return {"error": "invalid channel index", "code": 400}
+        if not (0 <= ch_idx < len(device.channels)):
+            return {"error": "invalid channel index", "code": 400}
+        ch = device.channels[ch_idx]
+        ch["do_mode"] = int(body.get("mode", 0)) & 0xFF
+        ch["do_src_sel_gpio"] = bool(body.get("srcSelGpio", False))
+        ch["do_t1"] = int(body.get("t1", 0)) & 0xFF
+        ch["do_t2"] = int(body.get("t2", 0)) & 0xFF
+        return {"channel": ch_idx, "mode": ch["do_mode"],
+                "srcSelGpio": ch["do_src_sel_gpio"],
+                "t1": ch["do_t1"], "t2": ch["do_t2"]}
+
+    # AVDD rail selection — POST /api/channel/<ch>/avdd
+    if method == "POST" and path.startswith("/channel/") and path.endswith("/avdd"):
+        parts = path.split("/")
+        try:
+            ch_idx = int(parts[2])
+        except ValueError:
+            return {"error": "invalid channel index", "code": 400}
+        if not (0 <= ch_idx < len(device.channels)):
+            return {"error": "invalid channel index", "code": 400}
+        device.channels[ch_idx]["avdd_select"] = int(body.get("select", 0)) & 0xFF
+        return {"channel": ch_idx,
+                "select": device.channels[ch_idx]["avdd_select"]}
 
     # DAC set (voltage, current, or raw code)
     if method == "POST" and path.startswith("/channel/") and path.endswith("/dac"):
@@ -877,4 +916,42 @@ def _faults_dict(device) -> dict:
         "supply_alert_status": device.supply_alert_status,
         "supply_alert_mask": device.supply_alert_mask,
         "channels": channels,
+    }
+
+
+def _memory_dict(device) -> dict:
+    """Reshape the BBP MEM_STATUS payload as the firmware's JSON.
+
+    Decoding the binary reply rather than re-deriving the numbers keeps the two
+    simulated transports honest: if the BBP handler and this route disagreed,
+    the divergence would be invisible to every test that only uses one of them.
+    """
+    from bugbuster.memory import parse_mem_status
+
+    m = parse_mem_status(device.dispatch(int(CmdId.MEM_STATUS), b""))
+
+    def pool(p) -> dict:
+        return {
+            "freeBytes": p.free_bytes, "free_bytes": p.free_bytes,
+            "minEverBytes": p.min_ever_bytes, "min_ever_bytes": p.min_ever_bytes,
+            "largestBlockBytes": p.largest_block_bytes,
+            "largest_block_bytes": p.largest_block_bytes,
+            "totalBytes": p.total_bytes, "total_bytes": p.total_bytes,
+        }
+
+    return {
+        "internal": pool(m.internal),
+        "psram": pool(m.psram),
+        "tasks": [
+            {
+                "name": t.name,
+                "declaredBytes": t.declared_bytes, "declared_bytes": t.declared_bytes,
+                "freeBytes": t.free_bytes, "free_bytes": t.free_bytes,
+                "peakUsedBytes": t.peak_used_bytes, "peak_used_bytes": t.peak_used_bytes,
+                "running": t.running,
+            }
+            for t in m.tasks
+        ],
+        "uptimeMs": m.uptime_ms,
+        "uptime_ms": m.uptime_ms,
     }

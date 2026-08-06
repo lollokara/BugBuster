@@ -6,7 +6,8 @@ Handles: PCA_GET_STATUS, PCA_SET_CONTROL, PCA_SET_PORT, PCA_SET_FAULT_CFG,
 """
 
 import struct
-from bugbuster.constants import CmdId
+from bugbuster.constants import CmdId, ErrorCode
+from bugbuster.transport.usb import DeviceError
 
 
 def register(device) -> None:
@@ -77,11 +78,18 @@ def _pca_set_control(device):
 
 # ---------------------------------------------------------------------------
 # PCA_SET_PORT (0xB2)
+# payload: u8 port(0-1), u8 val -> resp: u8 port, u8 val
 # ---------------------------------------------------------------------------
 
 def _pca_set_port(device):
     def handler(payload: bytes) -> bytes:
-        return b''
+        if len(payload) < 2:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        port, val = payload[0], payload[1]
+        if port > 1:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.pca_ports[port] = val
+        return bytes([port, val])
     return handler
 
 

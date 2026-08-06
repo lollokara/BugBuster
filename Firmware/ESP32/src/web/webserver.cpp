@@ -615,6 +615,16 @@ static esp_err_t handle_get_status(httpd_req_t *req)
     return rc;
 }
 
+// GET /api/system/memory
+static esp_err_t handle_get_system_memory(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", "/api/system/memory", NULL);
+    if (!resp) return send_error(req, 500, "memory status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
 // GET /api/channel/?/adc
 static esp_err_t handle_get_channel_adc(httpd_req_t *req)
 {
@@ -5038,6 +5048,11 @@ bool initWebServer(void)
         .uri = "/api/status", .method = HTTP_GET, .handler = handle_get_status, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_status);
+
+    httpd_uri_t uri_system_memory = {
+        .uri = "/api/system/memory", .method = HTTP_GET, .handler = handle_get_system_memory, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_system_memory);
 
     httpd_uri_t uri_faults = {
         .uri = "/api/faults", .method = HTTP_GET, .handler = handle_get_faults, .user_ctx = NULL

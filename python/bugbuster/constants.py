@@ -298,6 +298,7 @@ class CmdId(IntEnum):
     SELFTEST_AUTO_CAL       = 0x08
     SELFTEST_INT_SUPPLIES   = 0x09
     SELFTEST_WORKER         = 0x0B  # enable/disable/query supply-monitor worker
+    MEM_STATUS              = 0x0C  # heap + per-task stack telemetry
 
     # Channel configuration
     SET_CHANNEL_FUNC = 0x10

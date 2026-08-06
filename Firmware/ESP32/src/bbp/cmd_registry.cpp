@@ -33,6 +33,8 @@ extern "C" void register_cmds_streaming(void);
 extern "C" void register_cmds_script(void);
 // IO Ownership
 extern "C" void register_cmds_io_owner(void);
+// Memory telemetry
+extern "C" void register_cmds_memory(void);
 
 // ---------------------------------------------------------------------------
 // Internal flat table (grows at init time)
@@ -87,6 +89,8 @@ void cmd_registry_init(void)
     register_cmds_script();
     // IO Ownership
     register_cmds_io_owner();
+    // Memory telemetry
+    register_cmds_memory();
 
     // Sort by opcode for O(log n) lookup
     qsort(s_registry, s_registry_len, sizeof(CmdDescriptor), cmp_opcode);

@@ -8,7 +8,8 @@ Handles: REGISTER_READ, REGISTER_WRITE, SET_WATCHDOG, SET_LSHIFT_OE,
 """
 
 import struct
-from bugbuster.constants import CmdId
+from bugbuster.constants import CmdId, ErrorCode
+from bugbuster.transport.usb import DeviceError
 
 
 def register(device) -> None:
@@ -131,12 +132,16 @@ def _usbpd_select_pdo(device):
 
 
 # ---------------------------------------------------------------------------
-# USBPD_GO (0xC2) — no-op
+# USBPD_GO (0xC2)
+# payload: u8 cmd -> resp: u8 cmd
 # ---------------------------------------------------------------------------
 
 def _usbpd_go(device):
     def handler(payload: bytes) -> bytes:
-        return b''
+        if not payload:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.usbpd_last_go = payload[0]
+        return bytes([payload[0]])
     return handler
 
 

@@ -198,12 +198,17 @@ def _get_faults(device):
 
 
 # ---------------------------------------------------------------------------
-# GET_DIAGNOSTICS (0x04) — stub, return empty
+# GET_DIAGNOSTICS (0x04)
+# resp: 4x (u8 slot, u8 source, u16 rawCode, f32 value)
 # ---------------------------------------------------------------------------
 
 def _get_diagnostics(device):
     def handler(payload: bytes) -> bytes:
-        return b''
+        out = bytearray()
+        for slot in range(4):
+            d = device.diagnostics[slot]
+            out += struct.pack('<BBHf', slot, d['source'], d['raw'], d['value'])
+        return bytes(out)
     return handler
 
 

@@ -1798,19 +1798,48 @@ void initTasks(AD74416H& device)
         (unsigned long)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
 }
 
+size_t tasks_get_registry(BbTaskInfo *out, size_t max)
+{
+    static const struct { const char *name; uint32_t declared; } spec[] = {
+        { "adcPoll",  TASK_STACK_ADCPOLL  },
+        { "faultMon", TASK_STACK_FAULTMON },
+        { "cmdProc",  TASK_STACK_CMDPROC  },
+        { "wavegen",  TASK_STACK_WAVEGEN  },
+        { "mainLoop", TASK_STACK_MAINLOOP },
+        { "bbpCli",   TASK_STACK_BBPCLI   },
+    };
+    const size_t n_spec = sizeof(spec) / sizeof(spec[0]);
+    size_t n = 0;
+
+    for (size_t i = 0; i < n_spec && n < max; i++) {
+        TaskHandle_t h;
+        // adcPoll and wavegen keep global handles; the rest are looked up by
+        // the name they were created with.
+        if      (strcmp(spec[i].name, "adcPoll") == 0) h = g_adcTaskHandle;
+        else if (strcmp(spec[i].name, "wavegen") == 0) h = g_wavegenTask;
+        else                                          h = xTaskGetHandle(spec[i].name);
+
+        out[n].name           = spec[i].name;
+        out[n].handle         = h;
+        out[n].declared_bytes = spec[i].declared;
+        // ESP-IDF returns BYTES here, not words — an earlier version of the
+        // CLI multiplied by 4 and printed more than the whole stack.
+        out[n].hwm_bytes      = h ? (uint32_t)uxTaskGetStackHighWaterMark(h) : 0;
+        n++;
+    }
+    return n;
+}
+
 void tasks_log_stack_hwm(void)
 {
-    struct { const char *name; TaskHandle_t h; } tasks[] = {
-        { "adcPoll",  g_adcTaskHandle },
-        { "faultMon", xTaskGetHandle("faultMon") },
-        { "cmdProc",  xTaskGetHandle("cmdProc") },
-        { "wavegen",  g_wavegenTask },
-    };
-    for (auto &t : tasks) {
-        if (!t.h) continue;
-        UBaseType_t hwm = uxTaskGetStackHighWaterMark(t.h);
-        const char *warn = (hwm < 128) ? " *** LOW ***" : (hwm < 256) ? " (warn)" : "";
-        ESP_LOGI("tasks", "Stack HWM %s: %lu words free%s", t.name, (unsigned long)hwm, warn);
+    BbTaskInfo tasks[BB_TASK_REGISTRY_MAX];
+    size_t n = tasks_get_registry(tasks, BB_TASK_REGISTRY_MAX);
+    for (size_t i = 0; i < n; i++) {
+        if (!tasks[i].handle) continue;
+        uint32_t hwm = tasks[i].hwm_bytes;
+        const char *warn = (hwm < 512) ? " *** LOW ***" : (hwm < 1024) ? " (warn)" : "";
+        ESP_LOGI("tasks", "Stack HWM %s: %lu bytes free%s", tasks[i].name,
+                 (unsigned long)hwm, warn);
     }
     ESP_LOGI("tasks", "Heap internal free: %lu KB  min-ever: %lu KB  largest block: %lu KB",
         (unsigned long)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),

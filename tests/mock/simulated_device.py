@@ -40,6 +40,7 @@ _HANDLER_MODULES = [
     "tests.mock.handlers.bus",
     "tests.mock.handlers.quicksetup",
     "tests.mock.handlers.daq",
+    "tests.mock.handlers.system",
 ]
 
 from tests.mock import http_routes as _http_routes
@@ -203,6 +204,18 @@ class SimulatedDevice:
         # Scope stream state
         self.scope_ch_mask = 0x0F    # active channel bitmask (0x01–0x0F)
         self.adc_diag_paused = False  # True while scope stream is active
+
+        # AD74416H diagnostic MUX slots, routed by SET_DIAG_CONFIG.
+        self.diagnostics = [
+            {"source": 0, "raw": 0x8000 + s * 0x100, "value": 1.65 + s * 0.25}
+            for s in range(4)
+        ]
+
+        # Raw PCA9535 output latches, written by PCA_SET_PORT.
+        self.pca_ports = [0x00, 0x00]
+
+        # Last USBPD_GO command byte.
+        self.usbpd_last_go = 0
 
         # Config of the running ADC DSP stream, or None when stopped.
         self.dsp_stream = None

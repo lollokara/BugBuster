@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     # Imported lazily: bugbuster.script imports this module, so a runtime
     # import here would be circular.
     from .script import ScriptSession
+    from .memory import MemoryStatus
 
 
 class BugBusterWarning(UserWarning):
@@ -91,7 +92,7 @@ def _pd_limited_vadj_warning(status: dict, rail: int, voltage: float) -> Optiona
 from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
-    VoutRange, CurrentLimit, PowerControl,
+    VoutRange, CurrentLimit, PowerControl, DoMode, AvddSelect,
 )
 from .protocol import ProtocolError
 
@@ -997,6 +998,54 @@ class BugBuster:
         else:
             return _normalize_http_faults(self._http_get("/faults"))
 
+    def get_diagnostics(self) -> list[dict]:
+        """
+        Read the four AD74416H diagnostic multiplexer slots.
+
+        Each slot is routed to a source by :meth:`set_diag_config`; this
+        returns what those slots currently measure.
+
+        :return: four dicts with keys ``slot``, ``source``, ``raw``, ``value``.
+        """
+        if self._usb:
+            resp = self._usb_cmd(CmdId.GET_DIAGNOSTICS)
+            _require_resp_len(resp, 32, "GET_DIAGNOSTICS")
+            out = []
+            for i in range(4):
+                slot, source, raw, value = struct.unpack_from('<BBHf', resp, i * 8)
+                out.append({"slot": slot, "source": source,
+                            "raw": raw, "value": value})
+            return out
+        raw = self._http_get("/diagnostics")
+        items = raw.get("diagnostics", raw) if isinstance(raw, dict) else raw
+        out = []
+        for i, d in enumerate(items or []):
+            out.append({
+                "slot":   int(_first_present(d, "slot", default=i) or i),
+                "source": int(_first_present(d, "source", default=0) or 0),
+                "raw":    int(_first_present(d, "raw", "rawCode", "raw_code",
+                                             default=0) or 0),
+                "value":  float(_first_present(d, "value", default=0.0) or 0.0),
+            })
+        return out
+
+    def get_memory_status(self) -> "MemoryStatus":
+        """
+        Return live memory pressure for the ESP32-S3 mainboard.
+
+        Splits internal SRAM from PSRAM, reports the largest contiguous block
+        in each, and gives per-task stack headroom. Prefer this over
+        :meth:`get_status`'s ``free_heap``: that figure sums both pools, so on
+        a PSRAM board it stays healthy-looking while internal RAM — the pool
+        that actually runs out — is nearly exhausted.
+
+        Works over USB (BBP) and HTTP.
+        """
+        from .memory import parse_mem_status, parse_mem_status_json
+        if self._usb:
+            return parse_mem_status(self._usb_cmd(CmdId.MEM_STATUS))
+        return parse_mem_status_json(self._http_get("/system/memory"))
+
     def reset(self) -> None:
         """
         Reset all channels to HIGH_IMP and clear all alerts.
@@ -1145,6 +1194,21 @@ class BugBuster:
                 self._http_post(f"/channel/{channel}/ilimit", {"limit_8mA": bool(limit)})
         self._auto_claim_wrap([channel + 12], _body)
 
+    def set_avdd_select(self, channel: int, select: AvddSelect) -> None:
+        """
+        Choose which analog supply rail feeds a channel's output stage.
+
+        *select* — :class:`AvddSelect`. ``HI`` is required for outputs above
+        roughly 10 V; ``LO`` saves power on low-voltage loads.
+        """
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BB', channel, int(select))
+                self._usb_cmd(CmdId.SET_AVDD_SELECT, payload)
+            else:
+                self._http_post(f"/channel/{channel}/avdd", {"select": int(select)})
+        self._auto_claim_wrap([channel + 12], _body)
+
     # ------------------------------------------------------------------
     # ── Channel — ADC ───────────────────────────────────────────────────
     # ------------------------------------------------------------------
@@ -1276,6 +1340,39 @@ class BugBuster:
                 self._usb_cmd(CmdId.SET_DO_STATE, payload)
             else:
                 self._http_post(f"/channel/{channel}/do/set", {"on": on})
+        self._auto_claim_wrap([channel + 12], _body)
+
+    def set_do_config(
+        self,
+        channel:      int,
+        mode:         DoMode,
+        src_sel_gpio: bool = False,
+        t1:           int  = 0,
+        t2:           int  = 0,
+    ) -> None:
+        """
+        Configure a channel's digital-output driver.
+
+        *mode*         — :class:`DoMode` (HIGH_SIDE, LOW_SIDE, PUSH_PULL).
+        *src_sel_gpio* — drive the output from a GPIO instead of the DO state
+                         register, so an external signal can toggle it.
+        *t1*, *t2*     — slew/debounce timing codes passed straight through to
+                         the AD74416H.
+
+        Call before :meth:`set_digital_output`, which only sets the level.
+        """
+        def _body():
+            if self._usb:
+                payload = struct.pack('<BBBBB', channel, int(mode),
+                                      int(bool(src_sel_gpio)), t1 & 0xFF, t2 & 0xFF)
+                self._usb_cmd(CmdId.SET_DO_CONFIG, payload)
+            else:
+                self._http_post(f"/channel/{channel}/do/config", {
+                    "mode": int(mode),
+                    "srcSelGpio": bool(src_sel_gpio),
+                    "t1": t1,
+                    "t2": t2,
+                })
         self._auto_claim_wrap([channel + 12], _body)
 
     def set_din_config(
@@ -2209,6 +2306,70 @@ class BugBuster:
         else:
             self._http_post("/idac/cal/save")
 
+    def idac_cal_add_point(self, channel: int, code: int, measured_v: float) -> dict:
+        """
+        Record one measured calibration point for an IDAC channel.
+
+        Write *code* with :meth:`idac_set_code`, measure the resulting rail
+        with a trusted meter, then pass the reading here. Persist the curve
+        with :meth:`idac_cal_save` once enough points are in.
+
+        :return: ``{"channel": int, "count": int, "valid": bool}`` — ``valid``
+            turns True once the curve has enough monotonic points to be used.
+        """
+        if not (-127 <= code <= 127):
+            raise ValueError(f"code must be -127..127, got {code}")
+        if self._usb:
+            resp = self._usb_cmd(CmdId.IDAC_CAL_ADD_POINT,
+                                 struct.pack('<Bbf', channel, code, float(measured_v)))
+            _require_resp_len(resp, 3, "IDAC_CAL_ADD_POINT")
+            return {"channel": resp[0], "count": resp[1], "valid": bool(resp[2])}
+        r = self._http_post("/idac/cal/point", {
+            "ch": channel, "code": code, "measuredV": float(measured_v)})
+        return {
+            "channel": channel,
+            "count": int(r.get("count", 0)),
+            "valid": bool(r.get("valid", False)),
+        }
+
+    def idac_cal_clear(self, channel: int) -> None:
+        """Discard the in-RAM calibration curve for an IDAC channel.
+
+        Does not touch NVS — call :meth:`idac_cal_save` afterwards to make the
+        clear permanent.
+        """
+        if self._usb:
+            self._usb_cmd(CmdId.IDAC_CAL_CLEAR, struct.pack('<B', channel))
+        else:
+            self._http_post("/idac/cal/clear", {"ch": channel})
+
+    def idac_calibrate(
+        self,
+        channel:     int,
+        adc_channel: int,
+        step:        int = 8,
+        settle_ms:   int = 50,
+    ) -> int:
+        """
+        Run an automatic IDAC calibration sweep. **USB only.**
+
+        Sweeps the IDAC across its code range, reading each resulting voltage
+        back through *adc_channel*, and stores the curve. The result is saved
+        to NVS by the firmware, so no :meth:`idac_cal_save` is needed.
+
+        *adc_channel* must already be in :attr:`ChannelFunction.VIN` and wired
+        to the rail being calibrated, or the device returns INVALID_STATE.
+
+        :return: number of calibration points captured.
+        """
+        self._require_usb("idac_calibrate")
+        resp = self._usb_cmd(
+            CmdId.IDAC_CALIBRATE,
+            struct.pack('<BBHB', channel, step & 0xFF,
+                        settle_ms & 0xFFFF, adc_channel))
+        _require_resp_len(resp, 2, "IDAC_CALIBRATE")
+        return resp[1]
+
     # ------------------------------------------------------------------
     # ── Power management (PCA9535 I/O expander) ──────────────────────
     # ------------------------------------------------------------------
@@ -2282,6 +2443,27 @@ class BugBuster:
         else:
             data = self._http_get("/ioexp/faults")
             return data.get("faults", [])
+
+    def power_set_port(self, port: int, value: int) -> tuple[int, int]:
+        """
+        Write a raw PCA9535 output port byte. **USB only.**
+
+        Bypasses the named-control mapping in :meth:`power_set` and drives all
+        eight pins of *port* at once. Prefer :meth:`power_set` unless you need
+        to change several rails in one I2C transaction — a raw write can turn
+        on rails the named API would have interlocked.
+
+        :param port: 0 or 1.
+        :param value: 8-bit output latch value.
+        :return: ``(port, value)`` echoed by the device.
+        """
+        self._require_usb("power_set_port")
+        if port not in (0, 1):
+            raise ValueError(f"port must be 0 or 1, got {port}")
+        resp = self._usb_cmd(CmdId.PCA_SET_PORT,
+                             struct.pack('<BB', port, value & 0xFF))
+        _require_resp_len(resp, 2, "PCA_SET_PORT")
+        return resp[0], resp[1]
 
     def power_set_fault_config(self, auto_disable: bool = True, log_events: bool = True) -> None:
         """
@@ -3478,6 +3660,17 @@ class BugBuster:
         self._t.on_event(CmdId.SCOPE_DATA_EVT, _handler)
         self._usb_cmd(CmdId.START_SCOPE_STREAM, struct.pack("<B", ch_mask))
 
+    def stop_scope_stream(self) -> None:
+        """
+        Stop the 10 ms oscilloscope stream. **USB only.**
+
+        Also re-enables the ADC diagnostic conversions that
+        :meth:`on_scope_data` disabled for non-selected channels.
+        """
+        self._require_usb("stop_scope_stream")
+        self._usb_cmd(CmdId.STOP_SCOPE_STREAM)
+        self._t.remove_event(CmdId.SCOPE_DATA_EVT)
+
     def on_alert(self, callback: Callable[[dict], None]) -> None:
         """
         Register a callback for hardware alert events. **USB only.**
@@ -3709,6 +3902,20 @@ class BugBuster:
             self._usb_cmd(CmdId.USBPD_SELECT_PDO, struct.pack('<B', code))
         else:
             self._http_post("/usbpd/select", {"voltage": int(voltage_v)})
+
+    def usbpd_go(self, command: int) -> int:
+        """
+        Send a raw HUSB238 GO command to re-run PD negotiation. **USB only.**
+
+        :meth:`usbpd_select_voltage` stages a PDO; this commits it. Also used
+        to request the source capabilities be re-read after a cable swap.
+
+        :return: the command byte the device echoed back.
+        """
+        self._require_usb("usbpd_go")
+        resp = self._usb_cmd(CmdId.USBPD_GO, struct.pack('<B', command & 0xFF))
+        _require_resp_len(resp, 1, "USBPD_GO")
+        return resp[0]
 
     # ------------------------------------------------------------------
     # ── WiFi management ──────────────────────────────────────────────

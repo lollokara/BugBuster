@@ -403,6 +403,24 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 #define TASK_STACK_MAINLOOP  5120  // Core-0 main loop; sized from measured 2684 bytes peak
 #define TASK_STACK_BBPCLI    5120  // Core-1 CLI/BBP; measured peak 2760 (TUI exercised, 2026-08-06), margin 2360
 
+// Number of entries tasks_get_registry() can return. Keep in lockstep with
+// s_task_registry[] in tasks.cpp.
+#define BB_TASK_REGISTRY_MAX 6
+
+// One row of the task table. `handle` is resolved at call time, not cached:
+// during boot and after a task exits it can legitimately be NULL.
+struct BbTaskInfo {
+    const char  *name;
+    TaskHandle_t handle;
+    uint32_t     declared_bytes;
+    uint32_t     hwm_bytes;      // stack never used, 0 when handle is NULL
+};
+
+// Single source of truth for the task table shared by the `stack_hwm` CLI
+// command, BBP_CMD_MEM_STATUS and GET /api/system/memory. Fills up to `max`
+// entries and returns how many were written.
+size_t tasks_get_registry(BbTaskInfo *out, size_t max);
+
 void tasks_log_stack_hwm(void);
 
 // -----------------------------------------------------------------------------

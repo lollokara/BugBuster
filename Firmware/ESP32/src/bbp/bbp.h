@@ -75,6 +75,18 @@ extern "C" {
 #define BBP_CMD_SELFTEST_INT_SUPPLIES  0x09  // Measure internal ADC supplies (AVDD, DVCC, etc.)
 #define BBP_CMD_SELFTEST_WORKER        0x0B  // Enable/disable/query supply monitor worker
 #define BBP_CMD_WIFI_FORGET            0x0A  // Erase saved STA credentials from NVS and disconnect
+#define BBP_CMD_MEM_STATUS             0x0C  // Heap + per-task stack telemetry (see MEM_STATUS_SCHEMA)
+
+// MEM_STATUS response layout (little-endian, schema-versioned so the desktop
+// and Python client can grow the tail without a PROTO_VERSION bump):
+//   u8  schema (= BBP_MEM_STATUS_SCHEMA)
+//   u32 internal_free, internal_min_ever, internal_largest, internal_total
+//   u32 psram_free,    psram_min_ever,    psram_largest,    psram_total
+//   u32 uptime_ms
+//   u8  task_count
+//   then task_count x { char name[12] NUL-padded, u16 declared, u16 hwm_free }
+#define BBP_MEM_STATUS_SCHEMA          1
+#define BBP_MEM_TASK_NAME_LEN          12
 
 // Channel Configuration
 #define BBP_CMD_SET_CH_FUNC     0x10

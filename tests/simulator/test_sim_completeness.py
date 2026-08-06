@@ -100,6 +100,7 @@ KNOWN_HTTP_ROUTES = [
     ("GET", "/api/device/version"),
     ("GET", "/api/device/info"),
     ("GET", "/api/status"),
+    ("GET", "/api/system/memory"),
     ("GET", "/api/faults"),
     ("POST", "/api/faults/clear"),
     ("POST", "/api/device/reset"),

@@ -240,6 +240,57 @@ static char *api_status(void)
     return json_take(root);
 }
 
+// GET /api/system/memory — live memory pressure.
+//
+// /api/status already carries freeHeap/minFreeHeap, but those are whole-heap
+// figures: on a PSRAM board they are dominated by external RAM and stay
+// comfortable while INTERNAL RAM (the scarce pool) runs out. This route splits
+// the two pools, reports the largest contiguous block (a task cannot start
+// without one, however much total free there is) and per-task stack headroom.
+static char *api_system_memory(void)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    size_t int_free    = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t int_min     = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    size_t int_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    size_t int_total   = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+
+    cJSON *internal = cJSON_AddObjectToObject(root, "internal");
+    add_number_alias(internal, "freeBytes", "free_bytes", (double)int_free);
+    add_number_alias(internal, "minEverBytes", "min_ever_bytes", (double)int_min);
+    add_number_alias(internal, "largestBlockBytes", "largest_block_bytes", (double)int_largest);
+    add_number_alias(internal, "totalBytes", "total_bytes", (double)int_total);
+
+    cJSON *psram = cJSON_AddObjectToObject(root, "psram");
+    add_number_alias(psram, "freeBytes", "free_bytes",
+                     (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    add_number_alias(psram, "minEverBytes", "min_ever_bytes",
+                     (double)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+    add_number_alias(psram, "largestBlockBytes", "largest_block_bytes",
+                     (double)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    add_number_alias(psram, "totalBytes", "total_bytes",
+                     (double)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+
+    BbTaskInfo tasks[BB_TASK_REGISTRY_MAX];
+    size_t n_tasks = tasks_get_registry(tasks, BB_TASK_REGISTRY_MAX);
+    cJSON *arr = cJSON_AddArrayToObject(root, "tasks");
+    for (size_t i = 0; i < n_tasks; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", tasks[i].name);
+        add_number_alias(o, "declaredBytes", "declared_bytes", (double)tasks[i].declared_bytes);
+        add_number_alias(o, "freeBytes", "free_bytes", (double)tasks[i].hwm_bytes);
+        add_number_alias(o, "peakUsedBytes", "peak_used_bytes",
+                         (double)(tasks[i].declared_bytes > tasks[i].hwm_bytes
+                                  ? tasks[i].declared_bytes - tasks[i].hwm_bytes : 0));
+        cJSON_AddBoolToObject(o, "running", tasks[i].handle != NULL);
+        cJSON_AddItemToArray(arr, o);
+    }
+
+    cJSON_AddNumberToObject(root, "uptimeMs", (double)millis_now());
+    return json_take(root);
+}
+
 static void add_rails(cJSON *parent, const HatState *hs)
 {
     cJSON *rails = cJSON_AddArrayToObject(parent, "rails");
@@ -1516,6 +1567,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     // GET-style
     if (strcmp(path, "/api/device/info") == 0) return api_device_info();
     if (strcmp(path, "/api/status") == 0)      return api_status();
+    if (strcmp(path, "/api/system/memory") == 0) return api_system_memory();
     if (strcmp(path, "/api/hat") == 0)         return api_hat();
     if (strcmp(path, "/api/hat/v2/rails") == 0) return api_hat_v2_rails();
     if (strncmp(path, "/api/hat/calibration", 20) == 0) return api_hat_calibration(path);

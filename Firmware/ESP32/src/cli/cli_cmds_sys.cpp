@@ -1202,31 +1202,24 @@ extern "C" void cli_cmd_coredump(const char* args)
 extern "C" void cli_cmd_stack_hwm(const char* args)
 {
     (void)args;
-    struct { const char *name; TaskHandle_t h; uint32_t declared; } tasks[] = {
-        { "adcPoll",  g_adcTaskHandle,             TASK_STACK_ADCPOLL  },
-        { "faultMon", xTaskGetHandle("faultMon"),  TASK_STACK_FAULTMON },
-        { "cmdProc",  xTaskGetHandle("cmdProc"),   TASK_STACK_CMDPROC  },
-        { "wavegen",  g_wavegenTask,               TASK_STACK_WAVEGEN  },
-        { "mainLoop", xTaskGetHandle("mainLoop"),  TASK_STACK_MAINLOOP },
-        { "bbpCli",   xTaskGetHandle("bbpCli"),    TASK_STACK_BBPCLI   },
-    };
-    // NOTE: on ESP-IDF uxTaskGetStackHighWaterMark() returns BYTES, not words
-    // (IDF sizes stacks in bytes too). An earlier version of this command
-    // multiplied by 4 and printed figures larger than the whole stack.
+    BbTaskInfo tasks[BB_TASK_REGISTRY_MAX];
+    size_t n = tasks_get_registry(tasks, BB_TASK_REGISTRY_MAX);
+
     term_println("\r\n--- Stack High-Water Marks (bytes never used) ---");
     term_println("  task        declared   unused     peak-used");
-    for (auto &t : tasks) {
-        if (!t.h) {
+    for (size_t i = 0; i < n; i++) {
+        const BbTaskInfo &t = tasks[i];
+        if (!t.handle) {
             term_printf("  %-10s  handle not found\r\n", t.name);
             continue;
         }
-        uint32_t hwm = (uint32_t)uxTaskGetStackHighWaterMark(t.h);
+        uint32_t hwm = t.hwm_bytes;
         const char *flag = "";
         if      (hwm < 512)  flag = "  *** LOW — overflow risk ***";
         else if (hwm < 1024) flag = "  (warn — monitor closely)";
         term_printf("  %-10s  %6lu   %6lu   %6lu%s\r\n", t.name,
-                    (unsigned long)t.declared, (unsigned long)hwm,
-                    (unsigned long)(t.declared > hwm ? t.declared - hwm : 0), flag);
+                    (unsigned long)t.declared_bytes, (unsigned long)hwm,
+                    (unsigned long)(t.declared_bytes > hwm ? t.declared_bytes - hwm : 0), flag);
     }
     // Also emit to ESP log so it appears in the serial monitor stream
     tasks_log_stack_hwm();

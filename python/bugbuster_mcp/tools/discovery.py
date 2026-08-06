@@ -50,6 +50,62 @@ def register(mcp) -> None:
         return result
 
     @mcp.tool()
+    def device_memory() -> dict:
+        """
+        Return live memory pressure for the ESP32-S3 mainboard.
+
+        The S3 runs tight on INTERNAL SRAM. Use this before and after loading
+        scripts, starting streams, or triggering an OTA to see whether the
+        device has headroom left.
+
+        Prefer this over device_status()'s free_heap: that figure sums internal
+        and PSRAM, so on a PSRAM board it looks healthy while internal RAM --
+        the pool that actually runs out -- is nearly exhausted.
+
+        Returns internal/psram pools (free, min-ever, largest contiguous block,
+        total, used %, fragmentation %), per-task stack headroom, a one-line
+        summary, and a warnings list that is empty when the device is healthy.
+        """
+        bb = session.get_client()
+        try:
+            m = bb.get_memory_status()
+        except Exception as e:
+            return {"error": str(e),
+                    "transport": "usb" if session.is_usb() else "http"}
+
+        def pool(p) -> dict:
+            return {
+                "free_bytes": p.free_bytes,
+                "min_ever_bytes": p.min_ever_bytes,
+                "largest_block_bytes": p.largest_block_bytes,
+                "total_bytes": p.total_bytes,
+                "used_pct": round(p.used_pct, 1),
+                "fragmentation_pct": round(p.fragmentation_pct, 1),
+            }
+
+        warnings = m.warnings()
+        return {
+            "internal": pool(m.internal),
+            "psram": pool(m.psram) if m.has_psram else None,
+            "tasks": [
+                {
+                    "name": t.name,
+                    "declared_bytes": t.declared_bytes,
+                    "free_bytes": t.free_bytes,
+                    "peak_used_bytes": t.peak_used_bytes,
+                    "used_pct": round(t.used_pct, 1),
+                    "running": t.running,
+                }
+                for t in m.tasks
+            ],
+            "uptime_ms": m.uptime_ms,
+            "summary": m.summary(),
+            "warnings": warnings,
+            "healthy": not warnings,
+            "transport": "usb" if session.is_usb() else "http",
+        }
+
+    @mcp.tool()
     def device_info() -> dict:
         """
         Return BugBuster hardware identification and firmware version.

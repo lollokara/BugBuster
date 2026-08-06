@@ -11,6 +11,7 @@ from tests.lib.srcread import read_source
 HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
 HAT_C = read_source("Firmware/ESP32/src/hat/hat.cpp")
 TASKS_H = read_source("Firmware/ESP32/src/tasks.h")
+TASKS_CPP = read_source("Firmware/ESP32/src/tasks.cpp")
 
 
 def _literal_end(text: str, i: int, n: int) -> int:
@@ -1045,53 +1046,59 @@ def test_bbp_cli_shrunk_and_ble_api_still_untouched_guard_rails():
 
 
 def test_stack_hwm_table_uses_shared_constants_not_literals():
-    """The stack_hwm CLI diagnostic must reference shared TASK_STACK_* constants,
-    not duplicated hardcoded literals. This prevents the table from becoming stale
-    when actual stack sizes change (bug that motivated this fix: mainLoop was 5120
-    but the table said 8192).
+    """The declared stack sizes must come from the shared TASK_STACK_* macros,
+    never from duplicated literals — a duplicated table goes stale when a stack
+    is resized (the bug that motivated this guard: mainLoop was 5120 but the
+    table still said 8192).
 
-    This test checks that each row in the tasks[] table uses a macro constant
-    rather than a bare numeric literal for the 'declared' field."""
-    body = _fn_body(CLI_SYS_CPP, "extern \"C\" void cli_cmd_stack_hwm(")
+    The table used to live inline in cli_cmd_stack_hwm(). It now lives once in
+    tasks_get_registry() (tasks.cpp), which the CLI, BBP_CMD_MEM_STATUS and
+    GET /api/system/memory all read, so this checks two things: the CLI does
+    not reintroduce a private copy, and the one real table uses the macros.
+    """
+    cli_body = _fn_body(CLI_SYS_CPP, "extern \"C\" void cli_cmd_stack_hwm(")
+    assert "tasks_get_registry" in cli_body, (
+        "cli_cmd_stack_hwm must read the shared task registry rather than "
+        "building its own table")
+    assert not re.search(r"\}\s*tasks\[\]\s*=", cli_body), (
+        "cli_cmd_stack_hwm has reintroduced a private task table — that is the "
+        "duplication this guard exists to prevent")
 
-    # Extract just the tasks[] array initialization
-    # Find the struct definition with the array - needs to handle inline struct
-    array_match = re.search(
-        r"struct\s*\{[^}]*\}\s*tasks\[\]\s*=\s*\{(.*?)\n\s*\};",
-        body,
-        re.DOTALL
-    )
-    assert array_match, "could not find tasks[] array in cli_cmd_stack_hwm"
+    registry = _fn_body(TASKS_CPP, "size_t tasks_get_registry(")
+    assert registry, "tasks_get_registry() not found in tasks.cpp"
 
-    array_init = array_match.group(1)
+    bad_literals = {"2560", "2048", "5120", "8192", "4096"}
+    for line in registry.split("\n"):
+        stripped = _strip_comments(line).strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        # Rows look like: { "adcPoll", TASK_STACK_ADCPOLL },
+        match = re.search(r'"(\w+)"\s*,\s*(\w+)\s*\}', stripped)
+        if match and match.group(2) in bad_literals:
+            raise AssertionError(
+                f"task registry row for '{match.group(1)}' uses bare literal "
+                f"{match.group(2)} instead of a TASK_STACK_* constant. Use the "
+                f"constant from tasks.h so the table cannot go stale."
+            )
 
-    # Check that each row uses a macro constant, not a bare number
-    # Valid patterns: TASK_STACK_ADCPOLL, TASK_STACK_FAULTMON, etc.
-    # Invalid patterns: bare numbers like 2560, 2048, 5120, 8192
-    lines = array_init.split("\n")
-    for line in lines:
-        if line.strip() and not line.strip().startswith("//"):
-            # Each line should be: { "name", handle, TASK_STACK_* },
-            # Check that common bare literals don't appear at the end (the declared field)
-            stripped = _strip_comments(line)
 
-            # This is a heuristic check: if a line contains common stack size literals
-            # in the declared field position (end of the tuple), fail
-            match = re.search(r",\s*(\d+)\s*\}", stripped)
-            if match:
-                literal = match.group(1)
-                # Known bad literals (common stack sizes that should be macros)
-                bad_literals = {"2560", "2048", "5120", "8192"}
-                if literal in bad_literals:
-                    # Get the task name from this line for the error message
-                    name_match = re.search(r'"(\w+)"', line)
-                    task_name = name_match.group(1) if name_match else "unknown"
-                    raise AssertionError(
-                        f"stack_hwm table row for '{task_name}' uses bare literal {literal} "
-                        f"instead of a TASK_STACK_* constant. This will cause the table to "
-                        f"become stale when stack sizes change. Use the appropriate constant "
-                        f"from tasks.h instead."
-                    )
+def test_every_task_stack_constant_appears_in_the_registry():
+    """A task with a TASK_STACK_* size but no registry row is invisible to
+    `stack_hwm`, MEM_STATUS and /api/system/memory — its stack could be one
+    byte from overflow and nothing would report it."""
+    declared = set(re.findall(r"#define\s+TASK_STACK_(\w+)\s+\d+", TASKS_H))
+    registry = _fn_body(TASKS_CPP, "size_t tasks_get_registry(")
+    referenced = set(re.findall(r"TASK_STACK_(\w+)", registry))
+    missing = declared - referenced
+    assert not missing, f"task stacks defined but never reported: {sorted(missing)}"
+
+
+def test_registry_capacity_covers_every_task():
+    m = re.search(r"#define\s+BB_TASK_REGISTRY_MAX\s+(\d+)", TASKS_H)
+    assert m, "BB_TASK_REGISTRY_MAX is not defined"
+    declared = len(re.findall(r"#define\s+TASK_STACK_(\w+)\s+\d+", TASKS_H))
+    assert int(m.group(1)) >= declared, (
+        f"BB_TASK_REGISTRY_MAX={m.group(1)} silently truncates {declared} tasks")
 
 
 # =============================================================================
