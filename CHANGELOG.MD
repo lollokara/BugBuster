@@ -84,19 +84,49 @@
 
 ### Known issues
 
-- **`START_ADC_DSP_STREAM`'s `rate_code` is accepted and never applied.**
-  `bbpStartAdcDspStream()` (`bbp/bbp.cpp`) uses `rate_code` only to compute the
-  `effectiveRate` it reports back in the response; it never reconfigures the
-  AD74416H ADC rate or the `adcPoll` loop cadence. Requesting `SPS_9600` with a
-  256-sample window advertises ~37 windows/s (as the client docstring also
-  promises) and delivers **one window in 20.5 s** — measured on hardware over
-  both USB and the WiFi websocket, on a configured and an unconfigured channel.
-  The DSP pipeline itself is correct; only the rate is ignored. Fixing it means
-  driving the ADC rate and the poll-loop delay together, which interacts with
-  auto-ranging and `tasks_rebuild_adc_conv_ctrl()`, so it is left for its own
-  pass rather than folded into the memory work.
+- **ADC DSP throughput is bounded by the `adcPoll` loop, not the converter.**
+  Even with the rate now applied (below), a 9.6 kSPS request yields ~512
+  samples/s — adcPoll reads over SPI once per FreeRTOS tick, so ~1000 samples/s
+  is the architectural ceiling. `effectiveRateHz` now reports this bound rather
+  than the converter rate. Getting closer to the converter's rate needs a
+  DMA/DRDY-driven read path, which is a separate piece of work.
 
 ### Fixed
+
+- **`START_ADC_DSP_STREAM`'s `rate_code` was accepted and never applied.**
+  `bbpStartAdcDspStream()` used `rate_code` only to compute the `effectiveRate`
+  it echoed back; it never touched the AD74416H's CONV_RATE. A `SPS_9600`
+  request advertised ~37 windows/s (as the client docstring also promised) and
+  delivered **one 256-sample window per ~20 s** — measured on hardware over both
+  USB and the WiFi websocket. Three separate causes, all fixed:
+  1. The rate is now written to the channel (via the existing `CMD_ADC_CONFIG`
+     path) and **restored when the stream stops**, so a DSP session no longer
+     leaves the channel and the poll cadence permanently at 9.6 kSPS.
+  2. Setting CONV_RATE alone was not enough: `ADC_CONV_CTRL` also runs the four
+     diagnostic slots and the sequence advances at its slowest member, which
+     still capped the channel at ~46 samples/s. The DSP stream now claims
+     refcounted scope mode (`tasks_scope_mode_enter`) for its channel — the same
+     mechanism `START_SCOPE_STREAM` already used for this exact reason — and
+     releases it on stop, restoring the diagnostic slots.
+  3. `effectiveRateHz` is now derived from `min(converter rate, poll-loop
+     ceiling)` instead of the converter rate alone, so it reports 3 windows/s
+     where the device measures 2.0 — instead of 37.
+
+  Measured on hardware, 256-sample windows: **12.5 → 512 samples/s at 9.6 kSPS
+  (41x)**, first window at 0.63 s instead of 20.5 s, and the window rate now
+  tracks the requested rate (200 SPS → 128 samples/s). Channel `adc_rate` and
+  the ADC diagnostic slots both verified restored after the stream stops.
+- **A DSP stream on a `HIGH_IMP` channel streamed zeros forever.** `adcPoll`
+  skips `CH_FUNC_HIGH_IMP` channels entirely — it neither reads them nor lets
+  them raise the poll rate — so the stream emitted stale cached values with no
+  indication anything was wrong. `bbpStartAdcDspStream()` now returns false and
+  the transports surface it (BBP `INVALID_STATE`, HTTP `409`). Invalid
+  `rate_code` values (`AdcRate` is not contiguous — 2, 5, 7, 10, 11 are not
+  rates) are rejected too, instead of being silently written to CONV_RATE.
+  The simulator mirrors both rejections, and a new parity gate
+  (`test_simulator_adc_rate_codes_match_the_firmware_enum`) derives the valid
+  set from `ad74416h_regs.h` so the simulator cannot drift from the firmware.
+
 
 - **A USB disconnect silently reset logical channel 0.**
   `bbpExitBinaryMode()` → `bbpStopWavegen()` → `wavegen_stop_and_reset()`

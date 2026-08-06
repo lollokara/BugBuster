@@ -3582,10 +3582,24 @@ class BugBuster:
         Works over **USB** (via BBP binary events) and **HTTP/WiFi** (via
         WebSocket ``/api/ws/stream`` with ``"adc-dsp"`` subscription).
 
-        The device samples at *rate* (up to 9.6 kSPS), accumulates 256-sample
+        The device samples at *rate*, accumulates *window_samples*-sample
         windows, applies a Hann window + FFT, detects spikes, and pushes a
-        compressed :class:`AdcDspWindow` for every window (~37 windows/sec at
-        9.6 kSPS — roughly 89 bytes/window vs 768 bytes raw).
+        compressed :class:`AdcDspWindow` for every window (~89 bytes/window vs
+        768 bytes raw).
+
+        Throughput is bounded by the ADC **poll loop**, not the converter:
+        adcPoll reads over SPI once per tick, so ~2 windows/s (about 512
+        samples/s) is what a 9.6 kSPS request actually delivers with a
+        256-sample window — measured on hardware. The device reports its own
+        estimate as ``effectiveRateHz``. Requesting a rate slower than
+        ``window_samples`` per second simply makes windows rare (20 SPS needs
+        ~13 s per window).
+
+        The channel must already be in an analog input function — adcPoll never
+        samples a ``HIGH_IMP`` channel, so the device rejects the request with
+        ``INVALID_STATE`` rather than streaming zeros. For the duration of the
+        stream the channel is moved to *rate* and the ADC diagnostic slots are
+        suspended; both are restored by :meth:`stop_adc_dsp_stream`.
 
         *channel*         — logical AD74416H channel (0–3).
         *rate*            — :class:`AdcRate` enum value; defaults to SPS_9600.

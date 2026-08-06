@@ -205,6 +205,20 @@ def test_out_of_range_io_is_rejected(client):
 # ADC DSP stream
 # ---------------------------------------------------------------------------
 
+def _dsp_ready(client, channel):
+    """adcPoll never samples a HIGH_IMP channel, so the firmware refuses to
+    start a DSP stream on one. Put it in an analog input mode first."""
+    client.set_channel_function(channel, bb.ChannelFunction.VIN)
+    return channel
+
+
+def test_dsp_stream_refuses_a_high_impedance_channel(client):
+    """Streaming from a channel adcPoll skips would emit stale zeros forever.
+    Mirrors the guard in bbpStartAdcDspStream()."""
+    with pytest.raises(DeviceError):
+        client.start_adc_dsp_stream(channel=2, callback=lambda w: None)
+
+
 def test_dsp_stream_delivers_self_consistent_windows(client):
     got = []
     done = threading.Event()
@@ -214,7 +228,7 @@ def test_dsp_stream_delivers_self_consistent_windows(client):
         if len(got) >= 2:
             done.set()
 
-    client.start_adc_dsp_stream(channel=1, callback=on_window)
+    client.start_adc_dsp_stream(channel=_dsp_ready(client, 1), callback=on_window)
     try:
         assert done.wait(timeout=3.0), "no ADC_DSP_EVT delivered"
     finally:
@@ -239,7 +253,7 @@ def test_dsp_stream_timestamps_advance(client):
         if len(got) >= 3:
             done.set()
 
-    client.start_adc_dsp_stream(channel=0, callback=on_window)
+    client.start_adc_dsp_stream(channel=_dsp_ready(client, 0), callback=on_window)
     try:
         assert done.wait(timeout=3.0)
     finally:
@@ -254,7 +268,7 @@ def test_a_high_spike_threshold_suppresses_spikes(client):
     done = threading.Event()
 
     client.start_adc_dsp_stream(
-        channel=0, spike_threshold=99.0,
+        channel=_dsp_ready(client, 0), spike_threshold=99.0,
         callback=lambda w: (got.append(w), done.set()))
     try:
         assert done.wait(timeout=3.0)
@@ -266,7 +280,7 @@ def test_a_high_spike_threshold_suppresses_spikes(client):
 
 def test_stopping_the_dsp_stream_ends_delivery(client):
     got = []
-    client.start_adc_dsp_stream(channel=0, callback=got.append)
+    client.start_adc_dsp_stream(channel=_dsp_ready(client, 0), callback=got.append)
     time.sleep(0.15)
     client.stop_adc_dsp_stream()
     settled = len(got)
@@ -281,6 +295,7 @@ def test_disconnect_stops_a_running_dsp_stream():
     transport = SimulatedUSBTransport(device, hat=True)
     c = bb.BugBuster(transport)
     c.connect()
+    c.set_channel_function(0, bb.ChannelFunction.VIN)
     c.start_adc_dsp_stream(channel=0, callback=lambda w: None)
     c.disconnect()
     assert device.dsp_stream is None

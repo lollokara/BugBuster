@@ -780,6 +780,8 @@ static TaskHandle_t s_dspTask  = nullptr;
 static Command s_dspRateCfg       = {};
 static AdcRate s_dspPrevRate      = ADC_RATE_20SPS;
 static bool    s_dspPrevRateValid = false;
+// True while the DSP stream holds a scope-mode reference (see below).
+static bool    s_dspScopeMode     = false;
 
 static uint16_t adcRateToSps(AdcRate r)
 {
@@ -811,6 +813,10 @@ bool bbpIsValidAdcRate(uint8_t code)
 
 static void dsp_restore_adc_rate(void)
 {
+    if (s_dspScopeMode) {
+        s_dspScopeMode = false;
+        tasks_scope_mode_exit();
+    }
     if (!s_dspPrevRateValid) return;
     s_dspPrevRateValid = false;
     s_dspRateCfg.adcCfg.rate = s_dspPrevRate;
@@ -911,10 +917,29 @@ bool bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
         }
     }
 
+    // Setting the channel's CONV_RATE is not enough on its own: ADC_CONV_CTRL
+    // also runs the 4 diagnostic slots, and the sequence advances at the
+    // slowest member, so a 9.6 kSPS channel still only produced ~46 samples/s
+    // measured. Scope mode drops diagMask to 0 and restricts the sequence to
+    // the masked channels -- exactly what START_SCOPE_STREAM already does for
+    // the same reason. It is refcounted, so this composes with a concurrent
+    // scope stream instead of fighting it.
+    tasks_scope_mode_enter((uint8_t)(1u << channel));
+    s_dspScopeMode = true;
+
     // Report the rate that is actually in effect, not the one asked for.
+    // The converter's CONV_RATE is only half the story: adcPoll reads over SPI
+    // once per tasks_adc_rate_poll_ms(), so samples/s is capped by the poll
+    // loop. Measured on hardware at CONV_RATE 9.6 kSPS: ~555 samples/s, i.e.
+    // the poll loop, not the ADC, is the limit. Reporting the raw converter
+    // rate advertised 37 windows/s while delivering ~2.
     uint16_t sps = 20;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        sps = adcRateToSps(g_deviceState.channels[channel].adcRate);
+        AdcRate live = g_deviceState.channels[channel].adcRate;
+        uint32_t poll_ms = tasks_adc_rate_poll_ms(live);
+        uint16_t poll_hz = (uint16_t)(poll_ms ? (1000u / poll_ms) : 1000u);
+        sps = adcRateToSps(live);
+        if (poll_hz < sps) sps = poll_hz;
         xSemaphoreGive(g_stateMutex);
     }
     if (effective_rate_out) {

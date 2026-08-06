@@ -7,13 +7,69 @@ The suite has five layers:
 
 | Layer | Dir | Needs hardware? | What it validates |
 |---|---|---|---|
-| **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow |
+| **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow — **plus the source-parity guards below** |
 | **Simulator** | `tests/simulator/` | no | End-to-end BBP + HTTP round-trips against `SimulatedDevice` (102 BBP handlers, `/api/*` surface) |
 | **Mock** | `tests/mock/` | no | `SimulatedDevice`, `SimulatedUSBTransport`, `SimulatedHTTPTransport` — shared fixtures used by the simulator and device layers |
 | **Synthetic** | `tests/synthetic/` | no | Regression tests for LA USB bulk/streaming protocol, generated stimuli, timing edge-cases |
 | **Device** | `tests/device/` | yes (or `--sim`) | The same tests, driven against real hardware over USB / HTTP, or against the simulator with `--sim` |
 
-Current posture: **249 tests** (unit + sim/device passing), 64 skipped (HAT / SWD / LA hardware-only).
+Current posture (2026-08-06): **1140 passing**, 150 skipped, 2 xpassed across
+`unit + synthetic + simulator + device --sim`, plus 6 in `tests/integration`
+(`--sim-full`). Skips are hardware-only paths (HAT / SWD / LA).
+
+```bash
+# The full hardware-free run, as CI executes it
+PYTHONPATH=python pytest tests/unit tests/synthetic tests/simulator tests/device --sim -q
+PYTHONPATH=python pytest tests/integration --sim-full -q
+```
+
+## Source-parity guards (the tests that read the firmware)
+
+A large part of `tests/unit/` does not exercise Python at all — it **parses the
+firmware C/C++ sources** and asserts the host, the simulator and the firmware
+still agree. This exists because the expensive bugs on this project have all
+been drift bugs, not logic bugs: a constant retyped in three places, or a
+simulator written against a broken client parser instead of against the
+firmware (which kept the whole suite green while the device returned garbage).
+
+The rule: **derive the constant from the firmware source in the test, never
+retype it.**
+
+| Guard | Reads | Catches |
+|---|---|---|
+| `test_bbp_command_parity.py` | `bbp.h`, `constants.py`, `client.py` | opcodes defined in firmware but unreachable from the client; duplicate opcodes; `AdcRate` codes the simulator accepts but the device rejects |
+| `test_api_route_parity.py` | `api_core.cpp`, `webserver.cpp` | an HTTP route implemented but never registered |
+| `test_idac_wire_format.py` | `cmd_idac.cpp` | per-channel record layout drift between firmware and client |
+| `test_mux_device_parity.py` | `tasks.cpp` + host/desktop/web sources | the logical→MUX-device C/D swap disagreeing across surfaces |
+| `test_memory_telemetry.py` | `tasks.h`, `bbp.h`, `bbp.cpp`, `cmd_registry.cpp` | task-stack sizing, internal-DRAM regressions (see below) |
+| `test_direct_daq_ota.py` | `tasks.h`, `main.cpp`, `ble_service.cpp` | task stacks shrunk below their measured peak; OTA workers moved to PSRAM stacks |
+
+These fail on a **firmware** edit, which is the point — change
+`ad74416h_regs.h`'s `AdcRate` enum and the Python suite goes red until the
+simulator is updated to match.
+
+### Memory-pressure guards
+
+`tests/unit/test_memory_telemetry.py` additionally pins the ESP32-S3's internal
+SRAM posture, which is the resource this board actually runs out of:
+
+- the BBP command registry must stay a **pointer index** into the flash-resident
+  `static const` descriptor blocks, never a `memcpy`'d copy (that copy cost
+  8 KB of internal `.bss`);
+- `CMD_REGISTRY_MAX` must still cover every registered descriptor, so a new
+  subsystem block cannot be silently dropped at boot;
+- seven named scratch buffers must stay **file-scope** `static EXT_RAM_BSS_ATTR`
+  — the attribute is silently ignored on function-scope statics, so a `static`
+  array declared inside a function lands in internal DRAM no matter what;
+- no function-scope `static` arrays may reappear in `ws_stream.cpp`,
+  `repl_ws.cpp` or `hat.cpp`, where that trap has already bitten;
+- `wavegen_stop_and_reset()` must keep its `wavegen.active` early-return, which
+  is what stops every USB disconnect from enqueueing a deep handler onto
+  `cmdProc`'s stack.
+
+Runtime memory has its own tooling — see
+[`Docs/MemoryTesting.md`](../Docs/MemoryTesting.md) and
+`tests/tools/mem_watch.py`.
 
 ## Setup
 
@@ -136,8 +192,39 @@ PYTHONPATH=python:tests pytest tests/device --sim -q            # device suite v
 
 The simulator implements every BBP CmdId handler (see
 `tests/simulator/test_sim_completeness.py`) and mirrors the firmware's `/api`
-schema, including the BBP v9 `macAddress` field on `/api/device/info` and the
+schema, including the `macAddress` field on `/api/device/info` and the
 admin-token pairing flow (injected automatically by `SimulatedHTTPTransport`).
+
+> **Write simulator handlers against the FIRMWARE, not against the client.**
+> `tests/mock/handlers/idac.py` was once written to match a broken client
+> parser — 26 bytes/channel for 4 channels, where the firmware wrote 44 bytes
+> for 3. The suite was green and `idac_get_status()` returned
+> `target_v = 726302457856.0 V` on real hardware. When adding a handler, read
+> the `bbp_put_*` sequence in the firmware and mirror it, then pin it with a
+> parity guard that parses the layout out of the `.cpp`.
+
+### Memory watch (hardware)
+
+`tests/tools/mem_watch.py` is a live internal-SRAM dashboard driven by the
+`MEM_STATUS` BBP command / `GET /api/system/memory`. It doubles as a CI gate:
+
+```bash
+# One-shot reading
+PYTHONPATH=python python tests/tools/mem_watch.py --device-usb COM6 --once --no-clear
+
+# Under load, exporting a series to compare before/after a change
+PYTHONPATH=python python tests/tools/mem_watch.py --device-usb COM6 --stress \
+    --duration 60 --interval 1 --json mem-after.json --csv mem-after.csv
+
+# Pass/fail thresholds (non-zero exit when breached)
+PYTHONPATH=python python tests/tools/mem_watch.py --device-usb COM6 --stress \
+    --duration 30 --fail-under-kb 24 --fail-largest-under-kb 8 --fail-task-pct 80
+```
+
+`--stress` starts the ADC and scope streams while sampling. **Idle numbers lie**
+— always compare under load. Stack high-water marks also grow late, so exercise
+the deep paths (connect/disconnect cycles, HTTP, the CLI `tui`, an OTA query)
+before trusting a reading.
 
 ## Test markers
 

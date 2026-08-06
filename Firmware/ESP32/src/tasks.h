@@ -292,6 +292,13 @@ bool sendCommand(const Command& cmd);
 bool tasks_drain_command_queue(uint32_t timeout_ms);
 
 /**
+ * @brief adcPoll's loop interval in ms for a given ADC conversion rate.
+ *        The poll loop reads over SPI once per interval, so 1000/this is the
+ *        hard ceiling on samples/s regardless of the converter's own rate.
+ */
+uint32_t tasks_adc_rate_poll_ms(AdcRate fastest);
+
+/**
  * @brief Reset the entire board signal path to a safe state.
  *
  * Sets all analog channels to HIGH_IMP, opens all MUX switches,

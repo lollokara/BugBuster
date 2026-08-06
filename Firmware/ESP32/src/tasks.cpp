@@ -172,7 +172,7 @@ static bool setVoutRangePreservingOutput(uint8_t logical_channel, float present_
 // Map ADC rate enum to approximate poll interval in ms.
 // We can't match full SPI throughput at 9600 SPS, but we poll as fast as
 // practical for higher rates. Minimum ~2ms due to SPI + FreeRTOS overhead.
-static uint32_t adcRateToPollMs(AdcRate fastest)
+uint32_t tasks_adc_rate_poll_ms(AdcRate fastest)
 {
     switch (fastest) {
         case ADC_RATE_10SPS_H:   return 50;   // Poll at 20 Hz (for 10 SPS)
@@ -247,7 +247,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
             uint32_t minPollMs = 50;  // default 20 SPS
             for (uint8_t ch = 0; ch < AD74416H_NUM_CHANNELS; ch++) {
                 if (func[ch] != CH_FUNC_HIGH_IMP) {
-                    uint32_t ms = adcRateToPollMs(rate[ch]);
+                    uint32_t ms = tasks_adc_rate_poll_ms(rate[ch]);
                     if (ms < minPollMs) minPollMs = ms;
                 }
             }

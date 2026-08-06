@@ -22,6 +22,30 @@ CLIENT_PY = read_source("python/bugbuster/client.py")
 DAQ_CONFIG_PY = read_source("python/bugbuster/daq_config.py")
 OTA_PY = read_source("python/bugbuster/ota.py")
 
+
+def test_simulator_adc_rate_codes_match_the_firmware_enum():
+    """The simulator rejects DSP requests carrying an invalid CONV_RATE code,
+    which means it hardcodes the valid set. AdcRate is NOT contiguous (2, 5, 7,
+    10, 11 are absent), so a retyped literal is easy to get wrong and nothing
+    at runtime would notice -- the simulator would simply accept a code the
+    device rejects."""
+    regs_h = read_source("Firmware/ESP32/src/hal/ad74416h_regs.h")
+    body = regs_h.split("typedef enum {", 1)[1].split("} AdcRate;", 1)[0]
+    firmware = {
+        int(v) for _, v in re.findall(r"(ADC_RATE_\w+)\s*=\s*(\d+)", body)
+    }
+    assert firmware, "could not parse AdcRate out of ad74416h_regs.h"
+
+    streaming = read_source("tests/mock/handlers/streaming.py")
+    m = re.search(r"_VALID_ADC_RATES\s*=\s*frozenset\(\{([^}]*)\}\)", streaming)
+    assert m, "_VALID_ADC_RATES not found in the simulator"
+    simulated = {int(x) for x in m.group(1).replace("\n", "").split(",") if x.strip()}
+
+    assert simulated == firmware, (
+        f"simulator accepts {sorted(simulated)} but the firmware's AdcRate enum "
+        f"is {sorted(firmware)}"
+    )
+
 # Opcodes the device sends to the host. The client subscribes to these via
 # on_event() rather than sending them.
 _EVENT_CMDS = {

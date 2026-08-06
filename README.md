@@ -233,7 +233,7 @@ flowchart TB
     P4 -->|DDP UART| C6
   end
 
-  HOST -->|"USB CDC #0 — BBP v9<br/>control plane (MCP / desktop)"| ESP32
+  HOST -->|"USB CDC #0 — BBP v10<br/>control plane (MCP / desktop)"| ESP32
   HOST -->|"WiFi HTTP REST<br/>(token-paired)"| ESP32
   ESP32 -->|"HAT UART 921600 8N1<br/>(HAT_Protocol.md)"| RP
   ESP32 -->|"HAT UART (BBP-compatible)<br/>config / sync / OTA"| P4
@@ -262,7 +262,7 @@ flowchart LR
   end
 
   subgraph ESP["ESP32-S3"]
-    BBP["BBP v9\nUSB CDC #0"]
+    BBP["BBP v10\nUSB CDC #0"]
     HTTP["HTTP REST\nWiFi / USB"]
   end
 
@@ -270,9 +270,9 @@ flowchart LR
     UART["HAT UART\n0xAA framing"]
   end
 
-  Desktop -->|"BBP v9 / COBS+CRC-16"| BBP
-  MCP     -->|"BBP v9 / COBS+CRC-16"| BBP
-  PyLib   -->|"BBP v9 / COBS+CRC-16"| BBP
+  Desktop -->|"BBP v10 / COBS+CRC-16"| BBP
+  MCP     -->|"BBP v10 / COBS+CRC-16"| BBP
+  PyLib   -->|"BBP v10 / COBS+CRC-16"| BBP
 
   Desktop -->|"JSON REST"| HTTP
   PyLib   -->|"JSON REST"| HTTP
@@ -283,7 +283,7 @@ flowchart LR
 
 **Two independent USB paths** when a HAT is attached:
 
-- **ESP32 USB CDC** — control plane (BBP v9 binary protocol over COBS + CRC-16).
+- **ESP32 USB CDC** — control plane (BBP v10 binary protocol over COBS + CRC-16).
   MCP server, desktop app, and Python library all speak this.
 - **HAT USB data plane** — the active HAT exposes its own high-throughput USB
   device. On the **Logic Analyzer HAT** this is the RP2040 vendor-bulk endpoint
@@ -297,7 +297,7 @@ flowchart LR
 
 | Transport | Protocol | Latency | Who talks it | Best for |
 |---|---|---|---|---|
-| ESP32 USB CDC #0 | BBP v9 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
+| ESP32 USB CDC #0 | BBP v10 (COBS + CRC-16) | < 1 ms | MCP · desktop · Python | Full control + streaming control plane |
 | ESP32 HTTP REST | JSON over WiFi | ~10 ms | desktop · Python · browser UI | Remote access, OTA |
 | RP2040 USB vendor bulk † | 4-byte framed packets | < 1 ms | desktop · Python (libusb) | LA streaming / readout, ~1 MB/s |
 | RP2040 USB CMSIS-DAP v2 † | standard DAP | < 1 ms | OpenOCD / pyOCD / probe-rs | SWD debug (zero proxy) |
@@ -458,6 +458,46 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 
 <br/>
 
+## Testing & verification
+
+The stack spans four MCUs, three wire protocols and five host surfaces, so most
+defects are **drift** — a constant that disagrees between firmware and host —
+rather than logic errors. The suite is built around that.
+
+| Layer | Dir | Hardware | Scope |
+|---|---|:---:|---|
+| Unit | `tests/unit/` | no | Parsers, HAL routing, rail-lock and auth logic, plus the source-parity guards below |
+| Simulator | `tests/simulator/` | no | BBP + HTTP round-trips against `SimulatedDevice` (every BBP opcode implemented) |
+| Synthetic | `tests/synthetic/` | no | LA USB bulk/streaming protocol against generated stimuli |
+| Integration | `tests/integration/` | no | Full simulated HTTP server, end-to-end client flows |
+| Device | `tests/device/` | yes, or `--sim` | The same assertions against real hardware over USB/HTTP |
+
+**1140 passing**, 150 skipped (hardware-only paths), on Ubuntu 3.11/3.12/3.13,
+Windows and macOS. Coverage is ratcheted — a drop fails the build and lowering
+the floor is an explicit diff.
+
+```bash
+PYTHONPATH=python pytest tests/unit tests/synthetic tests/simulator tests/device --sim -q
+PYTHONPATH=python pytest tests/integration --sim-full -q
+```
+
+**Source-parity guards.** A significant part of `tests/unit/` parses the
+firmware C/C++ sources directly and asserts that firmware, simulator and host
+still agree — opcode tables, wire-record layouts, HTTP route registration, the
+logical→MUX channel swap, task stack sizing. Constants are derived from the
+firmware source, never retyped, so a firmware edit fails the Python suite
+instead of shipping a silent mismatch. Precedent: a simulator handler written
+against a broken client parser held the suite green while `idac_get_status()`
+returned `726302457856.0 V` on hardware.
+
+**Resource gates.** `Firmware/tools/check_memory.py` runs on every firmware
+build and fails it if static DRAM or the OTA image exceed budget.
+`tests/tools/mem_watch.py` reports live internal-SRAM headroom, fragmentation
+and per-task stack high-water marks from a running board, with thresholds for
+CI use. See [`Docs/MemoryTesting.md`](Docs/MemoryTesting.md).
+
+<br/>
+
 ## Explore the docs
 
 | Topic | Where to read |
@@ -479,7 +519,8 @@ Full rule-by-rule matrix: [`python/bugbuster_mcp/README.md`](python/bugbuster_mc
 | **Hardware** (ICs, power topology, ESP32 pinout) | [`Docs/Hardware.md`](Docs/Hardware.md) |
 | **Board profiles** (schema, rail lock, MCP integration) | [`Docs/board_profiles.md`](Docs/board_profiles.md) |
 | **Real-world scenarios** | [`Docs/Scenarios.md`](Docs/Scenarios.md) |
-| **Test suite** (unit, simulator, device) | [`tests/README.md`](tests/README.md) |
+| **Test suite** (layers, source-parity guards, hardware-in-the-loop) | [`tests/README.md`](tests/README.md) |
+| **Memory safety** (SRAM budget, stack sizing, live telemetry) | [`Docs/MemoryTesting.md`](Docs/MemoryTesting.md) |
 
 <br/>
 
@@ -494,7 +535,7 @@ BugBuster/
 │   │   ├── ESP32P4/             Acquisition + DSP core (ESP-IDF 5.5)
 │   │   ├── ESP32C6/             Display + wireless co-processor
 │   │   └── DISPLAY_Protocol.md  P4 ↔ C6 display protocol (DDP v2)
-│   ├── BugBusterProtocol.md     BBP v9 wire format (USB CDC + HTTP REST)
+│   ├── BugBusterProtocol.md     BBP v10 wire format (USB CDC + HTTP REST)
 │   ├── HAT_Protocol.md          ESP32 ↔ HAT UART framing
 │   ├── HAT_Architecture.md      Logic Analyzer HAT architecture reference
 │   └── FirmwareStructure.md     Cross-firmware reference
