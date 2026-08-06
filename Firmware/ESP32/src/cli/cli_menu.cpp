@@ -1809,9 +1809,10 @@ static void open_update_release_picker(void)
     // update_manager_release_options() performs an HTTPS fetch
     // (esp_http_client_perform() plus software-AES mbedTLS) that this codebase
     // has measured at ~16 KB of stack. This function runs on bbpCli, whose
-    // stack is only 8192 bytes (main.cpp s_bbpTaskStack / tasks.h
-    // TASK_STACK_BBPCLI) -- calling it inline here can overflow that stack and
-    // panic the board. Route through api_core_handle(), which already runs
+    // stack is now only 5120 bytes (main.cpp s_bbpTaskStack / tasks.h
+    // TASK_STACK_BBPCLI, shrunk 2026-08-06 once this call moved off it) --
+    // calling it inline here can overflow that stack and panic the board.
+    // Route through api_core_handle(), which already runs
     // GitHub release queries on a dedicated 16 KB SPIRAM-backed worker
     // (net/api_core.cpp: ota_query_blocking()/ota_query_task()) and blocks the
     // caller until it completes, exactly like webserver.cpp's

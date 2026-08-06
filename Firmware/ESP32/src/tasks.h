@@ -380,22 +380,28 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 // faultMon 1204, cmdProc 1216, wavegen 1180 -- all comfortably above the
 // ~1 KB minimum headroom this comment mandates.
 //
-// DO NOT extend this trim to bbpCli (main.cpp, 8192) or ble_api
-// (net/ble_service.cpp:464, 8192) without reading the matching comments in
-// main.cpp first. ble_api runs update_manager_apply() inline while writing
-// flash during BLE OTA apply and is still load-bearing for a known-open
-// defect -- shrinking it turns a latent bug into a guaranteed crash. bbpCli
-// no longer runs the HTTPS/mbedTLS release-query chain inline (fixed
-// 2026-08-06, S1-4: it now delegates to api_core_handle()'s dedicated 16 KB
-// SPIRAM worker), so its 8192 floor may no longer be load-bearing -- but two
-// unit tests still pin it there; do not shrink without updating/removing
-// those tests deliberately and re-measuring stack_hwm on hardware.
+// DO NOT extend this trim to ble_api (net/ble_service.cpp:464, 8192) without
+// reading the matching comment in main.cpp first: it runs
+// update_manager_apply() inline while writing flash during BLE OTA apply and
+// is still load-bearing for a known-open defect -- shrinking it turns a
+// latent bug into a guaranteed crash.
+//
+// bbpCli (TASK_STACK_BBPCLI, below) WAS shrunk in this pass. It no longer
+// runs the HTTPS/mbedTLS release-query chain inline (fixed 2026-08-06,
+// S1-4: it now delegates to api_core_handle()'s dedicated 16 KB SPIRAM
+// worker). With that ~16 KB chain gone, `stack_hwm` measured on hardware
+// after exercising the TUI (opening the dashboard, switching tabs -- the
+// realistic deep path on this task) peaked at 2760 bytes, so the stack was
+// resized to 5120: 2360 bytes of margin over that peak, comfortably above
+// the ~1 KB minimum headroom this comment mandates. See main.cpp's comment
+// on s_bbpTaskStack for the full audit (cJSON parsing of the release list
+// is the deepest thing still running on this task) before shrinking further.
 #define TASK_STACK_ADCPOLL   2560
 #define TASK_STACK_FAULTMON  2560
 #define TASK_STACK_CMDPROC   2048
 #define TASK_STACK_WAVEGEN   2048
 #define TASK_STACK_MAINLOOP  5120  // Core-0 main loop; sized from measured 2684 bytes peak
-#define TASK_STACK_BBPCLI    8192  // Core-1 CLI/BBP; DO NOT shrink (see main.cpp comment)
+#define TASK_STACK_BBPCLI    5120  // Core-1 CLI/BBP; measured peak 2760 (TUI exercised, 2026-08-06), margin 2360
 
 void tasks_log_stack_hwm(void);
 

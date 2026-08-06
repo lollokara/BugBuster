@@ -60,10 +60,11 @@ static StaticTask_t s_mainLoopTcb;
 // (see tasks.h:363-380 for the full measured-peaks table and date). This
 // stack is STATIC (.bss), so every byte trimmed here is always-resident
 // internal RAM freed for the lifetime of the process -- the single most
-// valuable saving in this pass. Do NOT apply the same trim to s_bbpTaskStack
-// below (bbpCli, 8192) or to ble_api's 8192-byte stack in net/ble_service.cpp
-// without re-reading the comment on s_bbpTaskStack -- ble_api is still
-// load-bearing for a known-open defect and must stay exactly as it is.
+// valuable saving in this pass. s_bbpTaskStack below (bbpCli) got the same
+// trim in a later pass once its own deep call was gone; see that comment
+// for the measured numbers. Do NOT apply the same trim to ble_api's
+// 8192-byte stack in net/ble_service.cpp -- it is still load-bearing for a
+// known-open defect and must stay exactly as it is.
 static StackType_t s_mainLoopStack[TASK_STACK_MAINLOOP / sizeof(StackType_t)];
 
 // Dedicated task for CLI / BBP processing, pinned to Core 1.
@@ -74,19 +75,38 @@ static StackType_t s_mainLoopStack[TASK_STACK_MAINLOOP / sizeof(StackType_t)];
 //
 // (2026-08-06, S1-4 fix) cli_menu.cpp's open_update_release_picker() used to
 // call update_manager_release_options() directly on this task -- an
-// HTTPS/mbedTLS chain measured at ~16 KB, twice this stack's whole size. It
-// now goes through api_core_handle("GET", "/api/ota/releases", ...), which
-// runs the query on its own dedicated 16 KB SPIRAM worker
+// HTTPS/mbedTLS chain measured at ~16 KB, twice this stack's old 8192-byte
+// size. It now goes through api_core_handle("GET", "/api/ota/releases", ...),
+// which runs the query on its own dedicated 16 KB SPIRAM worker
 // (net/api_core.cpp: ota_query_blocking()/ota_query_task()) and blocks this
 // task until it completes, so bbpCli itself no longer needs headroom for
-// that chain. Two unit tests (tests/unit/test_direct_daq_ota.py) still pin
-// TASK_STACK_BBPCLI at >= 8192; that floor is not yet known to be
-// load-bearing for anything else on this task and may be worth revisiting,
-// but do not shrink it without checking those tests and re-measuring
-// stack_hwm on hardware first. See also net/ble_service.cpp:464 (ble_api,
-// also 8192, also untouched): the BLE OTA apply path still runs
-// update_manager_apply() inline on it and writes flash -- unrelated defect,
-// out of scope for the fix above.
+// that chain.
+//
+// (2026-08-06, shrink pass) With the TLS chain gone, `stack_hwm` was
+// measured on hardware after exercising the TUI (opening the dashboard and
+// switching tabs -- the deepest render path that actually runs on this
+// task) and peaked at 2760 bytes. Audited the rest of what bbpCliTask()
+// reaches -- CLI command dispatch (cli/cli_cmdtab*), the TUI menu render
+// (cli/cli_menu.cpp, cli/cli_tui*.cpp), and BBP protocol dispatch
+// (bbp/bbp.cpp: dispatchMessage()) -- and found no other 16 KB-class call:
+// the update-apply paths (cli_cmds_sys.cpp's "update apply" CLI command,
+// cli_menu.cpp's TUI release picker) both spawn their own dedicated worker
+// task via xTaskCreatePinnedToCoreWithCaps() rather than running inline
+// here. The deepest thing left on bbpCli is the release picker's cJSON_Parse()
+// of the returned release list (the TLS fetch itself now runs on the
+// api_core_handle() worker) -- cJSON parsing of a release list is the
+// least-exercised deep path on this task, which is why the stack was sized
+// with margin above the measured peak rather than exactly to it. Resized
+// TASK_STACK_BBPCLI from 8192 to 5120 (tasks.h): 2360 bytes of margin over
+// the 2760 peak, well above the ~1 KB minimum headroom this codebase
+// mandates (tasks.h:363-380), while reclaiming 3072 bytes of always-resident
+// internal RAM (s_bbpTaskStack is STATIC/.bss, same as s_mainLoopStack
+// above). See tests/unit/test_direct_daq_ota.py's
+// test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails for the
+// regression guard (now pinned at 5120, not merely >= 8192). See also
+// net/ble_service.cpp:464 (ble_api, still 8192, untouched): the BLE OTA
+// apply path still runs update_manager_apply() inline on it and writes
+// flash -- unrelated defect, out of scope here.
 static StaticTask_t s_bbpTaskTcb;
 static StackType_t  s_bbpTaskStack[TASK_STACK_BBPCLI / sizeof(StackType_t)];
 

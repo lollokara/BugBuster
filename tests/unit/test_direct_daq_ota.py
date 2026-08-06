@@ -964,10 +964,16 @@ def test_release_path_and_push_local_use_the_shared_product_id_constants():
 # shrunk to their measured `stack_hwm` peaks (see tasks.h:363-380 for the
 # full measured-peaks table). bbpCli and ble_api were deliberately left at
 # 8192 -- both run OTA-adjacent code (an HTTPS/mbedTLS chain and an inline
-# flash-writing BLE apply, respectively) that makes them load-bearing for
-# known-open defects. These tests pin the five new values exactly (so an
-# accidental revert is caught) and guard the two untouched stacks (so a
-# future "finish the job" pass cannot shrink them too).
+# flash-writing BLE apply, respectively) that made them load-bearing for
+# known-open defects.
+#
+# bbpCli's defect was fixed 2026-08-06 (S1-4: the TLS chain moved off this
+# task onto its own worker) and the stack was then re-measured on hardware
+# and shrunk in a follow-up pass (2026-08-06) from 8192 to 5120 -- see
+# tasks.h and main.cpp for the measured-peak numbers. ble_api's defect is
+# still open and its stack is still untouched. These tests pin the exact
+# values (so an accidental revert of either shrink is caught) and guard
+# ble_api specifically (so a future pass cannot shrink it too).
 # ---------------------------------------------------------------------------
 MAIN_CPP = Path("Firmware/ESP32/src/main.cpp").read_text()
 BLE_C = Path("Firmware/ESP32/src/net/ble_service.cpp").read_text()
@@ -1003,7 +1009,7 @@ def test_daq_activate_worker_stack_is_exactly_the_new_value():
         "DAQ_ACTIVATE_WORKER_STACK must be exactly 5120 (measured peak ~3112, margin 2008)"
 
 
-def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
+def test_bbp_cli_shrunk_and_ble_api_still_untouched_guard_rails():
     main_code = _strip_noise(MAIN_CPP)
     # Check that bbpCli references TASK_STACK_BBPCLI constant
     assert "s_bbpTaskStack[TASK_STACK_BBPCLI" in main_code, \
@@ -1013,15 +1019,17 @@ def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
     tasks_code = _strip_noise(TASKS_H)
     m = re.search(r"#define\s+TASK_STACK_BBPCLI\s+(\d+)", tasks_code)
     assert m, "could not find TASK_STACK_BBPCLI definition in tasks.h"
-    assert int(m.group(1)) >= 8192, (
-        "bbpCli's stack must stay >= 8192. As of the S1-4 fix (2026-08-06), "
-        "open_update_release_picker() no longer calls "
-        "update_manager_release_options() directly on this task -- it now "
-        "delegates via api_core_handle() to a dedicated 16 KB SPIRAM worker, "
-        "so this floor is not currently known to be load-bearing for anything "
-        "else on bbpCli. Left in place deliberately pending a human decision "
-        "(re-measure stack_hwm on hardware before relaxing it) -- see "
-        "test_cli_menu_does_not_call_update_manager_release_options_directly."
+    assert int(m.group(1)) == 5120, (
+        "bbpCli's stack must stay exactly 5120. The S1-4 fix (2026-08-06) "
+        "moved the ~16 KB HTTPS/mbedTLS release-query chain off this task "
+        "(open_update_release_picker() now delegates via api_core_handle() "
+        "to a dedicated 16 KB SPIRAM worker), and a follow-up pass "
+        "(2026-08-06) then re-measured `stack_hwm` on hardware with the TUI "
+        "exercised (dashboard + tab switching) and shrank the stack from "
+        "8192 to 5120: 2360 bytes of margin over the measured 2760-byte "
+        "peak. The remaining headroom above the floor is for cJSON_Parse() "
+        "of the release list, still done on this task -- do not shrink "
+        "further without re-measuring stack_hwm on hardware."
     )
 
     ble_code = _strip_comments(BLE_C)
