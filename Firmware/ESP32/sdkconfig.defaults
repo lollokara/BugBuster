@@ -88,6 +88,15 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 # CACHE_TX_BUFFER_NUM (dynamic PSRAM) stays at 32 to absorb burst headroom.
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+# WiFi Rate Adaptation tuning — PSRAM now handles HTTP buffers, so WiFi
+# can use full management buffer pool without competing for internal RAM.
+CONFIG_ESP_WIFI_ENABLE_WIFI6=y
+# Keep management buffer pool at default (32) — HTTP buffers moved to PSRAM
+# eliminates internal RAM contention.
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+# Improve RX aggregation window for better efficiency
+CONFIG_ESP_WIFI_RX_BA_WIN=32
 
 # Cache: bump with octal PSRAM (default 16 KB/32 KB is too small for external RAM workloads)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
@@ -100,6 +109,11 @@ CONFIG_LWIP_MAX_SOCKETS=16
 
 # WebSocket support in esp_http_server (required for /api/scripts/repl/ws)
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# NOTE: httpd's max URI handler count is NOT a Kconfig option (esp_http_server's
+# Kconfig only exposes HTTPD_MAX_REQ_HDR_LEN/HTTPD_MAX_URI_LEN/etc — no handler-count
+# knob exists). It is the runtime httpd_config_t.max_uri_handlers field, set in
+# webserver.cpp at httpd_start(). See that file for the real fix + route count.
 
 # HTTPS/GitHub update checks need a full TLS handshake while the firmware is
 # already running WiFi, TinyUSB, MicroPython, BBP, and HTTPD. Keep the TLS

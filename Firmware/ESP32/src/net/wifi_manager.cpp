@@ -286,6 +286,24 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
 
     esp_wifi_start();
 
+    // Disable modem-sleep power save. BugBuster is a mains-powered bench
+    // instrument, not a battery device -- power save buys nothing here and
+    // actively hurts: the default PS mode sends an 802.11 NULL data frame
+    // on every awake/asleep transition to signal power-save state to the AP,
+    // and each of those is a fresh small allocation out of the same tight
+    // internal-DMA-RAM pool the rest of WiFi's buffers share. Under any
+    // internal-RAM pressure that allocation can fail, logged by the closed-
+    // source WiFi blob as "wifi:m f null" ("mem fail" building a "null"
+    // frame) -- confirmed by the string table in libnet80211.a, which lists
+    // the same "m f <frame-type>" pattern for beacon/deauth/auth/assoc/probe
+    // frames too. Sustained failures here are what starve the link into the
+    // esp-tls "select() timeout" seen during GitHub update checks.
+    // Persists across the esp_wifi_stop()/esp_wifi_start() cycle used by the
+    // STA-credential-probe path below (only esp_wifi_deinit() clears it, and
+    // nothing in this firmware calls that), so this one call covers every
+    // WiFi (re)start.
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     // Wait for connection (up to 10 seconds)
     if (use_ssid && use_ssid[0]) {
         ESP_LOGI(TAG, "Connecting to '%s'...", use_ssid);

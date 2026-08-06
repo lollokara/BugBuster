@@ -1557,6 +1557,11 @@ void hat_daq_poll_mb(void)
         fw.rel_count = (snap.rel_count > HAT_FW_REL_MAX) ? HAT_FW_REL_MAX : snap.rel_count;
         for (uint8_t i = 0; i < fw.rel_count; ++i) strlcpy(fw.rel[i], snap.rel[i], HAT_FW_STR);
         fw.update_avail = (uint8_t)snap.update_avail;
+        // Bit values are identical between update_target_t and HAT_FW_T_* (see
+        // the comment above HAT_FW_T_RP2040), so no translation needed.
+        fw.active_target = (uint8_t)snap.active_target;
+        fw.progress_done = snap.progress_done;
+        fw.progress_total = snap.progress_total;
 
         if (snap.state == UPDATE_STATE_CHECKING)      fw.state = HAT_FW_ST_CHECKING;
         else if (snap.state == UPDATE_STATE_FAILED)   fw.state = HAT_FW_ST_ERROR;

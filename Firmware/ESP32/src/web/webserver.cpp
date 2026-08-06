@@ -4977,11 +4977,13 @@ bool initWebServer(void)
     update_manager_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    // Keep route capacity close to the real table size. The current explicit
-    // route count is 87 plus two WebSocket routes and four registry routes; 96
-    // gives safe headroom without reserving another 32 unused handler slots
-    // from heap.
-    config.max_uri_handlers = 128;
+    // Keep route capacity close to the real table size. httpd_register_uri_handler
+    // call count as of 2026-08-06: 128 in this file + 4 registry routes
+    // (http_adapter_register) + 1 WS stream route + 1 REPL WS route = 134.
+    // 128 alone silently starved the last ~6 registrations (registry routes,
+    // this file's own wildcard "/*" catch-all) with ESP_ERR_HTTPD_HANDLERS_FULL.
+    // 150 gives headroom without reserving a large unused slot table from heap.
+    config.max_uri_handlers = 150;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
     // that touches flash (OTA partition reads, SPIFFS, NVS) goes through

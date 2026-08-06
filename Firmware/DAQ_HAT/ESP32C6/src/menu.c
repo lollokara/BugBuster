@@ -1057,10 +1057,13 @@ static void fw_step_dev(int dir)
 // Poll the S3 while the screen is open. The first reply is usually state
 // CHECKING with an empty release list (the S3 kicks off the GitHub query on the
 // worker); polling faster while checking makes the list appear promptly.
+// Also poll faster while APPLYING so the progress bar (render_fw()) moves
+// smoothly instead of jumping every 4 s.
 static void fw_refresh(uint32_t now_ms)
 {
     if (!s_in_fw) return;
-    uint32_t period = (s_fwi.state == DDP_FW_ST_CHECKING) ? 1500 : 4000;
+    uint32_t period = (s_fwi.state == DDP_FW_ST_CHECKING || s_fwi.state == DDP_FW_ST_APPLYING)
+                       ? 1000 : 4000;
     if (now_ms - s_fw_last_req >= period) {
         s_fw_last_req = now_ms;
         ddp_send_mb_request(DDP_MB_FWINFO, NULL, 0);
@@ -1537,6 +1540,41 @@ static void render_fw(void)
     int stw = gfx_text_w(sstate, 1);
     ui_draw_dot(DISP_WIDTH - stw - 12, 9, scol);
     gfx_text(DISP_WIDTH - stw - 6, 5, sstate, 1, scol);
+
+    // While a flash is in flight, take over the whole screen with a progress
+    // bar (same layout as the cal wizard's, see render_cal()) instead of the
+    // device table -- there is nothing else useful to show, and the table
+    // would imply the user could still navigate/select another target.
+    if (s_fwi.state == DDP_FW_ST_APPLYING) {
+        gfx_text(6, 5, "Updating", 1, g_theme.dim);
+
+        const char *devname = "device";
+        for (int i = 0; i < (int)DDP_FW_DEV_MAX; i++) {
+            if (FW_DEV_BIT[i] == s_fwi.active_target) { devname = FW_DEV_NAME[i]; break; }
+        }
+        char line[40];
+        snprintf(line, sizeof(line), "%s", devname);
+        gfx_text(6, TITLE_H + 14, line, 1, g_theme.text);
+        gfx_text(6, TITLE_H + 30, "Do not power off during the update.", 1, g_theme.amber);
+
+        // Progress bar along the bottom, identical geometry/style to render_cal().
+        int bx = 6, bw = DISP_WIDTH - 12, by = DISP_HEIGHT - 12, bh = 9;
+        int frac = 0;
+        if (s_fwi.progress_total > 0) {
+            frac = (int)((uint64_t)s_fwi.progress_done * 100 / s_fwi.progress_total);
+            if (frac > 100) frac = 100;
+        }
+        // 16 (not 8): frac's range isn't provable at compile time from the u64
+        // divide above (unlike render_cal()'s already-narrow uint8_t source),
+        // so -Werror=format-truncation sizes against a full int's digit count.
+        char pb[16];
+        snprintf(pb, sizeof(pb), "%d%%", frac);
+        gfx_text(DISP_WIDTH - gfx_text_w(pb, 1) - 6, by - 10, pb, 1, g_theme.muted);
+        gfx_round_rect_border(bx, by, bw, bh, 3, g_theme.border);
+        int fillw = frac * (bw - 4) / 100;
+        if (fillw > 0) gfx_round_rect(bx + 2, by + 2, fillw, bh - 4, 2, g_theme.sel);
+        return;
+    }
 
     if (s_fw_stage == FW_STAGE_CONFIRM) {
         gfx_text(6, 5, "Confirm Update", 1, g_theme.dim);

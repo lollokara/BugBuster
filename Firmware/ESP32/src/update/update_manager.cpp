@@ -229,13 +229,18 @@ static esp_err_t text_event_handler(esp_http_client_event_t *evt)
     if (s->len + evt->data_len + 1 > s->cap) {
         size_t new_cap = s->cap ? s->cap * 2 : 4096;
         while (new_cap < s->len + (size_t)evt->data_len + 1) new_cap *= 2;
-        if (new_cap > 512 * 1024) {
+        // Allocate from PSRAM (8 MB available) to preserve WiFi driver's internal RAM.
+        // Cap at 1 MB to bound latency; GitHub releases API ~260 KB fits comfortably.
+        if (new_cap > 1024 * 1024) {
             s->oom = true;
+            ESP_LOGW(TAG, "Response buffer cap exceeded (>1MB); truncating at %zu bytes", s->len);
             return ESP_OK;
         }
-        char *next = (char *)realloc(s->body, new_cap);
+        // Force PSRAM allocation to avoid competing with WiFi stack for internal RAM
+        char *next = (char *)heap_caps_realloc(s->body, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!next) {
             s->oom = true;
+            ESP_LOGW(TAG, "PSRAM allocation failed for %zu bytes", new_cap);
             return ESP_OK;
         }
         s->body = next;
@@ -258,7 +263,14 @@ static int http_get_text(const char *url, char **body_out)
     cfg.user_data = &s;
     cfg.method = HTTP_METHOD_GET;
     cfg.buffer_size = 2048;
-    cfg.buffer_size_tx = 1024;
+    // 4096 (not 1024): GitHub asset browser_download_url redirects to a signed
+    // CDN URL (AWS S3-style, 1.5-3 KB query string). The outgoing request line
+    // is built into this buffer by http_header_generate_string(); 1024 was too
+    // small and silently truncated/failed with "Buffer length is small to fit
+    // all the headers" right at the OTA download step. >=1 KB allocations land
+    // in PSRAM automatically here (see CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0 in
+    // sdkconfig.defaults), so this doesn't cost internal RAM.
+    cfg.buffer_size_tx = 4096;
     cfg.max_redirection_count = 5;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
@@ -342,7 +354,25 @@ static bool asset_digest_sha256(cJSON *asset, char out[65])
     return true;
 }
 
-static bool fill_component_from_asset(cJSON *asset, bool rp2040, UpdateComponent *out)
+// Asset-name prefix/suffix per target, matched against the CI-published
+// naming scheme (see .mex/patterns/daq-hat-release-images.md and the RP2040/
+// ESP32 release workflow). Order matches ASSET_KIND_*.
+typedef enum {
+    ASSET_KIND_RP2040 = 0,
+    ASSET_KIND_ESP32,
+    ASSET_KIND_P4,
+    ASSET_KIND_C6,
+    ASSET_KIND_COUNT
+} AssetKind;
+
+static const char *const ASSET_PREFIX[ASSET_KIND_COUNT] = {
+    "bugbuster-hat-rp2040-v", "bugbuster-esp32s3-v", "bugbuster-daq-p4-v", "bugbuster-daq-c6-v",
+};
+static const char *const ASSET_SUFFIX[ASSET_KIND_COUNT] = {
+    ".bin", "-ota.bin", "-ota.bin", "-merged.bin",
+};
+
+static bool fill_component_from_asset(cJSON *asset, AssetKind kind, UpdateComponent *out)
 {
     cJSON *name = cJSON_GetObjectItem(asset, "name");
     cJSON *url = cJSON_GetObjectItem(asset, "browser_download_url");
@@ -352,11 +382,8 @@ static bool fill_component_from_asset(cJSON *asset, bool rp2040, UpdateComponent
     }
 
     char version[sizeof(out->version)] = {};
-    bool name_ok = rp2040
-        ? extract_between(name->valuestring, "bugbuster-hat-rp2040-v", ".bin",
-                          version, sizeof(version))
-        : extract_between(name->valuestring, "bugbuster-esp32s3-v", "-ota.bin",
-                          version, sizeof(version));
+    bool name_ok = extract_between(name->valuestring, ASSET_PREFIX[kind], ASSET_SUFFIX[kind],
+                                   version, sizeof(version));
     if (!name_ok || !asset_digest_sha256(asset, out->sha256_hex)) {
         return false;
     }
@@ -389,18 +416,25 @@ static bool collect_release_options(UpdateOption *options, uint8_t max_options, 
         return false;
     }
 
-    UpdateComponent current_rp = {};
-    UpdateComponent current_esp = {};
-    bool have_rp = false;
-    bool have_esp = false;
-    char last_rp_url[sizeof(current_rp.url)] = {};
-    char last_esp_url[sizeof(current_esp.url)] = {};
+    UpdateComponent current[ASSET_KIND_COUNT] = {};
+    bool have[ASSET_KIND_COUNT] = {};
+    char last_url[ASSET_KIND_COUNT][sizeof(current[0].url)] = {};
 
+    uint32_t heap_before = esp_get_free_heap_size();
     cJSON *root = cJSON_Parse(body);
+    uint32_t heap_after = esp_get_free_heap_size();
+
+    if (!root) {
+        free(body);
+        ESP_LOGW(TAG, "JSON parse failed: heap before=%" PRIu32 " after=%" PRIu32 " len=%zu",
+                 heap_before, heap_after, strlen(body) + 1);
+        set_error("GitHub releases API JSON parse failed (invalid JSON)");
+        return false;
+    }
     free(body);
     if (!cJSON_IsArray(root)) {
         cJSON_Delete(root);
-        set_error("GitHub releases API JSON parse failed");
+        set_error("GitHub releases API response is not an array");
         return false;
     }
 
@@ -415,23 +449,23 @@ static bool collect_release_options(UpdateOption *options, uint8_t max_options, 
         bool changed = false;
         cJSON *asset = NULL;
         cJSON_ArrayForEach(asset, assets) {
-            UpdateComponent candidate = {};
-            if (fill_component_from_asset(asset, true, &candidate)) {
-                current_rp = candidate;
-                have_rp = true;
-                changed = true;
-            }
-            if (fill_component_from_asset(asset, false, &candidate)) {
-                current_esp = candidate;
-                have_esp = true;
-                changed = true;
+            for (int k = 0; k < (int)ASSET_KIND_COUNT; k++) {
+                UpdateComponent candidate = {};
+                if (fill_component_from_asset(asset, (AssetKind)k, &candidate)) {
+                    current[k] = candidate;
+                    have[k] = true;
+                    changed = true;
+                }
             }
         }
 
-        if (!changed || (!have_rp && !have_esp)) continue;
-        if (strcmp(last_rp_url, current_rp.url) == 0 && strcmp(last_esp_url, current_esp.url) == 0) {
-            continue;
+        bool have_any = have[0] || have[1] || have[2] || have[3];
+        if (!changed || !have_any) continue;
+        bool url_changed = false;
+        for (int k = 0; k < (int)ASSET_KIND_COUNT; k++) {
+            if (strcmp(last_url[k], current[k].url) != 0) { url_changed = true; break; }
         }
+        if (!url_changed) continue;
 
         UpdateOption *opt = &options[*out_count];
         memset(opt, 0, sizeof(*opt));
@@ -439,17 +473,20 @@ static bool collect_release_options(UpdateOption *options, uint8_t max_options, 
         snprintf(opt->published_at, sizeof(opt->published_at), "%s",
                  cJSON_IsString(published) ? published->valuestring : "");
         snprintf(opt->label, sizeof(opt->label), "%.40s  RP:%.20s  ESP:%.20s",
-                 opt->tag, have_rp ? current_rp.version : "-",
-                 have_esp ? current_esp.version : "-");
+                 opt->tag, have[ASSET_KIND_RP2040] ? current[ASSET_KIND_RP2040].version : "-",
+                 have[ASSET_KIND_ESP32] ? current[ASSET_KIND_ESP32].version : "-");
         snprintf(opt->manifest.build_id, sizeof(opt->manifest.build_id),
                  "%s.release-api", opt->tag);
         if (cJSON_IsString(commitish)) {
             snprintf(opt->manifest.commit, sizeof(opt->manifest.commit), "%s", commitish->valuestring);
         }
-        if (have_rp) opt->manifest.rp2040 = current_rp;
-        if (have_esp) opt->manifest.esp32 = current_esp;
-        snprintf(last_rp_url, sizeof(last_rp_url), "%s", current_rp.url);
-        snprintf(last_esp_url, sizeof(last_esp_url), "%s", current_esp.url);
+        if (have[ASSET_KIND_RP2040]) opt->manifest.rp2040 = current[ASSET_KIND_RP2040];
+        if (have[ASSET_KIND_ESP32])  opt->manifest.esp32  = current[ASSET_KIND_ESP32];
+        if (have[ASSET_KIND_P4])     opt->manifest.p4     = current[ASSET_KIND_P4];
+        if (have[ASSET_KIND_C6])     opt->manifest.c6     = current[ASSET_KIND_C6];
+        for (int k = 0; k < (int)ASSET_KIND_COUNT; k++) {
+            snprintf(last_url[k], sizeof(last_url[k]), "%s", current[k].url);
+        }
 
         (*out_count)++;
         if (*out_count >= max_options) break;
@@ -665,7 +702,14 @@ static bool download_file(const UpdateComponent *component, const char *path)
     cfg.user_data = &s;
     cfg.method = HTTP_METHOD_GET;
     cfg.buffer_size = 4096;
-    cfg.buffer_size_tx = 1024;
+    // 4096 (not 1024): GitHub asset browser_download_url redirects to a signed
+    // CDN URL (AWS S3-style, 1.5-3 KB query string). The outgoing request line
+    // is built into this buffer by http_header_generate_string(); 1024 was too
+    // small and silently truncated/failed with "Buffer length is small to fit
+    // all the headers" right at the OTA download step. >=1 KB allocations land
+    // in PSRAM automatically here (see CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0 in
+    // sdkconfig.defaults), so this doesn't cost internal RAM.
+    cfg.buffer_size_tx = 4096;
     cfg.max_redirection_count = 5;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
@@ -874,6 +918,16 @@ static esp_err_t hat_ota_event_handler(esp_http_client_event_t *evt)
         p += n;
         remaining -= n;
         s_update.progress_done = s->offset;
+        // Yield after each ~236-byte HAT frame. A healthy GitHub CDN connection
+        // delivers this 4096-byte buffer_size chunk fast enough to fire ~17
+        // back-to-back hat_ota_data() calls with zero gap otherwise, and this
+        // task re-takes s_hat_mutex the instant it releases it -- starving the
+        // C6 screen's own MB_POLL (0x5D) for the whole download. Bench-observed
+        // 2026-08-06: progress showed on the C6 for the first ~1 s of a P4
+        // GitHub-release apply, then froze for the rest of the transfer even
+        // though it continued in the background. Mirrors the identical fix
+        // already applied to update_manager_push_local()'s chunk loop.
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     return ESP_OK;
 }
@@ -933,6 +987,7 @@ static bool apply_daq_ota(const UpdateComponent *component, uint8_t hat_target)
         HatOtaDownloadState s = {};
         s.offset = (attempt == 0) ? 0 : daq_resume_offset(hat_target);
         if (s.offset >= component->size) { ok = true; break; }
+        const uint32_t start_offset = s.offset;   // hat_ota_event_handler mutates s.offset
 
         esp_http_client_config_t cfg = {};
         cfg.url = component->url;
@@ -942,7 +997,14 @@ static bool apply_daq_ota(const UpdateComponent *component, uint8_t hat_target)
         cfg.user_data = &s;
         cfg.method = HTTP_METHOD_GET;
         cfg.buffer_size = 4096;
-        cfg.buffer_size_tx = 1024;
+        // 4096 (not 1024): GitHub asset browser_download_url redirects to a signed
+    // CDN URL (AWS S3-style, 1.5-3 KB query string). The outgoing request line
+    // is built into this buffer by http_header_generate_string(); 1024 was too
+    // small and silently truncated/failed with "Buffer length is small to fit
+    // all the headers" right at the OTA download step. >=1 KB allocations land
+    // in PSRAM automatically here (see CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0 in
+    // sdkconfig.defaults), so this doesn't cost internal RAM.
+    cfg.buffer_size_tx = 4096;
         cfg.max_redirection_count = 5;
 
         esp_http_client_handle_t client = esp_http_client_init(&cfg);
@@ -965,8 +1027,18 @@ static bool apply_daq_ota(const UpdateComponent *component, uint8_t hat_target)
         // 206 on a resumed request, 200 on a fresh one. A server that ignores
         // Range answers 200 with the whole file, which would restart the P4 at
         // a non-zero offset and be rejected -- treat it as a failed attempt.
+        // Compared against start_offset (captured before the transfer), NOT
+        // s.offset: hat_ota_event_handler mutates s.offset in place as bytes
+        // arrive, so by the time we get here s.offset already equals the full
+        // transferred count on any successful attempt -- checking `s.offset
+        // == 0` post-transfer can never be true after a real fresh download,
+        // so this previously reported "failed" on every single successful
+        // non-resumed attempt (bench-observed: sent==size, status==200, but
+        // still logged as attempt N/5 failed). It self-healed on the next
+        // attempt via daq_resume_offset() seeing the P4 already had it all,
+        // but wasted ~1s and an extra HAT round-trip on every apply.
         bool http_ok = (err == ESP_OK) &&
-                       ((s.offset == 0 && status == 200) || (s.offset > 0 && status == 206));
+                       ((start_offset == 0 && status == 200) || (start_offset > 0 && status == 206));
         ok = http_ok && !s.failed && s.offset >= component->size;
         if (!ok) {
             ESP_LOGW(TAG, "DAQ OTA attempt %d/%d failed (err=%d status=%d sent=%lu/%lu)",
@@ -1016,7 +1088,14 @@ static bool apply_esp32_ota(const UpdateComponent *component)
     cfg.user_data = &s;
     cfg.method = HTTP_METHOD_GET;
     cfg.buffer_size = 4096;
-    cfg.buffer_size_tx = 1024;
+    // 4096 (not 1024): GitHub asset browser_download_url redirects to a signed
+    // CDN URL (AWS S3-style, 1.5-3 KB query string). The outgoing request line
+    // is built into this buffer by http_header_generate_string(); 1024 was too
+    // small and silently truncated/failed with "Buffer length is small to fit
+    // all the headers" right at the OTA download step. >=1 KB allocations land
+    // in PSRAM automatically here (see CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0 in
+    // sdkconfig.defaults), so this doesn't cost internal RAM.
+    cfg.buffer_size_tx = 4096;
     cfg.max_redirection_count = 5;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
@@ -1548,6 +1627,8 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
 
     s_update.progress_total = image_size;
     s_update.progress_done  = 0;
+    ESP_LOGI(TAG, "DAQ local push: target=%s size=%lu bytes",
+             is_c6 ? "c6" : "p4", (unsigned long)image_size);
     if (emit_cb) {
         snprintf(line, sizeof(line),
                  "{\"stage\":\"begin\",\"target\":\"%s\",\"total\":%lu}",
@@ -1599,28 +1680,52 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
         if (!failed && head && head_pos < head_len) head_pos += avail;
 
         int64_t now = esp_timer_get_time();
-        if (emit_cb && !failed &&
+        if (!failed &&
             (sent - last_emit_bytes >= PUSH_EMIT_BYTES ||
              now - last_emit_us >= PUSH_EMIT_MS * 1000)) {
-            snprintf(line, sizeof(line),
-                     "{\"stage\":\"%s\",\"done\":%lu,\"total\":%lu}",
-                     xfer_stage, (unsigned long)sent, (unsigned long)image_size);
-            emit_cb(ctx, line);
+            ESP_LOGI(TAG, "DAQ local push: %s %lu/%lu bytes (%lu%%)",
+                     xfer_stage, (unsigned long)sent, (unsigned long)image_size,
+                     (unsigned long)((uint64_t)sent * 100 / image_size));
+            if (emit_cb) {
+                snprintf(line, sizeof(line),
+                         "{\"stage\":\"%s\",\"done\":%lu,\"total\":%lu}",
+                         xfer_stage, (unsigned long)sent, (unsigned long)image_size);
+                emit_cb(ctx, line);
+            }
             last_emit_bytes = sent;
             last_emit_us = now;
         }
+        // Yield once per outer PUSH_CHUNK_BYTES block (~17 back-to-back
+        // hat_ota_data() calls with no gap otherwise). Without this, this task
+        // re-takes s_hat_mutex the instant it releases it and starves
+        // lower/equal-priority HAT link users (telemetry 0x5A, MB_POLL 0x5D --
+        // the latter is also how the C6 screen's progress bar gets its
+        // updates) for the whole transfer: "HAT command 0x5A/0x5D: failed to
+        // take mutex" repeatedly on the bench during a local C6/P4 push.
+        // Mirrors the same pattern already used for the RP2040 and DAQ-OTA
+        // download loops elsewhere in this file.
+        if (!failed) vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     free(head);
     free(buf);
 
-    if (failed) { hat_ota_abort(); return ESP_FAIL; }
+    if (failed) {
+        ESP_LOGW(TAG, "DAQ local push: transfer failed at %lu/%lu bytes: %s",
+                 (unsigned long)sent, (unsigned long)image_size, err);
+        hat_ota_abort();
+        return ESP_FAIL;
+    }
 
+    ESP_LOGI(TAG, "DAQ local push: %s transfer complete (%lu bytes), verifying SHA-256...",
+             is_c6 ? "c6" : "p4", (unsigned long)image_size);
     if (emit_cb) emit_cb(ctx, "{\"stage\":\"verify\"}");
     if (!hat_ota_end()) {
         snprintf(err, err_len, "DAQ HAT image failed verification");
+        ESP_LOGW(TAG, "DAQ local push: SHA-256 verification failed");
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "DAQ local push: SHA-256 verified OK");
 
     if (!is_c6) {
         // Runs on a worker task (dedicated internal-RAM stack), NOT inline on
@@ -1633,10 +1738,13 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
     }
 
     // C6: staged and verified inside the P4; now drive the ROM-loader push.
+    ESP_LOGI(TAG, "DAQ local push: starting C6 relay apply (P4 ROM-loader push)...");
     if (!hat_daq_relay_apply()) {
         snprintf(err, err_len, "DAQ HAT refused the C6 relay apply");
+        ESP_LOGW(TAG, "DAQ local push: C6 relay apply rejected");
         return ESP_FAIL;
     }
+    int64_t last_log_us = esp_timer_get_time();
     int64_t start_us = esp_timer_get_time();
     int64_t start_wait_us = start_us;
     bool relay_status_ever_ok = false;
@@ -1681,6 +1789,14 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
                      (unsigned long)st.relay_pushed_bytes, (unsigned long)image_size);
             emit_cb(ctx, line);
         }
+        int64_t now = esp_timer_get_time();
+        if (now - last_log_us >= 2000 * 1000) {
+            unsigned long pct = image_size ? (unsigned long)((uint64_t)st.relay_pushed_bytes * 100 / image_size) : 0;
+            ESP_LOGI(TAG, "DAQ local push: c6 relay %lu/%lu bytes (%lu%%) state=%u",
+                     (unsigned long)st.relay_pushed_bytes, (unsigned long)image_size, pct,
+                     (unsigned)st.relay_state);
+            last_log_us = now;
+        }
         if (!started) {
             if (st.relay_state == HAT_RELAY_STAGED) continue;  // not spawned yet
             started = true;
@@ -1696,24 +1812,38 @@ esp_err_t update_manager_push_local(uint32_t target, uint32_t image_size,
     if (st.relay_state != HAT_RELAY_DONE) {
         snprintf(err, err_len, "C6 relay push failed (relay_state=%u)",
                  (unsigned)st.relay_state);
+        ESP_LOGW(TAG, "DAQ local push: c6 relay push failed, relay_state=%u", (unsigned)st.relay_state);
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "DAQ local push: c6 relay push DONE (%lu bytes)", (unsigned long)image_size);
 
     hat_daq_c6_version_t cv = {};
-    if (hat_daq_c6_version(&cv) && emit_cb) {
-        snprintf(line, sizeof(line), "{\"stage\":\"version\",\"running\":\"%s\",\"build\":\"%s\"}",
+    if (hat_daq_c6_version(&cv)) {
+        ESP_LOGI(TAG, "DAQ local push: c6 now running version=%s build=%s",
                  cv.c6_version, cv.c6_build_id);
-        emit_cb(ctx, line);
+        if (emit_cb) {
+            snprintf(line, sizeof(line), "{\"stage\":\"version\",\"running\":\"%s\",\"build\":\"%s\"}",
+                     cv.c6_version, cv.c6_build_id);
+            emit_cb(ctx, line);
+        }
     }
     return ESP_OK;
 }
 
 uint32_t update_manager_available_targets(void)
 {
-    uint32_t mask = UPDATE_TARGET_RP2040 | UPDATE_TARGET_ESP32;
+    // The mainboard itself is always updatable. RP2040 and the DAQ HAT
+    // targets are mutually exclusive: they occupy the same HAT link, so
+    // whichever one is actually connected is the only one that can be real.
+    // Previously RP2040 was OR'd in unconditionally, so a request naming it
+    // was accepted (and its asset downloaded/flash-attempted) even with a
+    // DAQ HAT connected -- wasted bandwidth/RAM and a spurious flash attempt
+    // that could only fail at hat_fw_begin() for lack of an RP2040 on the link.
+    uint32_t mask = UPDATE_TARGET_ESP32;
     const HatState *hs = hat_get_state();
-    if (hs && hs->connected && hs->type == HAT_TYPE_DAQ_POWER) {
-        mask |= UPDATE_TARGETS_DAQ_HAT;
+    if (hs && hs->connected) {
+        if (hs->type == HAT_TYPE_DAQ_POWER) mask |= UPDATE_TARGETS_DAQ_HAT;
+        else                                mask |= UPDATE_TARGET_RP2040;
     }
     return mask;
 }
@@ -1950,10 +2080,17 @@ esp_err_t update_manager_apply_release_index(uint8_t index, uint32_t targets, cJ
                      strcmp(current_esp32_build_id(), manifest.esp32.build_id) != 0 &&
                      strcmp(current_esp32_build_id(), manifest.esp32.version) != 0;
 
-    ESP_LOGI(TAG, "Applying release - ESP32: current = %s, target = %s (newer=%d)",
-             current_esp32_build_id(), manifest.esp32.build_id, esp_newer);
-    ESP_LOGI(TAG, "Applying release - RP2040: current = %s, target = %s (newer=%d)",
-             current_rp2040_build_id(), manifest.rp2040.build_id, rp_newer);
+    // Log only what was actually requested -- these used to print unconditionally
+    // for both targets regardless of `targets`, which read as "RP2040 is being
+    // updated" even on a single-target ESP32-only apply with no RP2040 present.
+    if (update_esp32) {
+        ESP_LOGI(TAG, "Applying release - ESP32: current = %s, target = %s (newer=%d)",
+                 current_esp32_build_id(), manifest.esp32.build_id, esp_newer);
+    }
+    if (update_rp2040) {
+        ESP_LOGI(TAG, "Applying release - RP2040: current = %s, target = %s (newer=%d)",
+                 current_rp2040_build_id(), manifest.rp2040.build_id, rp_newer);
+    }
 
     if (update_rp2040 && rp_newer) {
         set_target(UPDATE_TARGET_RP2040);
@@ -2030,6 +2167,9 @@ void update_manager_fill_installed(update_snapshot_t *s)
     else     strlcpy(s->rp2040, current_rp2040_build_id(), UPDATE_SNAP_STR);
 
     s->state = (uint8_t)s_update.state;
+    s->active_target = s_update.active_target;
+    s->progress_done = s_update.progress_done;
+    s->progress_total = s_update.progress_total;
 }
 
 

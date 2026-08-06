@@ -232,12 +232,14 @@ typedef struct {
 #define HAT_FW_ST_ERROR      3u
 
 typedef struct __attribute__((packed)) {
-    char    installed[HAT_FW_DEV_MAX][HAT_FW_STR];
-    char    rel[HAT_FW_REL_MAX][HAT_FW_STR];
-    uint8_t rel_count;
-    uint8_t update_avail;
-    uint8_t state;
-    uint8_t _rsv;
+    char     installed[HAT_FW_DEV_MAX][HAT_FW_STR];
+    char     rel[HAT_FW_REL_MAX][HAT_FW_STR];
+    uint8_t  rel_count;
+    uint8_t  update_avail;
+    uint8_t  state;
+    uint8_t  active_target;  // HAT_FW_T_* bit of the MCU being updated; valid only when state==APPLYING
+    uint32_t progress_done;  // bytes transferred for active_target; valid only when state==APPLYING
+    uint32_t progress_total; // total bytes for active_target, 0 if not yet known; valid only when state==APPLYING
 } hat_mb_fwinfo_t;
 
 // MicroPython engine states (first byte of the scripts result blob). MUST match

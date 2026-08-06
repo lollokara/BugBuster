@@ -112,6 +112,9 @@ typedef struct {
     uint32_t update_avail;              // update_target_t mask
     uint8_t  state;                     // update_state_t
     bool     valid;                     // a successful check has populated rel[]
+    uint32_t active_target;             // update_target_t bit being applied; valid only mid-apply
+    uint32_t progress_done;             // bytes transferred for active_target; valid only mid-apply
+    uint32_t progress_total;            // total bytes for active_target, 0 if not yet known
 } update_snapshot_t;
 
 /** @brief Fill the installed-version + state fields. Local reads only, never blocks. */

@@ -1331,6 +1331,20 @@ static void fw_apply_task(void *arg)
     char *rsp = api_core_handle("POST", "/api/ota/apply", body);
     cJSON_Delete(body);
     if (rsp) free(rsp);
+
+    // This path (C6 menu -> DDP_MB_FW_APPLY -> here) never rebooted the S3
+    // after a successful ESP32-target apply: unlike webserver.cpp's SEPARATE
+    // /api/update/apply handler (http_update_apply_task(), which does check
+    // update_manager_reboot_pending() and calls esp_restart()), this one just
+    // discarded the response and exited. The new image was correctly
+    // downloaded, verified, and armed in the other OTA slot -- it just never
+    // got booted into, so the device kept running the old image indefinitely.
+    // Mirrors http_update_apply_task()'s same check + 1 s settle delay.
+    if (update_manager_reboot_pending()) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
+    }
+
     s_fw_busy = false;
     vTaskDeleteWithCaps(NULL);
 }

@@ -274,15 +274,17 @@ typedef struct __attribute__((packed)) {
 #define DDP_FW_ST_APPLYING 2u   // an update is being applied; do not start another
 #define DDP_FW_ST_ERROR    3u   // last check failed (no network / API error)
 
-// DDP_MB_FWINFO result data (follows [req_type][status]). 164 bytes, which fits
+// DDP_MB_FWINFO result data (follows [req_type][status]). 157 bytes, which fits
 // both the 210-byte tunnel blob cap and a single 240-byte DDP frame.
 typedef struct __attribute__((packed)) {
-    char    installed[DDP_FW_DEV_MAX][DDP_FW_STR]; // running version per MCU ("" = unknown)
-    char    rel[DDP_FW_REL_MAX][DDP_FW_STR];       // GitHub release tags, newest first
-    uint8_t rel_count;      // valid entries in rel[]
-    uint8_t update_avail;   // DDP_FW_T_* bits whose newest release differs from installed
-    uint8_t state;          // DDP_FW_ST_*
-    uint8_t _rsv;
+    char     installed[DDP_FW_DEV_MAX][DDP_FW_STR]; // running version per MCU ("" = unknown)
+    char     rel[DDP_FW_REL_MAX][DDP_FW_STR];       // GitHub release tags, newest first
+    uint8_t  rel_count;      // valid entries in rel[]
+    uint8_t  update_avail;   // DDP_FW_T_* bits whose newest release differs from installed
+    uint8_t  state;          // DDP_FW_ST_*
+    uint8_t  active_target;  // DDP_FW_T_* bit of the MCU being updated; valid only when state==APPLYING
+    uint32_t progress_done;  // bytes transferred for active_target; valid only when state==APPLYING
+    uint32_t progress_total; // total bytes for active_target, 0 if not yet known; valid only when state==APPLYING
 } ddp_mb_fwinfo_t;
 
 // ---------------------------------------------------------------------------

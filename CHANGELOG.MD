@@ -2,6 +2,154 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **ESP32 update manager: C6/BLE-triggered ESP32 self-update never rebooted
+  the device.** `fw_apply_task()` (the worker behind the C6 menu's
+  `DDP_MB_FW_APPLY` -> `api_core_fw_apply_async()` path) called
+  `update_manager_apply_release_index()` via `api_core_handle()`, discarded
+  the response, and exited — it never checked
+  `update_manager_reboot_pending()` or called `esp_restart()`. The new ESP32
+  image was correctly downloaded, verified, and armed in the other OTA slot,
+  but the device just kept running the old one indefinitely, with no error
+  reported anywhere. `webserver.cpp`'s separate `/api/update/apply` HTTP
+  handler (`http_update_apply_task()`) already did this correctly; the two
+  handlers had drifted (see the "TWO `/api/update/apply` handlers" warning in
+  `.mex/patterns/multi-mcu-ota.md`). Mirrored the same check + 1 s settle
+  delay into `fw_apply_task()`.
+
+- **ESP32 update manager: `apply_daq_ota()` logged every successful
+  non-resumed DAQ (P4/C6) transfer as "failed".** The `http_ok` check compared
+  `status` against `s.offset == 0`, but `s.offset` is mutated in place by
+  `hat_ota_event_handler()` as bytes arrive — by the time the check runs after
+  a successful transfer, it always equals the full image size, so the
+  "fresh request" branch (`s.offset == 0 && status == 200`) could never be
+  true after a real successful download. Bench-observed: a full, correct
+  1,114,480/1,114,480-byte transfer (`err=0 status=200`) still logged
+  `DAQ OTA attempt 1/5 failed`. It silently self-healed on the next attempt
+  (`daq_resume_offset()` sees the P4 already has everything and short-circuits
+  to `ok=true`), costing a spurious ~1 s delay and an extra HAT round-trip on
+  every single DAQ apply, but never surfaced as a real failure — until now
+  it's fixed properly by comparing against a `start_offset` captured before
+  the transfer instead of the post-transfer `s.offset`.
+
+- **ESP32 update manager: no progress on the C6 screen during a GitHub-release
+  P4/C6 apply (only S3-target applies showed it).** `hat_ota_event_handler()`
+  (used by `apply_daq_ota()` for the GitHub-download path) fires ~17
+  back-to-back `hat_ota_data()` calls per 4096-byte HTTP buffer with no yield
+  between them — a healthy connection to GitHub's CDN delivers data fast
+  enough for this to starve `s_hat_mutex` for the whole transfer, exactly the
+  same class of bug already fixed in `update_manager_push_local()`'s chunk
+  loop (see the "HAT command 0x5A/0x5D: failed to take mutex" fix above).
+  Starving `s_hat_mutex` blocks `MB_POLL` (`0x5D`), which is how the C6
+  screen's own progress poll gets through — bench-observed: progress showed
+  for the first ~1 s of a P4 GitHub-release apply, then froze for the rest of
+  the transfer even though it continued correctly in the background. (ESP32
+  self-updates were unaffected: updating the S3 itself never touches the HAT
+  link at all.) Added the same 1 ms yield used in the local-push fix.
+
+- **ESP32 update manager: GitHub-releases-API fallback path never recognized
+  P4/C6 assets, always failing DAQ HAT applies with "release has no P4/C6
+  image" even when the release had them.** `fill_component_from_asset()` only
+  matched two hardcoded name patterns (RP2040 `bugbuster-hat-rp2040-v*.bin`,
+  ESP32 `bugbuster-esp32s3-v*-ota.bin`); `collect_release_options()` never
+  called it for P4 or C6 at all, so `UpdateManifest.p4`/`.c6` were always
+  left zeroed on this path — regardless of what assets the release actually
+  published. (The nightly-manifest.json path, `fetch_manifest()`, already
+  handled all four via `read_component()`; this fallback is what actually
+  runs whenever the manifest URL 404s, e.g. every non-`nightly`-tagged
+  release, which is the common case.) Generalized the matcher to a
+  prefix/suffix table for all four targets (P4: `bugbuster-daq-p4-v*-ota.bin`,
+  C6: `bugbuster-daq-c6-v*-merged.bin`, confirmed against a live release's
+  actual asset names) and scan all four per asset instead of two.
+
+- **ESP32 WiFi: `wifi:m f null` allocation-failure spam and WiFi link stalls
+  under normal operation.** The closed-source WiFi blob (`libnet80211.a`)
+  logs `"m f <frame-type>"` ("mem fail") whenever it cannot allocate a buffer
+  to build a management frame; `"null"` is the 802.11 NULL data frame used to
+  signal power-save awake/asleep transitions to the AP. No code in this
+  firmware ever called `esp_wifi_set_ps()`, so the default modem-sleep power
+  save mode was active and firing NULL-frame allocations on every PS
+  transition — a small but frequent allocation racing everything else that
+  needs the same tight internal-DMA-RAM pool (WiFi's own static buffers, BLE,
+  httpd, TLS). Sustained failures here starved the link badly enough to
+  produce `esp-tls: select() timeout` during GitHub update checks. Added
+  `esp_wifi_set_ps(WIFI_PS_NONE)` in `wifi_manager.cpp` right after the main
+  `esp_wifi_start()` — this is a mains-powered bench instrument, so power
+  save has no benefit and only adds allocation churn. The setting persists
+  across the STA-credential-probe path's own stop/start cycle (only
+  `esp_wifi_deinit()` clears it, and nothing here calls that), so one call
+  covers every WiFi (re)start.
+
+- **ESP32 update manager: local DAQ HAT (P4/C6) push starved the HAT link's
+  other users.** `update_manager_push_local()`'s chunk-send loop called
+  `hat_ota_data()` back-to-back with no yield between calls, so this task
+  re-took `s_hat_mutex` the instant it released it for the whole transfer,
+  starving lower/equal-priority HAT link traffic — telemetry (`0x5A`) and
+  `MB_POLL` (`0x5D`, also how the C6 screen's own progress-bar poll gets
+  through) — logged as repeated `HAT command 0x5A/0x5D: failed to take mutex`
+  on the bench during a local C6 push. Added a 1 ms yield once per outer
+  ~4 KB read block, matching the pattern already used by the RP2040 and
+  DAQ-OTA download loops elsewhere in this file. The GitHub-release DAQ OTA
+  path (`hat_ota_event_handler`) is naturally throttled by TLS/network
+  receive rate and was left as-is.
+
+- **ESP32 update manager: memory exhaustion during large GitHub API responses.**
+  The device was running out of internal RAM when downloading the 588 KB
+  GitHub releases list, causing WiFi driver allocation failures (`wifi:mem fail`).
+  The GitHub releases HTTP response buffer now allocates from PSRAM (1 MB cap)
+  instead of internal RAM, eliminating contention with the WiFi driver's own
+  buffers entirely. Added explicit NULL checks for JSON parsing failures with
+  separate error messages and heap diagnostics to track OOM conditions.
+
+- **ESP32 update manager: OTA asset download failing with "Buffer length is
+  small to fit all the headers".** GitHub's `browser_download_url` redirects
+  once to a signed CDN URL (`release-assets.githubusercontent.com`) whose query
+  string alone runs 1.5-2 KB; the outgoing request line didn't fit in the
+  `buffer_size_tx=1024` byte TX buffer used by every `esp_http_client_config_t`
+  in update_manager.cpp, so `http_header_generate_string()` failed and the OTA
+  never started. Raised `buffer_size_tx` to 4096 across all four HTTP client
+  configs (release-list GET, RP2040/ESP32/DAQ-HAT asset downloads); allocations
+  that size land in PSRAM automatically per this project's
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0` tuning, so it costs no internal RAM.
+
+- **ESP32 update manager: `update_manager_available_targets()` always reported
+  RP2040 as updatable.** The mask unconditionally OR'd in `UPDATE_TARGET_RP2040`
+  regardless of what MCU was actually on the HAT link, so a request naming
+  RP2040 was accepted (and its GitHub asset downloaded, and a flash attempted
+  that could only fail at `hat_fw_begin()`) even with a DAQ HAT (ESP32-P4-based,
+  no RP2040 present) connected. Now RP2040 and the DAQ HAT targets (P4/C6) are
+  correctly mutually exclusive based on the connected HAT's reported type. Also
+  made the "Applying release - RP2040/ESP32" diagnostic log lines conditional
+  on what was actually requested — they used to print for both unconditionally,
+  which read as a phantom RP2040 update on a single-target ESP32 apply.
+
+- **ESP32-S3 webserver: `ESP_ERR_HTTPD_HANDLERS_FULL` on ~6 routes at every
+  boot.** `httpd_config_t.max_uri_handlers` was hardcoded to 128 in
+  `webserver.cpp`, but the real route count across webserver.cpp (128) +
+  http_adapter.cpp (4) + ws_stream.cpp (1) + repl_ws.cpp (1) is 134 — so the
+  last few registrations (both registry DAC routes and webserver's own
+  wildcard `/*` fallback) silently failed every boot. Raised to 150. (Note:
+  there is no `CONFIG_HTTPD_MAX_URI_HANDLERS` Kconfig option in ESP-IDF's
+  esp_http_server component — this is a runtime `httpd_config_t` field, not a
+  compile-time setting.)
+
+### Changed
+
+- **C6 screen: firmware-update progress bar.** The "Firmware" screen used to
+  show only a static "UPDATING" state pill for the whole duration of an
+  apply, with no indication of which MCU was being flashed or how far along
+  it was. It now takes over the screen with the same progress-bar layout used
+  by the DUT calibration wizard (`render_cal()`): active device name, a "do
+  not power off" warning, and a live percentage bar. Wired end-to-end: new
+  `active_target`/`progress_done`/`progress_total` fields on
+  `ddp_mb_fwinfo_t` / `hat_mb_fwinfo_t` (byte-identical, tunneled as an opaque
+  blob through the P4 — no P4-side changes needed) sourced from
+  `update_manager`'s existing `s_update.progress_done/progress_total`, which
+  already covers all four targets (RP2040, ESP32, P4, C6) via the shared HTTP/
+  DAQ-OTA download paths. C6 poll cadence during APPLYING raised from 4 s to
+  1 s so the bar moves smoothly.
+
 ### Added
 
 - **Super Resolution acquisition mode (DAQ HAT).** Trades bandwidth for
