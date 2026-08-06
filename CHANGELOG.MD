@@ -4,6 +4,83 @@
 
 ### Added
 
+- **Live ESP32-S3 memory telemetry across every surface.** The S3 runs tight on
+  internal SRAM, but heap and per-task stack headroom were only visible through
+  the `heap` / `stack_hwm` serial CLI commands, which need exclusive use of
+  CDC0 — so the desktop app, the MCP server and CI could not observe memory
+  pressure at all. `/api/status`'s `freeHeap` sums internal and PSRAM, so on a
+  PSRAM board it stays healthy-looking while the pool that actually runs out is
+  nearly exhausted.
+  - New BBP command `MEM_STATUS` (`0x0C`, `Firmware/ESP32/src/bbp/cmds/cmd_memory.cpp`)
+    with a schema-versioned payload: internal and PSRAM free / min-ever /
+    largest contiguous block / total, uptime, and per-task declared-vs-high-water
+    stack. Takes no state lock — a diagnostic that blocks behind `g_stateMutex`
+    is useless exactly when the device is struggling.
+  - New HTTP route `GET /api/system/memory` (`net/api_core.cpp` +
+    `web/webserver.cpp`), camelCase and snake_case aliases as elsewhere.
+  - New `bugbuster.memory` module and `BugBuster.get_memory_status()` returning
+    `MemoryStatus` with derived `fragmentation_pct`, `worst_task` and
+    `warnings()`; works over USB and HTTP.
+  - New MCP tool `device_memory`.
+  - New `tests/tools/mem_watch.py` — refreshing terminal dashboard, session
+    low-water tracking, `--stress` to sample under load, `--json`/`--csv`
+    export, and `--fail-under-kb` / `--fail-task-pct` thresholds so the same
+    tool serves interactive debugging and CI.
+  - New shared task registry `tasks_get_registry()` (`tasks.h`/`tasks.cpp`) is
+    now the single source of truth for the CLI, the BBP command and the HTTP
+    route; `cli_cmd_stack_hwm` no longer keeps its own copy of the table.
+- **Eight previously unreachable BBP commands bound on the Python client** —
+  `get_diagnostics`, `idac_calibrate`, `idac_cal_add_point`, `idac_cal_clear`,
+  `power_set_port`, `set_avdd_select`, `set_do_config`, `usbpd_go`. Each was
+  defined in `bbp.h`, enumerated in `constants.py` and implemented in the
+  firmware, but no client method ever sent it.
+- **CI quality gates** (`.github/workflows/python-tests.yml` rewritten):
+  a `lint` job (ruff hard-gated on the `F`/`B`/`E9` real-defect rules, mypy
+  advisory) and a `test` matrix across Ubuntu 3.11/3.12/3.13 plus Windows and
+  macOS. All six suites now run — `tests/simulator`, `tests/integration` and
+  the full `tests/device --sim` set were previously never executed by CI.
+  Coverage is collected and enforced by a new ratchet
+  (`tests/tools/coverage_ratchet.py` + `tests/coverage-baseline.json`) that
+  fails on a drop and makes lowering the floor an explicit, reviewable diff.
+- **Cross-surface parity gates** — `tests/unit/test_bbp_command_parity.py`
+  (firmware `bbp.h` ↔ `constants.py` ↔ client reachability, duplicate-opcode
+  detection) and `tests/unit/test_idac_wire_format.py` (per-channel record
+  layout derived from the firmware source).
+
+### Fixed
+
+- **`idac_get_status()` returned garbage over USB.** The client parsed 26 bytes
+  per channel for 4 channels while the firmware writes 44 bytes per channel for
+  3, and skipped the leading channel-index byte entirely — so every field was
+  misaligned from the first record onward. Observed on hardware:
+  `target_v = 726302457856.0 V` where the device's own CLI reported `3.299 V`.
+  The client now derives the channel count from the payload length. Nothing
+  caught this because `tests/mock/handlers/idac.py` had been written to match
+  the broken parser rather than the firmware; the simulator now emits the real
+  wire format.
+- **`stop_scope_stream()` did not exist.** `on_scope_data()`'s own docstring
+  referenced it and `STOP_SCOPE_STREAM` (`0x63`) was implemented in the
+  firmware and the simulator, but no client method sent it — a started scope
+  stream could only be stopped by resetting the device, leaving the ADC
+  diagnostic slots disabled.
+- **Stack high-water warnings never fired.** `tasks_log_stack_hwm()` compared
+  ESP-IDF's byte-valued `uxTaskGetStackHighWaterMark()` against word-valued
+  thresholds (`< 128` / `< 256`), so a task with 380 bytes of headroom — 81% of
+  its stack used — was reported as healthy. Thresholds are now 512 / 1024 bytes
+  and the log says "bytes free" instead of "words free".
+- **The entire `tests/unit` suite failed to collect on Windows.** 90
+  `Path(...).read_text()` calls used the platform default encoding, which is
+  cp1252 on Windows and cannot decode the box-drawing characters in the
+  firmware comment banners. All source reads now go through
+  `tests/lib/srcread.py`, which pins UTF-8 and resolves paths from the repo
+  root.
+- Closure-capture bug in `tests/device/test_10_streaming.py`: the ADC callback
+  captured `events` and `done` by reference inside a 3-cycle loop, so a late
+  callback appended into the next cycle's state.
+- Unreachable duplicate `serial.SerialException` clause in
+  `python/bugbuster/transport/usb.py`, a broken `"ScriptSession"` forward
+  reference in `client.py`, and 9 missing `raise ... from` chains.
+
 - **DAQ HAT hardware-in-the-loop test suite** — ~92 hardware tests plus 44 unit
   tests, built from nothing. Entry point `python3 tests/tools/daq_gate.py`
   (fast tier by default, `--full` for slow tests incl. the FFT freeze guard,

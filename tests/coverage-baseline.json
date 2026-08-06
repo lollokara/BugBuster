@@ -1,6 +1,6 @@
 {
-  "line_rate": 55.37,
-  "branch_rate": 44.82,
+  "line_rate": 56.29,
+  "branch_rate": 46.17,
   "updated": "2026-08-06",
   "_comment": "Coverage floor enforced by tests/tools/coverage_ratchet.py. Raise it when coverage improves; lowering it requires an explicit, reviewed diff."
 }

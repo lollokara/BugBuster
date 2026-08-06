@@ -132,6 +132,13 @@ DeviceInfo  = namedtuple("DeviceInfo",  ["spi_ok", "silicon_rev", "silicon_id0",
 PingResult  = namedtuple("PingResult",  ["token", "uptime_ms"])
 GpioStatus  = namedtuple("GpioStatus",  ["id", "mode", "output", "input", "pulldown"])
 IdacChannel        = namedtuple("IdacChannel",        ["code", "target_v", "actual_v", "v_min", "v_max", "calibrated"])
+
+# One IDAC_GET_STATUS channel record, matching the writes in
+# Firmware/ESP32/src/bbp/cmds/cmd_idac.cpp:handler_idac_get_status():
+#   u8 ch, i8 dac_code, f32 target_v, f32 actual_v, f32 midpoint_v,
+#   f32 v_min, f32 v_max, f32 step_mv, u8 cal_valid, u8 have_poly, f32 poly[4]
+_IDAC_CH_FMT = "<BbffffffBB4f"
+_IDAC_CH_LEN = struct.calcsize(_IDAC_CH_FMT)
 ScriptStatusResult = namedtuple("ScriptStatusResult",
     ["is_running", "script_id", "total_runs", "total_errors", "last_error",
      "mode", "globals_bytes_est", "globals_count", "auto_reset_count",
@@ -2226,26 +2233,33 @@ class BugBuster:
     def idac_get_status(self) -> dict:
         """
         Return the DS4424 IDAC status dict with keys:
-        ``present``, ``channels`` (list of 4 :class:`IdacChannel`).
+        ``present``, ``channels`` (list of :class:`IdacChannel`).
 
         IDAC channel mapping:
           - 0 → VLOGIC (TPS74601, 1.8–5 V logic level for digital IOs)
           - 1 → VADJ1 (LTM8063 #1, feeds IO_Block 1+2, IO 1–6)
           - 2 → VADJ2 (LTM8063 #2, feeds IO_Block 3+4, IO 7–12)
-          - 3 → not connected
+
+        The DS4424 has a fourth channel, but it is not connected on this board
+        and the firmware deliberately omits it from the response, so only the
+        three writable channels are returned.
         """
         if self._usb:
             resp    = self._usb_cmd(CmdId.IDAC_GET_STATUS)
             present = bool(resp[0])
             chans   = []
             off     = 1
-            for _ in range(4):
-                code,         = struct.unpack_from('<b',  resp, off);      off += 1
-                tgt, act, mid = struct.unpack_from('<fff',resp, off);      off += 12
-                vmin, vmax,   = struct.unpack_from('<ff', resp, off);      off += 8
-                step_mv,      = struct.unpack_from('<f',  resp, off);      off += 4
-                cal           = bool(resp[off]);                           off += 1
-                chans.append(IdacChannel(code, tgt, act, vmin, vmax, cal))
+            # 44 bytes per channel; the count comes from the payload rather
+            # than a hardcoded loop bound so a firmware that reports a
+            # different number of channels cannot silently desynchronise this
+            # parser (it previously read 26 bytes for 4 channels against a
+            # 44-byte 3-channel reply and returned garbage for every field).
+            while off + _IDAC_CH_LEN <= len(resp):
+                (_ch, code, tgt, act, _mid, vmin, vmax, _step_mv,
+                 cal, _have_poly, _p0, _p1, _p2, _p3) = struct.unpack_from(
+                    _IDAC_CH_FMT, resp, off)
+                off += _IDAC_CH_LEN
+                chans.append(IdacChannel(code, tgt, act, vmin, vmax, bool(cal)))
             return {"present": present, "channels": chans}
         else:
             return self._http_get("/idac")

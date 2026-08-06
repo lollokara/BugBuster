@@ -4,7 +4,9 @@ IDAC (DS4424) handlers for SimulatedDevice.
 Handles: IDAC_GET_STATUS, IDAC_SET_CODE, IDAC_SET_VOLTAGE, IDAC_CALIBRATE,
          IDAC_CAL_ADD_POINT, IDAC_CAL_CLEAR, IDAC_CAL_SAVE.
 
-State: device.idac — list of 4 channel dicts (indices 0-3).
+State: device.idac — list of 4 channel dicts (indices 0-3). The DS4424 has
+four channels but only 0-2 are wired on this board, and the firmware reports
+only those three — see _NUM_REPORTED_CHANNELS.
 """
 
 import struct
@@ -12,6 +14,12 @@ from bugbuster.constants import CmdId, ErrorCode
 from bugbuster.transport.usb import DeviceError
 
 _NUM_CHANNELS = 4
+
+# handler_idac_get_status() in Firmware/ESP32/src/bbp/cmds/cmd_idac.cpp loops
+# `ch < 3`: channel 3 is not connected and emitting it was a real firmware bug
+# once already. The simulator must report the same three, or a host parser that
+# assumes four passes here and returns garbage on hardware.
+_NUM_REPORTED_CHANNELS = 3
 
 
 def _ensure_idac(device):
@@ -43,32 +51,44 @@ def register(device) -> None:
 
 # ---------------------------------------------------------------------------
 # IDAC_GET_STATUS (0xA0)
-# client unpacks per channel (26 bytes each):
-#   code    (<b)   1 byte  signed
-#   tgt     (<f)   4 bytes
-#   act     (<f)   4 bytes
-#   mid     (<f)   4 bytes  (unused mid placeholder)
-#   vmin    (<f)   4 bytes
-#   vmax    (<f)   4 bytes
-#   step_mv (<f)   4 bytes
-#   cal     (B)    1 byte
-# Preceded by present (B).
+#
+# Wire format is dictated by the FIRMWARE, not by whatever the client happens
+# to parse. Per channel, 44 bytes, mirroring the bbp_put_* calls in
+# cmd_idac.cpp:handler_idac_get_status():
+#   u8 ch, i8 dac_code, f32 target_v, f32 actual_v, f32 midpoint_v,
+#   f32 v_min, f32 v_max, f32 step_mv, u8 cal_valid, u8 have_poly, f32 poly[4]
+# Preceded by a single u8 `present`.
+#
+# This previously emitted 26 bytes for 4 channels to match a client parser that
+# was itself wrong, so the whole suite was green while idac_get_status()
+# returned garbage against real hardware.
 # ---------------------------------------------------------------------------
+
+_CH_FMT = "<BbffffffBB4f"
+
 
 def _idac_get_status(device):
     def handler(payload: bytes) -> bytes:
         _ensure_idac(device)
         buf = bytearray()
         buf.append(1)   # present = True
-        for ch in device.idac:
-            buf += struct.pack('<b', ch.get('code', 0))
-            buf += struct.pack('<f', ch.get('target_v', 5.0))
-            buf += struct.pack('<f', ch.get('actual_v', 5.0))
-            buf += struct.pack('<f', 0.0)   # mid placeholder
-            buf += struct.pack('<f', ch.get('v_min', 3.0))
-            buf += struct.pack('<f', ch.get('v_max', 15.0))
-            buf += struct.pack('<f', ch.get('step_mv', 100.0))
-            buf.append(int(ch.get('calibrated', False)))
+        for idx in range(_NUM_REPORTED_CHANNELS):
+            ch = device.idac[idx]
+            cal = bool(ch.get('calibrated', False))
+            buf += struct.pack(
+                _CH_FMT,
+                idx,
+                ch.get('code', 0),
+                ch.get('target_v', 5.0),
+                ch.get('actual_v', 5.0),
+                ch.get('midpoint_v', 5.0),
+                ch.get('v_min', 3.0),
+                ch.get('v_max', 15.0),
+                ch.get('step_mv', 100.0),
+                int(cal),
+                int(cal),          # have_poly: only fitted once calibrated
+                0.0, 0.0, 0.0, 0.0,
+            )
         return bytes(buf)
     return handler
 

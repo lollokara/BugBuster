@@ -83,11 +83,12 @@ def test_hat_detect_with_hat():
 # ---------------------------------------------------------------------------
 
 def test_idac_get_status_usb():
-    """idac_get_status() over USB returns present=True and 4 channels."""
+    """The firmware reports the three wired DS4424 channels; channel 3 is not
+    connected and is deliberately omitted."""
     client, _ = _usb_client()
     status = client.idac_get_status()
     assert status["present"] is True
-    assert len(status["channels"]) == 4
+    assert len(status["channels"]) == 3
     client.disconnect()
 
 
