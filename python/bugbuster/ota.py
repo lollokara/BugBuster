@@ -42,7 +42,6 @@ from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
-import requests
 
 # Re-export the header name so callers don't need a second import.
 ADMIN_TOKEN_HEADER = "X-BugBuster-Admin-Token"

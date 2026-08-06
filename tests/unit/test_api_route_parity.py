@@ -9,6 +9,8 @@ would have flashed the wrong chips.
 import pathlib
 import re
 
+from tests.lib.srcread import read_source
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 API_CORE = REPO / "Firmware/ESP32/src/net/api_core.cpp"
 WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
@@ -70,8 +72,8 @@ def test_source_files_exist():
 
 
 def test_every_api_core_route_is_reachable_over_http():
-    core = _api_core_routes(API_CORE.read_text())
-    web = _webserver_routes(WEBSERVER.read_text())
+    core = _api_core_routes(read_source(API_CORE))
+    web = _webserver_routes(read_source(WEBSERVER))
     assert core, "parsed no routes out of api_core.cpp — has the dispatch style changed?"
 
     missing = {r for r in core if r not in web} - KNOWN_HTTP_MISSING
@@ -82,8 +84,8 @@ def test_every_api_core_route_is_reachable_over_http():
 
 def test_known_missing_routes_are_still_missing():
     """If a known gap gets fixed, tighten the guard rather than leaving it stale."""
-    core = _api_core_routes(API_CORE.read_text())
-    web = _webserver_routes(WEBSERVER.read_text())
+    core = _api_core_routes(read_source(API_CORE))
+    web = _webserver_routes(read_source(WEBSERVER))
     fixed = {r for r in KNOWN_HTTP_MISSING if r in web or r not in core}
     assert not fixed, (
         "these are no longer missing from webserver.cpp — remove them from "
@@ -106,8 +108,8 @@ def test_update_apply_is_parsed_consistently():
     exactly once, both inside the update-apply target-parsing code, so a
     whole-file check carries no meaningful false-positive risk here.
     """
-    core = API_CORE.read_text()
-    web = WEBSERVER.read_text()
+    core = read_source(API_CORE)
+    web = read_source(WEBSERVER)
     for name, text in (("api_core.cpp", core), ("webserver.cpp", web)):
         if "/api/update/apply" not in text:
             continue

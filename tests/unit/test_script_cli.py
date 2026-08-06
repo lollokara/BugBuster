@@ -5,10 +5,6 @@ Invokes ``bugbuster.script.main()`` directly with a mock client so no device
 or network connection is required.
 """
 
-import io
-import os
-import sys
-import tempfile
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -73,7 +69,6 @@ class TestCLIHelp:
 
     def test_no_connection_flag_exits_nonzero(self):
         """run without --host or --usb raises SystemExit."""
-        mock_client = _mock_client()
         # _make_client is NOT patched here; it should raise SystemExit itself
         with pytest.raises(SystemExit):
             cli_main(["run", "somefile.py"])

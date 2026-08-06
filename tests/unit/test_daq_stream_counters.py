@@ -1,10 +1,10 @@
 """Per-record-type TX counters for the DAQ stream (voltage-loss diagnosis)."""
-from pathlib import Path
+from tests.lib.srcread import read_source
 
-PROTO = Path("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h").read_text()
-STREAM_H = Path("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_stream.h").read_text()
-STREAM_C = Path("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_stream.c").read_text()
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
+PROTO = read_source("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h")
+STREAM_H = read_source("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_stream.h")
+STREAM_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_stream.c")
+BOARD = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
 
 
 def test_status_payload_appends_per_type_counters_without_reordering():
@@ -36,8 +36,8 @@ def test_board_populates_the_new_status_fields():
     assert "usb_stream_get_type_counters" in BOARD
 
 
-IOS_MGR = Path("iOSApp/Sources/Services/DaqWifiStreamManager.swift").read_text()
-IOS_SCOPE = Path("iOSApp/Sources/Views/ScopeTab.swift").read_text()
+IOS_MGR = read_source("iOSApp/Sources/Services/DaqWifiStreamManager.swift")
+IOS_SCOPE = read_source("iOSApp/Sources/Views/ScopeTab.swift")
 
 
 def test_ios_parses_extension_v5_counters_at_correct_offsets():

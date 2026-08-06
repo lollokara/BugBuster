@@ -99,8 +99,6 @@ class TestDoubleTimeout:
 
         call_count = [0]
 
-        original_send = client._t.send_command
-
         def _always_timeout(cmd_id, payload=b''):
             call_count[0] += 1
             raise TimeoutError("always times out")

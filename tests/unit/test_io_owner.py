@@ -9,7 +9,6 @@ Slot mapping:
   CH0..CH3   →  slots 12..15  (analog channels)
 """
 
-import pytest
 import bugbuster as bb
 from tests.mock import SimulatedDevice, SimulatedUSBTransport
 from bugbuster.constants import IoClaimStatus, IoOwnerKind
@@ -317,7 +316,6 @@ def test_g4_internal_preempt_and_restore():
     ownership. After restore, the slot should be USB-owned again, NOT NONE.
     """
     client, device = _make_client()
-    saved_session = device._usb_session_id
 
     client._io_claim_raw([6], 30_000, "usb_owner")
     assert device.io_owner_table[6]["kind"] == IoOwnerKind.USB

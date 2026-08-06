@@ -39,6 +39,7 @@ _HANDLER_MODULES = [
     "tests.mock.handlers.io_owner",
     "tests.mock.handlers.bus",
     "tests.mock.handlers.quicksetup",
+    "tests.mock.handlers.daq",
 ]
 
 from tests.mock import http_routes as _http_routes
@@ -203,6 +204,13 @@ class SimulatedDevice:
         self.scope_ch_mask = 0x0F    # active channel bitmask (0x01–0x0F)
         self.adc_diag_paused = False  # True while scope stream is active
 
+        # Config of the running ADC DSP stream, or None when stopped.
+        self.dsp_stream = None
+
+        # Zero-arg callables registered by handlers that own a stream thread,
+        # so stop_all_streams() can reach threads it has no reference to.
+        self._stream_stoppers: list = []
+
         self._register_all_handlers()
 
     # ------------------------------------------------------------------
@@ -259,8 +267,8 @@ class SimulatedDevice:
             return handler(payload)
         except DeviceError:
             raise
-        except Exception:
-            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        except Exception as exc:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0) from exc
 
     def http_dispatch(self, method: str, path: str, params: dict, body: dict, headers: dict = None) -> dict:
         return _http_routes.dispatch(self, method, path, params, body, headers or {})
@@ -274,6 +282,11 @@ class SimulatedDevice:
         if self._stream_thread and self._stream_thread.is_alive():
             self._stream_thread.join(timeout=2.0)
         self._stream_stop.clear()
+        for stop in self._stream_stoppers:
+            try:
+                stop()
+            except Exception:
+                pass
 
     def tick(self, now_ms: int) -> None:
         """Advance simulated time and expire stale leases."""

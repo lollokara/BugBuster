@@ -1,7 +1,9 @@
 """The Live pill must be reachable and must not sit on the lane labels."""
 from pathlib import Path
 
-SRC = Path("iOSApp/Sources/Views/DaqScopeCanvasView.swift").read_text()
+from tests.lib.srcread import read_source
+
+SRC = read_source("iOSApp/Sources/Views/DaqScopeCanvasView.swift")
 TAB = Path("iOSApp/Sources/Views/ScopeTab.swift")
 
 
@@ -20,7 +22,7 @@ def test_live_pill_is_not_rendered_inside_the_canvas():
 def test_live_pill_is_a_sibling_of_the_legend_panel():
     """Laid out in ONE container so overlap is impossible by construction,
     rather than by guessing which screen corner happens to be free."""
-    tab = TAB.read_text()
+    tab = read_source(TAB)
     assert "daqLiveButton" in tab, "ScopeTab does not render the Live pill"
     overlay = _extract_braced_block(
         tab, r"\.overlay\(alignment: \.bottomTrailing\)\s*\{")
@@ -34,7 +36,7 @@ def test_live_pill_drives_the_shared_follow_state():
     """The canvas reads follow state from the published frame, so the pill must
     write the model viewport or tapping it does nothing."""
     body = _extract_braced_block(
-        TAB.read_text(), r"private var daqLiveButton: some View \{")
+        read_source(TAB), r"private var daqLiveButton: some View \{")
     assert "followLive = true" in body and "anchorEndT = nil" in body, (
         "tapping Live must re-anchor the viewport to the live edge")
 
@@ -57,7 +59,7 @@ ROOT = Path("iOSApp/Sources/Views/iPadRootView.swift")
 
 
 def test_sidebar_auto_collapses_after_idle():
-    src = ROOT.read_text()
+    src = read_source(ROOT)
     assert "columnVisibility" in src, "NavigationSplitView has no visibility binding to drive"
     # Anchor on the actual declaration, not incidental digits elsewhere in the
     # file: this must fail if the timeout value is changed to anything else.
@@ -79,7 +81,7 @@ VDUT_CARD = Path("iOSApp/Sources/Views/VDUTControlsCard.swift")
 
 
 def test_vdut_state_is_prefetched_not_fetched_on_open():
-    src = CONN.read_text()
+    src = read_source(CONN)
     assert "startVdutPrefetch" in src, "no background VDUT prefetch"
     assert "vdutPrefetchTask" in src
     # The prefetch loop must actually be wired to run once the connection is
@@ -96,7 +98,7 @@ def test_vdut_prefetch_is_also_started_over_ble():
     the prefetch into startPolling() alone leaves BLE-connected users with
     exactly the stale-setpoint bug this task fixes, with the suite still
     green. Must be covered independently of the WiFi-path assertion above."""
-    src = CONN.read_text()
+    src = read_source(CONN)
     assert re.search(r"func startBLEPolling\(\)\s*\{\s*startVdutPrefetch\(\)", src), (
         "startVdutPrefetch() must also be started when BLE polling begins, "
         "or BLE-connected users still see stale VDUT setpoints on open")
@@ -129,7 +131,7 @@ def test_vdut_prefetch_backs_off_on_transport_degraded_and_daq_stream_busy():
     prefetch loop must respect both, or it keeps hammering a wedged transport
     / competes for the single serialized request slot exactly when it's
     scarcest (DAQ wifi-stream provisioning and recovery)."""
-    src = CONN.read_text()
+    src = read_source(CONN)
     body = _extract_braced_block(src, r"func startVdutPrefetch\(\)\s*\{")
 
     assert "transportDegraded" in body, (
@@ -164,7 +166,7 @@ def test_vdut_prefetch_treats_only_transitional_daq_states_as_busy():
     too-broad gate (e.g. "busy unless .idle/.failed") passes the weaker
     check in test_vdut_prefetch_backs_off_on_transport_degraded_and_daq_stream_busy
     but must fail here."""
-    src = CONN.read_text()
+    src = read_source(CONN)
     fn_body = _extract_braced_block(src, r"func startVdutPrefetch\(\)\s*\{")
     switch_body = _extract_braced_block(
         fn_body, r"switch\s+DaqWifiStreamManager\.shared\.linkState\s*\{")
@@ -205,7 +207,7 @@ def test_vdut_card_does_not_depend_on_an_open_time_fetch():
     itself (brace-matched), not a fixed-width slice after a fixed string:
     a slice would silently examine the wrong region if the file gains
     another `.onAppear`, and would raise IndexError if it gains none."""
-    src = VDUT_CARD.read_text()
+    src = read_source(VDUT_CARD)
     match = re.search(r"\.onAppear\s*\{", src)
     assert match is not None, "VDUTControlsCard must seed its drafts in onAppear"
 
@@ -242,7 +244,7 @@ def test_watchdog_gives_a_new_stream_a_grace_period():
     stall -> recover -> reset -> nil -> stall. That presented as a
     "Reconnecting..." banner that never cleared while the trace flickered back
     every few seconds."""
-    body = _extract_braced_block(MGR.read_text(),
+    body = _extract_braced_block(read_source(MGR),
                                  r"private func startWatchdog\(\)\s*\{")
     assert "last == nil ||" not in body, (
         "treating a nil lastFrameAt as stalled re-triggers recovery one second "
@@ -256,7 +258,7 @@ def test_reset_buffers_still_clears_the_frame_timestamp():
     """The grace deadline is the fix — NOT leaving a stale timestamp behind.
     A stale lastFrameAt from before an outage would make the watchdog think
     data is flowing when it is not."""
-    body = _extract_braced_block(MGR.read_text(), r"func resetBuffers\(\)\s*\{")
+    body = _extract_braced_block(read_source(MGR), r"func resetBuffers\(\)\s*\{")
     assert "lastFrameAt = nil" in body, (
         "resetBuffers must still clear lastFrameAt; the watchdog handles nil "
         "via its grace deadline")

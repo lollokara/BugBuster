@@ -7,7 +7,6 @@ These tests assert RELATIONAL properties only. The DUT load resistance is
 unknown to the suite and must never appear in an assertion -- see
 docs/superpowers/specs/2026-08-03-daq-test-suite-design.md, "Bench Setup".
 """
-import struct
 import time
 
 import pytest
@@ -568,7 +567,7 @@ def test_spectrum_keeps_updating_over_thousands_of_ffts(daq_safe):
         # any identical adjacent pair late in the run means the buffer froze.
         tail = cap.fft[int(len(cap.fft) * 0.8):]
         assert len(tail) >= 5
-        changed = sum(1 for a, b in zip(tail, tail[1:]) if a.bins != b.bins)
+        changed = sum(1 for a, b in zip(tail, tail[1:], strict=False) if a.bins != b.bins)
         assert changed >= len(tail) // 2, (
             "spectrum stopped updating: only %d of %d consecutive pairs "
             "differed in the final fifth of a %d-FFT run"
@@ -885,7 +884,7 @@ def test_current_is_monotonic_in_vdut(daq_safe, daq_load):
             "load is attached to the DUT terminals. Readings: %r"
             % (span, readings))
 
-    for (v0, i0), (v1, i1) in zip(readings, readings[1:]):
+    for (v0, i0), (v1, i1) in zip(readings, readings[1:], strict=False):
         # 5% tolerance absorbs noise at a range boundary without permitting a
         # real inversion.
         assert i1 >= i0 * 0.95, (

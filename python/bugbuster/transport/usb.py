@@ -199,7 +199,7 @@ class USBTransport:
                         self._serial.close()
                     raise ConnectionError(
                         f"BBP handshake timed out — received: {last_handshake_buf}"
-                    )
+                    ) from exc
 
         if resp is None:
             raise ConnectionError("Handshake returned no response")
@@ -288,7 +288,7 @@ class USBTransport:
                 self._pending.pop(seq, None)
             raise TimeoutError(
                 f"No response for cmd=0x{cmd_id:02X} seq={seq} within {self._timeout}s"
-            )
+            ) from None
 
         if isinstance(result, Exception):
             raise result
@@ -343,7 +343,9 @@ class USBTransport:
                 log.debug("Serial transient: %s", exc)
                 __import__('time').sleep(0.01)
                 continue
-            except (OSError, serial.SerialException, TypeError) as exc:
+            except (OSError, TypeError) as exc:
+                # serial.SerialException is an OSError subclass but is already
+                # handled above, so listing it here again was unreachable.
                 # TypeError: Windows pyserial ctypes race when the port is closed
                 # (self._serial NULLed) mid-read — byref() on a freed OVERLAPPED.
                 log.error("Serial read error: %s", exc, exc_info=True)

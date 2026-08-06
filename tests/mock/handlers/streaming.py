@@ -14,6 +14,14 @@ SCOPE_DATA_EVT payload layout (matching client.py _handler):
   [4:8]    timestamp_ms  (I, LE)
   [8:10]   count         (H, LE)
   [10:]    4 × (avg f, min f, max f) LE floats
+
+ADC_DSP_EVT payload layout (matching client.py _parse_adc_dsp_evt):
+  [0]      channel       (B)
+  [1:5]    timestamp_us  (I, LE)
+  [5:7]    n_samples     (H, LE)
+  [7:23]   min/max/mean/rms (4 × f, LE)
+  [23]     n_fft_peaks   (B), then n × (bin B, magnitude f)
+  [..]     n_spikes      (B), then n × (offset_us I, value f)
 """
 
 import math
@@ -112,6 +120,59 @@ def _scope_stream_loop(device, stop_event, interval_s):
 
 
 # ---------------------------------------------------------------------------
+# ADC DSP stream loop
+# ---------------------------------------------------------------------------
+
+def _dsp_stream_loop(device, stop_event, interval_s, channel,
+                     window_samples, spike_threshold, n_fft_peaks):
+    """Push ADC_DSP_EVT windows describing a synthetic 1 kHz tone."""
+    ts_us = 0
+    period_us = int(interval_s * 1_000_000)
+
+    while not stop_event.is_set():
+        # Window statistics of a 1 V-amplitude sine about a 2.5 V offset. The
+        # host asserts on the min/max/mean/rms relationship, so these must be
+        # mutually consistent rather than arbitrary.
+        offset, amp = 2.5, 1.0
+        min_v = offset - amp
+        max_v = offset + amp
+        mean_v = offset
+        rms_v = math.sqrt(offset * offset + (amp * amp) / 2.0)
+
+        buf = bytearray()
+        buf += struct.pack('<BIH', channel & 0xFF, ts_us & 0xFFFFFFFF,
+                           window_samples & 0xFFFF)
+        buf += struct.pack('<ffff', min_v, max_v, mean_v, rms_v)
+
+        peaks = min(n_fft_peaks, 8)
+        buf.append(peaks)
+        for i in range(peaks):
+            # Fundamental carries the most energy, harmonics decay.
+            buf += struct.pack('<Bf', (i + 1) * 4, amp / (i + 1))
+
+        # One spike per window only once it clears the caller's threshold, so
+        # a high threshold really does suppress spikes.
+        spikes = 1 if amp >= spike_threshold else 0
+        buf.append(spikes)
+        for _ in range(spikes):
+            buf += struct.pack('<If', period_us // 2, max_v)
+
+        transport = getattr(device, '_transport', None)
+        handler = (
+            transport._event_handlers.get(int(CmdId.ADC_DSP_EVT))
+            if transport is not None else None
+        )
+        if handler:
+            try:
+                handler(bytes(buf))
+            except Exception:
+                pass
+
+        stop_event.wait(interval_s)
+        ts_us += period_us
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -119,6 +180,8 @@ def register(device) -> None:
     # Separate stop event and thread for scope (can run alongside ADC)
     _scope_stop = threading.Event()
     _scope_thread_holder = [None]
+    _dsp_stop = threading.Event()
+    _dsp_thread_holder = [None]
 
     def handle_start_adc(payload: bytes) -> bytes:
         channel_mask = payload[0] if len(payload) >= 1 else 0x0F
@@ -166,7 +229,42 @@ def register(device) -> None:
         device.adc_diag_paused = False
         return b''
 
-    device.register_handler(CmdId.START_ADC_STREAM,   handle_start_adc)
-    device.register_handler(CmdId.STOP_ADC_STREAM,    handle_stop_adc)
-    device.register_handler(CmdId.START_SCOPE_STREAM, handle_start_scope)
-    device.register_handler(CmdId.STOP_SCOPE_STREAM,  handle_stop_scope)
+    def handle_start_dsp(payload: bytes) -> bytes:
+        channel, _rate, window, threshold, peaks = struct.unpack('<BBHfB', payload) \
+            if len(payload) >= struct.calcsize('<BBHfB') else (0, 0, 256, 0.1, 8)
+        device.dsp_stream = {
+            "channel": channel,
+            "window_samples": window,
+            "spike_threshold": threshold,
+            "n_fft_peaks": peaks,
+        }
+        _dsp_stop.clear()
+        t = threading.Thread(
+            target=_dsp_stream_loop,
+            args=(device, _dsp_stop, 0.03, channel, window, threshold, peaks),
+            daemon=True,
+        )
+        t.start()
+        _dsp_thread_holder[0] = t
+        return b''
+
+    def handle_stop_dsp(payload: bytes) -> bytes:
+        _dsp_stop.set()
+        th = _dsp_thread_holder[0]
+        if th and th.is_alive():
+            th.join(timeout=2.0)
+        _dsp_thread_holder[0] = None
+        device.dsp_stream = None
+        return b''
+
+    device.register_handler(CmdId.START_ADC_STREAM,     handle_start_adc)
+    device.register_handler(CmdId.STOP_ADC_STREAM,      handle_stop_adc)
+    device.register_handler(CmdId.START_SCOPE_STREAM,   handle_start_scope)
+    device.register_handler(CmdId.STOP_SCOPE_STREAM,    handle_stop_scope)
+    device.register_handler(CmdId.START_ADC_DSP_STREAM, handle_start_dsp)
+    device.register_handler(CmdId.STOP_ADC_DSP_STREAM,  handle_stop_dsp)
+
+    # Scope and DSP threads are owned by closures here, so hand the device a
+    # way to stop them on disconnect.
+    device._stream_stoppers.append(lambda: handle_stop_scope(b''))
+    device._stream_stoppers.append(lambda: handle_stop_dsp(b''))

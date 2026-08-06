@@ -46,12 +46,10 @@ import argparse
 import json
 import os
 import sys
-import time
 from dataclasses import dataclass, asdict, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from tests.lib import daq_proto as P            # noqa: E402
 from tests.lib.daq_link import DaqLink, DaqLinkUnavailable   # noqa: E402
 
 
@@ -151,7 +149,7 @@ def print_report(r: Result, title: str = "") -> None:
     print(f"host throughput   : {r.mb_per_s:.2f} MB/s  ({r.bytes_rx} bytes)")
     print(f"WAVE_I end-to-end : {r.wave_i_sps:,.0f} Sa/s  ({r.wave_i_samples} samples)")
     print(f"WAVE_V end-to-end : {r.wave_v_sps:,.0f} Sa/s  ({r.wave_v_samples} samples)")
-    print(f"frames            : " +
+    print("frames            : " +
           "  ".join(f"{k}={v}" for k, v in sorted(r.frames.items())))
     print(f"wire frame loss   : {r.seq_lost} frames in {r.seq_gaps} gaps "
           f"({r.frame_loss_pct:.3f}%), resyncs={r.resyncs}")

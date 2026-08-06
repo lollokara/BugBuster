@@ -1,7 +1,7 @@
 """P4 softAP lifecycle must never leave state only a power-cycle can clear."""
-from pathlib import Path
+from tests.lib.srcread import read_source
 
-SRC = Path("Firmware/DAQ_HAT/ESP32P4/src/link/wifi_ap.c").read_text()
+SRC = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/wifi_ap.c")
 
 
 def _body(name: str) -> str:
@@ -57,7 +57,7 @@ def test_event_handler_registered_at_most_once():
 
 # --- Idle-teardown liveness: association, not just TCP ----------------------
 
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+BOARD = "Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c"
 
 
 def test_ap_tracks_associated_station_count():
@@ -83,6 +83,6 @@ def test_ap_stop_clears_the_station_count():
 
 
 def test_idle_teardown_treats_association_as_liveness():
-    src = BOARD.read_text()
+    src = read_source(BOARD)
     assert "wifi_ap_sta_count() > 0" in src, (
         "the idle-teardown timer still counts only TCP connections")

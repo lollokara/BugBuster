@@ -48,7 +48,7 @@ def test_idac_set_voltage_emits_python_warning_before_write():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if warning:
-            warnings.warn(warning, BugBusterWarning)
+            warnings.warn(warning, BugBusterWarning, stacklevel=2)
 
     assert caught
     assert issubclass(caught[0].category, BugBusterWarning)

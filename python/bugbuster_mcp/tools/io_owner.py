@@ -213,8 +213,8 @@ def register(mcp) -> None:
         # Catch authentication errors without leaking the token value.
         try:
             bb.io_force_release(slot, resolved_token)
-        except PermissionError:
-            raise PermissionError("Invalid admin token — io_force_release rejected.")
+        except PermissionError as exc:
+            raise PermissionError("Invalid admin token — io_force_release rejected.") from exc
         except Exception as exc:
             # Scrub any token-like content from the error string before re-raising.
             msg = str(exc)

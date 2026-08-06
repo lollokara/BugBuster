@@ -450,7 +450,6 @@ def _timing_diagram(ch_data: list, n_channels: int, n_points: int) -> str:
         # Build a binary string from first n_points samples
         # ch_data[chi] is a flat list of 0/1 bits (one per sample)
         row: list[str] = []
-        from typing import Any
         samples: list[Any] = ch_data[chi]
         for t in range(n_points):
             if t < len(samples):

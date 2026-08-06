@@ -49,7 +49,6 @@ import ast
 import inspect
 import textwrap
 import time
-import warnings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

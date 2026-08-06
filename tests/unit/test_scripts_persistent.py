@@ -13,7 +13,6 @@ Covers:
 """
 
 import struct
-import pytest
 
 import bugbuster as bb
 from tests.mock import SimulatedDevice, SimulatedUSBTransport

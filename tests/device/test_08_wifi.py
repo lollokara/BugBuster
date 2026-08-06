@@ -41,7 +41,6 @@ def test_wifi_status_has_required_fields(device):
     # The USB parser returns: connected, sta_ssid, sta_ip, rssi, ap_ssid, ap_ip, ap_mac
     # HTTP may return different key names — check for either form
     has_sta_info = any(k in status for k in ("connected", "sta_connected", "sta_ssid"))
-    has_ap_info = any(k in status for k in ("ap_enabled", "ap_ssid", "ap_ip"))
 
     assert has_sta_info, f"WiFi status missing STA connection info: {list(status.keys())}"
     # AP info is optional — device may not have AP mode enabled

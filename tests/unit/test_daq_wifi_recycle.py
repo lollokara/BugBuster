@@ -1,8 +1,8 @@
 """DAQ WiFi stream state machine: no terminal states, no double bring-up."""
-from pathlib import Path
+from tests.lib.srcread import read_source
 
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
-BOARD_H = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.h").read_text()
+BOARD = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+BOARD_H = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.h")
 
 
 def test_failed_state_decays_back_to_idle():
@@ -28,11 +28,11 @@ def test_bringup_task_clears_liveness_on_every_exit_path():
     assert body.count("s_bringup_alive = false") >= 2
 
 
-S3LINK = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h").read_text()
-HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
-HAT_CPP = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
-API = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
-WEB = Path("Firmware/ESP32/src/web/webserver.cpp").read_text()
+S3LINK = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
+HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
+HAT_CPP = read_source("Firmware/ESP32/src/hat/hat.cpp")
+API = read_source("Firmware/ESP32/src/net/api_core.cpp")
+WEB = read_source("Firmware/ESP32/src/web/webserver.cpp")
 
 
 def test_recycle_command_byte_matches_on_both_sides_of_the_hat_link():

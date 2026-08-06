@@ -8,7 +8,6 @@ source text.  Tests therefore assert on the log *format* produced by the
 simulator (e.g. "[eval:N] <src>") rather than on Python execution output.
 """
 
-import pytest
 import bugbuster as bb
 from bugbuster.script import ScriptSession
 from bugbuster.client import ScriptStatusResult
@@ -35,7 +34,7 @@ class TestScriptSessionContextManager:
     def test_enter_warms_vm(self):
         """__enter__ sends an empty eval with persist=True, switching mode."""
         client, device = _usb_client()
-        with ScriptSession(client=client) as s:
+        with ScriptSession(client=client):
             assert device.script_mode == 1  # persistent after warm-up
         client.disconnect()
 

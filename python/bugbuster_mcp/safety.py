@@ -159,11 +159,11 @@ def require_hat(bb) -> None:
                 "SWD debug probe and logic analyzer require the RP2040 HAT. "
                 "Check that the HAT is physically connected."
             )
-    except NotImplementedError:
+    except NotImplementedError as exc:
         raise RuntimeError(
             "HAT commands require USB transport. "
             "Connect via USB (--transport usb) for HAT/SWD/logic-analyzer access."
-        )
+        ) from exc
 
 
 def require_la_ready(bb) -> None:
@@ -183,11 +183,11 @@ def require_la_ready(bb) -> None:
                 f"Logic analyzer is not ready (state: {name}). "
                 f"Stop the current capture first."
             )
-    except (AttributeError, NotImplementedError):
+    except (AttributeError, NotImplementedError) as exc:
         # Transport or library doesn't support LA
         raise RuntimeError(
             "Logic analyzer commands are not supported on this transport or device."
-        )
+        ) from exc
 
 
 def validate_la_config(channels: int, rate_hz: int, depth: int) -> None:

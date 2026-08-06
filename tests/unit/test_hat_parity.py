@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from bugbuster.constants import CmdId
+from tests.lib.srcread import read_source
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -54,7 +55,7 @@ def _python_hat_cmds() -> dict[str, int]:
 
 
 def _esp32_hat_cmds() -> dict[str, int]:
-    text = (ROOT / "Firmware/ESP32/src/bbp/bbp.h").read_text()
+    text = read_source(ROOT / "Firmware/ESP32/src/bbp/bbp.h")
     out: dict[str, int] = {}
     for name, value in re.findall(r"#define\s+BBP_CMD_(HAT_[A-Z0-9_]+)\s+0x([0-9A-Fa-f]+)", text):
         out[_canonical(name)] = int(value, 16)
@@ -62,7 +63,7 @@ def _esp32_hat_cmds() -> dict[str, int]:
 
 
 def _desktop_hat_cmds() -> dict[str, int]:
-    text = (ROOT / "DesktopApp/BugBuster/src-tauri/src/bbp.rs").read_text()
+    text = read_source(ROOT / "DesktopApp/BugBuster/src-tauri/src/bbp.rs")
     out: dict[str, int] = {}
     for name, value in re.findall(r"pub const CMD_(HAT_[A-Z0-9_]+):\s*u8\s*=\s*0x([0-9A-Fa-f]+)", text):
         out[_canonical(name)] = int(value, 16)
@@ -70,7 +71,7 @@ def _desktop_hat_cmds() -> dict[str, int]:
 
 
 def _desktop_http_mapped_cmds() -> set[str]:
-    text = (ROOT / "DesktopApp/BugBuster/src-tauri/src/http_transport.rs").read_text()
+    text = read_source(ROOT / "DesktopApp/BugBuster/src-tauri/src/http_transport.rs")
     return {
         _canonical(name)
         for name in re.findall(r"bbp::CMD_(HAT_[A-Z0-9_]+)\s*=>", text)

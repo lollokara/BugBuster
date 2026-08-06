@@ -6,9 +6,11 @@ in docs/superpowers/specs/2026-08-05-direct-p4-c6-ota-design.md.
 import re
 from pathlib import Path
 
-HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
-HAT_C = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
-TASKS_H = Path("Firmware/ESP32/src/tasks.h").read_text()
+from tests.lib.srcread import read_source
+
+HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
+HAT_C = read_source("Firmware/ESP32/src/hat/hat.cpp")
+TASKS_H = read_source("Firmware/ESP32/src/tasks.h")
 
 
 def _literal_end(text: str, i: int, n: int) -> int:
@@ -199,7 +201,7 @@ def test_fn_body_ignores_braces_inside_string_literals():
     assert "next_fn" not in body
 
 
-UPD_C = Path("Firmware/ESP32/src/update/update_manager.cpp").read_text()
+UPD_C = read_source("Firmware/ESP32/src/update/update_manager.cpp")
 
 
 def test_p4_activation_helper_exists():
@@ -244,8 +246,8 @@ def test_release_path_activates_the_p4():
         "the GitHub release path must activate too, or P4 updates silently revert"
 
 
-DAQ_C = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
-CLI_C = Path("Firmware/DAQ_HAT/ESP32P4/src/cli/cli.c").read_text()
+DAQ_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+CLI_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/cli/cli.c")
 
 
 def test_c6_claim_and_release_exist():
@@ -379,7 +381,7 @@ def test_c6_validation_checks_both_magics():
         "must check ESP_PARTITION_MAGIC bytes AA 50 at 0x8000"
 
 
-UPD_H = Path("Firmware/ESP32/src/update/update_manager.h").read_text()
+UPD_H = read_source("Firmware/ESP32/src/update/update_manager.h")
 
 
 def test_push_local_is_declared():
@@ -519,7 +521,7 @@ def test_push_local_relay_poll_checks_timeout_before_status_continue():
         "failure continue, or a stuck HAT link can spin this loop forever"
 
 
-WEB_C = Path("Firmware/ESP32/src/web/webserver.cpp").read_text()
+WEB_C = read_source("Firmware/ESP32/src/web/webserver.cpp")
 
 
 def test_both_upload_routes_are_registered():
@@ -565,7 +567,7 @@ def test_done_record_buffer_is_derived_from_err_buffer_size():
         "not a fixed literal size that can drift out of sync with err's size"
 
 
-MCP_OTA = Path("python/bugbuster_mcp/tools/ota.py").read_text()
+MCP_OTA = read_source("python/bugbuster_mcp/tools/ota.py")
 
 
 def _py_signature(text: str, name: str) -> str:
@@ -591,8 +593,8 @@ def test_mcp_exposes_daq_uploads_and_targets():
 # api.update.* bugs that made the GitHub-update feature unauthenticated/broken.
 # =============================================================================
 
-CLIENT_TS = Path("Firmware/ESP32/web/src/api/client.ts").read_text()
-OTACARD = Path("Firmware/ESP32/web/src/tabs/system/OtaCard.tsx").read_text()
+CLIENT_TS = read_source("Firmware/ESP32/web/src/api/client.ts")
+OTACARD = read_source("Firmware/ESP32/web/src/tabs/system/OtaCard.tsx")
 
 
 def test_web_client_has_a_daq_upload_helper():
@@ -703,9 +705,9 @@ def test_web_otacard_offers_p4_and_c6_targets():
 # timer; the DAQ path must report the device's own byte counts instead.
 # =============================================================================
 
-CMDS_RS = Path("DesktopApp/BugBuster/src-tauri/src/commands.rs").read_text()
-LIB_RS = Path("DesktopApp/BugBuster/src-tauri/src/lib.rs").read_text()
-BRIDGE_RS = Path("DesktopApp/BugBuster/src/tauri_bridge.rs").read_text()
+CMDS_RS = read_source("DesktopApp/BugBuster/src-tauri/src/commands.rs")
+LIB_RS = read_source("DesktopApp/BugBuster/src-tauri/src/lib.rs")
+BRIDGE_RS = read_source("DesktopApp/BugBuster/src/tauri_bridge.rs")
 
 
 def test_desktop_has_a_daq_upload_command():
@@ -749,7 +751,7 @@ def test_desktop_bridge_wrapper_uses_error_propagating_invoke():
 # line silently never updated.
 # =============================================================================
 
-IOS_DIAG = Path("iOSApp/Sources/Views/DiagnosticsTab.swift").read_text()
+IOS_DIAG = read_source("iOSApp/Sources/Views/DiagnosticsTab.swift")
 
 
 def test_ios_update_status_matches_the_firmware_json():
@@ -827,8 +829,8 @@ def test_web_otacard_p4_c6_path_skips_the_12s_reboot_wait():
 # need to assert on. Use _strip_comments() (comments blanked, literals kept)
 # instead, and parse the #define lines directly for the device side since
 # that's plain C macro text, not a function body.
-P4_VERSION_H = Path("Firmware/DAQ_HAT/ESP32P4/include/version.h").read_text()
-C6_VERSION_H = Path("Firmware/DAQ_HAT/ESP32C6/include/version.h").read_text()
+P4_VERSION_H = read_source("Firmware/DAQ_HAT/ESP32P4/include/version.h")
+C6_VERSION_H = read_source("Firmware/DAQ_HAT/ESP32C6/include/version.h")
 
 
 def _fw_product_id(text: str) -> str:
@@ -869,7 +871,7 @@ def test_s3_c6_product_id_matches_the_c6_device():
 # ineffective reset never dropped the link, which is exactly why the old
 # single-phase wait passed on its very first poll.
 # =============================================================================
-S3LINK_C = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
+S3LINK_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c")
 
 
 def _case_block(text: str, case_label: str) -> str:
@@ -975,11 +977,11 @@ def test_release_path_and_push_local_use_the_shared_product_id_constants():
 # values (so an accidental revert of either shrink is caught) and guard
 # ble_api specifically (so a future pass cannot shrink it too).
 # ---------------------------------------------------------------------------
-MAIN_CPP = Path("Firmware/ESP32/src/main.cpp").read_text()
-BLE_C = Path("Firmware/ESP32/src/net/ble_service.cpp").read_text()
-CLI_SYS_CPP = Path("Firmware/ESP32/src/cli/cli_cmds_sys.cpp").read_text()
-CLI_MENU_CPP = Path("Firmware/ESP32/src/cli/cli_menu.cpp").read_text()
-API_CORE_CPP = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
+MAIN_CPP = read_source("Firmware/ESP32/src/main.cpp")
+BLE_C = read_source("Firmware/ESP32/src/net/ble_service.cpp")
+CLI_SYS_CPP = read_source("Firmware/ESP32/src/cli/cli_cmds_sys.cpp")
+CLI_MENU_CPP = read_source("Firmware/ESP32/src/cli/cli_menu.cpp")
+API_CORE_CPP = read_source("Firmware/ESP32/src/net/api_core.cpp")
 
 
 def test_reduced_task_stack_sizes_are_exactly_the_new_values():
@@ -1067,7 +1069,7 @@ def test_stack_hwm_table_uses_shared_constants_not_literals():
     # Valid patterns: TASK_STACK_ADCPOLL, TASK_STACK_FAULTMON, etc.
     # Invalid patterns: bare numbers like 2560, 2048, 5120, 8192
     lines = array_init.split("\n")
-    for i, line in enumerate(lines, 1):
+    for line in lines:
         if line.strip() and not line.strip().startswith("//"):
             # Each line should be: { "name", handle, TASK_STACK_* },
             # Check that common bare literals don't appear at the end (the declared field)
@@ -1084,7 +1086,7 @@ def test_stack_hwm_table_uses_shared_constants_not_literals():
                     # Get the task name from this line for the error message
                     name_match = re.search(r'"(\w+)"', line)
                     task_name = name_match.group(1) if name_match else "unknown"
-                    assert False, (
+                    raise AssertionError(
                         f"stack_hwm table row for '{task_name}' uses bare literal {literal} "
                         f"instead of a TASK_STACK_* constant. This will cause the table to "
                         f"become stale when stack sizes change. Use the appropriate constant "
@@ -1249,11 +1251,12 @@ def test_all_upload_methods_never_send_both_content_length_and_transfer_encoding
 
         class S:
             def post(self, url, params=None, data=None, headers=None,
-                     timeout=None, stream=None):
+                     timeout=None, stream=None,
+                     _captured=captured, _resp_factory=resp_factory):
                 req = _requests.Request(method="POST", url=url, params=params,
                                         data=data, headers=headers)
-                captured["prepped"] = _requests.Session().prepare_request(req)
-                return resp_factory()
+                _captured["prepped"] = _requests.Session().prepare_request(req)
+                return _resp_factory()
 
         c = OTAClient.__new__(OTAClient)
         c._session, c._base, c._token = S(), "http://d/api", "t" * 64
@@ -1295,8 +1298,8 @@ def test_ota_abort_restores_fast_acquisition_conditionally():
 # heap-allocating the read-back buffer (freed on every exit path) instead of
 # putting it on the stack.
 # =============================================================================
-RELAY_STAGE_C = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_stage.c").read_text()
-OTA_C = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/ota.c").read_text()
+RELAY_STAGE_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_stage.c")
+OTA_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/ota/ota.c")
 
 # Files containing every handler reachable from the s3_link dispatcher task:
 # s3_link.c itself (frame parser + generic dispatch), daq_board.c
@@ -1382,7 +1385,6 @@ def test_relay_stage_end_heap_allocates_and_frees_its_readback_buffer():
     malloc_pos = body.index("malloc(")
     free_pos = body.index("free(")
     assert free_pos > malloc_pos, "free() must appear after malloc() in program order"
-    tail = body[free_pos:]
     # Every remaining `return` after the free() is safe by construction; make
     # sure there ISN'T a return sitting between the malloc and the free that
     # would leak (other than the allocation-failure check itself, which is

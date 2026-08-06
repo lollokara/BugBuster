@@ -547,7 +547,6 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
         enable = bool(body.get("enable", False))
         if 0 <= connector <= 1:
             device.hat_power[connector] = enable
-        conn_key = "connA" if connector == 0 else "connB"
         return {"ok": True, "connector": connector, "enabled": device.hat_power[connector], "currentMa": 0.0, "fault": False}
 
     # HAT v2 set LED state

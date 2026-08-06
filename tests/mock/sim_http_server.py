@@ -14,13 +14,12 @@ Usage in pytest fixtures (--sim-full mode):
     server.stop()
 """
 
-import io
 import json
 import logging
 import threading
 import urllib.parse
 from socketserver import ThreadingMixIn
-from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
+from wsgiref.simple_server import WSGIServer, WSGIRequestHandler
 
 log = logging.getLogger(__name__)
 

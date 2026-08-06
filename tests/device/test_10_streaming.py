@@ -218,7 +218,9 @@ def test_adc_stream_restart(usb_device):
         events = []
         done = threading.Event()
 
-        def on_data(mask, samples, _cycle=cycle):
+        # events/done are bound as defaults: a callback that fires after this
+        # iteration has moved on would otherwise append to the NEXT cycle's list.
+        def on_data(mask, samples, _cycle=cycle, events=events, done=done):
             events.append(len(samples))
             if len(events) >= 2:
                 done.set()

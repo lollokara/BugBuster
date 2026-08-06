@@ -16,10 +16,19 @@ _EVENT_ONLY_CMDS = {
     "SET_DIAG_CONFIG",
     "ADC_DATA_EVT",
     "SCOPE_DATA_EVT",
+    "ADC_DSP_EVT",
     "ALERT_EVT",
     "DIN_EVT",
     "PCA_FAULT_EVT",
     "HAT_LA_LOG_EVT",
+}
+
+# Commands the firmware reserves an opcode for but the Python client never
+# sends over BBP, so the simulator has nothing to answer. OTA is driven
+# entirely over HTTP (see python/bugbuster/ota.py); the BBP opcode exists only
+# to keep the ID reserved.
+_HOST_NEVER_SENDS = {
+    "OTA",
 }
 
 
@@ -35,6 +44,7 @@ def test_all_cmdids_have_handlers():
         cmd for cmd in CmdId
         if int(cmd) not in device._handlers
         and cmd.name not in _EVENT_ONLY_CMDS
+        and cmd.name not in _HOST_NEVER_SENDS
     ]
     assert not unhandled, f"Missing handlers for: {[c.name for c in unhandled]}"
 
@@ -96,9 +106,9 @@ KNOWN_HTTP_ROUTES = [
     ("POST", "/api/channel/0/function"),
     ("GET", "/api/channel/0/dac/readback"),
     ("POST", "/api/channel/0/dac"),
-    ("POST", "/api/faults/channel/0/mask"),
+    ("POST", "/api/faults/mask/0"),
     ("POST", "/api/faults/mask"),
-    ("POST", "/api/faults/channel/0/clear"),
+    ("POST", "/api/faults/clear/0"),
     ("GET", "/api/selftest"),
     ("GET", "/api/selftest/supply/0"),
     ("GET", "/api/selftest/supplies/cached"),
@@ -207,7 +217,6 @@ def test_http_json_validation():
 # Payload-bounds validation for individual handlers (H17)
 # ---------------------------------------------------------------------------
 
-import struct as _struct
 
 # Each entry: (description, cmd_name, bad_payload, expect_error)
 # expect_error=True means the handler must raise DeviceError (or any exception

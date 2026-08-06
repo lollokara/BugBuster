@@ -357,8 +357,6 @@ def register(mcp) -> None:
                 "HAT rail preflight failed: " + "; ".join(preflight["reasons"])
             )
 
-        target_v = voltage_mv / 1000.0
-
         # Program the rail voltage. The device firmware automatically negotiates
         # the minimum USB-C PD profile before setting the DC-DC converter.
         rail_status = bb.hat_set_rail_voltage(rail_id, voltage_mv)

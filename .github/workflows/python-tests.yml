@@ -10,15 +10,31 @@ name: Python Tests
 # --sim. Hardware-gated tests are selected by --hat / --device-usb and stay out
 # of CI.
 #
+# The matrix is not decoration. The first Windows run found that the whole
+# tests/unit suite failed to COLLECT: 90 `Path(...).read_text()` calls with no
+# encoding fell back to cp1252 and choked on the box-drawing characters in the
+# firmware comment banners. Keep a non-Linux runner in the matrix.
+#
 # See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-9.
 
 on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The suites import via PYTHONPATH rather than an installed package: a
+  # committed python/bugbuster.egg-info breaks `pip install ./python` on a
+  # clean checkout. Set it here so it also applies on the Windows runner,
+  # where the inline `PYTHONPATH=x cmd` shell form does nothing.
+  PYTHONPATH: python
+
 jobs:
-  pytest:
-    name: pytest (unit + synthetic + simulator)
+  lint:
+    name: lint (ruff + mypy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
@@ -27,24 +43,76 @@ jobs:
         uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.11"
+          cache: pip
+
+      - name: Install lint tooling
+        run: python -m pip install --upgrade pip ruff mypy
+
+      # Hard gate. The selected rules (F/B/E9) are real-defect rules and the
+      # tree is clean against them -- see [tool.ruff.lint] in
+      # python/pyproject.toml for why the style families are not on yet.
+      - name: ruff check
+        run: ruff check --config python/pyproject.toml python tests
+
+      # Advisory for now: the library predates type checking and a hard gate
+      # would block every unrelated PR. Flip continue-on-error off once the
+      # backlog under python/bugbuster is clear.
+      - name: mypy
+        continue-on-error: true
+        run: mypy --config-file python/pyproject.toml python/bugbuster
+
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  python: "3.11", coverage: true }
+          - { os: ubuntu-latest,  python: "3.12", coverage: false }
+          - { os: ubuntu-latest,  python: "3.13", coverage: false }
+          - { os: windows-latest, python: "3.11", coverage: false }
+          - { os: macos-latest,   python: "3.11", coverage: false }
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
 
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          # Dependencies only -- the suites import via PYTHONPATH=python, the
-          # same way AGENTS.md documents running them locally. Installing the
-          # package itself is avoided because python/bugbuster.egg-info is
-          # committed to the repo and breaks a fresh `pip install ./python`.
           python -m pip install -r python/requirements.txt
           # tests/unit/test_mcp_*.py import bugbuster_mcp (mcp, pydantic);
           # discovery/transport tests need zeroconf/websockets.
-          python -m pip install pytest mcp pydantic zeroconf websockets
+          python -m pip install pytest pytest-cov pytest-timeout mcp pydantic zeroconf websockets
 
-      - name: Unit tests
-        run: PYTHONPATH=python python -m pytest tests/unit -q
+      # One invocation so coverage spans every suite sharing the --sim fixture.
+      - name: Unit, synthetic, simulator and simulated-device tests
+        shell: bash
+        run: |
+          pytest tests/unit tests/synthetic tests/simulator tests/device --sim -q \
+            ${{ matrix.coverage && '--cov=bugbuster --cov=bugbuster_mcp --cov-branch --cov-report=xml:coverage.xml --cov-report=term' || '' }}
 
-      - name: Synthetic regression tests
-        run: PYTHONPATH=python python -m pytest tests/synthetic -q
+      # --sim-full swaps the device fixture for a real localhost HTTP server,
+      # so it cannot share a process with --sim.
+      - name: Integration tests (full HTTP simulator)
+        shell: bash
+        run: |
+          pytest tests/integration --sim-full -q \
+            ${{ matrix.coverage && '--cov=bugbuster --cov=bugbuster_mcp --cov-branch --cov-append --cov-report=xml:coverage.xml' || '' }}
 
-      - name: Simulator device tests
-        run: PYTHONPATH=python python -m pytest tests/device --sim -q
+      - name: Coverage ratchet
+        if: matrix.coverage
+        run: python tests/tools/coverage_ratchet.py coverage.xml
+
+      - name: Upload coverage report
+        if: matrix.coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error

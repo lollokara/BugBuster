@@ -195,7 +195,7 @@ def parse_pytest_output(output: str) -> dict[str, dict]:
     results: dict[str, dict] = {}
 
     # Initialize all categories
-    for key, file_path, desc in CATEGORIES:
+    for key, _file_path, desc in CATEGORIES:
         results[key] = {"key": key, "desc": desc, "passed": 0, "failed": 0, "skipped": 0, "errors": 0}
 
     # Parse test result lines: "tests/device/test_01_core.py::test_ping PASSED"
@@ -205,7 +205,7 @@ def parse_pytest_output(output: str) -> dict[str, dict]:
         status = match.group(3)
 
         # Find matching category
-        for key, cat_file, desc in CATEGORIES:
+        for key, cat_file, _desc in CATEGORIES:
             if cat_file.replace("\\", "/") in file_path_str:
                 if status == "PASSED":
                     results[key]["passed"] += 1
@@ -228,7 +228,6 @@ def print_summary(results: dict[str, dict], returncode: int):
     total_passed = sum(v["passed"] for v in results.values())
     total_failed = sum(v["failed"] for v in results.values())
     total_skipped = sum(v["skipped"] for v in results.values())
-    total_errors = sum(v["errors"] for v in results.values())
 
     if _RICH:
         console = Console()
@@ -244,7 +243,7 @@ def print_summary(results: dict[str, dict], returncode: int):
         table.add_column("Failed", justify="right", style="red")
         table.add_column("Skipped", justify="right", style="yellow")
 
-        for key, data in results.items():
+        for data in results.values():
             has_failures = data["failed"] > 0 or data["errors"] > 0
             passed_str = str(data["passed"]) if data["passed"] > 0 else "-"
             failed_str = str(data["failed"] + data["errors"]) if data["failed"] + data["errors"] > 0 else "-"
@@ -282,7 +281,7 @@ def print_summary(results: dict[str, dict], returncode: int):
         print(f"{'Category':<15} {'Description':<40} {'P':>5} {'F':>5} {'S':>5}")
         print("-" * 70)
 
-        for key, data in results.items():
+        for data in results.values():
             print(
                 f"{data['key']:<15} {data['desc']:<40} "
                 f"{data['passed']:>5} {data['failed']:>5} {data['skipped']:>5}"

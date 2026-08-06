@@ -75,7 +75,7 @@ def cobs_decode(data: bytes) -> bytes:
     while read_idx < len(data):
         code = data[read_idx]
         read_idx += 1
-        for i in range(1, code):
+        for _ in range(1, code):
             if read_idx >= len(data):
                 break
             result.append(data[read_idx])

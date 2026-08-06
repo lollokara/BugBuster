@@ -18,8 +18,10 @@ of searching for isolated strings.
 import re
 from pathlib import Path
 
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
-S3LINKC = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
+from tests.lib.srcread import read_source
+
+BOARD = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+S3LINKC = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c")
 
 
 def _extract_function_body(src: str, name: str) -> str:
@@ -70,7 +72,7 @@ def _command_bytes(path: Path) -> dict:
     out: dict = {}
     for name, val in re.findall(
             r"#define\s+((?:HATP|HAT)_CMD_\w+)\s+0x([0-9A-Fa-f]{2})u?\b",
-            path.read_text()):
+            read_source(path)):
         out.setdefault(val.upper(), []).append(name)
     return out
 
@@ -83,8 +85,7 @@ def test_no_duplicate_command_bytes():
     have surfaced as inexplicable misbehaviour on hardware. Parallel branches
     allocating from the same range is exactly how this recurs.
     """
-    for header in (SRC_PATH_S3LINK_H if "SRC_PATH_S3LINK_H" in globals() else
-                   Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h"), HAT_H):
+    for header in (Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h"), HAT_H):
         dupes = {b: n for b, n in _command_bytes(header).items() if len(n) > 1}
         assert not dupes, f"{header}: duplicate command bytes {dupes}"
 

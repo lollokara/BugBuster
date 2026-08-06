@@ -1,12 +1,13 @@
 """ODR/filter/decimation config must be append-only on the wire and BLE-reachable."""
 import re
-from pathlib import Path
 
-PROTO = Path("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h").read_text()
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
-S3LINK = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h").read_text()
-HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
-API = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
+from tests.lib.srcread import read_source
+
+PROTO = read_source("Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h")
+BOARD = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+S3LINK = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
+HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
+API = read_source("Firmware/ESP32/src/net/api_core.cpp")
 
 
 def _extract_function_body(src: str, name: str) -> str:

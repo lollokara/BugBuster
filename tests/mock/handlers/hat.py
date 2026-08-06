@@ -527,7 +527,6 @@ def _hat_calibrate_import(device):
     def handler(payload: bytes) -> bytes:
         if len(payload) < 2:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
-        rail_id = payload[0]
         count = payload[1]
         if len(payload) != 2 + count * 5:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)

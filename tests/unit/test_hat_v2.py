@@ -1,6 +1,5 @@
 import struct
 from unittest.mock import MagicMock
-import pytest
 
 from bugbuster import BugBuster
 from bugbuster.constants import CmdId

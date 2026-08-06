@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.lib.srcread import read_source
+
 SM = Path("iOSApp/Sources/Services/DaqLinkState.swift")
 AXIS = Path("iOSApp/Sources/Services/ScopeAxis.swift")
 ACQ_CFG = Path("iOSApp/Sources/Services/DaqAcquisitionConfig.swift")
@@ -27,14 +29,14 @@ XCRUN = shutil.which("xcrun")
                     reason="no Swift toolchain available")
 def test_daq_link_state_machine_behavior():
     assert SM.exists(), f"{SM} not created"
-    src = SM.read_text()
+    src = read_source(SM)
     for forbidden in ("import Network", "import UIKit", "import SwiftUI",
                       "import NetworkExtension"):
         assert forbidden not in src, (
             f"{SM} must stay platform-free ({forbidden}) so it is host-testable")
 
     assert ACQ_CFG.exists(), f"{ACQ_CFG} not created"
-    acq_src = ACQ_CFG.read_text()
+    acq_src = read_source(ACQ_CFG)
     for forbidden in ("import Network", "import UIKit", "import SwiftUI",
                       "import NetworkExtension"):
         assert forbidden not in acq_src, (
@@ -78,7 +80,7 @@ MGR = Path("iOSApp/Sources/Services/DaqWifiStreamManager.swift")
 
 
 def test_manager_adopts_the_state_machine_and_drops_the_ad_hoc_flags():
-    src = MGR.read_text()
+    src = read_source(MGR)
     assert "DaqLinkStateMachine" in src, "manager does not use the state machine"
     assert "@Published private(set) var linkState" in src
     # The replaced flags must no longer be independently stored state.
@@ -88,7 +90,7 @@ def test_manager_adopts_the_state_machine_and_drops_the_ad_hoc_flags():
 
 
 def test_every_effect_has_exactly_one_performer():
-    src = MGR.read_text()
+    src = read_source(MGR)
     for effect in ("requestProvisioning", "joinHotspot", "openSocket", "sendStart",
                    "sendStop", "closeSocket", "removeHotspotConfig", "recycleDevice",
                    "resetBuffers", "scheduleRetry"):
@@ -98,20 +100,20 @@ def test_every_effect_has_exactly_one_performer():
 
 
 def test_hotspot_configuration_removed_in_exactly_one_place():
-    src = MGR.read_text()
+    src = read_source(MGR)
     assert src.count("removeConfiguration(forSSID") == 1, (
         "hotspot removal must have a single owner — multiple call sites caused "
         "the removal-races-connect bug")
 
 
 def test_watchdog_detects_a_connected_but_silent_link():
-    src = MGR.read_text()
+    src = read_source(MGR)
     assert "lastFrameAt" in src
     assert "dataStalled" in src, "nothing ever raises the stall event"
 
 
 def test_recovery_calls_the_device_recycle_endpoint():
-    src = MGR.read_text()
+    src = read_source(MGR)
     assert "/api/daq/wifi_stream/recycle" in src
 
 
@@ -121,18 +123,18 @@ SCOPE = Path("iOSApp/Sources/Views/ScopeTab.swift")
 
 
 def test_scope_tab_uses_the_state_projection_not_deleted_apis():
-    src = SCOPE.read_text()
+    src = read_source(SCOPE)
     for gone in ("startFullStreamFlow", "requestStreamStop", "provisioningState"):
         assert gone not in src, f"ScopeTab still calls removed API: {gone}"
     assert "linkState" in src
 
 
 def test_failure_offers_retry_rather_than_a_dead_end():
-    src = SCOPE.read_text()
+    src = read_source(SCOPE)
     assert "daqStream.retry()" in src, "no Retry affordance — user is stranded"
 
 
 def test_recovering_state_is_visible_to_the_user():
     """Silent recovery looks like a hang; show what is happening."""
-    src = SCOPE.read_text()
+    src = read_source(SCOPE)
     assert "userFacingLabel" in src

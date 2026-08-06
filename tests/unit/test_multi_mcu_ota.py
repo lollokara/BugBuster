@@ -2,8 +2,10 @@
 import re
 from pathlib import Path
 
-S3LINK = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h").read_text()
-HAT_H = Path("Firmware/ESP32/src/hat/hat.h").read_text()
+from tests.lib.srcread import read_source
+
+S3LINK = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
+HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
 
 # Only two opcodes are new. OTA status rides the pre-existing 0x65 (reply
 # widened) and the P4's own version the pre-existing 0x60; see
@@ -90,7 +92,7 @@ def test_c6_version_struct_does_not_restate_the_p4_version():
             assert field in body, f"{struct} missing {field}"
 
 
-HAT_CPP = Path("Firmware/ESP32/src/hat/hat.cpp").read_text()
+HAT_CPP = read_source("Firmware/ESP32/src/hat/hat.cpp")
 
 
 def _fn_body(text: str, sig: str) -> str:
@@ -166,8 +168,8 @@ def test_ota_senders_hold_the_hat_link_mutex():
     assert "s_hat_mutex" in body, "OTA transactions must serialize on the HAT mutex"
 
 
-BOARD = Path("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c").read_text()
-S3LINK_C = Path("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c").read_text()
+BOARD = read_source("Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c")
+S3LINK_C = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.c")
 
 
 def _case_body(cmd: str, span: int = 2200) -> str:
@@ -305,7 +307,7 @@ def test_ota_status_helper_zeroes_the_struct_before_a_short_copy():
     assert zero < copy, "must zero the output struct before copying a short reply"
 
 
-RELAY_C6_H = Path("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_c6.h").read_text()
+RELAY_C6_H = read_source("Firmware/DAQ_HAT/ESP32P4/src/ota/relay_c6.h")
 
 
 def test_relay_apply_is_dispatched_and_allow_listed():
@@ -387,8 +389,8 @@ def test_every_daq_helper_gates_on_a_daq_hat_being_present():
             f"{fn} does not verify a DAQ HAT is attached before sending"
 
 
-UPD_H = Path("Firmware/ESP32/src/update/update_manager.h").read_text()
-UPD_CPP = Path("Firmware/ESP32/src/update/update_manager.cpp").read_text()
+UPD_H = read_source("Firmware/ESP32/src/update/update_manager.h")
+UPD_CPP = read_source("Firmware/ESP32/src/update/update_manager.cpp")
 
 
 def test_update_targets_are_distinct_bits():
@@ -435,7 +437,7 @@ def test_every_apply_call_site_uses_the_mask():
                  "Firmware/ESP32/src/web/webserver.cpp",
                  "Firmware/ESP32/src/cli/cli_cmds_sys.cpp",
                  "Firmware/ESP32/src/cli/cli_menu.cpp"):
-        src = Path(path).read_text()
+        src = read_source(path)
         for m in re.finditer(r"update_manager_apply(?:_release_index)?\(([^;]*?)&out|&root", src):
             args = m.group(1) or ""
             assert "true" not in args and "false" not in args, \
@@ -565,7 +567,7 @@ def test_each_download_phase_tags_its_target():
             f"{state} does not record which target it belongs to"
 
 
-WEBSERVER = Path("Firmware/ESP32/src/web/webserver.cpp").read_text()
+WEBSERVER = read_source("Firmware/ESP32/src/web/webserver.cpp")
 
 
 def test_http_apply_route_parses_every_target():
@@ -591,7 +593,7 @@ def test_http_apply_body_naming_targets_does_not_inherit_defaults():
 def test_both_http_surfaces_agree_on_target_keys():
     """api_core.cpp (HTTP+BLE) and webserver.cpp must accept the same JSON keys
     or a client's request means different things depending on the transport."""
-    api = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
+    api = read_source("Firmware/ESP32/src/net/api_core.cpp")
     api_body = _code_only(_fn_body(api, "static char *api_ota_apply("))
     web_body = _code_only(_fn_body(WEBSERVER, "static esp_err_t handle_post_update_apply("))
     for key in ('"rp2040"', '"esp32"', '"p4"', '"c6"'):
@@ -604,7 +606,6 @@ def test_withcaps_tasks_are_deleted_with_withcaps():
     stack -- measured at 12 KB of INTERNAL RAM per update on the S3, which took
     the largest free internal block from 14 KB to 8 KB and made every subsequent
     update fail to start (the worker needs 12 KB contiguous internal)."""
-    import subprocess
     roots = ["Firmware/ESP32/src", "Firmware/DAQ_HAT/ESP32P4/src"]
     offenders = []
     for root in roots:

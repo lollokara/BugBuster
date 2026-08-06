@@ -1,7 +1,6 @@
 """Unit tests for the DAQ HAT config TLV codec + DaqConfig accessor."""
 import struct
 
-import pytest
 
 from bugbuster.daq_config import (
     DaqConfig, DaqCfgOp, DaqKey, DaqType, DaqAction,

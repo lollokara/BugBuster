@@ -5,7 +5,6 @@ import pytest
 
 from bugbuster import BugBuster
 from bugbuster.constants import CmdId
-from bugbuster.transport.usb import DeviceError
 from bugbuster.transport.usb import USBTransport
 
 

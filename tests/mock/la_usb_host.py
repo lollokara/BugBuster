@@ -121,10 +121,10 @@ class LaUsbHost:
         try:
             import usb.core
             import usb.util
-        except ImportError:
+        except ImportError as exc:
             raise RuntimeError(
                 "pyusb is required: pip install pyusb"
-            )
+            ) from exc
         dev = usb.core.find(idVendor=vid, idProduct=pid)
         if dev is None:
             raise RuntimeError(

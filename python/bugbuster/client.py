@@ -22,12 +22,17 @@ import struct
 import logging
 import warnings
 from contextlib import contextmanager
-from typing import Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import serial  # pyserial — needed for SerialException in drain-loop guard
 
 from .transport.usb  import USBTransport, DeviceError
 from .transport.http import HTTPTransport
+
+if TYPE_CHECKING:
+    # Imported lazily: bugbuster.script imports this module, so a runtime
+    # import here would be circular.
+    from .script import ScriptSession
 
 
 class BugBusterWarning(UserWarning):
@@ -87,7 +92,6 @@ from .constants import (
     CmdId, ChannelFunction, AdcRange, AdcRate, AdcMux,
     GpioMode, WaveformType, OutputMode, RtdCurrent,
     VoutRange, CurrentLimit, PowerControl,
-    IoOwnerKind, IoClaimStatus,
 )
 from .protocol import ProtocolError
 
@@ -517,7 +521,8 @@ class BugBuster:
             try:
                 return _attempt()
             except TimeoutError:
-                raise exc
+                # Surface the original timeout; the retry's is redundant noise.
+                raise exc from None
 
     def _http_get(self, path: str, **params) -> dict:
         return self._t.get(path, params=params or None)
@@ -2345,7 +2350,7 @@ class BugBuster:
                 fw_minor = resp[off]; off += 1
                 confirmed = bool(resp[off]); off += 1
                 pins = []
-                for i in range(4):
+                for _ in range(4):
                     pins.append(resp[off]); off += 1
             else:
                 # Fallback for truncated/mock responses
@@ -2933,10 +2938,10 @@ class BugBuster:
         try:
             import usb.core
             import usb.util
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "pyusb is required for high-speed streaming capability: pip install pyusb"
-            )
+            ) from exc
 
         dev = usb.core.find(idVendor=0x2E8A, idProduct=0x000C)
         if dev is None:
@@ -3322,8 +3327,6 @@ class BugBuster:
                 ch_mask  = payload[0]
                 # samples follow: N groups of active-channel readings
                 # each sample is u24 (3 bytes LE)
-                n_active = bin(ch_mask).count('1')
-                n_samples_total = (len(payload) - 7) // (3 * n_active)
                 raw_samples = []
                 off = 7  # skip mask(1) + base_ts(4) + count(2)
                 while off + 3 <= len(payload):

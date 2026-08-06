@@ -154,7 +154,7 @@ class Capture:
     @property
     def contiguous_wave_i(self) -> bool:
         """True when consecutive WAVE_I blocks tile the sample index with no hole."""
-        for a, b in zip(self.wave_i, self.wave_i[1:]):
+        for a, b in zip(self.wave_i, self.wave_i[1:], strict=False):
             if a.start_index + a.count != b.start_index:
                 return False
         return True

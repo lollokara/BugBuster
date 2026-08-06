@@ -123,6 +123,14 @@ Firmware/DAQ_HAT/ESP32C6/components/*
 .pytest_cache/
 .mypy_cache/
 .cache/
+.ruff_cache/
+
+# Coverage output. tests/coverage-baseline.json IS tracked -- it is the floor
+# enforced by tests/tools/coverage_ratchet.py.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Node / JS artifacts
 node_modules/

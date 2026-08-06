@@ -15,7 +15,6 @@ HAT features tested:
 import time
 import pytest
 from bugbuster.constants import LaTriggerType, HatPinFunction
-from bugbuster.transport.usb import DeviceError
 from conftest import assert_no_faults
 
 pytestmark = [

@@ -1,7 +1,7 @@
 """Regression checks for DAQ HAT autorange threshold calibration sequencing."""
-from pathlib import Path
+from tests.lib.srcread import read_source
 
-SRC = Path("Firmware/DAQ_HAT/ESP32P4/src/cal/range_cal.c").read_text()
+SRC = read_source("Firmware/DAQ_HAT/ESP32P4/src/cal/range_cal.c")
 
 
 def _body(name: str) -> str:
