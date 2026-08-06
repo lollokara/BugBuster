@@ -381,11 +381,15 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 // ~1 KB minimum headroom this comment mandates.
 //
 // DO NOT extend this trim to bbpCli (main.cpp, 8192) or ble_api
-// (net/ble_service.cpp:464, 8192): bbpCli runs update_manager_release_options()
-// (an HTTPS/mbedTLS chain measured at ~16 KB elsewhere), and ble_api runs
-// update_manager_apply() inline while writing flash during BLE OTA apply.
-// Both are load-bearing for known-open defects; shrinking either turns a
-// latent bug into a guaranteed crash. See main.cpp for the matching comments.
+// (net/ble_service.cpp:464, 8192) without reading the matching comments in
+// main.cpp first. ble_api runs update_manager_apply() inline while writing
+// flash during BLE OTA apply and is still load-bearing for a known-open
+// defect -- shrinking it turns a latent bug into a guaranteed crash. bbpCli
+// no longer runs the HTTPS/mbedTLS release-query chain inline (fixed
+// 2026-08-06, S1-4: it now delegates to api_core_handle()'s dedicated 16 KB
+// SPIRAM worker), so its 8192 floor may no longer be load-bearing -- but two
+// unit tests still pin it there; do not shrink without updating/removing
+// those tests deliberately and re-measuring stack_hwm on hardware.
 #define TASK_STACK_ADCPOLL   2560
 #define TASK_STACK_FAULTMON  2560
 #define TASK_STACK_CMDPROC   2048

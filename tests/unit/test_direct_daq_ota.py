@@ -972,6 +972,8 @@ def test_release_path_and_push_local_use_the_shared_product_id_constants():
 MAIN_CPP = Path("Firmware/ESP32/src/main.cpp").read_text()
 BLE_C = Path("Firmware/ESP32/src/net/ble_service.cpp").read_text()
 CLI_SYS_CPP = Path("Firmware/ESP32/src/cli/cli_cmds_sys.cpp").read_text()
+CLI_MENU_CPP = Path("Firmware/ESP32/src/cli/cli_menu.cpp").read_text()
+API_CORE_CPP = Path("Firmware/ESP32/src/net/api_core.cpp").read_text()
 
 
 def test_reduced_task_stack_sizes_are_exactly_the_new_values():
@@ -1012,10 +1014,14 @@ def test_bbp_cli_and_ble_api_stacks_are_still_untouched_guard_rails():
     m = re.search(r"#define\s+TASK_STACK_BBPCLI\s+(\d+)", tasks_code)
     assert m, "could not find TASK_STACK_BBPCLI definition in tasks.h"
     assert int(m.group(1)) >= 8192, (
-        "bbpCli's stack must stay >= 8192: cli_menu.cpp:1809 calls "
-        "update_manager_release_options() on this task, which runs an "
-        "HTTPS/mbedTLS chain measured at ~16 KB elsewhere in this codebase -- "
-        "shrinking it turns a latent bug into a guaranteed crash"
+        "bbpCli's stack must stay >= 8192. As of the S1-4 fix (2026-08-06), "
+        "open_update_release_picker() no longer calls "
+        "update_manager_release_options() directly on this task -- it now "
+        "delegates via api_core_handle() to a dedicated 16 KB SPIRAM worker, "
+        "so this floor is not currently known to be load-bearing for anything "
+        "else on bbpCli. Left in place deliberately pending a human decision "
+        "(re-measure stack_hwm on hardware before relaxing it) -- see "
+        "test_cli_menu_does_not_call_update_manager_release_options_directly."
     )
 
     ble_code = _strip_comments(BLE_C)
@@ -1520,3 +1526,69 @@ def test_relay_poll_emits_progress_from_relay_pushed_bytes():
     assert "relay_pushed_bytes" in section, \
         "the relay progress record must be derived from st.relay_pushed_bytes"
     assert "emit_cb(" in section
+
+
+# -----------------------------------------------------------------------------
+# S1-4 -- TUI firmware picker used to run the GitHub release-query HTTPS/mbedTLS
+# chain (~16 KB measured) directly on bbpCli (8 KB). See
+# docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-4. Fixed by
+# routing open_update_release_picker() through api_core_handle(), reusing the
+# same "/api/ota/releases" path webserver.cpp already uses for the sibling
+# S1-2 fix, which runs the query on a dedicated 16 KB SPIRAM worker
+# (net/api_core.cpp: ota_query_blocking() / ota_query_task()).
+# -----------------------------------------------------------------------------
+
+def test_cli_menu_does_not_call_update_manager_release_options_directly():
+    """The bug itself: open_update_release_picker() must not call
+    update_manager_release_options() inline on bbpCli. That performs an HTTPS
+    fetch (esp_http_client_perform()) plus a software-AES mbedTLS handshake,
+    measured elsewhere in this codebase at ~16 KB of stack -- double bbpCli's
+    entire 8192-byte stack. A bare call would reintroduce the overflow."""
+    code = _strip_noise(CLI_MENU_CPP)
+    assert not re.search(r"[^_a-zA-Z0-9]update_manager_release_options\s*\(", code), \
+        "cli_menu.cpp must not call update_manager_release_options() directly " \
+        "on the CLI task -- route through api_core_handle() instead, which " \
+        "already runs this query on a dedicated 16 KB worker"
+
+
+def test_cli_menu_release_picker_delegates_via_api_core_handle():
+    """The fix, positively stated: the release picker must reuse the existing
+    transport-agnostic dispatcher rather than reimplementing a third worker.
+    webserver.cpp's handle_get_update_check() already established this exact
+    pattern (api_core_handle("GET", "/api/ota/check", ...)) for the sibling
+    S1-2 bug; the release picker should be its twin on "/api/ota/releases"."""
+    body = _strip_comments(_fn_body(CLI_MENU_CPP, "static void open_update_release_picker(void)"))
+    assert 'api_core_handle(' in body, \
+        "open_update_release_picker() must call api_core_handle()"
+    assert '"/api/ota/releases"' in body, \
+        'open_update_release_picker() must request the "/api/ota/releases" path'
+
+
+def test_ota_query_worker_is_created_and_torn_down_with_matching_withcaps_pair():
+    """xTaskCreatePinnedToCoreWithCaps() allocations MUST be torn down with
+    vTaskDeleteWithCaps() -- a plain vTaskDelete() cannot free a
+    WithCaps-allocated stack/TCB and leaks it every call (this exact leak
+    already cost 12 KB of internal RAM per update once; see commit 971714e
+    referenced in api_core.cpp). ota_query_task/ota_query_blocking is the
+    worker cli_menu.cpp's release picker now depends on indirectly through
+    api_core_handle()."""
+    creator = _strip_noise(_fn_body(API_CORE_CPP, "static char *ota_query_blocking("))
+    assert "xTaskCreatePinnedToCoreWithCaps(" in creator, \
+        "ota_query_blocking() must create its worker with the WithCaps allocator"
+
+    worker = _strip_noise(_fn_body(API_CORE_CPP, "static void ota_query_task("))
+    assert "vTaskDeleteWithCaps(NULL)" in worker, \
+        "ota_query_task() must tear itself down with vTaskDeleteWithCaps()"
+    assert not re.search(r"[^a-zA-Z]vTaskDelete\s*\(", worker), \
+        "plain vTaskDelete() cannot free a WithCaps-allocated stack/TCB"
+
+
+def test_ota_query_worker_stack_lives_in_spiram():
+    """This query only reads (esp_http_client_perform() against GitHub's
+    releases API) -- it never writes flash or NVS -- so its 16 KB worker stack
+    should live in SPIRAM rather than consuming scarce contiguous internal
+    RAM the OTA apply/flash paths need. cli_cmds_sys.cpp's own `update check`
+    worker documents and follows the same reasoning."""
+    creator = _strip_noise(_fn_body(API_CORE_CPP, "static char *ota_query_blocking("))
+    assert "MALLOC_CAP_SPIRAM" in creator, \
+        "the read-only release-query worker stack must be SPIRAM-backed"

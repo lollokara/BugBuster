@@ -53,6 +53,7 @@
 #include "adgs2414d.h"
 #include "hat.h"
 #include "update_manager.h"
+#include "api_core.h"
 #include "dio/dio.h"
 #include "selftest.h"
 #include "ds4424.h"
@@ -1805,9 +1806,23 @@ static void open_update_release_picker(void)
         return;
     }
 
-    cJSON *root = nullptr;
-    esp_err_t err = update_manager_release_options(UPDATE_MENU_MAX_OPTIONS, &root);
-    if (err != ESP_OK || !root) {
+    // update_manager_release_options() performs an HTTPS fetch
+    // (esp_http_client_perform() plus software-AES mbedTLS) that this codebase
+    // has measured at ~16 KB of stack. This function runs on bbpCli, whose
+    // stack is only 8192 bytes (main.cpp s_bbpTaskStack / tasks.h
+    // TASK_STACK_BBPCLI) -- calling it inline here can overflow that stack and
+    // panic the board. Route through api_core_handle(), which already runs
+    // GitHub release queries on a dedicated 16 KB SPIRAM-backed worker
+    // (net/api_core.cpp: ota_query_blocking()/ota_query_task()) and blocks the
+    // caller until it completes, exactly like webserver.cpp's
+    // handle_get_update_check() does for the same class of bug (S1-2). See
+    // docs/superpowers/reviews/2026-08-03-design-sweep.md finding S1-4.
+    char *resp = api_core_handle("GET", "/api/ota/releases", nullptr);
+    cJSON *root = resp ? cJSON_Parse(resp) : nullptr;
+    if (resp) cJSON_free(resp);
+
+    cJSON *err_item = root ? cJSON_GetObjectItem(root, "error") : nullptr;
+    if (!root || cJSON_IsString(err_item)) {
         cJSON *status = update_manager_status_json();
         const char *last = json_string(status, "lastError", "release lookup failed");
         char msg[80];

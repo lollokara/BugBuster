@@ -62,8 +62,8 @@ static StaticTask_t s_mainLoopTcb;
 // internal RAM freed for the lifetime of the process -- the single most
 // valuable saving in this pass. Do NOT apply the same trim to s_bbpTaskStack
 // below (bbpCli, 8192) or to ble_api's 8192-byte stack in net/ble_service.cpp
-// -- both are load-bearing for known-open defects and must stay exactly as
-// they are; see the comment on s_bbpTaskStack for why.
+// without re-reading the comment on s_bbpTaskStack -- ble_api is still
+// load-bearing for a known-open defect and must stay exactly as it is.
 static StackType_t s_mainLoopStack[TASK_STACK_MAINLOOP / sizeof(StackType_t)];
 
 // Dedicated task for CLI / BBP processing, pinned to Core 1.
@@ -72,12 +72,21 @@ static StackType_t s_mainLoopStack[TASK_STACK_MAINLOOP / sizeof(StackType_t)];
 // and vice versa.  Both tasks compete for s_hat_mutex when they need UART
 // access, serialising HAT traffic correctly.
 //
-// DO NOT shrink this TASK_STACK_BBPCLI-byte stack (2026-08-05): cli_menu.cpp:1809 calls
-// update_manager_release_options() on this task, which runs an HTTPS/mbedTLS
-// chain measured at ~16 KB elsewhere in this codebase. It is arguably already
-// too small. Leave it exactly as is -- see also net/ble_service.cpp:464
-// (ble_api, also 8192, also untouched): the BLE OTA apply path runs
-// update_manager_apply() inline on it and writes flash.
+// (2026-08-06, S1-4 fix) cli_menu.cpp's open_update_release_picker() used to
+// call update_manager_release_options() directly on this task -- an
+// HTTPS/mbedTLS chain measured at ~16 KB, twice this stack's whole size. It
+// now goes through api_core_handle("GET", "/api/ota/releases", ...), which
+// runs the query on its own dedicated 16 KB SPIRAM worker
+// (net/api_core.cpp: ota_query_blocking()/ota_query_task()) and blocks this
+// task until it completes, so bbpCli itself no longer needs headroom for
+// that chain. Two unit tests (tests/unit/test_direct_daq_ota.py) still pin
+// TASK_STACK_BBPCLI at >= 8192; that floor is not yet known to be
+// load-bearing for anything else on this task and may be worth revisiting,
+// but do not shrink it without checking those tests and re-measuring
+// stack_hwm on hardware first. See also net/ble_service.cpp:464 (ble_api,
+// also 8192, also untouched): the BLE OTA apply path still runs
+// update_manager_apply() inline on it and writes flash -- unrelated defect,
+// out of scope for the fix above.
 static StaticTask_t s_bbpTaskTcb;
 static StackType_t  s_bbpTaskStack[TASK_STACK_BBPCLI / sizeof(StackType_t)];
 
