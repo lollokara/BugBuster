@@ -1,7 +1,7 @@
 {
   "tool": "bb_bench",
   "schema_version": 1,
-  "generated_at": "2026-08-06T00:31:06.899200+00:00",
+  "generated_at": "2026-08-06T00:48:05.314558+00:00",
   "host": "192.168.3.35",
   "not_measured": [
     "iOS/desktop-app UI rendering, frame time, or perceived latency",
@@ -17,55 +17,55 @@
         "status": {
           "count": 20,
           "unit": "ms",
-          "min": 24.04870899999989,
-          "median": 62.14735449999998,
-          "p95": 86.41824795000005,
-          "max": 152.39333399999998,
+          "min": 22.478082999999984,
+          "median": 49.98681199999994,
+          "p95": 87.04495835000003,
+          "max": 178.31066699999997,
           "errors": 0,
           "error_rate": 0.0
         },
         "hat": {
           "count": 20,
           "unit": "ms",
-          "min": 15.999000000000096,
-          "median": 21.42249950000008,
-          "p95": 83.3550017500002,
-          "max": 161.12045800000007,
+          "min": 14.449999999999852,
+          "median": 22.121958499999984,
+          "p95": 82.13747915000015,
+          "max": 104.73520799999991,
           "errors": 0,
           "error_rate": 0.0
         },
         "overview": {
           "count": 20,
           "unit": "ms",
-          "min": 26.51229200000005,
-          "median": 76.72637549999983,
-          "p95": 93.05876459999995,
-          "max": 103.00791699999978,
+          "min": 25.057707999999845,
+          "median": 73.51520799999989,
+          "p95": 90.18649789999995,
+          "max": 111.95095799999999,
           "errors": 0,
           "error_rate": 0.0
         },
         "scope": {
           "count": 20,
           "unit": "ms",
-          "min": 28.452249999999957,
-          "median": 81.5016664999999,
-          "p95": 101.01883125000063,
-          "max": 168.7624999999997,
+          "min": 27.84704200000032,
+          "median": 70.98179150000016,
+          "p95": 96.2156375000003,
+          "max": 173.4532500000001,
           "errors": 0,
           "error_rate": 0.0
         },
         "update_status": {
           "count": 20,
           "unit": "ms",
-          "min": 14.312625000000523,
-          "median": 18.210312499999937,
-          "p95": 88.7438732000004,
-          "max": 168.67604100000034,
+          "min": 14.176874999999534,
+          "median": 18.721332999999785,
+          "p95": 84.41233990000028,
+          "max": 171.5092500000006,
           "errors": 0,
           "error_rate": 0.0
         }
       },
-      "cold_ms": 145.17983299999997,
+      "cold_ms": 76.66950000000001,
       "cold_endpoint": "status"
     },
     "link": {
@@ -73,10 +73,10 @@
       "round_trip": {
         "count": 20,
         "unit": "ms",
-        "min": 14.049207999999425,
-        "median": 21.324125000000027,
-        "p95": 77.8648202000005,
-        "max": 118.81750000000046,
+        "min": 14.551374999999922,
+        "median": 20.32752099999957,
+        "p95": 87.07341279999986,
+        "max": 112.5309579999998,
         "errors": 0,
         "error_rate": 0.0,
         "note": "measures HTTP + HAT UART round trip end to end, as seen from the S3's /api/hat handler -- NOT the raw UART link in isolation"
@@ -85,9 +85,9 @@
     "mem": {
       "available": true,
       "heap": {
-        "internal_free_kb": 37,
-        "internal_min_ever_kb": 27,
-        "internal_largest_kb": 19,
+        "internal_free_kb": 39,
+        "internal_min_ever_kb": 30,
+        "internal_largest_kb": 22,
         "psram_free_kb": 6991,
         "psram_largest_kb": 6912,
         "unit": "KB"
@@ -102,8 +102,8 @@
         },
         "faultMon": {
           "declared_bytes": 2560,
-          "unused_bytes": 1200,
-          "peak_used_bytes": 1360,
+          "unused_bytes": 1264,
+          "peak_used_bytes": 1296,
           "unit": "bytes",
           "flag": ""
         },
@@ -116,30 +116,30 @@
         },
         "wavegen": {
           "declared_bytes": 2048,
-          "unused_bytes": 1168,
-          "peak_used_bytes": 880,
+          "unused_bytes": 1176,
+          "peak_used_bytes": 872,
           "unit": "bytes",
           "flag": ""
         },
         "mainLoop": {
           "declared_bytes": 5120,
-          "unused_bytes": 3044,
-          "peak_used_bytes": 2076,
+          "unused_bytes": 2932,
+          "peak_used_bytes": 2188,
           "unit": "bytes",
           "flag": ""
         },
         "bbpCli": {
-          "declared_bytes": 8192,
-          "unused_bytes": 5720,
-          "peak_used_bytes": 2472,
+          "declared_bytes": 5120,
+          "unused_bytes": 2504,
+          "peak_used_bytes": 2616,
           "unit": "bytes",
           "flag": ""
         }
       }
     },
     "daq_usb": {
-      "seconds": 5.020220834,
-      "bytes_rx": 2098602,
+      "seconds": 5.043991166,
+      "bytes_rx": 2108278,
       "frames": {
         "WAVE_V": 101,
         "WAVE_I": 50,
@@ -147,10 +147,10 @@
         "ENERGY": 50,
         "STATUS": 50
       },
-      "wave_i_samples": 159004,
-      "wave_v_samples": 321186,
-      "seq_first": 860,
-      "seq_last": 1160,
+      "wave_i_samples": 159748,
+      "wave_v_samples": 322675,
+      "seq_first": 1163,
+      "seq_last": 1463,
       "seq_gaps": 0,
       "seq_lost": 0,
       "resyncs": 0,
@@ -171,10 +171,10 @@
         "drop_coarse": 0,
         "fine_diag_sticky": 245,
         "frames_tx": 299,
-        "bytes_per_sec": 419614,
+        "bytes_per_sec": 419686,
         "fifo_drop_frames": 0,
         "ring_high_water": 798,
-        "wave_i_index_lo": 159004,
+        "wave_i_index_lo": 159748,
         "relay_target": 1,
         "relay_state": 4,
         "relay_image_size": 1341648,
@@ -193,47 +193,47 @@
         "i": {
           "min": -0.00045785101247020066,
           "max": 4.446250750334002e-05,
-          "mean": -0.0004431343695614487,
-          "rms": 0.00044316399726085365,
-          "std": 5.125293682795018e-06,
-          "count": 17987882
+          "mean": -0.0004431449924595654,
+          "rms": 0.0004431691486388445,
+          "std": 4.6282875700853765e-06,
+          "count": 22060682
         },
         "v": {
           "min": 0.4315279424190521,
           "max": 1.1660395860671997,
-          "mean": 0.5964224338531494,
-          "rms": 0.5964592695236206,
-          "std": 0.006629939656704664,
-          "count": 17987882
+          "mean": 0.5964747667312622,
+          "rms": 0.596504807472229,
+          "std": 0.005987920798361301,
+          "count": 22060682
         },
         "p": {
           "min": -0.00048272445565089583,
           "max": 3.513752744765952e-05,
-          "mean": -0.0002642641484271735,
-          "rms": 0.00026428644196130335,
-          "std": 3.4339429930696497e-06,
-          "count": 17987882
+          "mean": -0.0002642993931658566,
+          "rms": 0.0002643176121637225,
+          "std": 3.101844185948721e-06,
+          "count": 22060682
         }
       },
       "energy": {
-        "energy_mwh": -0.33010777141407216,
-        "energy_j": -1.1883879770906598,
-        "charge_mah": -0.5535450186229852,
-        "charge_c": -1.9927620670427466,
-        "elapsed_s": 4496.970250001129,
-        "last_i": -0.0004432692367117852,
-        "last_v": 0.5967786908149719,
-        "last_p": -0.0002645336207933724
+        "energy_mwh": -0.4049045116912259,
+        "energy_j": -1.4576562420884132,
+        "charge_mah": -0.6788944446111789,
+        "charge_c": -2.444020000600244,
+        "elapsed_s": 5515.170249998757,
+        "last_i": -0.00044316062121652067,
+        "last_v": 0.5967377424240112,
+        "last_p": -0.0002644506748765707
       },
       "energy_first": {
-        "charge_c": -1.990590444111255,
-        "energy_j": -1.1870921648545143,
-        "elapsed_s": 4492.070250001141
+        "charge_c": -2.4418485418194766,
+        "energy_j": -1.4563604256799432,
+        "elapsed_s": 5510.270249998768
       },
       "error": "",
-      "mb_per_s": 0.39866430062283376,
-      "wave_i_sps": 31672.71027663322,
-      "wave_v_sps": 63978.460434396104,
+      "mb_per_s": 0.3986150082889214,
+      "wave_i_sps": 31670.951582312904,
+      "wave_v_sps": 63972.1580352982,
       "frame_loss_pct": 0.0,
       "available": true
     },
