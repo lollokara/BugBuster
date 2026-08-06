@@ -29,6 +29,12 @@ import struct
 import threading
 
 from bugbuster.constants import CmdId
+from bugbuster.transport.usb import DeviceError, ErrorCode
+
+# AD74416H CONV_RATE codes — mirrors AdcRate in
+# Firmware/ESP32/src/hal/ad74416h_regs.h (note the gaps: 2, 5, 7, 10, 11 are
+# not valid rates).
+_VALID_ADC_RATES = frozenset({0, 1, 3, 4, 6, 8, 9, 12, 13})
 
 
 # ---------------------------------------------------------------------------
@@ -230,14 +236,25 @@ def register(device) -> None:
         return b''
 
     def handle_start_dsp(payload: bytes) -> bytes:
-        channel, _rate, window, threshold, peaks = struct.unpack('<BBHfB', payload) \
+        channel, rate, window, threshold, peaks = struct.unpack('<BBHfB', payload) \
             if len(payload) >= struct.calcsize('<BBHfB') else (0, 0, 256, 0.1, 8)
+        # Mirrors bbpStartAdcDspStream() in Firmware/ESP32/src/bbp/bbp.cpp.
+        if channel >= 4 or rate not in _VALID_ADC_RATES:
+            raise DeviceError(ErrorCode.INVALID_CHANNEL, 0)
+        # adcPoll never samples a HIGH_IMP channel, so the firmware refuses
+        # rather than streaming stale zeros forever.
+        if device.channels[channel]["function"] == 0:
+            raise DeviceError(ErrorCode.INVALID_STATE, 0)
         device.dsp_stream = {
             "channel": channel,
             "window_samples": window,
             "spike_threshold": threshold,
             "n_fft_peaks": peaks,
         }
+        # The firmware puts the channel at the requested rate for the duration
+        # of the stream and restores it on stop.
+        device.channels[channel]["adc_rate_before_dsp"] = device.channels[channel]["adc_rate"]
+        device.channels[channel]["adc_rate"] = rate
         _dsp_stop.clear()
         t = threading.Thread(
             target=_dsp_stream_loop,
@@ -254,6 +271,11 @@ def register(device) -> None:
         if th and th.is_alive():
             th.join(timeout=2.0)
         _dsp_thread_holder[0] = None
+        if device.dsp_stream is not None:
+            ch = device.dsp_stream["channel"]
+            prev = device.channels[ch].pop("adc_rate_before_dsp", None)
+            if prev is not None:
+                device.channels[ch]["adc_rate"] = prev
         device.dsp_stream = None
         return b''
 

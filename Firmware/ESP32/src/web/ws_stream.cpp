@@ -51,6 +51,10 @@ static volatile uint8_t s_subscriptions   = 0;   // bitmask of WS_SUB_*
 
 // Outbound ring (byte stream of length-prefixed frames).
 static EXT_RAM_BSS_ATTR uint8_t s_tx_ring[WS_TX_RING_SIZE];
+// Frame assembly scratch for tx_task(). File scope, because EXT_RAM_BSS_ATTR is
+// silently ignored on function-scope statics and this would otherwise sit in
+// internal DRAM (1500 B) right next to the ring it drains.
+static EXT_RAM_BSS_ATTR uint8_t s_tx_frame[WS_MAX_PAYLOAD];
 static size_t            s_tx_head  = 0;
 static size_t            s_tx_used  = 0;
 static SemaphoreHandle_t s_tx_mutex = NULL;
@@ -167,7 +171,6 @@ int ws_stream_has_subscriber(uint8_t stream_id)
 static void tx_task(void* arg)
 {
     (void)arg;
-    static uint8_t tx_buf[WS_MAX_PAYLOAD];
 
     for (;;) {
         // Block indefinitely until a frame is available.
@@ -186,14 +189,14 @@ static void tx_task(void* arg)
         for (;;) {
             size_t n = 0;
             if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                n = ring_pop_frame_locked(tx_buf, sizeof(tx_buf));
+                n = ring_pop_frame_locked(s_tx_frame, sizeof(s_tx_frame));
                 xSemaphoreGive(s_tx_mutex);
             }
             if (n == 0) break;
 
             httpd_ws_frame_t frame = {};
             frame.type    = HTTPD_WS_TYPE_BINARY;
-            frame.payload = tx_buf;
+            frame.payload = s_tx_frame;
             frame.len     = n;
             frame.final   = true;
 

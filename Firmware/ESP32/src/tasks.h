@@ -376,9 +376,30 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 // 13 KB -- one allocation away from the "Failed to start update task"
 // incident recorded elsewhere in this file, where largest fell 14->8 KB).
 // New measured peaks from `stack_hwm` (bytes): adcPoll 1292, faultMon 1356,
-// cmdProc 832, wavegen 868. Resulting margins over peak: adcPoll 1268,
-// faultMon 1204, cmdProc 1216, wavegen 1180 -- all comfortably above the
-// ~1 KB minimum headroom this comment mandates.
+// wavegen 868.
+//
+// cmdProc CORRECTION, 2026-08-06. The 2026-07-29 and 2026-08-05 passes both
+// recorded cmdProc's peak as 832 B and claimed 1216 B of margin. That was
+// measured too early in boot and was wrong by 2x. Isolated on hardware
+// (fw 5.0.0, `mem_watch.py`):
+//     fresh boot ................................  824 B
+//     after ordinary BBP traffic ................ 1256 B
+//     after ONE USB connect/disconnect cycle .... 1672 B of 2048  (376 B free)
+// The 1672 B peak is tasks_apply_channel_function() running on this task:
+// startAdcConversion + ADC_CONFIG read-back + RTD_CONFIG write + configureAdc
+// + adgs_set_switch_safe + tasks_rebuild_adc_conv_ctrl + clearAllAlerts +
+// hat_update_leds. It reaches cmdProc from exactly two callers:
+//   * BBP DEVICE_RESET (cmd_misc.cpp), which enqueues it for all 4 channels;
+//   * wavegen_stop_and_reset() (bbp.cpp), which fired on EVERY disconnect
+//     until it was guarded on wavegen.active on 2026-08-06.
+// The BBP SET_CH_FUNC handler does NOT contribute — cmd_channel.cpp calls
+// tasks_apply_channel_function() synchronously on bbpCli (verified: +0 B on
+// cmdProc). Raised to 3072 so the DEVICE_RESET path, which legitimately still
+// runs this handler here, keeps >= 1 KB over the true measured worst case:
+// 3072 - 1672 = 1400 B. The +1024 B of internal DRAM this costs is more than
+// funded by the cmd_registry.cpp pointer-index change (-7424 B) landed in the
+// same pass. Do NOT trim this back on the strength of an idle reading; drive a
+// DEVICE_RESET first, then read `stack_hwm`.
 //
 // DO NOT extend this trim to ble_api (net/ble_service.cpp:464, 8192) without
 // reading the matching comment in main.cpp first: it runs
@@ -398,7 +419,7 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 // is the deepest thing still running on this task) before shrinking further.
 #define TASK_STACK_ADCPOLL   2560
 #define TASK_STACK_FAULTMON  2560
-#define TASK_STACK_CMDPROC   2048
+#define TASK_STACK_CMDPROC   3072  // measured worst case 1672 (DEVICE_RESET / wavegen stop), margin 1400
 #define TASK_STACK_WAVEGEN   2048
 #define TASK_STACK_MAINLOOP  5120  // Core-0 main loop; sized from measured 2684 bytes peak
 #define TASK_STACK_BBPCLI    5120  // Core-1 CLI/BBP; measured peak 2760 (TUI exercised, 2026-08-06), margin 2360

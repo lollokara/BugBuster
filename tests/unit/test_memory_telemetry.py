@@ -311,3 +311,125 @@ def test_reported_stack_sizes_match_the_firmware_constants():
 def test_dispatch_is_registered_for_mem_status():
     device = SimulatedDevice()
     assert int(CmdId.MEM_STATUS) in device._handlers
+
+
+# ---------------------------------------------------------------------------
+# Internal-SRAM pressure guards (2026-08-06 optimisation pass)
+# ---------------------------------------------------------------------------
+
+def _registered_descriptor_count() -> int:
+    """Count CmdDescriptor entries across every bbp/cmds/*.cpp block.
+
+    Verified against the device's own `cmds` CLI listing (143, fw 5.0.0,
+    2026-08-06). Entries are matched inside the descriptor array only, and the
+    opcode may sit on the same line as the brace or the next one (cmd_ota.cpp
+    uses the multi-line form).
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    total = 0
+    for path in sorted((root / "Firmware/ESP32/src/bbp/cmds").glob("*.cpp")):
+        src = read_source(f"Firmware/ESP32/src/bbp/cmds/{path.name}")
+        for block in re.findall(
+            r"static\s+const\s+CmdDescriptor\s+\w+\[\]\s*=\s*\{(.*?)\n\};",
+            src,
+            re.DOTALL,
+        ):
+            total += len(re.findall(r"\{\s*BBP_CMD_", block))
+    return total
+
+
+def test_command_registry_holds_pointers_not_copied_descriptors():
+    """The registry must index the flash-resident const blocks, not memcpy them
+    into .bss. Copying cost 32 B per slot (8192 B reserved) of internal DRAM on
+    a device that only has ~40 KB free; the pointer index costs 4 B per slot."""
+    src = read_source("Firmware/ESP32/src/bbp/cmd_registry.cpp")
+    assert re.search(r"static\s+const\s+CmdDescriptor\s+\*s_registry\[", src), (
+        "s_registry must be an array of `const CmdDescriptor *`. A plain "
+        "`CmdDescriptor s_registry[]` puts a full copy of every descriptor in "
+        "internal .bss."
+    )
+    assert "memcpy(&s_registry[" not in src, (
+        "descriptors must be referenced, not copied into the registry"
+    )
+
+
+def test_command_registry_ceiling_still_fits_every_registered_command():
+    src = read_source("Firmware/ESP32/src/bbp/cmd_registry.cpp")
+    m = re.search(r"#define\s+CMD_REGISTRY_MAX\s+(\d+)", src)
+    assert m, "CMD_REGISTRY_MAX not found in cmd_registry.cpp"
+    ceiling = int(m.group(1))
+    registered = _registered_descriptor_count()
+    assert registered >= 100, (
+        f"descriptor scan found only {registered} entries; the device's `cmds` "
+        f"listing reported 143 on fw 5.0.0, so the block regex has drifted and "
+        f"this guard is no longer measuring anything"
+    )
+    assert registered <= ceiling, (
+        f"{registered} descriptors are registered but CMD_REGISTRY_MAX is "
+        f"{ceiling}; cmd_registry_register_block() would silently drop a whole "
+        f"subsystem block at boot"
+    )
+
+
+def test_wavegen_stop_only_reclaims_the_channel_when_a_waveform_was_running():
+    """wavegen_stop_and_reset() runs on every USB DISCONNECT. Unconditionally
+    enqueueing CMD_SET_CHANNEL_FUNC there forced channel 0 to HIGH_IMP behind
+    the host's back and drove cmdProc's stack peak from 824 B to 1672 B."""
+    src = read_source("Firmware/ESP32/src/bbp/bbp.cpp")
+    body = src.split("static void wavegen_stop_and_reset", 1)[1]
+    body = body.split("\nvoid bbpStopWavegen", 1)[0]
+    assert "was_active" in body, "the wavegen.active snapshot is gone"
+    assert re.search(r"if\s*\(\s*!was_active\s*\)\s*return\s*;", body), (
+        "wavegen_stop_and_reset() must return early when no waveform was "
+        "active, before it enqueues CMD_SET_CHANNEL_FUNC"
+    )
+    assert body.index("was_active") < body.index("CMD_SET_CHANNEL_FUNC"), (
+        "the guard must precede the enqueue"
+    )
+
+
+# EXT_RAM_BSS_ATTR is silently ignored on function-scope statics, so a `static`
+# array declared inside a function lands in internal DRAM no matter what. These
+# four were found that way on 2026-08-06 (8220 B combined).
+_PSRAM_BUFFERS = [
+    ("Firmware/ESP32/src/hat/hat.cpp", "s_script_names"),
+    ("Firmware/ESP32/src/web/ws_stream.cpp", "s_tx_ring"),
+    ("Firmware/ESP32/src/web/ws_stream.cpp", "s_tx_frame"),
+    ("Firmware/ESP32/src/mp/repl_ws.cpp", "s_tx_ring"),
+    ("Firmware/ESP32/src/mp/repl_ws.cpp", "s_tx_frame"),
+    ("Firmware/ESP32/src/bbp/cmds/cmd_script.cpp", "s_script_names"),
+    ("Firmware/ESP32/src/web/webserver.cpp", "s_script_names"),
+]
+
+
+@pytest.mark.parametrize(("path", "name"), _PSRAM_BUFFERS)
+def test_large_scratch_buffers_stay_in_psram_at_file_scope(path, name):
+    src = read_source(path)
+    decl = re.search(
+        rf"^static\s+EXT_RAM_BSS_ATTR\s+\w+\s+{name}\s*\[", src, re.MULTILINE
+    )
+    assert decl, (
+        f"{path}: {name} must be a FILE-SCOPE `static EXT_RAM_BSS_ATTR` array. "
+        f"Declaring it inside a function silently puts it in internal DRAM — "
+        f"the attribute has no effect on function-scope statics."
+    )
+
+
+def test_no_function_scope_static_arrays_in_the_websocket_tx_paths():
+    """The trap above, pinned at the sites where it actually bit."""
+    for path in ("Firmware/ESP32/src/web/ws_stream.cpp",
+                 "Firmware/ESP32/src/mp/repl_ws.cpp",
+                 "Firmware/ESP32/src/hat/hat.cpp"):
+        src = read_source(path)
+        offenders = [
+            m.group(0).strip()
+            for m in re.finditer(r"^[ \t]+static\s+(?!EXT_RAM_BSS_ATTR)"
+                                 r"[\w ]+\s+\w+\s*\[[^\]]+\]\s*;", src, re.MULTILINE)
+        ]
+        assert not offenders, (
+            f"{path}: function-scope `static` arrays land in internal DRAM "
+            f"regardless of EXT_RAM_BSS_ATTR — move them to file scope: "
+            f"{offenders}"
+        )

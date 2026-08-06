@@ -24,6 +24,7 @@
 #include "auth.h"
 
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -69,7 +70,12 @@ static char   s_line_buf[REPL_LINE_BUF_SIZE];
 static size_t s_line_len = 0;
 
 // TX ring buffer (mproduce from scripting task, consume from tx_task).
-static char              s_tx_ring[REPL_TX_RING_SIZE];
+// PSRAM-backed, as in web/ws_stream.cpp — this is websocket payload staging,
+// not a task stack, and it is never touched from an ISR.
+static EXT_RAM_BSS_ATTR char s_tx_ring[REPL_TX_RING_SIZE];
+// Frame assembly scratch for repl_tx_task(). File scope, because
+// EXT_RAM_BSS_ATTR is silently ignored on function-scope statics.
+static EXT_RAM_BSS_ATTR char s_tx_frame[512];
 static size_t            s_tx_head  = 0;   // write position
 static size_t            s_tx_used  = 0;   // bytes in ring
 static SemaphoreHandle_t s_tx_mutex = NULL;
@@ -181,8 +187,6 @@ void repl_ws_forward(const char *str, size_t len)
 static void repl_tx_task(void *pvParam)
 {
     (void)pvParam;
-    // Static send buffer — reused across iterations.
-    static char tx_buf[512];
 
     for (;;) {
         // Wait for data or a kick from the session-close path.
@@ -201,14 +205,14 @@ static void repl_tx_task(void *pvParam)
         while (fd >= 0) {
             size_t n = 0;
             if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                n = tx_ring_drain_locked(tx_buf, sizeof(tx_buf));
+                n = tx_ring_drain_locked(s_tx_frame, sizeof(s_tx_frame));
                 xSemaphoreGive(s_tx_mutex);
             }
             if (n == 0) break;
 
             httpd_ws_frame_t frame = {};
             frame.type    = HTTPD_WS_TYPE_TEXT;
-            frame.payload = (uint8_t *)tx_buf;
+            frame.payload = (uint8_t *)s_tx_frame;
             frame.len     = n;
             frame.final   = true;
 

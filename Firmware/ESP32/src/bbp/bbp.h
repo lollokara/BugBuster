@@ -458,14 +458,22 @@ void bbpStopAdcStream(void);
 
 /**
  * @brief Start ADC DSP streaming on a single channel at the given rate.
- *        Creates the DSP task and initialises the on-device pipeline.
+ *        Creates the DSP task, initialises the on-device pipeline, and puts
+ *        the channel's ADC at `rate_code` (restored by bbpStopAdcDspStream).
  *        Caller must check bbpAdcDspActive() == false before calling.
+ * @return false if the channel is out of range, already streaming, in
+ *         CH_FUNC_HIGH_IMP (adcPoll never samples those), or if `rate_code`
+ *         is not a valid AdcRate. Nothing is started in that case.
  */
-void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
+bool bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
                           uint16_t window_samples, float spike_threshold,
                           uint8_t n_fft_peaks, uint16_t *effective_rate_out);
 
-/** @brief Stop ADC DSP streaming, delete the DSP task, free FFT buffers. */
+/** @brief True if `code` is a valid AdcRate CONV_RATE code. */
+bool bbpIsValidAdcRate(uint8_t code);
+
+/** @brief Stop ADC DSP streaming, delete the DSP task, free FFT buffers,
+ *         and restore the channel's pre-stream ADC rate. */
 void bbpStopAdcDspStream(void);
 
 /** @brief Returns true if DSP streaming is currently active. */

@@ -19,6 +19,7 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
@@ -1437,6 +1438,12 @@ static void hat_mb_result_send(uint8_t type, uint8_t status,
 
 // Build the MicroPython snapshot blob consumed by the C6 Scripts screen:
 //   [u8 state][u8 err_len][err][u8 count]{u8 name_len, name}*
+// Scratch for script_storage_list(). File scope, because EXT_RAM_BSS_ATTR is
+// silently ignored on function-scope statics — as a function-local `static` it
+// sat in internal DRAM (2112 B). The identical buffers in cmd_script.cpp and
+// webserver.cpp are already file-scope for the same reason.
+static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+
 // Bounded to `cap` bytes and 12 names so the assembled DDP response fits one
 // frame. Returns the number of bytes written.
 static uint16_t hat_build_scripts_blob(uint8_t *buf, uint16_t cap)
@@ -1461,16 +1468,15 @@ static uint16_t hat_build_scripts_blob(uint8_t *buf, uint16_t cap)
     if (el) { memcpy(&buf[o], st.last_error_msg, el); o += (uint16_t)el; }
 
     // Script list (bounded by byte budget and 12-name display cap).
-    static char names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
-    int cnt = script_storage_list(names, SCRIPT_LIST_MAX);
+    int cnt = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
     uint16_t count_pos = o;
     if (o < cap) buf[o++] = 0;   // placeholder for count
     int written = 0;
     for (int i = 0; i < cnt && written < 12; ++i) {
-        size_t nl = strnlen(names[i], SCRIPT_NAME_MAX);
+        size_t nl = strnlen(s_script_names[i], SCRIPT_NAME_MAX);
         if (o + 1 + nl > cap) break;
         buf[o++] = (uint8_t)nl;
-        memcpy(&buf[o], names[i], nl); o += (uint16_t)nl;
+        memcpy(&buf[o], s_script_names[i], nl); o += (uint16_t)nl;
         written++;
     }
     buf[count_pos] = (uint8_t)written;

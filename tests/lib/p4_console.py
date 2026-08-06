@@ -150,12 +150,34 @@ class P4Console:
         self.close()
 
 
+def candidate_ports():
+    """Every port that could plausibly be the P4 console, in probe order.
+
+    POSIX exposes usable device nodes by glob; Windows has no such namespace,
+    so COM ports have to come from pyserial's enumeration. Returning [] rather
+    than raising keeps find_p4_port() a pure "not found" on a machine without
+    pyserial.
+    """
+    posix = sorted(glob.glob("/dev/cu.usbmodem*")) + sorted(glob.glob("/dev/ttyACM*"))
+    if posix:
+        return posix
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return []
+    # 0x303A is Espressif; the S3 and the P4 are indistinguishable by descriptor
+    # (see module docstring), so VID only orders the probe, it cannot select.
+    ports = list(list_ports.comports())
+    ports.sort(key=lambda p: (p.vid != 0x303A, p.device))
+    return [p.device for p in ports]
+
+
 def find_p4_port():
     """Return the port whose device answers with the P4 prompt, else None.
 
     Probing is the ONLY reliable discovery -- see the module docstring.
     """
-    for port in sorted(glob.glob("/dev/cu.usbmodem*")):
+    for port in candidate_ports():
         try:
             con = P4Console(port, timeout=0.6)
         except Exception:

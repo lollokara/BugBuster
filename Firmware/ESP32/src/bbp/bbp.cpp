@@ -259,11 +259,26 @@ bool bbp_spi_set_clock(uint32_t hz)
 static void wavegen_stop_and_reset(void)
 {
     uint8_t ch = 0;
+    bool    was_active = false;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         ch = g_deviceState.wavegen.channel;
+        was_active = g_deviceState.wavegen.active;
         g_deviceState.wavegen.active = false;
         xSemaphoreGive(g_stateMutex);
     }
+
+    // Only reclaim the channel if a waveform was actually running. This used to
+    // be unconditional, which had two costs on every single USB DISCONNECT
+    // (bbpExitBinaryMode -> bbpStopWavegen), even on devices that had never
+    // started a waveform:
+    //   1. it silently forced logical channel 0 (the wavegen default) to
+    //      HIGH_IMP, wiping the host's channel-0 function and DAC output;
+    //   2. it put tasks_apply_channel_function() — the deepest handler the
+    //      command queue runs — onto cmdProc's 2 KB stack, taking its measured
+    //      high-water mark from 824 B to 1672 B (2026-08-06 isolation on fw
+    //      5.0.0; see tasks.h TASK_STACK_CMDPROC).
+    if (!was_active) return;
+
     // Set channel back to HIGH_IMP
     Command cmd = {};
     cmd.type = CMD_SET_CHANNEL_FUNC;
@@ -760,6 +775,48 @@ void bbpStopAdcStream(void)
 static bool        s_dspActive = false;
 static TaskHandle_t s_dspTask  = nullptr;
 
+// ADC rate borrowed by the DSP stream, restored when it stops so a DSP session
+// does not leave the channel (and the adcPoll cadence) permanently at 9.6 kSPS.
+static Command s_dspRateCfg       = {};
+static AdcRate s_dspPrevRate      = ADC_RATE_20SPS;
+static bool    s_dspPrevRateValid = false;
+
+static uint16_t adcRateToSps(AdcRate r)
+{
+    switch (r) {
+        case ADC_RATE_10SPS_H:   return 10;
+        case ADC_RATE_20SPS:
+        case ADC_RATE_20SPS_H:   return 20;
+        case ADC_RATE_200SPS_H1:
+        case ADC_RATE_200SPS_H:  return 200;
+        case ADC_RATE_1_2KSPS:
+        case ADC_RATE_1_2KSPS_H: return 1200;
+        case ADC_RATE_4_8KSPS:   return 4800;
+        case ADC_RATE_9_6KSPS:   return 9600;
+        default:                 return 20;
+    }
+}
+
+bool bbpIsValidAdcRate(uint8_t code)
+{
+    switch (code) {
+        case ADC_RATE_10SPS_H:   case ADC_RATE_20SPS:     case ADC_RATE_20SPS_H:
+        case ADC_RATE_200SPS_H1: case ADC_RATE_200SPS_H:  case ADC_RATE_1_2KSPS:
+        case ADC_RATE_1_2KSPS_H: case ADC_RATE_4_8KSPS:   case ADC_RATE_9_6KSPS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void dsp_restore_adc_rate(void)
+{
+    if (!s_dspPrevRateValid) return;
+    s_dspPrevRateValid = false;
+    s_dspRateCfg.adcCfg.rate = s_dspPrevRate;
+    sendCommand(s_dspRateCfg);
+}
+
 static void taskAdcDsp(void * /*arg*/)
 {
     ESP_LOGI(TAG, "DSP task started");
@@ -787,13 +844,32 @@ static void taskAdcDsp(void * /*arg*/)
     vTaskDelete(nullptr);
 }
 
-void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
+bool bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
                           uint16_t window_samples, float spike_threshold,
                           uint8_t n_fft_peaks, uint16_t *effective_rate_out)
 {
     if (s_dspActive) {
         ESP_LOGW(TAG, "DSP stream already active");
-        return;
+        return false;
+    }
+    if (channel >= 4 || !bbpIsValidAdcRate(rate_code)) {
+        ESP_LOGW(TAG, "DSP: bad channel %u or rate code %u", channel, rate_code);
+        return false;
+    }
+    // adcPoll skips HIGH_IMP channels entirely — it neither reads them nor lets
+    // them raise the poll rate — so a DSP stream on one would sample stale
+    // cached values forever. Refuse instead of streaming zeros.
+    {
+        ChannelFunction fn = CH_FUNC_HIGH_IMP;
+        if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            fn = g_deviceState.channels[channel].function;
+            xSemaphoreGive(g_stateMutex);
+        }
+        if (fn == CH_FUNC_HIGH_IMP) {
+            ESP_LOGW(TAG, "DSP: channel %u is HIGH_IMP — configure it as an "
+                          "analog input first", channel);
+            return false;
+        }
     }
 
     AdcDspConfig cfg = {};
@@ -806,22 +882,43 @@ void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
     esp_err_t ret = adc_dsp_init(&cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "adc_dsp_init failed: %d", ret);
-        return;
+        return false;
     }
 
-    // Estimate effective window rate (windows per second)
-    // = sample_rate_hz / window_size
+    // Actually put the channel at the requested rate. Until 2026-08-06 this
+    // function only *reported* an effective rate derived from rate_code and
+    // never wrote it to the ADC, so a 9.6 kSPS request kept sampling at the
+    // channel's existing rate (20 SPS by default) — the response advertised
+    // ~37 windows/s while the device delivered one window per ~20 s. The
+    // adcPoll loop derives its own cadence from channels[].adcRate
+    // (adcRateToPollMs), so applying the rate here speeds up both the
+    // converter and the poller.
+    s_dspPrevRateValid = false;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_dspPrevRate    = g_deviceState.channels[channel].adcRate;
+        s_dspRateCfg.channel      = channel;
+        s_dspRateCfg.adcCfg.mux   = g_deviceState.channels[channel].adcMux;
+        s_dspRateCfg.adcCfg.range = g_deviceState.channels[channel].adcRange;
+        xSemaphoreGive(g_stateMutex);
+
+        s_dspRateCfg.type        = CMD_ADC_CONFIG;
+        s_dspRateCfg.adcCfg.rate = (AdcRate)rate_code;
+        if (sendCommand(s_dspRateCfg)) {
+            s_dspPrevRateValid = true;
+            tasks_drain_command_queue(500);
+        } else {
+            ESP_LOGW(TAG, "DSP: could not queue ADC rate change, using current rate");
+        }
+    }
+
+    // Report the rate that is actually in effect, not the one asked for.
     uint16_t sps = 20;
-    switch (rate_code) {
-        case 0:  sps = 10;   break;
-        case 1: case 3: sps = 20;   break;
-        case 4: case 6: sps = 200;  break;
-        case 8: case 9: sps = 1200; break;
-        case 12: sps = 4800; break;
-        case 13: sps = 9600; break;
+    if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        sps = adcRateToSps(g_deviceState.channels[channel].adcRate);
+        xSemaphoreGive(g_stateMutex);
     }
     if (effective_rate_out) {
-        *effective_rate_out = (uint16_t)(sps / ADC_DSP_WINDOW_SIZE);
+        *effective_rate_out = (uint16_t)(sps / cfg.window_samples);
         if (*effective_rate_out == 0) *effective_rate_out = 1;
     }
 
@@ -832,11 +929,13 @@ void bbpStartAdcDspStream(uint8_t channel, uint8_t rate_code,
         ESP_LOGE(TAG, "DSP task create failed");
         s_dspActive = false;
         adc_dsp_deinit();
-        return;
+        dsp_restore_adc_rate();
+        return false;
     }
 
-    ESP_LOGI(TAG, "ADC DSP stream started ch=%d rate=%d peaks=%d",
-             channel, rate_code, n_fft_peaks);
+    ESP_LOGI(TAG, "ADC DSP stream started ch=%d rate=%d peaks=%d sps=%u",
+             channel, rate_code, n_fft_peaks, (unsigned)sps);
+    return true;
 }
 
 void bbpStopAdcDspStream(void)
@@ -848,6 +947,7 @@ void bbpStopAdcDspStream(void)
         xTaskNotifyGive(s_dspTask);
     }
     adc_dsp_deinit();
+    dsp_restore_adc_rate();
     ESP_LOGI(TAG, "ADC DSP stream stopped");
 }
 

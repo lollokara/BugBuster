@@ -1023,11 +1023,17 @@ static esp_err_t handle_post_adc_dsp_start(httpd_req_t *req)
     cJSON_Delete(doc);
 
     if (channel > 3) return send_error(req, 400, "channel must be 0-3");
+    if (!bbpIsValidAdcRate(rate_code)) return send_error(req, 400, "invalid rate code");
 
     if (bbpAdcDspActive()) bbpStopAdcDspStream();
 
     uint16_t effective_rate = 0;
-    bbpStartAdcDspStream(channel, rate_code, window_samples, spike_threshold, n_fft_peaks, &effective_rate);
+    if (!bbpStartAdcDspStream(channel, rate_code, window_samples, spike_threshold,
+                              n_fft_peaks, &effective_rate)) {
+        return send_error(req, 409,
+                          "cannot stream DSP on this channel - configure it as "
+                          "an analog input first (HIGH_IMP channels are never sampled)");
+    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddBoolToObject(resp, "ok", true);

@@ -31,7 +31,7 @@ _COST_SCRIPT_RESIDENT = 20_000
 _TASKS = [
     ("adcPoll", 2560, 1268),
     ("faultMon", 2560, 1204),
-    ("cmdProc", 2048, 1216),
+    ("cmdProc", 3072, 1400),
     ("wavegen", 2048, 1180),
     ("mainLoop", 5120, 2436),
     ("bbpCli", 5120, 2360),

@@ -991,8 +991,11 @@ def test_reduced_task_stack_sizes_are_exactly_the_new_values():
         "TASK_STACK_ADCPOLL must be exactly 2560 (measured peak 1292, margin 1268)"
     assert re.search(r"#define\s+TASK_STACK_FAULTMON\s+2560\b", code), \
         "TASK_STACK_FAULTMON must be exactly 2560 (measured peak 1356, margin 1204)"
-    assert re.search(r"#define\s+TASK_STACK_CMDPROC\s+2048\b", code), \
-        "TASK_STACK_CMDPROC must be exactly 2048 (measured peak 832, margin 1216)"
+    assert re.search(r"#define\s+TASK_STACK_CMDPROC\s+3072\b", code), \
+        ("TASK_STACK_CMDPROC must be exactly 3072. The 832 B peak this guard "
+         "used to encode was measured too early in boot; the true worst case "
+         "is 1672 B (tasks_apply_channel_function on the DEVICE_RESET path, "
+         "isolated on hardware 2026-08-06), leaving 1400 B of margin.")
     assert re.search(r"#define\s+TASK_STACK_WAVEGEN\s+2048\b", code), \
         "TASK_STACK_WAVEGEN must be exactly 2048 (measured peak 868, margin 1180)"
 

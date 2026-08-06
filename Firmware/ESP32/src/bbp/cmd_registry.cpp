@@ -37,12 +37,24 @@ extern "C" void register_cmds_io_owner(void);
 extern "C" void register_cmds_memory(void);
 
 // ---------------------------------------------------------------------------
-// Internal flat table (grows at init time)
+// Internal index (grows at init time)
+//
+// This is an array of POINTERS into the per-subsystem `static const
+// CmdDescriptor[]` blocks, not a copy of them. Those blocks are const, so the
+// linker keeps them in flash .rodata and they cost zero internal DRAM; copying
+// them here used to duplicate all 142 descriptors into .bss at 32 bytes each
+// (8192 B reserved for 256 slots). The pointer index costs 4 bytes per slot.
+// Descriptor fields (`name`, `args`, `rsp`) were already flash-resident, so
+// dereferencing through flash is not a new access class.
+//
+// CMD_REGISTRY_MAX must stay above the registered total; 142 as of 2026-08-06
+// (see tests/unit/test_memory_telemetry.py, which pins the count against the
+// descriptor blocks so this ceiling cannot be silently overrun).
 // ---------------------------------------------------------------------------
-#define CMD_REGISTRY_MAX  256
+#define CMD_REGISTRY_MAX  192
 
-static CmdDescriptor s_registry[CMD_REGISTRY_MAX];
-static size_t        s_registry_len = 0;
+static const CmdDescriptor *s_registry[CMD_REGISTRY_MAX];
+static size_t               s_registry_len = 0;
 
 void cmd_registry_register_block(const CmdDescriptor *block, size_t n)
 {
@@ -52,15 +64,16 @@ void cmd_registry_register_block(const CmdDescriptor *block, size_t n)
                  (unsigned)s_registry_len, (unsigned)n, CMD_REGISTRY_MAX);
         return;
     }
-    memcpy(&s_registry[s_registry_len], block, n * sizeof(CmdDescriptor));
-    s_registry_len += n;
+    for (size_t i = 0; i < n; i++) {
+        s_registry[s_registry_len++] = &block[i];
+    }
 }
 
-// Simple opcode comparator for qsort
+// Simple opcode comparator for qsort (elements are CmdDescriptor pointers)
 static int cmp_opcode(const void *a, const void *b)
 {
-    const CmdDescriptor *da = (const CmdDescriptor *)a;
-    const CmdDescriptor *db = (const CmdDescriptor *)b;
+    const CmdDescriptor *da = *(const CmdDescriptor * const *)a;
+    const CmdDescriptor *db = *(const CmdDescriptor * const *)b;
     return (int)(da->bbp_opcode) - (int)(db->bbp_opcode);
 }
 
@@ -93,7 +106,7 @@ void cmd_registry_init(void)
     register_cmds_memory();
 
     // Sort by opcode for O(log n) lookup
-    qsort(s_registry, s_registry_len, sizeof(CmdDescriptor), cmp_opcode);
+    qsort(s_registry, s_registry_len, sizeof(s_registry[0]), cmp_opcode);
 
     ESP_LOGI(TAG, "Registry initialized: %u commands", (unsigned)s_registry_len);
 }
@@ -109,9 +122,9 @@ const CmdDescriptor *cmd_registry_lookup_opcode(uint16_t opcode)
     size_t lo = 0, hi = s_registry_len;
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
-        if (s_registry[mid].bbp_opcode == opcode) return &s_registry[mid];
-        if (s_registry[mid].bbp_opcode < opcode)  lo = mid + 1;
-        else                                        hi = mid;
+        if (s_registry[mid]->bbp_opcode == opcode) return s_registry[mid];
+        if (s_registry[mid]->bbp_opcode < opcode)  lo = mid + 1;
+        else                                         hi = mid;
     }
     return NULL;
 }
@@ -120,8 +133,8 @@ const CmdDescriptor *cmd_registry_lookup_name(const char *name)
 {
     if (!name) return NULL;
     for (size_t i = 0; i < s_registry_len; i++) {
-        if (s_registry[i].name && strcmp(s_registry[i].name, name) == 0)
-            return &s_registry[i];
+        if (s_registry[i]->name && strcmp(s_registry[i]->name, name) == 0)
+            return s_registry[i];
     }
     return NULL;
 }
@@ -129,5 +142,5 @@ const CmdDescriptor *cmd_registry_lookup_name(const char *name)
 const CmdDescriptor *cmd_registry_get(size_t idx)
 {
     if (idx >= s_registry_len) return NULL;
-    return &s_registry[idx];
+    return s_registry[idx];
 }

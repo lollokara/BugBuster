@@ -49,6 +49,84 @@
 
 ### Fixed
 
+### Changed
+
+- **Internal SRAM: 15 640 bytes of static DRAM reclaimed (100.0 KB → 84.8 KB,
+  build RAM 31.3% → 26.5%).** Two independent findings.
+
+  *Registry (7424 B).* `cmd_registry.cpp` held `CmdDescriptor s_registry[256]`
+  and `memcpy`'d every subsystem's descriptor block into it — 8192 B of `.bss`
+  for 143 registered commands, on a device with ~40 KB of internal heap free.
+  The per-subsystem blocks are already `static const`, so the linker keeps them
+  in flash `.rodata` at zero internal-RAM cost; the registry now stores
+  *pointers* into them (192 slots × 4 B = 768 B) and sorts the pointer array.
+  Descriptor fields (`name`, `args`, `rsp`) were flash-resident already, so
+  this introduces no new access class.
+
+  *`EXT_RAM_BSS_ATTR` on function-scope statics (8216 B).* The attribute is
+  **silently ignored** on a `static` declared inside a function — the buffer
+  lands in internal DRAM regardless. `cmd_script.cpp` carries a comment saying
+  exactly this, but four buffers had fallen into the trap anyway:
+  `hat.cpp: hat_build_scripts_blob::names` (2112 B),
+  `ws_stream.cpp: tx_task::tx_buf` (1500 B),
+  `repl_ws.cpp: repl_tx_task::tx_buf` (512 B), and
+  `repl_ws.cpp: s_tx_ring` (4096 B — file-scope, but simply missing the
+  attribute while its exact sibling in `ws_stream.cpp` had it). All four are
+  websocket/DDP payload staging — not task stacks, never touched from an ISR —
+  so PSRAM is safe, matching five existing `EXT_RAM_BSS_ATTR` buffers including
+  two identical copies of the same script-name array. Verified end to end on
+  hardware: 57 USB scope events → 57 websocket frames forwarded, exact parity.
+
+  Measured on hardware after OTA, under `mem_watch --stress`: internal free
+  **40.2 → 54.4 KB**, min-ever **30.2 → 44.5 KB**, largest contiguous block
+  **22.0 → 36.0 KB**, fragmentation **45.2 % → 33.8 %**. Cross-checked against
+  the device's own `heap` / `stack_hwm` CLI, which agrees digit for digit.
+
+### Known issues
+
+- **`START_ADC_DSP_STREAM`'s `rate_code` is accepted and never applied.**
+  `bbpStartAdcDspStream()` (`bbp/bbp.cpp`) uses `rate_code` only to compute the
+  `effectiveRate` it reports back in the response; it never reconfigures the
+  AD74416H ADC rate or the `adcPoll` loop cadence. Requesting `SPS_9600` with a
+  256-sample window advertises ~37 windows/s (as the client docstring also
+  promises) and delivers **one window in 20.5 s** — measured on hardware over
+  both USB and the WiFi websocket, on a configured and an unconfigured channel.
+  The DSP pipeline itself is correct; only the rate is ignored. Fixing it means
+  driving the ADC rate and the poll-loop delay together, which interacts with
+  auto-ranging and `tasks_rebuild_adc_conv_ctrl()`, so it is left for its own
+  pass rather than folded into the memory work.
+
+### Fixed
+
+- **A USB disconnect silently reset logical channel 0.**
+  `bbpExitBinaryMode()` → `bbpStopWavegen()` → `wavegen_stop_and_reset()`
+  (`bbp/bbp.cpp`) enqueued `CMD_SET_CHANNEL_FUNC(HIGH_IMP)` unconditionally,
+  including on devices that had never started a waveform — and
+  `WavegenState.channel` defaults to 0, so every host disconnect wiped channel
+  0's function and DAC output behind the host's back. It is now guarded on the
+  `wavegen.active` snapshot the function already takes. Verified on hardware:
+  channel 0 set to `VIN` now survives a disconnect/reconnect cycle (it
+  previously came back as `HIGH_IMP`).
+- **`cmdProc`'s stack was under-sized, and `tasks.h` recorded its peak wrongly
+  by 2x.** The comment claimed a measured peak of 832 B with "margin 1216";
+  the real peak was **1672 B of 2048, leaving 376 B** — below the ~1 KB minimum
+  headroom that same comment mandates and inside the firmware's own
+  `*** LOW — overflow risk ***` band. Both earlier right-sizing passes measured
+  too early in boot. Isolated on hardware (fw 5.0.0): fresh boot 824 B, one USB
+  connect/disconnect cycle 1672 B, saturating there. The cost is
+  `tasks_apply_channel_function()` — SPI stop/restart, `ADC_CONFIG` read-back,
+  `RTD_CONFIG` write, MUX routing, `tasks_rebuild_adc_conv_ctrl()`,
+  `clearAllAlerts()`, `hat_update_leds()` — running on this task, reached via
+  the unconditional wavegen reset above. The BBP `SET_CH_FUNC` handler does not
+  contribute (`cmd_channel.cpp` calls it synchronously on `bbpCli`; measured
+  +0 B on `cmdProc`). With the wavegen guard in place the disconnect path no
+  longer touches `cmdProc` at all, but `BBP_CMD_DEVICE_RESET` still enqueues
+  the same handler for all four channels, so `TASK_STACK_CMDPROC` is raised
+  **2048 → 3072** to keep ≥ 1 KB over the true worst case (1400 B margin).
+  Measured on hardware after the change: peak 824 B, 2248 B free, and no growth
+  across connect/disconnect cycles. The +1024 B this costs is funded several
+  times over by the registry change above.
+
 - **`idac_get_status()` returned garbage over USB.** The client parsed 26 bytes
   per channel for 4 channels while the firmware writes 44 bytes per channel for
   3, and skipped the leading channel-index byte entirely — so every field was

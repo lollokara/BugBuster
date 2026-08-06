@@ -29,11 +29,16 @@ static int handler_start_adc_dsp_stream(const uint8_t *payload, size_t len,
     uint8_t  n_fft_peaks     = bbp_get_u8(payload,  &rpos);
 
     if (channel >= 4) return -CMD_ERR_OUT_OF_RANGE;
+    if (!bbpIsValidAdcRate(rate_code)) return -CMD_ERR_OUT_OF_RANGE;
     if (n_fft_peaks > 16) n_fft_peaks = 16;
 
     uint16_t effective_rate = 0;
-    bbpStartAdcDspStream(channel, rate_code, window_samples,
-                         spike_threshold, n_fft_peaks, &effective_rate);
+    if (!bbpStartAdcDspStream(channel, rate_code, window_samples,
+                              spike_threshold, n_fft_peaks, &effective_rate)) {
+        // Most likely the channel is still CH_FUNC_HIGH_IMP, which adcPoll
+        // never samples — the stream would have emitted stale zeros forever.
+        return -CMD_ERR_INVALID_STATE;
+    }
 
     size_t pos = 0;
     bbp_put_u8(resp,  &pos, channel);
