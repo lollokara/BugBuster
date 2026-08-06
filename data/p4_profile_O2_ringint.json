@@ -1,0 +1,1682 @@
+{
+  "note": "-O2 + capture ring in INTERNAL SRAM (4096 samples/bus)",
+  "points": [
+    {
+      "odr_ratio": 1024,
+      "window_s": 6.004,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 79977,
+      "expected_sps": 80000,
+      "overflow": 0,
+      "missed": 23,
+      "drop_fine": 0,
+      "drop_coarse": 0,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 432416,
+          "avg_ns": 3257.0,
+          "min_ns": 2881.0,
+          "max_ns": 198383.0,
+          "tot_ms": 1408.28,
+          "pct": 23.5,
+          "drop": 0
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 384383,
+          "avg_ns": 11453.0,
+          "min_ns": 3625.0,
+          "max_ns": 15886.0,
+          "tot_ms": 4402.47,
+          "pct": 73.3,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 432533,
+          "avg_ns": 1179.0,
+          "min_ns": 892.0,
+          "max_ns": 192547.0,
+          "tot_ms": 509.78,
+          "pct": 8.5,
+          "drop": 0
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 432588,
+          "avg_ns": 1883.0,
+          "min_ns": 1056.0,
+          "max_ns": 7636.0,
+          "tot_ms": 814.51,
+          "pct": 13.6,
+          "drop": 0
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 480673,
+          "avg_ns": 453.0,
+          "min_ns": 214.0,
+          "max_ns": 4125.0,
+          "tot_ms": 217.71,
+          "pct": 3.6,
+          "drop": 0
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 480735,
+          "avg_ns": 1529.0,
+          "min_ns": 644.0,
+          "max_ns": 7431.0,
+          "tot_ms": 735.03,
+          "pct": 12.2,
+          "drop": 0
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 60459,
+          "avg_ns": 6931.0,
+          "min_ns": 356.0,
+          "max_ns": 28628.0,
+          "tot_ms": 419.06,
+          "pct": 7.0,
+          "drop": 0
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 384253,
+          "avg_ns": 423.0,
+          "min_ns": 414.0,
+          "max_ns": 2394.0,
+          "tot_ms": 162.73,
+          "pct": 2.7,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 60459,
+          "avg_ns": 2362.0,
+          "min_ns": 28.0,
+          "max_ns": 15322.0,
+          "tot_ms": 142.81,
+          "pct": 2.4,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 48032,
+          "avg_ns": 2683.0,
+          "min_ns": 2292.0,
+          "max_ns": 14683.0,
+          "tot_ms": 128.86,
+          "pct": 2.1,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 48032,
+          "avg_ns": 2163.0,
+          "min_ns": 1878.0,
+          "max_ns": 4767.0,
+          "tot_ms": 103.89,
+          "pct": 1.7,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 6004,
+          "avg_ns": 792.0,
+          "min_ns": 669.0,
+          "max_ns": 4158.0,
+          "tot_ms": 4.76,
+          "pct": 0.1,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 48032,
+          "avg_ns": 156.0,
+          "min_ns": 156.0,
+          "max_ns": 358.0,
+          "tot_ms": 7.47,
+          "pct": 0.1,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 60,
+          "avg_ns": 39.0,
+          "min_ns": 39.0,
+          "max_ns": 92.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 5949,
+          "avg_ns": 928559.0,
+          "min_ns": 747981.0,
+          "max_ns": 951911.0,
+          "tot_ms": 5524.0,
+          "pct": 92.0,
+          "drop": 1
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 53,
+          "avg_ns": 956571.0,
+          "min_ns": 929069.0,
+          "max_ns": 1003003.0,
+          "tot_ms": 50.7,
+          "pct": 0.8,
+          "drop": 0
+        }
+      },
+      "tasks": {
+        "daq_repl": {
+          "prio": 15,
+          "core": "0",
+          "state": "run",
+          "window_us": 2507,
+          "pct": 0.0,
+          "stack_hwm": 5580
+        },
+        "daq_fast": {
+          "prio": 12,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 481645,
+          "pct": 8.0,
+          "stack_hwm": 7540
+        },
+        "IDLE0": {
+          "prio": 0,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 5504211,
+          "pct": 91.4,
+          "stack_hwm": 1232
+        },
+        "s3_link": {
+          "prio": 14,
+          "core": "0",
+          "state": "blk",
+          "window_us": 1571,
+          "pct": 0.0,
+          "stack_hwm": 2420
+        },
+        "ddp_master": {
+          "prio": 6,
+          "core": "0",
+          "state": "blk",
+          "window_us": 4414,
+          "pct": 0.1,
+          "stack_hwm": 3088
+        },
+        "main": {
+          "prio": 1,
+          "core": "0",
+          "state": "blk",
+          "window_us": 3086,
+          "pct": 0.1,
+          "stack_hwm": 1740
+        },
+        "daq_ui": {
+          "prio": 5,
+          "core": "0",
+          "state": "blk",
+          "window_us": 6462,
+          "pct": 0.1,
+          "stack_hwm": 3016
+        }
+      },
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 7998,
+          "edges": 7998,
+          "overflow": 0,
+          "missed": 2
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 71980,
+          "edges": 71980,
+          "overflow": 0,
+          "missed": 20
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 7998,
+          "edges": 7998,
+          "overflow": 0,
+          "missed": 2
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 71979,
+          "edges": 71978,
+          "overflow": 0,
+          "missed": 21
+        }
+      ],
+      "heap_free": 214115,
+      "heap_largest": 131072,
+      "optimization": "-O2",
+      "dsp_decim": 8,
+      "wave_decim": 1,
+      "volt_decim": 1,
+      "error": ""
+    },
+    {
+      "odr_ratio": 512,
+      "window_s": 6.008,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 95953,
+      "expected_sps": 96000,
+      "overflow": 0,
+      "missed": 47,
+      "drop_fine": 0,
+      "drop_coarse": 0,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 480804,
+          "avg_ns": 3323.0,
+          "min_ns": 2878.0,
+          "max_ns": 7614.0,
+          "tot_ms": 1597.9,
+          "pct": 26.6,
+          "drop": 0
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 384628,
+          "avg_ns": 10912.0,
+          "min_ns": 1825.0,
+          "max_ns": 15886.0,
+          "tot_ms": 4197.04,
+          "pct": 69.9,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 480936,
+          "avg_ns": 1222.0,
+          "min_ns": 892.0,
+          "max_ns": 5192.0,
+          "tot_ms": 587.49,
+          "pct": 9.8,
+          "drop": 0
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 481001,
+          "avg_ns": 1907.0,
+          "min_ns": 1056.0,
+          "max_ns": 5883.0,
+          "tot_ms": 917.09,
+          "pct": 15.3,
+          "drop": 0
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 577176,
+          "avg_ns": 438.0,
+          "min_ns": 214.0,
+          "max_ns": 4100.0,
+          "tot_ms": 253.03,
+          "pct": 4.2,
+          "drop": 0
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 577256,
+          "avg_ns": 1430.0,
+          "min_ns": 644.0,
+          "max_ns": 5392.0,
+          "tot_ms": 825.62,
+          "pct": 13.7,
+          "drop": 0
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 108513,
+          "avg_ns": 5437.0,
+          "min_ns": 356.0,
+          "max_ns": 197303.0,
+          "tot_ms": 589.96,
+          "pct": 9.8,
+          "drop": 0
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 384457,
+          "avg_ns": 424.0,
+          "min_ns": 414.0,
+          "max_ns": 189133.0,
+          "tot_ms": 163.02,
+          "pct": 2.7,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 108513,
+          "avg_ns": 2601.0,
+          "min_ns": 28.0,
+          "max_ns": 7214.0,
+          "tot_ms": 282.2,
+          "pct": 4.7,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 96115,
+          "avg_ns": 2654.0,
+          "min_ns": 2289.0,
+          "max_ns": 6925.0,
+          "tot_ms": 255.09,
+          "pct": 4.2,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 96115,
+          "avg_ns": 2148.0,
+          "min_ns": 1894.0,
+          "max_ns": 4817.0,
+          "tot_ms": 206.45,
+          "pct": 3.4,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 12014,
+          "avg_ns": 740.0,
+          "min_ns": 661.0,
+          "max_ns": 4386.0,
+          "tot_ms": 8.89,
+          "pct": 0.1,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 96115,
+          "avg_ns": 153.0,
+          "min_ns": 156.0,
+          "max_ns": 372.0,
+          "tot_ms": 14.7,
+          "pct": 0.2,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 60,
+          "avg_ns": 38.0,
+          "min_ns": 39.0,
+          "max_ns": 53.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 5905,
+          "avg_ns": 898586.0,
+          "min_ns": 606303.0,
+          "max_ns": 928339.0,
+          "tot_ms": 5306.15,
+          "pct": 88.3,
+          "drop": 1
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 100,
+          "avg_ns": 948864.0,
+          "min_ns": 899575.0,
+          "max_ns": 995031.0,
+          "tot_ms": 94.89,
+          "pct": 1.6,
+          "drop": 0
+        }
+      },
+      "tasks": {
+        "daq_repl": {
+          "prio": 15,
+          "core": "0",
+          "state": "run",
+          "window_us": 2412,
+          "pct": 0.0,
+          "stack_hwm": 5580
+        },
+        "daq_fast": {
+          "prio": 12,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 658048,
+          "pct": 10.9,
+          "stack_hwm": 7540
+        },
+        "daq_ui": {
+          "prio": 5,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 6444,
+          "pct": 0.1,
+          "stack_hwm": 3016
+        },
+        "IDLE0": {
+          "prio": 0,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 5331528,
+          "pct": 88.5,
+          "stack_hwm": 1232
+        },
+        "s3_link": {
+          "prio": 14,
+          "core": "0",
+          "state": "blk",
+          "window_us": 1554,
+          "pct": 0.0,
+          "stack_hwm": 2420
+        },
+        "main": {
+          "prio": 1,
+          "core": "0",
+          "state": "blk",
+          "window_us": 3087,
+          "pct": 0.1,
+          "stack_hwm": 1740
+        },
+        "ddp_master": {
+          "prio": 6,
+          "core": "0",
+          "state": "blk",
+          "window_us": 4399,
+          "pct": 0.1,
+          "stack_hwm": 3088
+        }
+      },
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 15996,
+          "edges": 15996,
+          "overflow": 0,
+          "missed": 4
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 79977,
+          "edges": 79978,
+          "overflow": 0,
+          "missed": 23
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 15992,
+          "edges": 15992,
+          "overflow": 0,
+          "missed": 8
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 79961,
+          "edges": 79961,
+          "overflow": 0,
+          "missed": 39
+        }
+      ],
+      "heap_free": 214107,
+      "heap_largest": 131072,
+      "optimization": "-O2",
+      "dsp_decim": 8,
+      "wave_decim": 1,
+      "volt_decim": 1,
+      "error": ""
+    },
+    {
+      "odr_ratio": 256,
+      "window_s": 6.008,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 127885,
+      "expected_sps": 128000,
+      "overflow": 0,
+      "missed": 115,
+      "drop_fine": 0,
+      "drop_coarse": 0,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 577027,
+          "avg_ns": 3429.0,
+          "min_ns": 2875.0,
+          "max_ns": 7597.0,
+          "tot_ms": 1978.62,
+          "pct": 32.9,
+          "drop": 0
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 384617,
+          "avg_ns": 9820.0,
+          "min_ns": 1825.0,
+          "max_ns": 219039.0,
+          "tot_ms": 3776.9,
+          "pct": 62.9,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 577185,
+          "avg_ns": 1284.0,
+          "min_ns": 889.0,
+          "max_ns": 5192.0,
+          "tot_ms": 740.88,
+          "pct": 12.3,
+          "drop": 0
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 577264,
+          "avg_ns": 1950.0,
+          "min_ns": 1056.0,
+          "max_ns": 5867.0,
+          "tot_ms": 1125.67,
+          "pct": 18.7,
+          "drop": 0
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 769558,
+          "avg_ns": 420.0,
+          "min_ns": 214.0,
+          "max_ns": 4119.0,
+          "tot_ms": 323.44,
+          "pct": 5.4,
+          "drop": 0
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 769660,
+          "avg_ns": 1311.0,
+          "min_ns": 633.0,
+          "max_ns": 5358.0,
+          "tot_ms": 1009.1,
+          "pct": 16.8,
+          "drop": 0
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 204877,
+          "avg_ns": 4552.0,
+          "min_ns": 367.0,
+          "max_ns": 16714.0,
+          "tot_ms": 932.67,
+          "pct": 15.5,
+          "drop": 0
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 384509,
+          "avg_ns": 441.0,
+          "min_ns": 414.0,
+          "max_ns": 2453.0,
+          "tot_ms": 169.75,
+          "pct": 2.8,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 204877,
+          "avg_ns": 2713.0,
+          "min_ns": 28.0,
+          "max_ns": 14756.0,
+          "tot_ms": 555.74,
+          "pct": 9.3,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 192255,
+          "avg_ns": 2621.0,
+          "min_ns": 2289.0,
+          "max_ns": 14397.0,
+          "tot_ms": 503.84,
+          "pct": 8.4,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 192255,
+          "avg_ns": 2121.0,
+          "min_ns": 1886.0,
+          "max_ns": 13803.0,
+          "tot_ms": 407.75,
+          "pct": 6.8,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 24032,
+          "avg_ns": 715.0,
+          "min_ns": 653.0,
+          "max_ns": 4097.0,
+          "tot_ms": 17.18,
+          "pct": 0.3,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 192255,
+          "avg_ns": 152.0,
+          "min_ns": 156.0,
+          "max_ns": 358.0,
+          "tot_ms": 29.17,
+          "pct": 0.5,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 60,
+          "avg_ns": 39.0,
+          "min_ns": 39.0,
+          "max_ns": 50.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 5812,
+          "avg_ns": 837802.0,
+          "min_ns": 527133.0,
+          "max_ns": 899189.0,
+          "tot_ms": 4869.31,
+          "pct": 81.1,
+          "drop": 1
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 194,
+          "avg_ns": 916252.0,
+          "min_ns": 838078.0,
+          "max_ns": 1012397.0,
+          "tot_ms": 177.75,
+          "pct": 3.0,
+          "drop": 0
+        }
+      },
+      "tasks": {
+        "daq_repl": {
+          "prio": 15,
+          "core": "0",
+          "state": "run",
+          "window_us": 2424,
+          "pct": 0.0,
+          "stack_hwm": 5556
+        },
+        "daq_fast": {
+          "prio": 12,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 1011786,
+          "pct": 16.8,
+          "stack_hwm": 7540
+        },
+        "daq_ui": {
+          "prio": 5,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 6335,
+          "pct": 0.1,
+          "stack_hwm": 3016
+        },
+        "IDLE0": {
+          "prio": 0,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 4978222,
+          "pct": 82.6,
+          "stack_hwm": 1232
+        },
+        "main": {
+          "prio": 1,
+          "core": "0",
+          "state": "blk",
+          "window_us": 3083,
+          "pct": 0.1,
+          "stack_hwm": 1740
+        },
+        "s3_link": {
+          "prio": 14,
+          "core": "0",
+          "state": "blk",
+          "window_us": 1320,
+          "pct": 0.0,
+          "stack_hwm": 2420
+        },
+        "ddp_master": {
+          "prio": 6,
+          "core": "0",
+          "state": "blk",
+          "window_us": 4398,
+          "pct": 0.1,
+          "stack_hwm": 3088
+        }
+      },
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 31970,
+          "edges": 31970,
+          "overflow": 0,
+          "missed": 30
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 95908,
+          "edges": 95909,
+          "overflow": 0,
+          "missed": 92
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 31971,
+          "edges": 31972,
+          "overflow": 0,
+          "missed": 29
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 95914,
+          "edges": 95915,
+          "overflow": 0,
+          "missed": 86
+        }
+      ],
+      "heap_free": 214115,
+      "heap_largest": 131072,
+      "optimization": "-O2",
+      "dsp_decim": 8,
+      "wave_decim": 1,
+      "volt_decim": 1,
+      "error": ""
+    },
+    {
+      "odr_ratio": 128,
+      "window_s": 6.007,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 191973,
+      "expected_sps": 192000,
+      "overflow": 0,
+      "missed": 27,
+      "drop_fine": 0,
+      "drop_coarse": 0,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 769370,
+          "avg_ns": 4620.0,
+          "min_ns": 2861.0,
+          "max_ns": 816405131.0,
+          "tot_ms": 3554.59,
+          "pct": 59.2,
+          "drop": 0
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 384577,
+          "avg_ns": 7636.0,
+          "min_ns": 631.0,
+          "max_ns": 11678.0,
+          "tot_ms": 2936.66,
+          "pct": 48.9,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 769571,
+          "avg_ns": 1347.0,
+          "min_ns": 869.0,
+          "max_ns": 5692.0,
+          "tot_ms": 1036.41,
+          "pct": 17.3,
+          "drop": 0
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 769671,
+          "avg_ns": 3077.0,
+          "min_ns": 1056.0,
+          "max_ns": 816405042.0,
+          "tot_ms": 2368.46,
+          "pct": 39.4,
+          "drop": 0
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 1154181,
+          "avg_ns": 395.0,
+          "min_ns": 214.0,
+          "max_ns": 4464.0,
+          "tot_ms": 456.08,
+          "pct": 7.6,
+          "drop": 0
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 1154334,
+          "avg_ns": 1907.0,
+          "min_ns": 633.0,
+          "max_ns": 816403847.0,
+          "tot_ms": 2201.51,
+          "pct": 36.6,
+          "drop": 0
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 396004,
+          "avg_ns": 4024.0,
+          "min_ns": 358.0,
+          "max_ns": 92111.0,
+          "tot_ms": 1593.41,
+          "pct": 26.5,
+          "drop": 0
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 384445,
+          "avg_ns": 429.0,
+          "min_ns": 433.0,
+          "max_ns": 10250.0,
+          "tot_ms": 164.79,
+          "pct": 2.7,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 396004,
+          "avg_ns": 2781.0,
+          "min_ns": 28.0,
+          "max_ns": 90736.0,
+          "tot_ms": 1101.42,
+          "pct": 18.3,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 384445,
+          "avg_ns": 2606.0,
+          "min_ns": 2286.0,
+          "max_ns": 90422.0,
+          "tot_ms": 1001.69,
+          "pct": 16.7,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 384445,
+          "avg_ns": 2109.0,
+          "min_ns": 1869.0,
+          "max_ns": 88522.0,
+          "tot_ms": 810.98,
+          "pct": 13.5,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 48055,
+          "avg_ns": 697.0,
+          "min_ns": 661.0,
+          "max_ns": 12553.0,
+          "tot_ms": 33.5,
+          "pct": 0.6,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 384445,
+          "avg_ns": 151.0,
+          "min_ns": 156.0,
+          "max_ns": 372.0,
+          "tot_ms": 58.1,
+          "pct": 1.0,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 60,
+          "avg_ns": 38.0,
+          "min_ns": 39.0,
+          "max_ns": 53.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 5624,
+          "avg_ns": 717456.0,
+          "min_ns": 240644.0,
+          "max_ns": 906619.0,
+          "tot_ms": 4034.97,
+          "pct": 67.2,
+          "drop": 1
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 381,
+          "avg_ns": 857062.0,
+          "min_ns": 705511.0,
+          "max_ns": 994808.0,
+          "tot_ms": 326.54,
+          "pct": 5.4,
+          "drop": 0
+        }
+      },
+      "tasks": {
+        "daq_repl": {
+          "prio": 15,
+          "core": "0",
+          "state": "run",
+          "window_us": 2401,
+          "pct": 0.0,
+          "stack_hwm": 5476
+        },
+        "daq_fast": {
+          "prio": 12,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 1695188,
+          "pct": 28.1,
+          "stack_hwm": 7500
+        },
+        "daq_ui": {
+          "prio": 5,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 6253,
+          "pct": 0.1,
+          "stack_hwm": 3016
+        },
+        "IDLE0": {
+          "prio": 0,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 4294127,
+          "pct": 71.3,
+          "stack_hwm": 1232
+        },
+        "ddp_master": {
+          "prio": 6,
+          "core": "0",
+          "state": "blk",
+          "window_us": 4370,
+          "pct": 0.1,
+          "stack_hwm": 3088
+        },
+        "main": {
+          "prio": 1,
+          "core": "0",
+          "state": "blk",
+          "window_us": 3127,
+          "pct": 0.1,
+          "stack_hwm": 1740
+        },
+        "s3_link": {
+          "prio": 14,
+          "core": "0",
+          "state": "blk",
+          "window_us": 1557,
+          "pct": 0.0,
+          "stack_hwm": 2420
+        }
+      },
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 63981,
+          "edges": 63981,
+          "overflow": 0,
+          "missed": 19
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 127963,
+          "edges": 127963,
+          "overflow": 0,
+          "missed": 37
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 63991,
+          "edges": 63991,
+          "overflow": 0,
+          "missed": 9
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 127982,
+          "edges": 127982,
+          "overflow": 0,
+          "missed": 18
+        }
+      ],
+      "heap_free": 214115,
+      "heap_largest": 131072,
+      "optimization": "-O2",
+      "dsp_decim": 8,
+      "wave_decim": 1,
+      "volt_decim": 1,
+      "error": ""
+    },
+    {
+      "odr_ratio": 64,
+      "window_s": 6.002,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 320001,
+      "expected_sps": 320000,
+      "overflow": 0,
+      "missed": 0,
+      "drop_fine": 0,
+      "drop_coarse": 0,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 1152840,
+          "avg_ns": 3703.0,
+          "min_ns": 2850.0,
+          "max_ns": 10553.0,
+          "tot_ms": 4268.62,
+          "pct": 71.1,
+          "drop": 1
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 376818,
+          "avg_ns": 3297.0,
+          "min_ns": 306.0,
+          "max_ns": 541878.0,
+          "tot_ms": 1242.33,
+          "pct": 20.7,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 1153141,
+          "avg_ns": 1463.0,
+          "min_ns": 872.0,
+          "max_ns": 7611.0,
+          "tot_ms": 1686.97,
+          "pct": 28.1,
+          "drop": 0
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 1153291,
+          "avg_ns": 2044.0,
+          "min_ns": 878.0,
+          "max_ns": 7053.0,
+          "tot_ms": 2357.37,
+          "pct": 39.3,
+          "drop": 1
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 1921871,
+          "avg_ns": 401.0,
+          "min_ns": 214.0,
+          "max_ns": 6753.0,
+          "tot_ms": 770.58,
+          "pct": 12.8,
+          "drop": 0
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 1922117,
+          "avg_ns": 1088.0,
+          "min_ns": 633.0,
+          "max_ns": 6853.0,
+          "tot_ms": 2091.79,
+          "pct": 34.8,
+          "drop": 1
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 779835,
+          "avg_ns": 3727.0,
+          "min_ns": 331.0,
+          "max_ns": 188036.0,
+          "tot_ms": 2906.79,
+          "pct": 48.4,
+          "drop": 1
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 384025,
+          "avg_ns": 428.0,
+          "min_ns": 433.0,
+          "max_ns": 9322.0,
+          "tot_ms": 164.19,
+          "pct": 2.7,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 779835,
+          "avg_ns": 2775.0,
+          "min_ns": 39.0,
+          "max_ns": 187261.0,
+          "tot_ms": 2164.08,
+          "pct": 36.1,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 768236,
+          "avg_ns": 2562.0,
+          "min_ns": 2186.0,
+          "max_ns": 186961.0,
+          "tot_ms": 1968.53,
+          "pct": 32.8,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 768236,
+          "avg_ns": 2067.0,
+          "min_ns": 1775.0,
+          "max_ns": 186089.0,
+          "tot_ms": 1587.67,
+          "pct": 26.5,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 96029,
+          "avg_ns": 693.0,
+          "min_ns": 658.0,
+          "max_ns": 11486.0,
+          "tot_ms": 66.52,
+          "pct": 1.1,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 768236,
+          "avg_ns": 152.0,
+          "min_ns": 156.0,
+          "max_ns": 8472.0,
+          "tot_ms": 116.5,
+          "pct": 1.9,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 60,
+          "avg_ns": 39.0,
+          "min_ns": 39.0,
+          "max_ns": 53.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 5184,
+          "avg_ns": 502260.0,
+          "min_ns": 15928.0,
+          "max_ns": 1011764.0,
+          "tot_ms": 2603.72,
+          "pct": 43.4,
+          "drop": 0
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 757,
+          "avg_ns": 517712.0,
+          "min_ns": 22636.0,
+          "max_ns": 1009828.0,
+          "tot_ms": 391.91,
+          "pct": 6.5,
+          "drop": 0
+        }
+      },
+      "tasks": {},
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 127966,
+          "edges": 127966,
+          "overflow": 0,
+          "missed": 34
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 191946,
+          "edges": 191946,
+          "overflow": 0,
+          "missed": 54
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 128000,
+          "edges": 128001,
+          "overflow": 0,
+          "missed": 0
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 192001,
+          "edges": 192001,
+          "overflow": 0,
+          "missed": 0
+        }
+      ],
+      "heap_free": 0,
+      "heap_largest": 0,
+      "optimization": "",
+      "dsp_decim": 0,
+      "wave_decim": 0,
+      "volt_decim": 0,
+      "error": ""
+    },
+    {
+      "odr_ratio": 32,
+      "window_s": 6.008,
+      "cpu_mhz": 360,
+      "probe_overhead_cyc": 3,
+      "total_sps": 468924,
+      "expected_sps": 576000,
+      "overflow": 0,
+      "missed": 107076,
+      "drop_fine": 99,
+      "drop_coarse": 97,
+      "stages": {
+        "cap.pass": {
+          "core": 1,
+          "kind": "C",
+          "count": 1375925,
+          "avg_ns": 3864.0,
+          "min_ns": 2842.0,
+          "max_ns": 10381.0,
+          "tot_ms": 5316.44,
+          "pct": 88.5,
+          "drop": 1
+        },
+        "cap.spin": {
+          "core": 1,
+          "kind": "W",
+          "count": 140461,
+          "avg_ns": 931.0,
+          "min_ns": 308.0,
+          "max_ns": 6744.0,
+          "tot_ms": 130.73,
+          "pct": 2.2,
+          "drop": 0
+        },
+        "cap.scan": {
+          "core": 1,
+          "kind": "C",
+          "count": 1376274,
+          "avg_ns": 1568.0,
+          "min_ns": 856.0,
+          "max_ns": 8033.0,
+          "tot_ms": 2158.56,
+          "pct": 35.9,
+          "drop": 1
+        },
+        "cap.drain": {
+          "core": 1,
+          "kind": "C",
+          "count": 1376447,
+          "avg_ns": 2099.0,
+          "min_ns": 1069.0,
+          "max_ns": 8008.0,
+          "tot_ms": 2889.79,
+          "pct": 48.1,
+          "drop": 0
+        },
+        "cap.begin": {
+          "core": 1,
+          "kind": "C",
+          "count": 2544203,
+          "avg_ns": 401.0,
+          "min_ns": 214.0,
+          "max_ns": 6819.0,
+          "tot_ms": 1021.13,
+          "pct": 17.0,
+          "drop": 1
+        },
+        "cap.end": {
+          "core": 1,
+          "kind": "C",
+          "count": 2544526,
+          "avg_ns": 1004.0,
+          "min_ns": 633.0,
+          "max_ns": 6722.0,
+          "tot_ms": 2555.37,
+          "pct": 42.5,
+          "drop": 0
+        },
+        "fast.loop": {
+          "core": 0,
+          "kind": "C",
+          "count": 1173771,
+          "avg_ns": 3528.0,
+          "min_ns": 436.0,
+          "max_ns": 195178.0,
+          "tot_ms": 4141.37,
+          "pct": 68.9,
+          "drop": 0
+        },
+        "fast.volt": {
+          "core": 0,
+          "kind": "C",
+          "count": 208137,
+          "avg_ns": 436.0,
+          "min_ns": 47.0,
+          "max_ns": 22153.0,
+          "tot_ms": 90.79,
+          "pct": 1.5,
+          "drop": 0
+        },
+        "fast.pair": {
+          "core": 0,
+          "kind": "C",
+          "count": 1173771,
+          "avg_ns": 2779.0,
+          "min_ns": 28.0,
+          "max_ns": 194378.0,
+          "tot_ms": 3262.38,
+          "pct": 54.3,
+          "drop": 0
+        },
+        "fast.emit": {
+          "core": 0,
+          "kind": "C",
+          "count": 1167087,
+          "avg_ns": 2541.0,
+          "min_ns": 2056.0,
+          "max_ns": 194072.0,
+          "tot_ms": 2965.8,
+          "pct": 49.4,
+          "drop": 0
+        },
+        "fast.fusion": {
+          "core": 0,
+          "kind": "C",
+          "count": 1167087,
+          "avg_ns": 2044.0,
+          "min_ns": 1639.0,
+          "max_ns": 193256.0,
+          "tot_ms": 2385.64,
+          "pct": 39.7,
+          "drop": 0
+        },
+        "fast.dsp": {
+          "core": 0,
+          "kind": "C",
+          "count": 145886,
+          "avg_ns": 689.0,
+          "min_ns": 647.0,
+          "max_ns": 29764.0,
+          "tot_ms": 100.47,
+          "pct": 1.7,
+          "drop": 0
+        },
+        "fast.wire": {
+          "core": 0,
+          "kind": "C",
+          "count": 1167087,
+          "avg_ns": 153.0,
+          "min_ns": 156.0,
+          "max_ns": 28378.0,
+          "tot_ms": 178.02,
+          "pct": 3.0,
+          "drop": 0
+        },
+        "fast.summary": {
+          "core": 0,
+          "kind": "C",
+          "count": 45,
+          "avg_ns": 38.0,
+          "min_ns": 39.0,
+          "max_ns": 53.0,
+          "tot_ms": 0.0,
+          "pct": 0.0,
+          "drop": 0
+        },
+        "fast.idle": {
+          "core": 0,
+          "kind": "W",
+          "count": 2188,
+          "avg_ns": 507459.0,
+          "min_ns": 14944.0,
+          "max_ns": 1010150.0,
+          "tot_ms": 1110.32,
+          "pct": 18.5,
+          "drop": 1
+        },
+        "fast.yield": {
+          "core": 0,
+          "kind": "W",
+          "count": 1144,
+          "avg_ns": 530730.0,
+          "min_ns": 14686.0,
+          "max_ns": 1002553.0,
+          "tot_ms": 607.16,
+          "pct": 10.1,
+          "drop": 0
+        }
+      },
+      "tasks": {
+        "daq_repl": {
+          "prio": 15,
+          "core": "0",
+          "state": "run",
+          "window_us": 2348,
+          "pct": 0.0,
+          "stack_hwm": 5476
+        },
+        "daq_fast": {
+          "prio": 12,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 4315449,
+          "pct": 71.6,
+          "stack_hwm": 7484
+        },
+        "daq_ui": {
+          "prio": 5,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 5787,
+          "pct": 0.1,
+          "stack_hwm": 2984
+        },
+        "IDLE0": {
+          "prio": 0,
+          "core": "0",
+          "state": "rdy",
+          "window_us": 1675712,
+          "pct": 27.8,
+          "stack_hwm": 1216
+        },
+        "s3_link": {
+          "prio": 14,
+          "core": "0",
+          "state": "blk",
+          "window_us": 1543,
+          "pct": 0.0,
+          "stack_hwm": 2420
+        },
+        "main": {
+          "prio": 1,
+          "core": "0",
+          "state": "blk",
+          "window_us": 3049,
+          "pct": 0.1,
+          "stack_hwm": 1740
+        },
+        "ddp_master": {
+          "prio": 6,
+          "core": "0",
+          "state": "blk",
+          "window_us": 4221,
+          "pct": 0.1,
+          "stack_hwm": 3088
+        }
+      },
+      "buses": [
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 222563,
+          "edges": 222564,
+          "overflow": 0,
+          "missed": 33437
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 246080,
+          "edges": 246081,
+          "overflow": 0,
+          "missed": 73920
+        },
+        {
+          "bus": "A",
+          "name": "FINE",
+          "sps": 222915,
+          "edges": 222916,
+          "overflow": 0,
+          "missed": 33085
+        },
+        {
+          "bus": "B",
+          "name": "COARSE+VOLTAGE",
+          "sps": 246009,
+          "edges": 246009,
+          "overflow": 0,
+          "missed": 73991
+        }
+      ],
+      "heap_free": 214115,
+      "heap_largest": 131072,
+      "optimization": "-O2",
+      "dsp_decim": 8,
+      "wave_decim": 1,
+      "volt_decim": 1,
+      "error": ""
+    }
+  ]
+}

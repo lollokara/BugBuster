@@ -26,6 +26,7 @@
 #include "tcp_backend.h"
 #include "daq_wifi_ident.h"
 #include "captive_dns.h"
+#include "daq_perf.h"
 
 static const char *TAG = "daq_board";
 
@@ -2401,6 +2402,8 @@ static void glitch_filter_reset(void)
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
 {
+    DAQ_PERF_BEGIN(t_emit);
+    DAQ_PERF_BEGIN(t_fus);
     // range_manager_step() processes any pending ISR flags from the FF GPIOs
     // (range-up immediate, range-down deferred with lock + confirmation) and
     // drives the bypass GPIOs when warranted.  It must be called every sample
@@ -2438,6 +2441,8 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         s_i_glitch.hold = fo;
         s_i_glitch.hold_settling = settling_now;
         s_i_glitch.n = 1;
+        DAQ_PERF_END(DAQ_PERF_FAST_FUSION, t_fus);
+        DAQ_PERF_END(DAQ_PERF_FAST_EMIT, t_emit);
         return;
     }
     emit_fo = s_i_glitch.hold;
@@ -2456,6 +2461,7 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // held voltage from the slower VOLTAGE ADC.
     float v = power_dsp_voltage(&b->dsp);
     float p = v * emit_fo.amps;
+    DAQ_PERF_END(DAQ_PERF_FAST_FUSION, t_fus);
 
     // DSP TAIL (energy/charge/stats + spectrum) runs DECIMATED: it doesn't
     // need the full per-channel rate, and decimating frees core-0 budget so
@@ -2489,6 +2495,7 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // total this is protecting).
     b->dsp_emit_periods++;
     if (++b->dsp_count >= b->dsp_decim) {
+        DAQ_PERF_BEGIN(t_dsp);
         b->dsp_count = 0;
         uint32_t decim = b->dsp_decim ? b->dsp_decim : 1;
         uint32_t periods = b->dsp_emit_periods / decim;
@@ -2496,6 +2503,7 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         power_dsp_push_current_n(&b->dsp, emit_fo.amps, periods);
         spectrum_push(&b->spectrum,
                       (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : emit_fo.amps);
+        DAQ_PERF_END(DAQ_PERF_FAST_DSP, t_dsp);
     }
 
     // Full-rate fused waveform to the PC (decimated only by wave_decim, def 1).
@@ -2504,9 +2512,12 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // at up to 256 ksps.
     if (++b->wave_count >= b->wave_decim) {
         b->wave_count = 0;
+        DAQ_PERF_BEGIN(t_wire);
         usb_stream_push_sample(&b->usb, &emit_fo, b->fine_rate_hz, b->wave_decim,
                                emit_settling);
+        DAQ_PERF_END(DAQ_PERF_FAST_WIRE, t_wire);
     }
+    DAQ_PERF_END(DAQ_PERF_FAST_EMIT, t_emit);
 }
 
 static void daq_fast_task(void *arg)
@@ -2529,18 +2540,23 @@ static void daq_fast_task(void *arg)
 
     uint32_t yield_ctr = 0;
     while (b->fast_running) {
+        DAQ_PERF_BEGIN(t_loop);
         bool progress = false;
 
         // Refill a FINE sample (bus A).
         if (fine_ok && !have_fine) {
+            DAQ_PERF_BEGIN(t_ra);
             have_fine = (adaq_stream_read(&b->stream_a, &fine, 1) == 1);
+            DAQ_PERF_END(DAQ_PERF_FAST_READ_A, t_ra);
             if (have_fine) progress = true;
         }
 
         // Drain bus B: route VOLTAGE straight to the DSP, hold the next COARSE.
+        DAQ_PERF_BEGIN(t_rb);
         while (!have_coarse && adaq_stream_read(&b->stream_b, &sb, 1) == 1) {
             progress = true;
             if (sb.device_id == FASTB_VOLTAGE_LOCAL) {
+                DAQ_PERF_BEGIN(t_volt);
                 // sb.value != 0: cheap prefilter for one common corruption
                 // pattern (all-zero conversion with clean flags); the
                 // one-sample despike below catches arbitrary-value glitches.
@@ -2582,13 +2598,16 @@ static void daq_fast_task(void *arg)
                         }
                     }
                 }
+                DAQ_PERF_END(DAQ_PERF_FAST_VOLT, t_volt);
             } else {
                 coarse = sb;
                 have_coarse = true;
             }
         }
+        DAQ_PERF_END(DAQ_PERF_FAST_READ_B, t_rb);
 
         bool emitted = false;
+        DAQ_PERF_BEGIN(t_pair);
         if (fine_ok && coarse_ok) {
             if (have_fine && have_coarse) {
                 if (!have_offset) {
@@ -2638,14 +2657,21 @@ static void daq_fast_task(void *arg)
             have_coarse = false;
             emitted = progress = true;
         }
+        DAQ_PERF_END(DAQ_PERF_FAST_PAIR, t_pair);
 
         if (emitted && ++summary_count >= summary_interval) {
             summary_count = 0;
+            DAQ_PERF_BEGIN(t_sum);
             daq_board_stream_summary(b);
+            DAQ_PERF_END(DAQ_PERF_FAST_SUMMARY, t_sum);
         }
 
+        DAQ_PERF_END(DAQ_PERF_FAST_LOOP, t_loop);
+
         if (!progress) {
+            DAQ_PERF_BEGIN(t_idle);
             vTaskDelay(1);   // rings drained; yield ~1 tick
+            DAQ_PERF_END(DAQ_PERF_FAST_IDLE, t_idle);
         } else if ((++yield_ctr & 0x3FFu) == 0) {
             // At sustained high ODR, progress is true on almost every
             // iteration, so the branch above rarely fires. This task (prio
@@ -2655,7 +2681,9 @@ static void daq_fast_task(void *arg)
             // (looks like the device is unresponsive to commands). Force a
             // short real block periodically so core 0 always has scheduling
             // gaps regardless of how busy the rings are.
+            DAQ_PERF_BEGIN(t_yield);
             vTaskDelay(1);
+            DAQ_PERF_END(DAQ_PERF_FAST_YIELD, t_yield);
         }
     }
     // Last act before deleting ourselves: NULL our own handle so

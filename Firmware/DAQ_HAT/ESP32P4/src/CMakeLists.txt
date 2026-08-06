@@ -30,6 +30,7 @@ idf_component_register(
         "board/daq_board.c"
         "board/buttons_p4.c"
         "cli/cli.c"
+        "perf/daq_perf.c"
         "diag/diagnostics.c"
         "config/daq_settings.c"
         "config/daq_settings_glue.c"
@@ -51,6 +52,7 @@ idf_component_register(
         "stream"
         "board"
         "cli"
+        "perf"
         "diag"
         "config"
     REQUIRES
@@ -62,6 +64,7 @@ idf_component_register(
         esp_driver_tsens
         esp_psram
         esp_timer
+        esp_hw_support
         freertos
         esp_tinyusb
         console

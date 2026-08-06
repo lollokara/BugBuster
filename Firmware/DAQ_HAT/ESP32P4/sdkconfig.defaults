@@ -33,6 +33,25 @@ CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
 # cost 10 ms of throughput at 100 Hz.
 CONFIG_FREERTOS_HZ=1000
 
+# Per-task CPU accounting for the `perf` CLI command. The pipeline's two hot
+# loops both busy-poll, so "is a core saturated?" cannot be answered by eye —
+# it needs real per-task run-time shares. The esp_timer source costs one 64-bit
+# timer read per context switch, which is negligible next to the ~128 k
+# samples/s the pipeline is already moving.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS=y
+
+# -O2 rather than the IDF default -Og. Measured on hardware with the `perf`
+# profiler at the saturation point (odr ratio 32): 405 kSPS -> 443 kSPS
+# aggregate, +9.2%, with per-stage costs down 13-18% across the board
+# (cap.scan -18.2%, fast.loop -17.2%). Both hot loops are hand-written C on a
+# 360 MHz RISC-V core with no DMA, so they are exactly the shape -O2 helps
+# most. It is also SMALLER here: 1101942 B flash vs 1115446 B, 16560 B RAM vs
+# 17144 B. Revert to CONFIG_COMPILER_OPTIMIZATION_DEBUG only if step-debugging.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # TinyUSB — USB-HS vendor-bulk endpoint for the measurement data stream (J5).
 # Vendor class enabled by setting the interface count > 0. Large TX FIFO for
 # high-throughput streaming; 512-byte endpoints (HS bulk max packet).

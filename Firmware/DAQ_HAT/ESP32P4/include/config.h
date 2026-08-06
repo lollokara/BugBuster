@@ -198,6 +198,22 @@
 // while still surfacing fault flags. 1 = every sample.
 #define ADAQ_STATUS_SAMPLE_DIV    256
 
+// Capture-ring placement. The ring is touched twice per sample (pushed from the
+// core-1 capture task, popped by the core-0 consumer), so PSRAM latency on it is
+// paid on both hot paths.
+//
+// MEASURED (perf profiler, odr ratio 32, -O2): moving the ring to internal SRAM
+// at 4096 samples/bus took cap.end 1192 -> 1088 ns and lifted the saturation
+// point 443 kSPS -> 469 kSPS (+5.9%); at ratio 64 it captured 320001/320000
+// with ZERO missed edges where the PSRAM ring missed 236/s.
+//
+// It is NOT the default because it costs both things the deep PSRAM ring buys:
+// ~200 KB of internal SRAM that WiFi and OTA also need, and buffer depth
+// (65536 samples = 256 ms of consumer stall at 256 kSPS; 4096 = 16 ms).
+// To enable, set this to 1 AND lower DAQ_RING_CAPACITY so two rings fit in
+// internal SRAM -- otherwise the allocation simply fails over to PSRAM.
+#define ADAQ_RING_PREFER_INTERNAL 0
+
 // -----------------------------------------------------------------------------
 // SPI bus A — GP-SPI3, dedicated to ADAQ #0 = ADAQ1/U1 = FINE current.
 // All lines via the GPIO matrix (no native IOMUX on bus A).

@@ -60,6 +60,8 @@
 #include "daq_settings.h"
 #include "daq_config_registry.h"
 #include "diagnostics.h"
+#include "daq_perf.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "daq_cli";
 
@@ -2255,6 +2257,222 @@ static int cmd_adaqdmux(int argc, char **argv)
 }
 
 // ---------------------------------------------------------------------------
+// Pipeline cycle profiler.  perf <on|off|reset|show|tasks>
+//
+// `faststat` says how many samples survived; this says WHERE the cycles went.
+// Stage timings come from src/perf/daq_perf.h (compiled out entirely when
+// DAQ_PERF_ENABLED=0); the task table comes from FreeRTOS run-time stats.
+#if DAQ_PERF_ENABLED
+
+// Which core each stage is measured on — percentages are only meaningful
+// against that core's own elapsed time.
+static int perf_stage_core(daq_perf_stage_id_t id)
+{
+    return (id <= DAQ_PERF_CAP_END) ? 1 : 0;
+}
+
+static void perf_print_stages(void)
+{
+    daq_perf_window_t w;
+    daq_perf_get_window(&w);
+    if (w.window_us == 0) { printf("perf: no window (run 'perf on')\n"); return; }
+
+    double win_cycles = (double)w.window_us * (double)w.cpu_hz / 1e6;
+    printf("window %.3f s @ %lu MHz   probe overhead %lu cyc/pair   sampling %s\n",
+           w.window_us / 1e6, (unsigned long)(w.cpu_hz / 1000000u),
+           (unsigned long)w.overhead_cycles, w.enabled ? "ON" : "off");
+    printf("%-13s %3s %1s %10s %9s %9s %9s %9s %7s %5s\n",
+           "stage", "cpu", "k", "count", "avg_ns", "min_ns", "max_ns", "tot_ms",
+           "%core", "drop");
+    for (int i = 0; i < DAQ_PERF_STAGE_COUNT; ++i) {
+        const daq_perf_stage_t *s = &g_daq_perf[i];
+        if (s->count == 0 && s->dropped == 0) continue;
+        // Subtract the probe pair from each sample so the figure reflects the
+        // work, not the instrument.
+        double gross = (double)s->cycles;
+        double net   = gross - (double)s->count * (double)w.overhead_cycles;
+        if (net < 0) net = 0;
+        double ns_per = s->count ? 1e9 * (net / (double)s->count) / (double)w.cpu_hz
+                                 : 0.0;
+        double mn = (s->min == UINT32_MAX) ? 0 : (double)s->min;
+        bool blocking = daq_perf_stage_is_blocking((daq_perf_stage_id_t)i);
+        printf("%-13s %3d %1s %10lu %9.0f %9.0f %9.0f %9.2f %6.1f%% %5lu\n",
+               daq_perf_stage_name((daq_perf_stage_id_t)i), perf_stage_core(i),
+               blocking ? "W" : "C",
+               (unsigned long)s->count, ns_per,
+               1e9 * mn / (double)w.cpu_hz,
+               1e9 * (double)s->max / (double)w.cpu_hz,
+               1e3 * net / (double)w.cpu_hz,
+               100.0 * net / win_cycles,
+               (unsigned long)s->dropped);
+    }
+    printf("(k: C=CPU work, W=blocked/waiting wall time - never add W to a CPU budget)\n");
+}
+
+#if defined(CONFIG_FREERTOS_USE_TRACE_FACILITY) && \
+    defined(CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS)
+
+// FreeRTOS run-time counters are cumulative SINCE BOOT. Reporting them raw
+// answers "what has this device done since it powered on", not "what is it
+// doing now" — on a board that has been up for minutes the pipeline's share is
+// diluted to nothing. Snapshot at `perf on` and diff at `perf show` so the
+// percentages describe the measurement window only.
+#define PERF_TASK_SNAP_MAX 32
+typedef struct {
+    TaskHandle_t handle;
+    uint32_t     runtime;
+} perf_task_snap_t;
+static perf_task_snap_t s_task_snap[PERF_TASK_SNAP_MAX];
+static UBaseType_t      s_task_snap_n;
+static uint32_t         s_task_snap_total;
+
+static uint32_t perf_snap_lookup(TaskHandle_t h)
+{
+    for (UBaseType_t i = 0; i < s_task_snap_n; ++i)
+        if (s_task_snap[i].handle == h) return s_task_snap[i].runtime;
+    return 0;   // task created after the snapshot: all of its time is in-window
+}
+
+static void perf_snapshot_tasks(void)
+{
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    TaskStatus_t *st = calloc(n, sizeof(TaskStatus_t));
+    if (!st) { s_task_snap_n = 0; return; }
+    uint32_t total = 0;
+    n = uxTaskGetSystemState(st, n, &total);
+    s_task_snap_n = (n > PERF_TASK_SNAP_MAX) ? PERF_TASK_SNAP_MAX : n;
+    for (UBaseType_t i = 0; i < s_task_snap_n; ++i) {
+        s_task_snap[i].handle  = st[i].xHandle;
+        s_task_snap[i].runtime = st[i].ulRunTimeCounter;
+    }
+    s_task_snap_total = total;
+    free(st);
+}
+
+static void perf_print_tasks(void)
+{
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    TaskStatus_t *st = calloc(n, sizeof(TaskStatus_t));
+    if (!st) { printf("perf: out of memory for %u tasks\n", (unsigned)n); return; }
+    uint32_t total = 0;
+    n = uxTaskGetSystemState(st, n, &total);
+    uint32_t span = total - s_task_snap_total;
+    if (span == 0) span = 1;
+
+    printf("%-18s %4s %4s %5s %12s %7s %9s\n",
+           "task", "prio", "core", "state", "window_us", "%core", "stack_hwm");
+    for (UBaseType_t i = 0; i < n; ++i) {
+        const char *cs;
+        switch (st[i].eCurrentState) {
+        case eRunning:   cs = "run";  break;
+        case eReady:     cs = "rdy";  break;
+        case eBlocked:   cs = "blk";  break;
+        case eSuspended: cs = "sus";  break;
+        case eDeleted:   cs = "del";  break;
+        default:         cs = "?";    break;
+        }
+        char core[5];
+        // TaskStatus_t::xCoreID only exists under
+        // CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID; xTaskGetCoreID() always does.
+        BaseType_t aff = xTaskGetCoreID(st[i].xHandle);
+        if (aff == tskNO_AFFINITY) snprintf(core, sizeof core, "any");
+        else                       snprintf(core, sizeof core, "%d", (int)aff);
+        uint32_t dt = st[i].ulRunTimeCounter - perf_snap_lookup(st[i].xHandle);
+        if (dt == 0) continue;   // nothing ran in-window; keeps the table short
+        // With the esp_timer run-time source, ulTotalRunTime is WALL clock, not
+        // the sum over both cores — so a task's share of its own core is a
+        // plain ratio, with no dual-core scaling.
+        printf("%-18s %4u %4s %5s %12lu %6.1f%% %9u\n",
+               st[i].pcTaskName, (unsigned)st[i].uxCurrentPriority, core, cs,
+               (unsigned long)dt, 100.0 * (double)dt / (double)span,
+               (unsigned)st[i].usStackHighWaterMark);
+    }
+    // Run-time counters are only credited at a context switch, so a pinned task
+    // that never blocks (adaq_cap on core 1) accrues ZERO here forever. That is
+    // an artifact of the accounting, not an idle core — read cap.* above for it.
+    printf("(%%core = share of ONE core; a never-yielding pinned task reads 0 -"
+           " see cap.* stages)\n");
+    free(st);
+}
+#else
+static void perf_snapshot_tasks(void) {}
+static void perf_print_tasks(void)
+{
+    printf("perf: rebuild with CONFIG_FREERTOS_USE_TRACE_FACILITY=y and\n"
+           "      CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y for the task table\n");
+}
+#endif
+
+static void perf_print_config(void)
+{
+    daq_board_t *b = s_board;
+    printf("-- tunables --\n");
+    printf("  ring capacity     : %d samples/bus\n", (int)DAQ_RING_CAPACITY);
+    printf("  dsp_decim         : %u   wave_decim: %u   volt_decim: %u\n",
+           (unsigned)b->dsp_decim, (unsigned)b->wave_decim,
+           (unsigned)b->volt_decim);
+    for (int i = 0; i < ADAQ_COUNT; ++i)
+        printf("  ADAQ #%d %-7s   : ODR %8.0f SPS\n", i, adaq_role(i),
+               (double)adaq7769_output_data_rate(&b->adaq[i]));
+    printf("  heap internal free: %u B (largest %u B)\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    printf("  heap PSRAM free   : %u B\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+#if defined(CONFIG_COMPILER_OPTIMIZATION_DEBUG)
+    printf("  compiler          : -Og (DEBUG)  <-- perf builds want -O2\n");
+#elif defined(CONFIG_COMPILER_OPTIMIZATION_PERF)
+    printf("  compiler          : -O2 (PERF)\n");
+#elif defined(CONFIG_COMPILER_OPTIMIZATION_SIZE)
+    printf("  compiler          : -Os (SIZE)\n");
+#endif
+}
+
+static int cmd_perf(int argc, char **argv)
+{
+    const char *sub = (argc >= 2) ? argv[1] : "show";
+    if (!strcmp(sub, "on")) {
+        daq_perf_enable(true);
+        perf_snapshot_tasks();
+        printf("perf: sampling ON (counters reset)\n");
+        return 0;
+    }
+    if (!strcmp(sub, "off")) {
+        daq_perf_enable(false);
+        printf("perf: sampling off\n");
+        return 0;
+    }
+    if (!strcmp(sub, "reset")) {
+        daq_perf_reset();
+        perf_snapshot_tasks();
+        printf("perf: counters reset\n");
+        return 0;
+    }
+    if (!strcmp(sub, "tasks")) { perf_print_tasks(); return 0; }
+    if (!strcmp(sub, "show")) {
+        perf_print_stages();
+        printf("\n");
+        perf_print_tasks();
+        printf("\n");
+        perf_print_config();
+        return 0;
+    }
+    printf("usage: perf <on|off|reset|show|tasks>\n");
+    return 1;
+}
+
+#else   // profiler compiled out
+
+static int cmd_perf(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    printf("perf: compiled out (build with -DDAQ_PERF_ENABLED=1)\n");
+    return 0;
+}
+
+#endif  // DAQ_PERF_ENABLED
+
+// ---------------------------------------------------------------------------
 // Isolated SPI read-cost benchmark: with acquisition stopped, hold the bus and
 // time N back-to-back continuous-read transfers on one device — no ISRs, no
 // competing task, no queue. Tells us the TRUE per-read cost (SCLK speed vs
@@ -3597,6 +3815,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("adaqdmux","ADC self-test via diag mux: adaqdmux <n> [0|8|9|10]", cmd_adaqdmux);
     reg("readbench","Time raw SPI reads (fast off): readbench [n] [nbytes]", cmd_readbench);
     reg("readbench2","Time DIRECT SPI-FIFO reads (fast off): readbench2 [n] [nbytes]", cmd_readbench2);
+    reg("perf",   "Pipeline cycle profiler: perf <on|off|reset|show|tasks>", cmd_perf);
     reg("sweep",  "Auto ODR sweep + per-bus SPS/drops", cmd_sweep);
     reg("temp",   "Read the temperature sensors", cmd_temp);
     reg("rail",    "Control analog rails: rail <3v3|26v|24v|all> <on|off>", cmd_rail);

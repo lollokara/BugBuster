@@ -13,6 +13,9 @@
 #include "soc/soc.h"
 #include "soc/gpio_reg.h"
 
+#include "config.h"
+#include "daq_perf.h"
+
 static const char *TAG = "adaq_stream";
 
 
@@ -223,13 +226,26 @@ esp_err_t adaq_stream_init(adaq_stream_t *s,
     }
 
     s->ring_capacity = round_pow2(ring_capacity);
-    s->ring = (adaq_sample_t *)heap_caps_malloc(
-        s->ring_capacity * sizeof(adaq_sample_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t bytes = s->ring_capacity * sizeof(adaq_sample_t);
+    s->ring = NULL;
+#if ADAQ_RING_PREFER_INTERNAL
+    // Internal SRAM first: the ring sits in BOTH hot loops (capture_end pushes
+    // from core 1, adaq_stream_read pops from core 0), so its access latency is
+    // paid twice per sample. Falls through to PSRAM when it will not fit.
+    s->ring = (adaq_sample_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s->ring) {
+        ESP_LOGI(TAG, "ring %u samples (%u B) in INTERNAL SRAM",
+                 (unsigned)s->ring_capacity, (unsigned)bytes);
+    }
+#endif
+    if (!s->ring) {
+        s->ring = (adaq_sample_t *)heap_caps_malloc(bytes,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
     if (!s->ring) {
         // Fall back to internal RAM if PSRAM is unavailable.
         ESP_LOGW(TAG, "PSRAM alloc failed, using internal RAM");
-        s->ring = (adaq_sample_t *)heap_caps_malloc(
-            s->ring_capacity * sizeof(adaq_sample_t), MALLOC_CAP_8BIT);
+        s->ring = (adaq_sample_t *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
     }
     if (!s->ring) {
         return ESP_ERR_NO_MEM;
@@ -472,11 +488,26 @@ static void capture_task_comb(void *arg)
     // their latched status bit and are serviced on the next pass.
     int8_t   trig[ADAQ_STREAM_MAX_DEVICES];
     bool     trig_ws[ADAQ_STREAM_MAX_DEVICES];
+    // Idle-spin accounting: this loop busy-polls, so core 1 is 100% occupied
+    // whatever the ODR. What actually matters is the split between passes that
+    // found work and passes that found none — that ratio IS the headroom.
+    uint32_t spin_start __attribute__((unused)) = 0;
+    bool     spinning   __attribute__((unused)) = false;
     while (c->running) {
         uint32_t st = REG_READ(GPIO_STATUS_REG) & mask;
         if (st == 0) {
+            if (DAQ_PERF_ON && !spinning) {
+                spin_start = daq_perf_now();
+                spinning   = true;
+            }
             continue;                          // tight spin until a DRDY edge
         }
+        if (DAQ_PERF_ON && spinning) {
+            DAQ_PERF_END(DAQ_PERF_CAP_SPIN, spin_start);
+            spinning = false;
+        }
+        DAQ_PERF_BEGIN(t_pass);
+        DAQ_PERF_BEGIN(t_scan);
         for (uint8_t si = 0; si < c->n_streams; ++si) trig[si] = -1;
         uint32_t serviced = 0;
         uint8_t  ntrig    = 0;
@@ -490,7 +521,9 @@ static void capture_task_comb(void *arg)
             s->isr_count++;                    // DRDY edges detected
             bool ws = (++c->dev[i].status_ctr >= ADAQ_STATUS_SAMPLE_DIV);
             if (ws) c->dev[i].status_ctr = 0;
+            DAQ_PERF_BEGIN(t_begin);
             capture_begin(s, c->dev[i].local, ws, &cur_len[si]);
+            DAQ_PERF_END(DAQ_PERF_CAP_BEGIN, t_begin);
             trig[si]    = (int8_t)i;
             trig_ws[si] = ws;
             serviced   |= (1u << (uint32_t)c->dev[i].drdy_pin);
@@ -500,13 +533,19 @@ static void capture_task_comb(void *arg)
         // Clear the edges we claimed now (before draining) so a fresh edge during
         // the drain re-latches and is caught next pass.
         REG_WRITE(GPIO_STATUS_W1TC_REG, serviced);
+        DAQ_PERF_END(DAQ_PERF_CAP_SCAN, t_scan);
 
         // Phase 2: drain the overlapped transfers.
+        DAQ_PERF_BEGIN(t_drain);
         for (uint8_t si = 0; si < c->n_streams; ++si) {
             if (trig[si] < 0) continue;
             uint8_t i = (uint8_t)trig[si];
+            DAQ_PERF_BEGIN(t_end);
             capture_end(c->dev[i].stream, c->dev[i].local, trig_ws[si], buf);
+            DAQ_PERF_END(DAQ_PERF_CAP_END, t_end);
         }
+        DAQ_PERF_END(DAQ_PERF_CAP_DRAIN, t_drain);
+        DAQ_PERF_END(DAQ_PERF_CAP_PASS, t_pass);
     }
 
     // Release the held buses first (so no device holds the bus lock), then hand
