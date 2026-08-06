@@ -64,8 +64,11 @@ void diagnostics_push(daq_board_t *b)
         float c = 0.0f;
         if (b->temp_ok[i] && ad741x_read_celsius(&b->temp[i], &c) == ESP_OK) {
             int16_t v = (int16_t)lroundf(c * 10.0f);
+            b->t_board_c10[i] = v;          // cache for the USB STATUS frame
             if (i == 0) { d.t_board0_c10 = v; valid |= DDP_DIAG_V_BOARD0; }
             else        { d.t_board1_c10 = v; valid |= DDP_DIAG_V_BOARD1; }
+        } else {
+            b->t_board_c10[i] = DDP_DIAG_TEMP_NA;
         }
     }
 

@@ -315,7 +315,12 @@ esp_err_t adaq7769_set_filter(adaq7769_t *dev, uint8_t filter, uint8_t dec_rate)
     dev->cfg.dec_rate = dec_rate & 7;
     dev->cfg.conv16   = (filter == ADAQ_FILTER_SINC5_X8);  // 16-bit only path
     esp_err_t err = write_digital_filter(dev);
-    if (err == ESP_OK && dev->cfg.conv16 != 0) {
+    // Unconditional: this used to run only when ENTERING 16-bit mode, so
+    // leaving Sinc5x8 left the part converting at 16 bits while the driver
+    // shadow said 24. Every subsequent read was then misframed until a full
+    // re-init -- visible as a collapsed sample yield on any filter selected
+    // after Sinc5x8 (bench-caught 2026-08-06 by tests/tools/daq_noise_sweep.py).
+    if (err == ESP_OK) {
         err = write_interface_format(dev);
     }
     if (err == ESP_OK && dev->is_sync_master) {
@@ -344,6 +349,10 @@ esp_err_t adaq7769_set_sinc3(adaq7769_t *dev, uint32_t decimation, bool reject_5
     err = adaq_ll_write_reg(&dev->ll, ADAQ_REG_SINC3_DEC_LSB, (uint8_t)(regval & 0xFF));
     if (err != ESP_OK) return err;
     err = write_digital_filter(dev);
+    if (err != ESP_OK) return err;
+    // Sinc3 is always 24-bit; without this the part stays in 16-bit conversions
+    // when arriving here from Sinc5x8 (see adaq7769_set_filter).
+    err = write_interface_format(dev);
     if (err == ESP_OK && dev->is_sync_master) {
         adaq7769_sync_pulse(dev);
     }

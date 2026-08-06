@@ -187,6 +187,11 @@ def decode_status(p: bytes) -> dict:
         d["filter"], d["adc_dec"] = struct.unpack_from("<BB", p, 88)
         d["stream_decim"], = struct.unpack_from("<H", p, 90)
         d["odr_mhz"], = struct.unpack_from("<I", p, 92)
+    if len(p) >= 100:
+        # Extension v7: board temperatures, 0.1 C, 0x7FFF = not available.
+        t0, t1 = struct.unpack_from("<hh", p, 96)
+        d["t_board0_c"] = None if t0 == 0x7FFF else t0 / 10.0
+        d["t_board1_c"] = None if t1 == 0x7FFF else t1 / 10.0
     return d
 
 

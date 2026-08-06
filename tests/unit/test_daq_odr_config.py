@@ -81,14 +81,22 @@ def test_status_growth_is_append_only():
             f"STATUS v6 field {field} must sit at offset {off}, got {offsets[field]} "
             "— v6 fields must be appended after the v5 block, never inserted or reordered")
 
+    # v7: board temperatures, appended after the v6 block.
+    expected_v7 = {"t_board0_c10": 96, "t_board1_c10": 98}
+    for field, off in expected_v7.items():
+        assert field in offsets, f"STATUS v7 field {field} missing"
+        assert offsets[field] == off, (
+            f"STATUS v7 field {field} must sit at offset {off}, got {offsets[field]} "
+            "— v7 fields must be appended after the v6 block, never inserted or reordered")
+
     # Total struct size (documented in the trailing comment on the closing
-    # brace's line) must be 96 — 88 (v5) + 8 (v6: u8+u8+u16+u32).
+    # brace's line): 88 (v5) + 8 (v6: u8+u8+u16+u32) + 4 (v7: 2x i16).
     end_idx = PROTO.index(struct_body) + len(struct_body)
     line_end = PROTO.index("\n", end_idx)
     tail = PROTO[end_idx:line_end]
     m = re.search(r"total:\s*(\d+)\s*bytes", tail)
-    assert m and int(m.group(1)) == 96, \
-        f"usb_status_payload_t total size must be documented as 96 bytes, got {tail!r}"
+    assert m and int(m.group(1)) == 100, \
+        f"usb_status_payload_t total size must be documented as 100 bytes, got {tail!r}"
 
 
 def test_command_byte_does_not_collide():

@@ -139,16 +139,28 @@ enum { DAQ_DEC_32 = 0, DAQ_DEC_64, DAQ_DEC_128, DAQ_DEC_256, DAQ_DEC_512,
 // -----------------------------------------------------------------------------
 // Super-Resolution mode (DAQ_K_SR_MODE).
 //
-// Trades bandwidth for resolution: the ADAQ7769-1 runs Sinc3 at maximum
-// decimation (lowest noise bandwidth the part offers) and the P4 then applies a
-// windowed-sinc FIR low-pass before decimating to the rates below. Averaging N
-// samples buys ~sqrt(N) noise reduction; the FIR supplies the anti-alias
-// filtering that keeps the stage-1 noise from folding back into the passband.
+// Trades bandwidth for resolution. The ADAQ7769-1's own Sinc3 runs at the
+// HIGHEST decimation the part supports, because that filter acts on the
+// modulator bitstream — before the residual becomes 1/f-correlated — and no
+// amount of downstream averaging can match it. A stage-2 FIR then reconciles
+// what is left to the output rate and supplies anti-aliasing.
+//
+// 8192 is chosen so fMOD/8192 = 1000 sps lands exactly on DAQ_SR_CURRENT_SPS.
+// The Sinc3 decimation register is 13-bit ((dec/32)-1), so this is comfortably
+// in range; note the S3<->P4 `adc_dec` wire byte cannot express it (it carries
+// dec/32 = 256 > 255), which is fine because SR is applied P4-side by key, not
+// by that field.
+//
+// Measured on the bench 2026-08-06 (V_DUT 5 V, 500 mA, ~1 ksps out):
+//   Sinc3 x1024 (8 ksps) + FIR /8   ->  60.5 nA   <- the original 1024 choice
+//   Sinc3 x8160 (1 ksps), no FIR    ->  46.1 nA
+// The FIR only moved 63.3 -> 60.5 nA because its input was already
+// 1/f-dominated, so pushing the work into the ADC is worth ~0.4 bits.
 //
 // Every surface (P4, C6, S3, desktop, iOS) must agree on these rates, so they
 // live here rather than being duplicated per-surface.
 // -----------------------------------------------------------------------------
-#define DAQ_SR_ADC_DECIM      1024u   // ADAQ Sinc3 decimation in SR mode
+#define DAQ_SR_ADC_DECIM      8192u   // ADAQ Sinc3 decimation in SR mode
 #define DAQ_SR_CURRENT_SPS    1000u   // fused-current output rate
 #define DAQ_SR_VOLTAGE_SPS     500u   // V_DUT output rate
 

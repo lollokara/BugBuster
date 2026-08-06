@@ -130,13 +130,20 @@ static uint16_t sr_decim_for(float odr, uint32_t target_sps)
 
 // Apply Super-Resolution mode.
 //
-// ON:  put all three ADAQs on Sinc3 at DAQ_SR_ADC_DECIM — the narrowest noise
-//      bandwidth the part offers — then design the stage-2 FIR decimators that
-//      take the resulting ODR down to DAQ_SR_CURRENT_SPS / DAQ_SR_VOLTAGE_SPS.
-//      The decimation factors are derived from the ODR the ADC actually reports
-//      rather than assumed, so a different MCLK or MCLK divider still lands on
-//      the advertised output rates.
+// ON:  put the two CURRENT ADAQs on Sinc3 at DAQ_SR_ADC_DECIM — the narrowest
+//      noise bandwidth the part offers — then design the stage-2 FIR decimators
+//      that take the resulting ODRs down to DAQ_SR_CURRENT_SPS /
+//      DAQ_SR_VOLTAGE_SPS. The decimation factors are derived from the ODR each
+//      ADC actually reports rather than assumed, so a different MCLK or MCLK
+//      divider still lands on the advertised output rates.
 // OFF: restore whatever Filter/Decimation/Sample Rate the store holds.
+//
+// VOLTAGE (U23) is deliberately NOT reprogrammed. It shares SPI bus B and one
+// common SYNC line with COARSE (U22) and cannot be phase-staggered, so giving it
+// the same ODR as COARSE makes both assert DRDY on the same edge every sample
+// and the voltage channel starves — measured as zero WAVE_V samples. It keeps
+// VOLTAGE_ODR_TARGET_SPS and the FIR decimates from there instead. Same ruling
+// as CTRL_MSG_SET_ACQ_CONFIG in daq_board.c.
 //
 // ADAQ config registers are inaccessible during continuous-read capture, so
 // this is bracketed by a fast-acquisition pause/resume like apply_adaq_filter().
@@ -161,9 +168,19 @@ static void apply_sr_mode(daq_board_t *b)
     int32_t rej = 0;
     daq_settings_get_i32(DAQ_K_REJECT_5060, &rej);
 
-    for (int i = 0; i < ADAQ_COUNT; ++i) {
+    for (int i = ADAQ_ROLE_FINE; i <= ADAQ_ROLE_COARSE; ++i) {
         if (!b->adaq_ok[i]) continue;
         adaq7769_set_sinc3(&b->adaq[i], DAQ_SR_ADC_DECIM, rej != 0);
+    }
+
+    // Re-assert VOLTAGE's independent target rate. FINE is the SYNC master, so
+    // the pulse fired above reset every device's counter over the shared SYNC
+    // line; VOLTAGE's config registers are untouched by that, but re-applying
+    // is cheap insurance.
+    if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
+        float v_ach = 0.0f;
+        adaq7769_set_output_data_rate(&b->adaq[ADAQ_ROLE_VOLTAGE],
+                                      VOLTAGE_ODR_TARGET_SPS, &v_ach);
     }
 
     float i_odr = b->adaq_ok[ADAQ_ROLE_FINE]

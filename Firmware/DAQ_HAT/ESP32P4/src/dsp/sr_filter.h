@@ -33,7 +33,9 @@ extern "C" {
 // Longest filter we will build. 8 taps per decimation stage gives a transition
 // band narrow enough that the stop-band starts before the output Nyquist.
 #define SR_FILTER_MAX_TAPS   129
-#define SR_FILTER_MAX_DECIM  64
+// The voltage path decimates from VOLTAGE_ODR_TARGET_SPS (~50-64 ksps) down to
+// DAQ_SR_VOLTAGE_SPS, so the factor is far larger than the current path's.
+#define SR_FILTER_MAX_DECIM  256
 
 typedef struct {
     // Mirrored history: hist[pos] and hist[pos + ntaps] hold the same sample so

@@ -241,6 +241,9 @@ esp_err_t daq_board_init(daq_board_t *b)
                                    DAQ_I2C_FREQ_HZ, /*has_alert=*/false) == ESP_OK);
     b->temp_ok[1] = (ad741x_attach(&b->temp[1], b->i2c_bus, AD741X_1_ADDR,
                                    DAQ_I2C_FREQ_HZ, /*has_alert=*/false) == ESP_OK);
+    // NA until the first housekeeping poll, so a host never reads 0.0 C as real.
+    b->t_board_c10[0] = DDP_DIAG_TEMP_NA;
+    b->t_board_c10[1] = DDP_DIAG_TEMP_NA;
     b->idac_ok    = (ds4424_attach(&b->idac, b->i2c_bus, DS4424_I2C_ADDR,
                                    DAQ_I2C_FREQ_HZ) == ESP_OK);
 
@@ -959,6 +962,10 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     st.odr_mhz = b->adaq_ok[ADAQ_ROLE_FINE]
                      ? (uint32_t)(adaq7769_output_data_rate(fine_dev) * 1000.0f + 0.5f)
                      : 0u;
+
+    // Extension v7: cached board temperatures (see usb_proto.h) -- no I2C here.
+    st.t_board0_c10 = b->t_board_c10[0];
+    st.t_board1_c10 = b->t_board_c10[1];
 
     usb_stream_send_status(&b->usb, &st);
     DAQ_PERF_END(DAQ_PERF_SUM_STATUS, t_st);

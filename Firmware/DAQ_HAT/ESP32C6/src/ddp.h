@@ -3,13 +3,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "ddp_proto.h"
+#include "version.h"
 
 // DAQ HAT Display Protocol (DDP) UART slave. Listens for frames from the
 // ESP32-P4, answers PING/GET_INFO, decodes SET_MEASUREMENT / SET_DIAGNOSTICS
 // into shared snapshots for the UI, and can emit SET_CONFIG events upstream.
 
-#define DDP_FW_MAJOR  0
-#define DDP_FW_MINOR  2
+// Reported in RSP_INFO and relayed S3-ward as the C6's firmware version. These
+// MUST track version.h -- they were hardcoded 0.2 until 2026-08-06, so the C6
+// reported 0.2 no matter what was flashed. The DDP wire carries only
+// major/minor, so the patch level is not visible upstream.
+#define DDP_FW_MAJOR  FW_VERSION_MAJOR
+#define DDP_FW_MINOR  FW_VERSION_MINOR
 #define DDP_HAT_TYPE  0x10   // DAQ display HAT
 
 void ddp_init(void);

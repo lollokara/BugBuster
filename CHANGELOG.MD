@@ -75,7 +75,68 @@
     no new HAT commands, so it inherits the tunnel's chunking and reassembly.
   - `DDP_PROTO_VERSION` 8 → 9.
 
+- **Board temperature on the USB stream (STATUS extension v7).** The two AD7415
+  sensors (U2 analog area, U28 power area) are now stamped on every `STATUS`
+  frame as `t_board0_c10` / `t_board1_c10` (0.1 °C, `USB_TEMP_NA` = 0x7FFF).
+  At SR rates the residual is dominated by low-frequency drift, and without a
+  temperature on the same frames thermal drift is indistinguishable from
+  converter 1/f. Values are **cached** from the ~1 Hz `diagnostics_push()` poll,
+  never read inline: the STATUS frame is built on `daq_fast_task`, where a
+  blocking I2C transaction would stall the acquisition producer. The ADAQ die
+  sensors are deliberately excluded — they share the converter and are only
+  readable while acquisition is stopped. Append-only, so older parsers are
+  unaffected.
+
+- **`tests/tools/daq_noise_sweep.py` + `daq_noise_plot.py`** — noise
+  characterisation across every filter / hardware-decimation setting and SR,
+  with the DUT supply live (`--vdut`, USB-PD precondition checked, supply
+  restored on every exit path). Reports detrended sigma, robust p-p, noise
+  density and bits-vs-reference, and cross-checks SR against *naive*
+  keep-1-of-N decimation of the reference to the same rate — the comparison
+  that separates real filtering from bandwidth reduction. Captures whose yield
+  falls outside 70–150% of `rate × window` are flagged `SUSPECT` and excluded
+  from both the verdict and the plots, since a truncated or desynced window
+  still produces a plausible sigma. Found three of the firmware bugs above.
+
 ### Fixed
+
+- **Super Resolution used only 1/8 of the ADC's available decimation.**
+  `DAQ_SR_ADC_DECIM` was 1024 (8 ksps) with a FIR ÷8 behind it, which measured
+  **worse than simply setting Sinc3 to its maximum**: 60.5 nA vs 46.1 nA at the
+  same 1 ksps output. The FIR only moved 63.3 → 60.5 nA, because its input was
+  already 1/f-correlated and averaging cannot remove 1/f — whereas the ADC's own
+  Sinc3 acts on the modulator bitstream before that correlation exists. Now
+  8192, so fMOD/8192 lands exactly on `DAQ_SR_CURRENT_SPS`; SR then matches the
+  best hardware setting (44.7 nA vs 44.7 nA). The FIR remains in the voltage
+  path, which cannot change its own ODR.
+
+- **Super Resolution produced zero voltage samples.** `apply_sr_mode()`
+  reprogrammed all three ADAQs, putting VOLTAGE (U23) at the same ODR as COARSE
+  (U22). They share SPI bus B and one SYNC line and cannot be phase-staggered,
+  so both asserted DRDY on the same edge every sample and the voltage channel
+  starved — `WAVE_V` count was 0 for the whole of SR mode. VOLTAGE now keeps
+  `VOLTAGE_ODR_TARGET_SPS` and the FIR decimates from there, matching the ruling
+  already documented for `CTRL_MSG_SET_ACQ_CONFIG`.
+
+- **Leaving Sinc5x8 left the ADAQ in 16-bit conversion mode.**
+  `adaq7769_set_filter()` wrote the interface-format register only when
+  *entering* the 16-bit path, and `adaq7769_set_sinc3()` cleared the shadow flag
+  without writing the register at all. The driver then believed 24-bit while the
+  part stayed 16-bit, misframing every subsequent read until a full re-init —
+  visible as a collapsed sample yield on any filter selected after Sinc5x8. The
+  register is now written on every filter change.
+
+- **The C6 reported firmware 0.2 regardless of what was flashed.**
+  `ESP32C6/src/ddp.h` hardcoded `DDP_FW_MAJOR 0` / `DDP_FW_MINOR 2`, never wired
+  to `version.h`. Now derived from it. The DDP wire carries only major/minor, so
+  the patch level is still not visible upstream.
+
+- **The P4's reported version was the HAT board revision, not its firmware.**
+  `current_p4_build_id()` read `hat_get_state()->fw_version_*`, which comes from
+  `HAT_CMD_GET_INFO` and reads 1.0 on a DAQ HAT whatever P4 image is running
+  (confirmed on the bench immediately after a successful P4 OTA). It now uses
+  `HAT_CMD_GET_VERSION` via `hat_get_version()`, cached because that is a
+  blocking round trip reached from the ~1 Hz mainboard-tunnel poll.
 
 - **Waveform frames had no latency bound, only a size bound.** `WAVE_I` /
   `WAVE_V` flushed solely on reaching 3200 samples, a throughput figure chosen

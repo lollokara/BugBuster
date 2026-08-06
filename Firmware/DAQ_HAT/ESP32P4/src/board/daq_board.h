@@ -104,6 +104,10 @@ typedef struct daq_board {
 
     bool                    adaq_ok[ADAQ_COUNT];
     bool                    temp_ok[2];
+    // Last AD7415 readings in 0.1 C, refreshed by diagnostics_push() at ~1 Hz.
+    // Cached because the USB STATUS frame is built on daq_fast_task, where a
+    // blocking I2C read would stall the acquisition producer.
+    volatile int16_t        t_board_c10[2];
     bool                    idac_ok;
     bool                    usb_ok;
     uint8_t                 fft_source;   // 0 = current, 1 = power

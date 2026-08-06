@@ -209,7 +209,26 @@ typedef struct __attribute__((packed)) {
     uint8_t  adc_dec;       // 89  ADAQ_DEC_*, or 0xFF when SINC3 programmable
     uint16_t stream_decim;  // 90  P4 stream decimation (>=1)
     uint32_t odr_mhz;       // 92  actual ODR, milli-SPS (ODR * 1000)
-} usb_status_payload_t;         // total: 96 bytes
+    // --- extension v7 (offsets 96..99): onboard board temperatures, 0.1 C.
+    // The two AD7415s (U2 analog area, U28 power area). USB_TEMP_NA when the
+    // sensor is absent or has not been polled yet.
+    //
+    // These are CACHED values refreshed by the ~1 Hz housekeeping poll
+    // (diagnostics_push), never read here: this struct is filled on
+    // daq_fast_task, and a blocking I2C transaction on the acquisition
+    // producer would stall the capture. The ADAQ die sensors are deliberately
+    // absent -- they share the converter and are only readable while
+    // acquisition is stopped, i.e. never during a stream.
+    //
+    // Why on the wire at all: at SR rates the residual noise is dominated by
+    // low-frequency drift, and thermal drift is the largest known contributor.
+    // Without a temperature stamped on the same frames, a drifting sigma is
+    // indistinguishable from converter 1/f.
+    int16_t  t_board0_c10;  // 96  AD7415 U2  (analog area)
+    int16_t  t_board1_c10;  // 98  AD7415 U28 (power area)
+} usb_status_payload_t;     // total: 100 bytes
+
+#define USB_TEMP_NA  ((int16_t)0x7FFF)   // sensor absent / not yet polled
 
 // ---- Control command payloads ----------------------------------------------
 typedef struct __attribute__((packed)) {
