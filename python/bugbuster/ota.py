@@ -7,8 +7,9 @@ Wraps the firmware's ``/api/ota/*`` endpoints with a host-side helper that:
   ``?sha256=<hex>`` so the device can reject a corrupted upload before
   switching the boot partition (defense-in-depth on top of the bootloader's
   built-in image checksum);
-* streams the binary in chunks with a progress callback so callers can
-  drive a progress bar without buffering the full image;
+* streams the binary straight from an open file object (never buffering
+  the full image, and never emitting ``Transfer-Encoding: chunked``
+  alongside a manual ``Content-Length`` — see ``_upload``/``_push_daq``);
 * surfaces the firmware's ``/api/ota/info`` snapshot (running/next
   partition, ota_state, rollback availability) so callers can show a
   meaningful pre-flight UI;
@@ -26,8 +27,7 @@ Quick start::
     ota = OTAClient(t)
 
     print(ota.get_info())          # {"running": {...}, "next": {...}, "canRollback": true}
-    ota.upload_firmware("build/firmware.bin",
-                        on_progress=lambda done, total: print(f"{done}/{total}"))
+    ota.upload_firmware("build/firmware.bin")
     # Device reboots into the new image automatically.
 """
 
@@ -46,9 +46,6 @@ import requests
 
 # Re-export the header name so callers don't need a second import.
 ADMIN_TOKEN_HEADER = "X-BugBuster-Admin-Token"
-
-# Type alias for the progress callback: (bytes_sent, total_bytes) -> None.
-ProgressCallback = Callable[[int, int], None]
 
 
 @dataclass(frozen=True)
@@ -143,8 +140,6 @@ class OTAClient:
         path: str,
         *,
         sha256: Optional[str] = None,
-        on_progress: Optional[ProgressCallback] = None,
-        chunk_size: int = 64 * 1024,
         timeout: float = 120.0,
     ) -> dict:
         """Stream a firmware image to ``/api/ota/upload``.
@@ -154,10 +149,6 @@ class OTAClient:
             the file before uploading (recommended). Passing a wrong hash
             forces the firmware to reject the image without changing the
             boot target — useful for negative testing.
-        :param on_progress: optional ``fn(bytes_sent, total)`` called after
-            each chunk.
-        :param chunk_size: bytes per HTTP chunk. Default 64 KB matches the
-            firmware ring sizing in ``esp_ota_write``.
         :param timeout: per-request timeout in seconds. The default 120 s
             covers a worst-case 2 MB upload over slow WiFi.
         :returns: parsed JSON from the firmware response,
@@ -169,16 +160,12 @@ class OTAClient:
             transport's persistent connection will drop. Callers polling
             ``/api/device/version`` should expect ~5–10 s of unavailability.
         """
-        return self._upload("/ota/upload", path,
-                            sha256=sha256, on_progress=on_progress,
-                            chunk_size=chunk_size, timeout=timeout)
+        return self._upload("/ota/upload", path, sha256=sha256, timeout=timeout)
 
     def upload_spiffs(
         self,
         path: str,
         *,
-        on_progress: Optional[ProgressCallback] = None,
-        chunk_size: int = 64 * 1024,
         timeout: float = 180.0,
     ) -> dict:
         """Stream a SPIFFS filesystem image to ``/api/ota/uploadfs``.
@@ -187,9 +174,7 @@ class OTAClient:
         currently SHA-verify SPIFFS uploads. Erase + write of a 4 MB partition
         can take ~30 s, hence the larger default timeout.
         """
-        return self._upload("/ota/uploadfs", path,
-                            sha256=None, on_progress=on_progress,
-                            chunk_size=chunk_size, timeout=timeout)
+        return self._upload("/ota/uploadfs", path, sha256=None, timeout=timeout)
 
     def _upload(
         self,
@@ -197,8 +182,6 @@ class OTAClient:
         path: str,
         *,
         sha256: Optional[str],
-        on_progress: Optional[ProgressCallback],
-        chunk_size: int,
         timeout: float,
     ) -> dict:
         size = os.path.getsize(path)
@@ -212,34 +195,28 @@ class OTAClient:
                 raise OTAError(f"sha256 must be 64 lowercase hex chars (got {sha_hex!r})")
             params["sha256"] = sha_hex.lower()
 
-        def _gen():
-            sent = 0
-            with open(path, "rb") as f:
-                while True:
-                    block = f.read(chunk_size)
-                    if not block:
-                        break
-                    sent += len(block)
-                    yield block
-                    if on_progress:
-                        try:
-                            on_progress(sent, size)
-                        except Exception as e:  # callback errors must not abort upload
-                            log.warning("Progress callback raised: %s", e)
-
         headers = {
             ADMIN_TOKEN_HEADER: self._token,
             "Content-Type": "application/octet-stream",
             "Content-Length": str(size),
         }
 
-        r = self._session.post(
-            f"{self._base}{endpoint}",
-            params=params or None,
-            data=_gen(),
-            headers=headers,
-            timeout=timeout,
-        )
+        # `data=` must be the open file object, NOT a generator -- see
+        # `_push_daq()` below for the full rationale (RFC 7230 3.3.3: a
+        # generator body makes `requests` add `Transfer-Encoding: chunked`
+        # on top of the manual Content-Length, which is invalid and got
+        # rejected by ESP-IDF's httpd on the DAQ endpoints). The S3's own
+        # `/api/ota/upload(fs)` handlers happen to tolerate that today, but
+        # relying on their permissiveness is luck, not correctness, so this
+        # follows the same file-object pattern.
+        with open(path, "rb") as fh:
+            r = self._session.post(
+                f"{self._base}{endpoint}",
+                params=params or None,
+                data=fh,
+                headers=headers,
+                timeout=timeout,
+            )
         if not r.ok:
             raise OTAError(f"{endpoint} -> HTTP {r.status_code}: {r.text[:300]}")
         try:
@@ -413,5 +390,4 @@ __all__ = [
     "OTAError",
     "OTAInfo",
     "PartitionInfo",
-    "ProgressCallback",
 ]

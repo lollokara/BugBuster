@@ -2,8 +2,9 @@
 tests/unit/test_ota.py — OTAClient unit tests.
 
 Mocks the requests.Session attached to a stub HTTPTransport so we can
-verify SHA-256 computation, query-string passthrough, progress callbacks,
-binary streaming, and error mapping without touching firmware.
+verify SHA-256 computation, query-string passthrough, binary streaming
+(via an open file object, never a chunked-generator body), and error
+mapping without touching firmware.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from bugbuster.ota import OTAClient, OTAError
 
@@ -81,39 +83,52 @@ def test_get_info_passes_admin_header_via_session():
 # ---------------------------------------------------------------------------
 
 def test_upload_firmware_computes_sha256_and_passes_query(tmp_path):
+    """Also a regression guard for the generator+Content-Length bug fixed
+    in _push_daq(): _upload() must pass an open file object (which lets
+    requests derive Content-Length with no chunking) rather than a
+    generator (which forces requests to add Transfer-Encoding: chunked on
+    top of the manual Content-Length -- invalid per RFC 7230 3.3.3, and
+    exactly what made ESP-IDF's httpd reject the DAQ push endpoints)."""
     payload = b"firmware-bytes-go-here" * 100
     fw = tmp_path / "firmware.bin"
     fw.write_bytes(payload)
     expected = hashlib.sha256(payload).hexdigest()
 
     t = _StubTransport()
-    t._session.post.return_value = _ok_response(json_payload={
-        "success": True, "bytesWritten": len(payload),
-        "partition": "app1", "sha256Verified": True,
-    })
+    prepped_holder: dict[str, Any] = {}
 
-    sent = []
-    def cb(done, total):
-        sent.append((done, total))
+    def _capture_and_respond(url, *, params=None, data=None, headers=None, timeout=None):
+        # Build the real PreparedRequest requests.Session.send() would
+        # transmit -- while `data` (the open file) is still open, since
+        # _upload() closes it via `with` right after this call returns.
+        req = requests.Request(method="POST", url=url, params=params,
+                               data=data, headers=headers)
+        prepped_holder["prepped"] = requests.Session().prepare_request(req)
+        return _ok_response(json_payload={
+            "success": True, "bytesWritten": len(payload),
+            "partition": "app1", "sha256Verified": True,
+        })
 
-    OTAClient(t).upload_firmware(str(fw), on_progress=cb, chunk_size=512)
+    t._session.post.side_effect = _capture_and_respond
+
+    OTAClient(t).upload_firmware(str(fw))
 
     args, kwargs = t._session.post.call_args
     assert args[0] == "http://10.0.0.1/api/ota/upload"
     assert kwargs["params"] == {"sha256": expected}
-    # Header set + content-length present + binary content type
     headers = kwargs["headers"]
     assert headers["X-BugBuster-Admin-Token"] == "t" * 64
     assert headers["Content-Type"] == "application/octet-stream"
     assert int(headers["Content-Length"]) == len(payload)
 
-    # data was a generator; consume it to verify chunking + ordering
-    blocks = list(kwargs["data"])
-    assert b"".join(blocks) == payload
-    assert all(len(b) <= 512 for b in blocks)
-    # Progress callback fires once per chunk and ends at the file size
-    assert sent[-1] == (len(payload), len(payload))
-    assert sent[0][1] == len(payload)
+    # The behaviour that actually matters (this is the bug _push_daq() had):
+    # the PREPARED request must carry a correct Content-Length and must
+    # NEVER also carry Transfer-Encoding -- sending both is invalid per RFC
+    # 7230 3.3.3 and is exactly what a generator body (instead of the open
+    # file object) would trigger.
+    prepped = prepped_holder["prepped"]
+    assert "Transfer-Encoding" not in prepped.headers
+    assert int(prepped.headers["Content-Length"]) == len(payload)
 
 
 def test_upload_firmware_rejects_invalid_sha_arg(tmp_path):
@@ -144,20 +159,6 @@ def test_upload_firmware_rejects_empty_file(tmp_path):
     t = _StubTransport()
     with pytest.raises(OTAError, match="empty"):
         OTAClient(t).upload_firmware(str(fw))
-
-
-def test_progress_callback_errors_are_swallowed(tmp_path):
-    """Callback exceptions must never abort the upload."""
-    fw = tmp_path / "fw.bin"
-    fw.write_bytes(b"a" * 4096)
-    t = _StubTransport()
-    t._session.post.return_value = _ok_response(json_payload={"success": True})
-
-    def boom(*_):
-        raise RuntimeError("callback bug")
-
-    OTAClient(t).upload_firmware(str(fw), on_progress=boom, chunk_size=1024)
-    assert t._session.post.called
 
 
 # ---------------------------------------------------------------------------

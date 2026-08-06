@@ -297,6 +297,7 @@ def test_s3_owner_gen_is_assigned_synchronously_in_the_dispatcher():
         "an assignment here reintroduces the async race"
 
 
+import hashlib as _hashlib
 import json as _json
 import sys, types
 sys.path.insert(0, str(Path("python").resolve()))
@@ -1186,6 +1187,71 @@ def test_push_daq_prepared_request_never_has_both_headers(tmp_path):
         f"must never send both headers at once (Content-Length={has_cl}, "
         f"Transfer-Encoding={has_te})"
     )
+
+
+# =============================================================================
+# Task 21 (python client fix, backcompat sibling of task 18): _upload() --
+# used by upload_firmware()/upload_spiffs() -- had the identical latent
+# defect as _push_daq() before task 18: a generator `data=` body alongside a
+# manual Content-Length header. It only "worked" because the S3's own
+# /api/ota/upload(fs) handlers happen to be more permissive than the newer
+# DAQ endpoints -- that was luck, not correctness. _upload() now passes the
+# open file object too, so it can no longer trigger Transfer-Encoding.
+#
+# This is a single shared guard (not duplicated per method) exercising ALL
+# FOUR upload entry points -- upload_firmware/upload_spiffs (-> _upload) and
+# upload_p4/upload_c6 (-> _push_daq) -- through the REAL OTAClient code path,
+# each with a stub session.post() that builds the actual requests
+# PreparedRequest (mirroring how requests.Session.send() would see it) and
+# inspects its header set.
+# =============================================================================
+
+def test_all_upload_methods_never_send_both_content_length_and_transfer_encoding(tmp_path):
+    payload = b"\xe9" + b"q" * 20_000
+    img = tmp_path / "img.bin"
+    img.write_bytes(payload)
+    sha_hex = _hashlib.sha256(payload).hexdigest()
+
+    def _ok_json_resp():
+        r = types.SimpleNamespace()
+        r.ok = True
+        r.status_code = 200
+        r.text = ""
+        r.json = lambda: {"success": True}
+        return r
+
+    def _ok_ndjson_resp():
+        return _FakeResp([_json.dumps({"stage": "done", "ok": True}).encode()])
+
+    cases = [
+        ("upload_firmware", {"sha256": sha_hex}, _ok_json_resp),
+        ("upload_spiffs", {}, _ok_json_resp),
+        ("upload_p4", {"sha256": sha_hex}, _ok_ndjson_resp),
+        ("upload_c6", {"sha256": sha_hex}, _ok_ndjson_resp),
+    ]
+
+    for method_name, extra_kwargs, resp_factory in cases:
+        captured: dict = {}
+
+        class S:
+            def post(self, url, params=None, data=None, headers=None,
+                     timeout=None, stream=None):
+                req = _requests.Request(method="POST", url=url, params=params,
+                                        data=data, headers=headers)
+                captured["prepped"] = _requests.Session().prepare_request(req)
+                return resp_factory()
+
+        c = OTAClient.__new__(OTAClient)
+        c._session, c._base, c._token = S(), "http://d/api", "t" * 64
+
+        getattr(c, method_name)(str(img), **extra_kwargs)
+
+        prepped = captured["prepped"]
+        has_cl = "Content-Length" in prepped.headers
+        has_te = "Transfer-Encoding" in prepped.headers
+        assert has_cl, f"{method_name}: Content-Length missing from prepared request"
+        assert not has_te, f"{method_name}: must never send Transfer-Encoding"
+        assert int(prepped.headers["Content-Length"]) == len(payload), method_name
 
 
 def test_ota_abort_restores_fast_acquisition_conditionally():
