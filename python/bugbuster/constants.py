@@ -4,6 +4,7 @@ GPIO modes, waveform types, power controls, and all binary command IDs.
 """
 
 from enum import IntEnum
+from typing import Dict
 
 # BBP_PROTO_VERSION deliberately does NOT live here.
 #
@@ -544,7 +545,9 @@ class IoClaimStatus(IntEnum):
 # while the P4 is busy - and timing them out looks exactly like a dead link
 # while the device is still working normally. Anything absent uses the
 # transport default.
-CMD_TIMEOUTS_S = {
+# Keyed by int, not CmdId: CmdId is an IntEnum and the transport looks these up
+# with whatever the caller passed, which is often a bare int.
+CMD_TIMEOUTS_S: Dict[int, float] = {
     # Bridged to the HAT over UART; the P4 may be mid-restart after an
     # acquisition change or a reboot. Every MCP tool calls this via
     # require_hat(), so a short timeout here masquerades as a wedged link.

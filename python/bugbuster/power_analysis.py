@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .daq_stream import (
@@ -82,7 +83,9 @@ def integrate(
             prev_i = None
             continue
         p = i * v
-        if prev_p is not None:
+        # Both are cleared together on a gap; check both so the pairing is
+        # explicit rather than an invariant the reader has to infer.
+        if prev_p is not None and prev_i is not None:
             energy_j += 0.5 * (p + prev_p) * dt
             charge_c += 0.5 * (i + prev_i) * dt
         prev_p, prev_i = p, i
@@ -256,16 +259,18 @@ def detect_states(
         else:
             raw.append([lab, k2, k2 + 1])
 
-    # Absorb sub-threshold runs into the previous segment.
+    # Absorb sub-threshold runs into the previous segment. Named `run`, not
+    # `seg`: these are [label, start, end] triples, while `seg` below is a
+    # segment dict, and reusing one name for both types defeats type checking.
     min_len = max(1, int(min_duration_s * sample_rate))
     merged: List[List[Any]] = []
-    for seg in raw:
-        if merged and (seg[2] - seg[1]) < min_len and merged[-1][0] != -1:
-            merged[-1][2] = seg[2]
-        elif merged and merged[-1][0] == seg[0]:
-            merged[-1][2] = seg[2]
+    for run in raw:
+        if merged and (run[2] - run[1]) < min_len and merged[-1][0] != -1:
+            merged[-1][2] = run[2]
+        elif merged and merged[-1][0] == run[0]:
+            merged[-1][2] = run[2]
         else:
-            merged.append(list(seg))
+            merged.append(list(run))
 
     segments: List[Dict[str, Any]] = []
     for lab, s, e in merged:
@@ -340,7 +345,7 @@ def detect_states(
         seg["state"] = remap.get(seg["state"], seg["state"])
 
     trans: Dict[Tuple[int, int], int] = {}
-    for a, b in zip(segments, segments[1:]):
+    for a, b in pairwise(segments):
         if a["state"] != b["state"]:
             key = (a["state"], b["state"])
             trans[key] = trans.get(key, 0) + 1
@@ -390,7 +395,7 @@ def detect_periodicity(
     starts = [s["start_s"] for s in segments if s["state"] >= active_state_min]
     if len(starts) < 3:
         return {"periodic": False, "active_bursts": len(starts)}
-    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    gaps = [b - a for a, b in pairwise(starts)]
     mean = sum(gaps) / len(gaps)
     if mean <= 0:
         return {"periodic": False, "active_bursts": len(starts)}
@@ -441,7 +446,7 @@ def segment_by_markers(
     if len(marks) < 2 or capture.sample_rate <= 0:
         return []
     out: List[Dict[str, Any]] = []
-    for a, b in zip(marks, marks[1:]):
+    for a, b in pairwise(marks):
         s = max(0, int(a["sample_offset"]))
         e = min(capture.sample_count, int(b["sample_offset"]))
         if e <= s:

@@ -5,8 +5,6 @@ HAT_GET_STATUS is bridged to the P4 over UART and DAQ_CONFIG restarts the whole
 acquisition pipeline. Timing those out is indistinguishable from a dead link
 while the device is still working - observed repeatedly on the bench.
 """
-from unittest.mock import MagicMock
-
 import pytest
 
 from bugbuster.constants import CMD_TIMEOUTS_S, CmdId
