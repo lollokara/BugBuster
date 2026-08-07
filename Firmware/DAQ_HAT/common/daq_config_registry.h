@@ -78,6 +78,9 @@ typedef enum {
     DAQ_K_DECIMATION      = DAQ_KEY(DAQ_GRP_ACQ, 0x07),  // enum x32..x1024
     DAQ_K_REJECT_5060     = DAQ_KEY(DAQ_GRP_ACQ, 0x08),  // bool (Sinc3 50/60 Hz reject)
     DAQ_K_SR_MODE         = DAQ_KEY(DAQ_GRP_ACQ, 0x09),  // bool (super-resolution)
+    DAQ_K_RANGE_DWELL_US  = DAQ_KEY(DAQ_GRP_ACQ, 0x0A),  // u32 autorange down-dwell
+    DAQ_K_RANGE_LOCK_US   = DAQ_KEY(DAQ_GRP_ACQ, 0x0B),  // u16 post-switch settle lock
+    DAQ_K_RANGE_FLAP      = DAQ_KEY(DAQ_GRP_ACQ, 0x0C),  // bool adaptive anti-flap
 
     // --- Source / SMU ---
     DAQ_K_SOURCE_ENABLE   = DAQ_KEY(DAQ_GRP_SMU, 0x01),  // bool
@@ -163,6 +166,48 @@ enum { DAQ_DEC_32 = 0, DAQ_DEC_64, DAQ_DEC_128, DAQ_DEC_256, DAQ_DEC_512,
 #define DAQ_SR_ADC_DECIM      8192u   // ADAQ Sinc3 decimation in SR mode
 #define DAQ_SR_CURRENT_SPS    1000u   // fused-current output rate
 #define DAQ_SR_VOLTAGE_SPS     500u   // V_DUT output rate
+
+// -----------------------------------------------------------------------------
+// Autorange down-range dwell (DAQ_K_RANGE_DWELL_US), microseconds.
+//
+// Minimum time the front-end stays in a coarser range before a range-DOWN may
+// commit. The confirm counter alone is a glitch filter, not a thrash guard: it
+// only needs a few CONSECUTIVE quiet samples, so a periodically bursting load
+// down-ranges in every gap and up-ranges on the next burst. Bench-measured on a
+// bursty 3 V DUT: 6231 range changes in 45 s, ~50% of samples flagged SETTLING.
+//
+// The dwell must exceed the load's burst PERIOD to break that cycle; 10 ms
+// covers repetition rates down to 100 Hz. It costs resolution, not accuracy -
+// while parked in a coarser range the low-current tail after a burst is read on
+// a bigger shunt. Raise it for a bursty load; set 0 to disable.
+//
+// Lives here rather than in the P4's config.h so the compile-time boot default
+// and the registry's schema default cannot drift apart.
+// -----------------------------------------------------------------------------
+#define DAQ_RANGE_DWELL_US_DEFAULT  10000
+
+// -----------------------------------------------------------------------------
+// Post-switch settle lock (DAQ_K_RANGE_LOCK_US), microseconds.
+//
+// How long samples after a range switch are treated as untrustworthy (they
+// carry the bypass-switch transient) and reported with USB_META_SETTLING.
+//
+// This MUST be a time, not a sample count. It was `AR_LOCK_SAMPLES` = 64 fixed,
+// documented as "256 us at 250 kSPS" - but the same 64 samples is 8 ms at
+// 8 kSPS, 31x longer in wall clock. Measured on the bench at 8 kSPS: ~108 range
+// changes/s x 8 ms = 86% of all samples flagged settling, which matched the
+// observed 89%. The transient being waited out is analog (switch + CSA), so it
+// is fixed in microseconds; only the ADC's own filter settle scales in samples,
+// and that is floored separately by AR_LOCK_MIN_SAMPLES.
+// -----------------------------------------------------------------------------
+#define DAQ_RANGE_LOCK_US_DEFAULT   256
+
+// Adaptive anti-flap (DAQ_K_RANGE_FLAP). When a load keeps crossing a range
+// boundary the fixed dwell alone cannot settle it - the burst period may be
+// longer than the dwell. With this enabled the effective dwell doubles for
+// every observation window that exceeds the flap threshold, up to a cap, and
+// relaxes one step per quiet window. Costs nothing when the load is stable.
+#define DAQ_RANGE_FLAP_DEFAULT      1
 
 // Sample-rate index -> samples per second.
 extern const uint32_t DAQ_SAMPLE_RATE_SPS[DAQ_SR_COUNT];

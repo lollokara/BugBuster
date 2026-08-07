@@ -91,6 +91,50 @@ static void apply_adaq_filter(daq_board_t *b)
     if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
 
+// Set while mirroring the hardware's chosen filter/decimation back into the
+// store, so the resulting FILTER/DECIMATION callbacks do not re-program the
+// part (and recurse) - they are recording what just happened, not requesting it.
+static bool s_rate_sync;
+
+// Set while daq_settings_apply_all() walks the table at boot. It applies keys in
+// schema order, so Sample Rate (0x03) lands before Filter/Decimation (0x06/07):
+// letting it program the part there would both fight the authoritative keys and
+// - via the mirror below - overwrite them with its own choice before they are
+// ever applied. At boot, Filter/Decimation alone own the ODR.
+static bool s_boot_apply;
+
+// Mirror the filter + decimation the driver actually selected into the registry.
+//
+// Sample Rate and Filter/Decimation are two front-ends onto ONE piece of
+// hardware state. Without this, `apply_sample_rate()` programmed the part while
+// the store still held the old Filter/Decimation, and since those are what get
+// re-applied on boot, any rate set through Sample Rate silently reverted after
+// a power cycle. Making Filter/Decimation the authoritative record - always
+// equal to the hardware - keeps both front-ends and NVS consistent.
+static void sync_filter_keys_from_hw(daq_board_t *b)
+{
+    if (!b->adaq_ok[ADAQ_ROLE_FINE]) return;
+    const adaq_config_t *cfg = &b->adaq[ADAQ_ROLE_FINE].cfg;
+
+    int32_t f_key = (cfg->filter == ADAQ_FILTER_SINC5) ? DAQ_FILT_SINC5 :
+                    (cfg->filter == ADAQ_FILTER_SINC3) ? DAQ_FILT_SINC3 :
+                                                         DAQ_FILT_WIDEBAND;
+    int32_t d_key;
+    if (cfg->filter == ADAQ_FILTER_SINC3) {
+        // Sinc3 carries an arbitrary multiple of 32; the key is the x32<<n step.
+        uint32_t dec = cfg->sinc3_dec ? cfg->sinc3_dec : 32u;
+        d_key = 0;
+        while ((32u << d_key) < dec && d_key < DAQ_DEC_1024) d_key++;
+    } else {
+        d_key = (int32_t)cfg->dec_rate;
+    }
+
+    s_rate_sync = true;
+    daq_settings_set_i32(DAQ_K_FILTER, f_key, DAQ_SRC_LOCAL);
+    daq_settings_set_i32(DAQ_K_DECIMATION, d_key, DAQ_SRC_LOCAL);
+    s_rate_sync = false;
+}
+
 // Apply the top-level Sample Rate: pick the ADAQ filter+decimation that hits the
 // target SPS on the two current ADAQs, sync the DSP integration rate to the new
 // FINE ODR, and reset the energy accumulator so the rate change doesn't skew
@@ -115,6 +159,7 @@ static void apply_sample_rate(daq_board_t *b)
     power_dsp_set_rate(&b->dsp, achieved);
     power_dsp_reset_energy(&b->dsp);
     if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
+    sync_filter_keys_from_hw(b);
 }
 // Integer decimation from a measured ADC ODR down to a target output rate,
 // clamped to what sr_filter can build. Rounds to nearest so a slightly
@@ -158,10 +203,11 @@ static void apply_sr_mode(daq_board_t *b)
     if (!on) {
         b->sr_mode = false;
         if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
-        // Restoring the operator's filter/rate needs the fast path stopped too,
-        // and both helpers bracket themselves, so run them after the resume.
+        // Restore via Filter/Decimation only. Those now always mirror the
+        // hardware (see sync_filter_keys_from_hw), so re-deriving from Sample
+        // Rate here would just overwrite an explicit decimation on every boot -
+        // this path runs last in daq_settings_apply_all().
         apply_adaq_filter(b);
-        apply_sample_rate(b);
         return;
     }
 
@@ -256,6 +302,7 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
 
     case DAQ_K_FILTER:
     case DAQ_K_DECIMATION:
+        if (s_rate_sync) break;         // recording the hardware, not driving it
         if (b->sr_mode) break;          // SR owns the ADAQ filter configuration
         apply_adaq_filter(b);
         break;
@@ -269,7 +316,20 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
         apply_sr_mode(b);
         break;
 
+    case DAQ_K_RANGE_DWELL_US:
+        range_manager_set_down_dwell_us(&b->range, (uint32_t)(ival < 0 ? 0 : ival));
+        break;
+
+    case DAQ_K_RANGE_LOCK_US:
+        range_manager_set_lock_us(&b->range, (uint32_t)(ival < 0 ? 0 : ival));
+        break;
+
+    case DAQ_K_RANGE_FLAP:
+        range_manager_set_flap(&b->range, ival != 0);
+        break;
+
     case DAQ_K_SAMPLE_RATE_IDX:
+        if (s_boot_apply) break;        // Filter/Decimation own the ODR at boot
         if (b->sr_mode) break;          // SR pins the ODR to its own choice
         apply_sample_rate(b);
         break;
@@ -334,7 +394,9 @@ void daq_board_bind_settings(daq_board_t *b)
 {
     daq_settings_init();
     daq_settings_set_callbacks(on_apply, on_notify, on_action, b);
+    s_boot_apply = true;
     daq_settings_apply_all();
+    s_boot_apply = false;
 
     // Safety: the DUT supply (V_DUT) must NEVER come up enabled on boot, even if
     // a previous session persisted SOURCE_ENABLE=1. It is gated on an explicit

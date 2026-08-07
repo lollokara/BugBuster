@@ -104,6 +104,18 @@ void current_fusion_set_timing(current_fusion_t *f, uint32_t settle_samples,
 void current_fusion_set_trust(current_fusion_t *f,
                               float i_trust_hi, float i_trust_mid);
 
+/**
+ * @brief True while this sample is being compensated for a range transition,
+ *        i.e. inside the settle blackout or the COARSE->FINE cross-fade.
+ *
+ * This is what USB_META_SETTLING reports. Deliberately NOT the range manager's
+ * lock window: that is a control-side hold and is a strict superset of the real
+ * disturbance, because the fusion exits its blackout early whenever the ADC's
+ * FILT_NOT_SETTLED bit clears. Measured on the bench at 64 kSPS, 51% of samples
+ * flagged by the lock were already fully FINE-sourced and trustworthy.
+ */
+bool current_fusion_settling(const current_fusion_t *f);
+
 #ifdef __cplusplus
 }
 #endif

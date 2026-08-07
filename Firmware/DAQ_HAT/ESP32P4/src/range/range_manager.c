@@ -19,6 +19,7 @@
 #include "esp_attr.h"
 #include "driver/gpio.h"
 #include "config.h"
+#include "daq_config_registry.h"   // DAQ_RANGE_DWELL_US_DEFAULT
 
 static const char *TAG = "range_mgr";
 
@@ -66,6 +67,44 @@ static void set_mux_addr(range_manager_t *rm, uint8_t addr)
     if (rm->mux_a1_pin != GPIO_NUM_NC) gpio_set_level(rm->mux_a1_pin, (addr >> 1) & 1);
 }
 
+// Floor for the settle lock, in ADAQ output samples. The analog transient is
+// fixed in microseconds, but the converter's own digital filter settles in
+// 3-7 OUTPUT samples (datasheet Table 5) regardless of rate, so at a low ODR
+// the sample floor is what governs, not the microsecond figure.
+#define AR_LOCK_MIN_SAMPLES   8
+// Cap on the anti-flap backoff: effective dwell = dwell << level.
+#define AR_FLAP_MAX_LEVEL     5
+
+// Recompute the dwell sample countdown from the microsecond setting and ODR.
+// Called only on config changes, never per sample.
+static void recompute_dwell(range_manager_t *rm)
+{
+    if (rm->down_dwell_us == 0 || rm->odr_sps == 0) {
+        rm->down_dwell_samples = 0;
+        return;
+    }
+    uint64_t n = ((uint64_t)rm->down_dwell_us * rm->odr_sps) / 1000000ull;
+    rm->down_dwell_samples = (n > INT32_MAX) ? INT32_MAX : (uint32_t)n;
+}
+
+// Same, for the post-switch settle lock. Config-time only.
+static void recompute_lock(range_manager_t *rm)
+{
+    uint64_t n = 0;
+    if (rm->odr_sps != 0) {
+        n = ((uint64_t)rm->lock_us * rm->odr_sps) / 1000000ull;
+    }
+    if (n < AR_LOCK_MIN_SAMPLES) n = AR_LOCK_MIN_SAMPLES;
+    rm->lock_samples = (n > INT32_MAX) ? INT32_MAX : (uint32_t)n;
+}
+
+uint32_t range_manager_effective_dwell_samples(const range_manager_t *rm)
+{
+    if (rm->down_dwell_samples == 0) return 0;
+    uint32_t n = rm->down_dwell_samples << rm->flap_level;
+    return (n < rm->down_dwell_samples) ? INT32_MAX : n;   // shift overflow
+}
+
 // Set the bypass GPIOs and FINE mux to reflect a new range, then update the
 // state.  Does NOT touch lock/confirm fields — caller manages those.
 static void apply_range(range_manager_t *rm, current_range_t r)
@@ -82,9 +121,29 @@ static void apply_range(range_manager_t *rm, current_range_t r)
     range_manager_set_fine_mux(rm, r);
 
     if (r != rm->current) {
+        // Anti-flap, evaluated here because range changes are rare - putting
+        // this on the per-sample path would cost far more than it saves.
+        // Arriving while the dwell is still counting means the previous change
+        // has not had time to settle: the load is oscillating across the
+        // boundary, so back the dwell off. A change with the dwell already
+        // expired means we held stable for a full dwell, so relax one step.
+        if (rm->flap_enabled && rm->down_dwell_samples) {
+            if (rm->dwell_remaining > 0) {
+                if (rm->flap_level < AR_FLAP_MAX_LEVEL) {
+                    rm->flap_level++;
+                    rm->flap_escalations++;
+                }
+            } else if (rm->flap_level > 0) {
+                rm->flap_level--;
+            }
+        }
         rm->previous = rm->current;
         rm->current  = r;
         rm->change_count++;
+        // Restart the dwell on EVERY change, including a down-step, so a
+        // multi-decade fall walks down one range per dwell instead of
+        // collapsing straight to HI on the first quiet gap.
+        rm->dwell_remaining = (int32_t)range_manager_effective_dwell_samples(rm);
         ESP_LOGD(TAG, "range -> %s", range_manager_name(r));
     }
 }
@@ -104,6 +163,15 @@ esp_err_t range_manager_init(range_manager_t *rm)
     rm->current       = RANGE_UNKNOWN;
     rm->previous      = RANGE_UNKNOWN;
     rm->fine_mux_addr = 0xFF;
+    rm->down_dwell_us = DAQ_RANGE_DWELL_US_DEFAULT;
+    rm->lock_us       = DAQ_RANGE_LOCK_US_DEFAULT;
+    rm->flap_enabled  = (DAQ_RANGE_FLAP_DEFAULT != 0);
+    // No ODR known yet; daq_board calls range_manager_set_odr() once the
+    // converters are configured. Until then the dwell is inactive rather than
+    // wrong - a guessed rate would give it a meaningless wall-clock length.
+    rm->odr_sps       = 0;
+    recompute_dwell(rm);
+    recompute_lock(rm);
 
     // Default calibration from config constants.
     const float shunts[RANGE_COUNT] = { SHUNT_HI_OHM, SHUNT_MID_OHM, SHUNT_LO_OHM };
@@ -202,7 +270,7 @@ current_range_t range_manager_step(range_manager_t *rm)
     // FF_HI set while we are in HI → go to MID.
     if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI) {
         apply_range(rm, RANGE_MID);
-        rm->lock_remaining = AR_LOCK_SAMPLES;
+        rm->lock_remaining = (int32_t)rm->lock_samples;
         rm->pending_down   = false;
         rm->confirm_count  = 0;
         cur = rm->current;
@@ -210,7 +278,7 @@ current_range_t range_manager_step(range_manager_t *rm)
     // FF_MID set while we are in MID → go to LO.
     if (((flags & AR_ISR_UP_MID) || ff_mid_level) && cur == RANGE_MID) {
         apply_range(rm, RANGE_LO);
-        rm->lock_remaining = AR_LOCK_SAMPLES;
+        rm->lock_remaining = (int32_t)rm->lock_samples;
         rm->pending_down   = false;
         rm->confirm_count  = 0;
         cur = rm->current;
@@ -221,7 +289,7 @@ current_range_t range_manager_step(range_manager_t *rm)
     if (((flags & AR_ISR_UP_MID) || ff_mid_level) && cur == RANGE_HI) {
         apply_range(rm, RANGE_MID);
         apply_range(rm, RANGE_LO);
-        rm->lock_remaining = AR_LOCK_SAMPLES;
+        rm->lock_remaining = (int32_t)rm->lock_samples;
         rm->pending_down   = false;
         rm->confirm_count  = 0;
         cur = rm->current;
@@ -231,6 +299,15 @@ current_range_t range_manager_step(range_manager_t *rm)
     if (rm->lock_remaining > 0) {
         rm->lock_remaining--;
         return cur;
+    }
+
+    // ---- Down-range dwell -----------------------------------------------------
+    // Tick it down regardless of what the FF pins say. The confirm counter
+    // below still accumulates while this runs, so a genuinely quiet load
+    // down-ranges on the sample the dwell expires rather than needing another
+    // full confirm window afterwards.
+    if (rm->dwell_remaining > 0) {
+        rm->dwell_remaining--;
     }
 
     // ---- RANGE-DOWN: deferred with confirmation -------------------------------
@@ -262,12 +339,19 @@ current_range_t range_manager_step(range_manager_t *rm)
     }
 
     if (rm->pending_down && rm->confirm_count >= AR_CONFIRM_SAMPLES) {
+        if (rm->dwell_remaining > 0) {
+            // Quiet enough to drop, but still inside the minimum dwell. Hold
+            // the coarser range and keep confirm_count saturated so the drop
+            // happens the moment the dwell expires.
+            rm->dwell_blocked_count++;
+            return cur;
+        }
         // Confirmed: switch to the finer range.
         rm->pending_down  = false;
         rm->confirm_count = 0;
         // After a downrange switch, use half the lock window so a brief
         // upward glitch doesn't trigger another full-length confirm cycle.
-        rm->lock_remaining = AR_LOCK_SAMPLES / 2;
+        rm->lock_remaining = (int32_t)(rm->lock_samples / 2);
         if (cur == RANGE_MID) {
             apply_range(rm, RANGE_HI);
         } else if (cur == RANGE_LO) {
@@ -312,6 +396,62 @@ bool range_manager_settling(const range_manager_t *rm)
     return rm->lock_remaining > 0;
 }
 
+void range_manager_set_down_dwell_us(range_manager_t *rm, uint32_t us)
+{
+    rm->down_dwell_us = us;
+    rm->flap_level = 0;              // a manual change restarts the backoff
+    recompute_dwell(rm);
+    int32_t eff = (int32_t)range_manager_effective_dwell_samples(rm);
+    if (rm->dwell_remaining > eff) {
+        rm->dwell_remaining = eff;   // shorten an in-flight hold immediately
+    }
+    ESP_LOGI(TAG, "down-range dwell = %u us (%u samples @ %u sps)",
+             (unsigned)rm->down_dwell_us, (unsigned)rm->down_dwell_samples,
+             (unsigned)rm->odr_sps);
+}
+
+uint32_t range_manager_get_down_dwell_us(const range_manager_t *rm)
+{
+    return rm->down_dwell_us;
+}
+
+void range_manager_set_odr(range_manager_t *rm, uint32_t sps)
+{
+    if (rm->odr_sps == sps) return;
+    rm->odr_sps = sps;
+    recompute_dwell(rm);
+    recompute_lock(rm);
+    ESP_LOGI(TAG, "ODR = %u sps -> dwell %u samples, lock %u samples",
+             (unsigned)sps, (unsigned)rm->down_dwell_samples,
+             (unsigned)rm->lock_samples);
+}
+
+void range_manager_set_lock_us(range_manager_t *rm, uint32_t us)
+{
+    rm->lock_us = us;
+    recompute_lock(rm);
+    ESP_LOGI(TAG, "settle lock = %u us (%u samples @ %u sps)",
+             (unsigned)rm->lock_us, (unsigned)rm->lock_samples,
+             (unsigned)rm->odr_sps);
+}
+
+uint32_t range_manager_get_lock_us(const range_manager_t *rm)
+{
+    return rm->lock_us;
+}
+
+void range_manager_set_flap(range_manager_t *rm, bool enabled)
+{
+    rm->flap_enabled = enabled;
+    if (!enabled) rm->flap_level = 0;
+    ESP_LOGI(TAG, "anti-flap %s", enabled ? "enabled" : "disabled");
+}
+
+bool range_manager_get_flap(const range_manager_t *rm)
+{
+    return rm->flap_enabled;
+}
+
 // ---------------------------------------------------------------------------
 // Manual override (CLI, calibration routines)
 // ---------------------------------------------------------------------------
@@ -321,7 +461,7 @@ esp_err_t range_manager_force(range_manager_t *rm, current_range_t range)
     if (range == RANGE_UNKNOWN) {
         // Release override: autorange resumes from the current bypass state.
         rm->override_active = false;
-        rm->lock_remaining  = AR_LOCK_SAMPLES;   // brief lock so step settles
+        rm->lock_remaining  = (int32_t)rm->lock_samples;   // brief lock so step settles
         rm->pending_down    = false;
         rm->confirm_count   = 0;
         ESP_LOGI(TAG, "range_manager_force: released (autorange resumed)");

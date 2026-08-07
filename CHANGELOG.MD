@@ -2,7 +2,217 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`USB_META_SETTLING` now reports the FUSION's real state, not the range
+  manager's control lock (ESP32-P4 2.4.1).** The flag is what every consumer
+  uses to decide whether a sample is trustworthy, but it was driven by
+  `range_manager_settling()` - a control-side hold that is a strict superset of
+  the actual disturbance, because the fusion exits its blackout early whenever
+  the ADC's `FILT_NOT_SETTLED` bit clears. Measured at 64 kSPS before the
+  change: **51% of samples flagged settling were already fully FINE-sourced**
+  and perfectly good. It now comes from `current_fusion_settling()` - true only
+  while the fusion is leaning on COARSE or cross-fading back to FINE.
+
+  Measured at 64 kSPS, same DUT:
+
+  | build | settling share | composition of flagged samples |
+  |---|---|---|
+  | 2.3.0 (lock-based) | 1.19% | 51% FINE, 31% blend, 18% coarse |
+  | 2.4.0 (fusion-based) | 3.23% | 87% coarse, 13% blend - but every LO sample flagged |
+  | **2.4.1** | **0.42%** | **97.4% blend, 2.6% coarse, 0% FINE** |
+
+  2.4.0 had a bug of its own, caught in verification because `coarse-in-settling`
+  came back exactly equal to the LO sample count: the fusion's LO branch returns
+  early, so a blackout armed on entry to LO never aged and pinned the flag on
+  for the entire LO period. Any counter in that function must be aged in the
+  early-return path too. On LO, COARSE is the intended source, not a fallback
+  covering a transition.
+
+- **Autorange stability controls (ESP32-P4 2.3.0): ODR-aware settle lock and  adaptive anti-flap.** Measured on a bursty 3 V DUT, 45 s captures, normalised
+  by time spent outside the HI range:
+
+  | config | range changes | settling share |
+  |---|---|---|
+  | dwell off (old behaviour) | 8914 | 88.95% |
+  | dwell 10 ms only | 4375 | 48.02% |
+  | dwell + settle lock + anti-flap | **3148** | **4.57%** |
+
+  Usable (non-settling) samples went from 11% to 95%. Two independent causes,
+  both now fixed:
+  - `AR_LOCK_SAMPLES` was a fixed 64 **samples**, commented as "256 us at
+    250 kSPS" - but the same constant is 8 ms at 8 kSPS, 31x longer in wall
+    clock, and it drives the `USB_META_SETTLING` flag. At ~108 changes/s that
+    alone flagged ~86% of samples. Replaced by `DAQ_K_RANGE_LOCK_US`
+    (default 256 us), converted to samples against the live ODR and floored at
+    `AR_LOCK_MIN_SAMPLES` (8) so the converter's own filter settle is always
+    covered. The transient being waited out is analog, so it belongs in
+    microseconds; only the ADC filter settle belongs in samples.
+  - A fixed dwell cannot settle a load whose burst period exceeds it.
+    `DAQ_K_RANGE_FLAP` adds adaptive backoff: the effective dwell doubles (to
+    32x) each time an up-range arrives *while the dwell is still running* -
+    the exact signature of oscillating across a boundary - and relaxes one step
+    once a change happens from a settled state.
+
+  **The anti-flap detector costs nothing per sample.** It is evaluated inside
+  `apply_range()`, which is rare, rather than on the per-sample path that runs
+  at up to 256 kSPS; the only hot-path addition in this whole change is one
+  conditional decrement for the dwell countdown.
+
+  Exposed as persisted registry keys, the P4 CLI `dwell [dwell|lock|flap
+  <value>]`, and the MCP tool `daq_range_stability`.
+
+- **Autorange down-range dwell (ESP32-P4), to stop range thrashing on a bursty
+  load.** `AR_CONFIRM_SAMPLES` is a glitch filter, not a thrash guard - it only
+  needs a few *consecutive* quiet samples, so a periodically bursting DUT
+  down-ranges in every gap and up-ranges on the next burst. Bench-measured on a
+  3 V DUT: **6231 range changes in 45 s, leaving ~50% of samples flagged
+  SETTLING**. `AR_DOWN_DWELL_US` (`config.h`, default 10 ms) now imposes a
+  minimum hold in the coarser range before a down-range may commit, with
+  `range_manager_set_down_dwell_us()` / `range_manager_get_down_dwell_us()` and
+  a new P4 CLI command `dwell [microseconds]` (0 disables) for bench tuning.
+  The dwell is stored as a precomputed **sample countdown**, not a timestamp:
+  `range_manager_step()` runs per sample at up to 256 kSPS and must never read a
+  wall-clock timer. `range_manager_set_odr()` keeps that conversion honest and
+  is called wherever the FINE ODR is cached in `daq_board.c`. Trade-off: while
+  parked in a coarser range the low-current tail after a burst is measured on a
+  bigger shunt, so this trades sub-uA tail resolution for far fewer transition
+  artefacts.
+- **The dwell is a persisted, wire-settable setting.**
+  `DAQ_K_RANGE_DWELL_US` (`common/daq_config_registry.h`, group `0x01` index
+  `0x0A`, `DAQ_T_U32`, `DAQ_F_P4_LOCAL|DAQ_F_PERSIST`) stores it in NVS and
+  survives a power cycle. Reachable three ways: the P4 CLI `dwell
+  [microseconds]`, BBP `DAQ_CONFIG` from the host, and the new MCP tool
+  `daq_set_range_dwell`. The default lives once, in
+  `DAQ_RANGE_DWELL_US_DEFAULT` in the shared registry header, so the
+  compile-time boot value and the schema default cannot drift. No C6 changes
+  are needed - it is P4-local and absent from `SEND_KEYS[]`, exactly like
+  `DAQ_K_SOURCE_ENABLE`, and the C6's `field_apply_i32` ignores unknown keys.
+- `tests/unit/test_daq_registry_parity.py` - parses
+  `daq_config_registry.{h,c}` and asserts the Python `DaqKey` mirror matches it
+  on names, values and types, and that every key has a schema row. This is the
+  guard that was missing when four keys drifted unnoticed.
+- **ESP32-P4 DAQ HAT firmware 2.1.0 -> 2.2.0** (minor: backward-compatible
+  feature - the range dwell setting).
+- **The MCP OTA tools now bootstrap themselves from a USB session.** They wrap
+  HTTP-only endpoints, so they previously failed with "OTA requires admin
+  authentication" even though the USB link they were already holding could
+  answer both missing questions. `_make_ota()` now fetches the hardware-derived
+  token via `GET_ADMIN_TOKEN` (USB-only by design, precisely to bootstrap this)
+  and reads the device's own STA IP from `wifi_get_status()` when no host was
+  given. Explicit `host` / `admin_token` arguments still win, and an HTTP-only
+  session is unaffected.
+
+- **Power-consumption analysis from Python and the MCP server.** The DAQ HAT's
+  measurement data plane (the ESP32-P4's own USB-HS vendor-bulk endpoint) had
+  only ever been decoded by the desktop app, the iOS client and the hardware
+  test suite; the Python library could reach the control plane but not the
+  samples. Two new modules close that gap:
+  - `python/bugbuster/daq_stream.py` - `usb_proto.h` frame decoder plus a
+    `DaqStream` pyusb transport and a `CaptureAccumulator` that fills index
+    gaps with NaN and zero-order-holds voltage onto the current timebase, so a
+    capture is always a pair of equal-length, honestly-indexed arrays.
+  - `python/bugbuster/power_analysis.py` - host-side post-processing:
+    trapezoidal energy/charge integrals, power-state segmentation by
+    clustering log10(current), transition counts, duty cycle, burst
+    periodicity and jitter, marker-bracketed energy windows, range/saturation
+    quality accounting and a min/max waveform preview. It runs on the PC by
+    design - the P4's CPU budget goes to keeping the converters fed.
+- **15 MCP tools for power profiling** (`python/bugbuster_mcp/tools/daq_power.py`):
+  `daq_power_stream_status`, `daq_power_setup`, `daq_set_current_range`,
+  `daq_set_sample_rate`, `daq_power_capture` (+ `_start`/`_status`/`_result`
+  for long or trigger-armed runs), `daq_power_report`, `daq_power_window`,
+  `daq_power_compare`, `daq_power_markers`, `daq_power_export`,
+  `daq_power_list_captures`, `daq_power_drop_capture`. Total MCP tool count is
+  now 108 across 17 modules.
+- `pyusb` added to `python/requirements.txt`. It is imported lazily and is only
+  needed for the DAQ data plane.
+- **The MCP server now starts with no arguments.** `--transport` defaults to
+  `auto` (USB when a board is attached, HTTP otherwise) and `--port` to
+  auto-detection: `bugbuster.discovery.find_usb_port()` ranks serial ports by
+  USB descriptor (Espressif VID `0x303A`, mainboard PID `0x4002`) and CDC
+  interface index, then confirms the choice with the BBP handshake. The
+  mainboard exposes two CDC interfaces on one composite device, so VID/PID
+  alone cannot tell BBP (CDC0) from the text console (CDC1), and some hosts
+  report no location string at all - hence the probe. `BUGBUSTER_TRANSPORT` /
+  `BUGBUSTER_PORT` / `BUGBUSTER_HOST` override. `.vscode/mcp.json` no longer
+  carries a hardcoded COM port.
+- `discover_devices` now scans USB as well as mDNS, and reports which port is
+  the likely BBP port plus the session's active transport/port.
+- `libusb-package` added to `python/requirements.txt`. Windows has no
+  `libusb-1.0` on PATH, so `usb.core.find` returned None there with no error -
+  indistinguishable from "device not plugged in". `daq_stream.py` now falls
+  back to the bundled backend, which removes the Zadig step entirely.
+
 ### Fixed
+
+- **The ADC sample rate silently reverted on every P4 reboot (2.4.3).** Sample
+  Rate and Filter/Decimation are two front-ends onto one piece of hardware
+  state, with no defined precedence. `daq_settings_apply_all()` walks the schema
+  in key order, and `apply_sr_mode()`'s SR-OFF path (key 0x09, applied last)
+  ended with `apply_sample_rate()` - so on every boot the Sample Rate enum
+  overwrote whatever Filter/Decimation the operator had set. Bench-observed: set
+  64 kSPS, power-cycle, come back at 8 kSPS, measuring at a different bandwidth
+  than the UI claimed. Now:
+  - Filter/Decimation is the authoritative record and the only thing that
+    programs the ODR at boot (`s_boot_apply` guards the Sample Rate branch);
+  - an explicit runtime Sample Rate write still programs the part, then mirrors
+    the filter + decimation the driver actually chose back into the store
+    (`sync_filter_keys_from_hw`), so the two front-ends and NVS never disagree;
+  - a re-entrancy guard (`s_rate_sync`) stops that mirror re-programming the ADC.
+
+  Verified on hardware: set decimation x128, reboot, comes back at 64000 sps.
+  The first attempt at this fix (2.4.2) made it worse - the mirror also ran
+  during boot, where Sample Rate is applied *before* Filter/Decimation, so it
+  clobbered the stored value before it was ever used. Order of application in
+  `daq_settings_apply_all()` matters whenever two keys touch one register.
+
+- **The BBP USB reader thread could die silently, poisoning the link until the
+  owning process was restarted.** `_reader_loop()` caught `OSError`/`TypeError`
+  and simply `break`-ed, leaving `_running` True and the port open. Because the
+  port was still open, `send_command()` kept writing successfully while nothing
+  read the replies - so every command timed out forever and the sequence number
+  kept climbing, while HTTP and the DAQ USB data plane both stayed healthy. Hit
+  twice on the bench, both times triggered by USB re-enumeration when the
+  ESP32-P4 reset during an OTA. Now:
+  - the reader marks the link down and hands a `LinkDownError` to every waiting
+    command instead of letting each one burn its full timeout;
+  - `USBTransport.is_healthy()` reports port-open **and** reader-alive, because
+    `is_open` alone stays true through this failure;
+  - `USBTransport.reconnect()` rebuilds the port + handshake, and
+    `send_command()` calls it automatically (`auto_reconnect`, default on);
+  - new MCP tools `link_status` and `reset_link` recover a wedged link without
+    restarting the server.
+  Regression tests: `tests/unit/test_usb_link_recovery.py`.
+
+- **Host capture assembly was O(n^2), causing 87.7% sample loss on long runs.**
+  `CaptureAccumulator` drained pending voltage samples from a list with
+  `pop(0)`. On a 180 s run the host fell far enough behind the stream that the
+  DEVICE started dropping frames to back-pressure (`fifo_drop_frames` 6217),
+  and a 180 s capture took 373 s of wall clock. Switched to a `deque`; the same
+  capture now loses 0 samples with +0.2 s overshoot. Bench-verified.
+- **The capture loop only checked its deadline between USB reads**, so one slow
+  batch overshot the requested duration. It now also breaks mid-batch.
+- **`daq_stream` trusted the WAVE_I header's sample rate, which goes stale
+  after an ODR change.** Observed advertising 128000 sps while the part was
+  converting at 8000 - a silent 16x error on every integral and timestamp.
+  Captures now reconcile against the STATUS frame's `odr_sps` (documented as
+  what the device actually applied), and report `rate_source` plus a warning
+  when the two disagree.
+- **`daq_set_sample_rate` exposed stream decimation without warning that it
+  aliases.** The firmware documents it as a naive keep-1-of-N drop with no
+  anti-alias filter and deliberately does not expose it as a user knob. Values
+  above 1 now require `i_understand_aliasing=True`, and the docstring points at
+  the ADC ODR as the correct way to trade bandwidth for capture length.
+- **Two power states could be labelled "peak"** in the same report when the
+  clusterer produced six or more levels.
+- **`python/bugbuster/daq_config.py` was missing four acquisition registry
+  keys** the firmware has had: `FILTER`, `DECIMATION`, `REJECT_5060` and
+  `SR_MODE` (`daq_config_registry.h` group `0x01`, indices `0x06`-`0x09`).
+  `DaqConfig.get_all()` returned them as unnamed raw keys `0x106`-`0x109`.
+  They matter for power profiling - the Sinc3 filter and super-resolution
+  settings set the noise floor, which decides whether a sub-µA sleep current
+  is resolvable at all.
 
 - **ESP32 update manager: C6/BLE-triggered ESP32 self-update never rebooted
   the device.** `fw_apply_task()` (the worker behind the C6 menu's

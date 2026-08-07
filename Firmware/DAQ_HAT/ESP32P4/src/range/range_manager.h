@@ -57,6 +57,24 @@ typedef struct {
     int32_t lock_remaining;
     bool    pending_down;
     int32_t confirm_count;
+    // Down-range dwell. Held as a SAMPLE countdown so the per-sample path
+    // never reads a wall-clock timer; recomputed from _us whenever the ODR or
+    // the dwell setting changes. 0 disables the dwell entirely.
+    uint32_t down_dwell_us;
+    uint32_t down_dwell_samples;
+    int32_t  dwell_remaining;
+    uint32_t odr_sps;
+    volatile uint32_t dwell_blocked_count;   // down-ranges suppressed by dwell
+    // Post-switch settle lock, also a sample countdown derived from _us.
+    uint32_t lock_us;
+    uint32_t lock_samples;
+    // Adaptive anti-flap. Detected at range-change time, NOT per sample: an
+    // up-range arriving while the dwell is still running means we dropped and
+    // the load immediately came back, which is exactly an oscillation. The
+    // effective dwell is then shifted left by flap_level. Hot-path cost: zero.
+    bool     flap_enabled;
+    uint8_t  flap_level;
+    volatile uint32_t flap_escalations;
 } range_manager_t;
 
 esp_err_t       range_manager_init(range_manager_t *rm);
@@ -69,6 +87,23 @@ bool            range_manager_in_transition(const range_manager_t *rm);
 // samples in this window may carry a bypass-relay switching transient.
 bool            range_manager_settling(const range_manager_t *rm);
 esp_err_t       range_manager_force(range_manager_t *rm, current_range_t range);
+// Minimum dwell in a coarser range before a range-DOWN may commit. Set 0 to
+// disable. Takes effect on the next range change.
+void            range_manager_set_down_dwell_us(range_manager_t *rm, uint32_t us);
+uint32_t        range_manager_get_down_dwell_us(const range_manager_t *rm);
+// Post-switch settle lock (microseconds). Floored at AR_LOCK_MIN_SAMPLES so the
+// ADC's own filter settle is always covered whatever the ODR.
+void            range_manager_set_lock_us(range_manager_t *rm, uint32_t us);
+uint32_t        range_manager_get_lock_us(const range_manager_t *rm);
+// Adaptive anti-flap: escalate the effective dwell while the range oscillates.
+void            range_manager_set_flap(range_manager_t *rm, bool enabled);
+bool            range_manager_get_flap(const range_manager_t *rm);
+// Effective dwell in samples right now, including any anti-flap escalation.
+uint32_t        range_manager_effective_dwell_samples(const range_manager_t *rm);
+// Tell the manager the acquisition ODR so the dwell keeps its wall-clock
+// meaning. Must be called whenever the ODR changes, or the dwell silently
+// scales with the rate exactly like AR_LOCK_SAMPLES does.
+void            range_manager_set_odr(range_manager_t *rm, uint32_t sps);
 esp_err_t       range_manager_set_fine_mux(range_manager_t *rm, current_range_t range);
 float           range_manager_volts_to_amps(const range_manager_t *rm, current_range_t range, float v_adc);
 bool            range_uses_coarse(current_range_t range);

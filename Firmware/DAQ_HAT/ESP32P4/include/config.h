@@ -333,6 +333,12 @@
 // commit to a range-DOWN. Guards against brief CSA glitches.
 #define AR_CONFIRM_SAMPLES    8
 
+// Minimum time to DWELL in a coarser range before a range-DOWN may commit.
+// The value, its rationale and the default live in the SHARED registry header
+// (`common/daq_config_registry.h`, DAQ_RANGE_DWELL_US_DEFAULT) because it is a
+// persisted, wire-settable setting (DAQ_K_RANGE_DWELL_US) - a second copy here
+// would drift from the schema default.
+
 // Bypass-control outputs (P4 now DRIVES these; no longer observes analog latch).
 //   GPIO52 -> U9  : 51 ohm bypass. HIGH = 51 ohm shorted out (MID or LO range).
 //   GPIO53 -> U13 : 2 ohm bypass. HIGH = 2 ohm shorted out (LO range).

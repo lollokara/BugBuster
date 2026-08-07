@@ -3225,6 +3225,52 @@ static void cli_print_range_points(daq_board_t *b, current_range_t range)
     }
 }
 
+// Read or set the autorange stability controls (dwell / settle lock / anti-flap).
+static int cmd_dwell(int argc, char **argv)
+{
+    daq_board_t *b = s_board;
+
+    if (argc >= 3) {
+        long v = strtol(argv[2], NULL, 0);
+        uint16_t key = 0;
+        if (!strcmp(argv[1], "dwell"))     key = DAQ_K_RANGE_DWELL_US;
+        else if (!strcmp(argv[1], "lock")) key = DAQ_K_RANGE_LOCK_US;
+        else if (!strcmp(argv[1], "flap")) key = DAQ_K_RANGE_FLAP;
+        else {
+            printf("usage: dwell [dwell|lock|flap <value>]\n");
+            return -1;
+        }
+        // Go through the settings store, not range_manager directly: that is
+        // what validates, persists to NVS and fans the change out to the
+        // other control planes.
+        if (!daq_settings_set_i32(key, (int32_t)v, DAQ_SRC_LOCAL)) {
+            printf("dwell: value rejected by settings store\n");
+            return -1;
+        }
+    } else if (argc == 2) {
+        printf("usage: dwell [dwell|lock|flap <value>]\n");
+        return -1;
+    }
+
+    printf("autorange stability controls\n");
+    printf("  dwell          : %u us   (down-range hold; 0 = off)\n",
+           (unsigned)range_manager_get_down_dwell_us(&b->range));
+    printf("  lock           : %u us   (post-switch settle window)\n",
+           (unsigned)range_manager_get_lock_us(&b->range));
+    printf("  flap           : %s   (adaptive dwell backoff)\n",
+           range_manager_get_flap(&b->range) ? "on" : "off");
+    printf("  odr            : %u sps\n", (unsigned)b->range.odr_sps);
+    printf("  dwell samples  : %u (effective %u, backoff level %u)\n",
+           (unsigned)b->range.down_dwell_samples,
+           (unsigned)range_manager_effective_dwell_samples(&b->range),
+           (unsigned)b->range.flap_level);
+    printf("  lock samples   : %u\n", (unsigned)b->range.lock_samples);
+    printf("  range changes  : %u\n", (unsigned)b->range.change_count);
+    printf("  dwell-blocked  : %u\n", (unsigned)b->range.dwell_blocked_count);
+    printf("  flap escalations: %u\n", (unsigned)b->range.flap_escalations);
+    return 0;
+}
+
 static int cmd_rangecal(int argc, char **argv)
 {
     daq_board_t *b = s_board;
@@ -3823,6 +3869,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("ilimit",  "DUT supply current limit: ilimit <milliamps>", cmd_ilimit);
     reg("cal",     "Calibration: cal <status|v|i|base|clroff|points [range]|del <range> <idx>|clear <range>>", cmd_cal);
     reg("rangecal","Range threshold calibration: rangecal [status|ack|abort] [r_a_ohm [r_b_ohm]]", cmd_rangecal);
+    reg("dwell",  "Autorange stability: dwell [dwell|lock|flap <value>] (us / us / 0|1)", cmd_dwell);
     reg("c6reset", "Pulse C6 RST (normal restart)", cmd_c6reset);
     reg("c6boot",  "Enter C6 ROM download mode + bridge UART2 to console for esptool", cmd_c6boot);
     reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);

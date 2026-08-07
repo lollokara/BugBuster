@@ -1,2 +1,4 @@
 pyserial>=3.5
 requests>=2.28
+pyusb>=1.2            # DAQ HAT (ESP32-P4) USB-HS measurement data plane
+libusb-package>=1.0   # bundled libusb-1.0 backend; Windows has none on PATH

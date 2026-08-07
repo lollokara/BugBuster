@@ -60,6 +60,13 @@ class DaqKey(IntEnum):
     SAMPLE_RATE_IDX = _key(0x01, 0x03)
     STREAMING       = _key(0x01, 0x04)
     USB_DECIMATION  = _key(0x01, 0x05)
+    FILTER          = _key(0x01, 0x06)   # wideband / sinc5 / sinc3 (FINE+COARSE)
+    DECIMATION      = _key(0x01, 0x07)   # x32 .. x1024
+    REJECT_5060     = _key(0x01, 0x08)   # Sinc3 50/60 Hz reject
+    SR_MODE         = _key(0x01, 0x09)   # super-resolution
+    RANGE_DWELL_US  = _key(0x01, 0x0A)   # autorange down-range dwell (us)
+    RANGE_LOCK_US   = _key(0x01, 0x0B)   # post-switch settle lock (us)
+    RANGE_FLAP      = _key(0x01, 0x0C)   # adaptive anti-flap backoff
     # Source / SMU
     SOURCE_ENABLE   = _key(0x02, 0x01)
     DUT_VOLTAGE_MV  = _key(0x02, 0x02)
@@ -245,6 +252,13 @@ KEY_TYPE: Dict[int, DaqType] = {
     DaqKey.SAMPLE_RATE_IDX: DaqType.ENUM,
     DaqKey.STREAMING:       DaqType.BOOL,
     DaqKey.USB_DECIMATION:  DaqType.U16,
+    DaqKey.FILTER:          DaqType.ENUM,
+    DaqKey.DECIMATION:      DaqType.ENUM,
+    DaqKey.REJECT_5060:     DaqType.BOOL,
+    DaqKey.SR_MODE:         DaqType.BOOL,
+    DaqKey.RANGE_DWELL_US:  DaqType.U32,
+    DaqKey.RANGE_LOCK_US:   DaqType.U16,
+    DaqKey.RANGE_FLAP:      DaqType.BOOL,
     DaqKey.SOURCE_ENABLE:   DaqType.BOOL,
     DaqKey.DUT_VOLTAGE_MV:  DaqType.U16,
     DaqKey.DUT_ILIMIT_MA:   DaqType.U16,

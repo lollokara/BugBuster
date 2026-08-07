@@ -613,6 +613,7 @@ static void daq_ctrl_task(void *arg)
                     if (b->adaq_ok[ADAQ_ROLE_FINE]) {
                         b->fine_rate_hz =
                             (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
+                        range_manager_set_odr(&b->range, b->fine_rate_hz);
                     }
                     if (b->adaq_ok[ADAQ_ROLE_VOLTAGE]) {
                         b->volt_rate_hz =
@@ -829,7 +830,7 @@ esp_err_t daq_board_stream_step(daq_board_t *b, fusion_output_t *out)
 
     uint32_t rate = (uint32_t)adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE]);
     usb_stream_push_sample(&b->usb, &fo, rate, /*decimation=*/1,
-                           range_manager_settling(&b->range));
+                           current_fusion_settling(&b->fusion));
     // Non-fast path has no independent voltage sample cadence here (the VOLTAGE
     // ADC is only drained on the fast path's bus-B loop) — the current sample
     // is pushed above; no WAVE_V push is emitted from this path.
@@ -2476,7 +2477,10 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
 
     // One-sample-delayed despike (see glitch_isolated above): every consumer
     // below — power, DSP tail, and the wire push — sees the corrected stream.
-    bool settling_now = range_manager_settling(&b->range);
+    // The settling flag tracks the FUSION, not the range manager's lock: the
+    // lock is a control-side hold that outlives the actual disturbance, so
+    // reporting it marked trustworthy FINE samples as suspect.
+    bool settling_now = current_fusion_settling(&b->fusion);
     fusion_output_t emit_fo;
     bool emit_settling;
     if (s_i_glitch.n == 0) {
@@ -2805,6 +2809,9 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
     b->fine_rate_hz = (uint32_t)(b->adaq_ok[ADAQ_ROLE_FINE]
                           ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE])
                           : 256000.0f);
+    // The autorange dwell is a sample countdown, so it needs the live ODR to
+    // keep its wall-clock length.
+    range_manager_set_odr(&b->range, b->fine_rate_hz);
     // The DSP tail runs every dsp_decim-th fused sample, so set the power-DSP
     // timebase to the decimated rate — otherwise energy/charge integrate with
     // the wrong dt (off by dsp_decim).

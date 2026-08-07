@@ -2,23 +2,20 @@
 BugBuster MCP Server — Entry point.
 
 Usage:
-    python -m bugbuster_mcp --transport usb --port /dev/ttyACM0
+    python -m bugbuster_mcp                       # auto-detect board over USB
+    python -m bugbuster_mcp --transport usb --port COM6
     python -m bugbuster_mcp --transport http --host 192.168.4.1
+
+Transport and port default to auto-detection, so no editor config needs a
+hardcoded COM port. Override with --transport/--port or the environment
+variables BUGBUSTER_TRANSPORT / BUGBUSTER_PORT / BUGBUSTER_HOST.
 
 Install the server in Claude Code:
     Add to ~/.claude/settings.json → mcpServers:
 
     "bugbuster": {
         "command": "python3",
-        "args": ["-m", "bugbuster_mcp", "--transport", "usb", "--port", "/dev/cu.usbmodemXXXXXX"]
-    }
-
-    Or with uv (installed via brew install uv):
-    "bugbuster": {
-        "command": "uv",
-        "args": ["run", "--project", "/path/to/BugBuster/python",
-                 "python", "-m", "bugbuster_mcp",
-                 "--transport", "usb", "--port", "/dev/cu.usbmodemXXXXXX"]
+        "args": ["-m", "bugbuster_mcp"]
     }
 """
 
@@ -34,20 +31,25 @@ def main() -> None:
     )
     parser.add_argument(
         "--transport",
-        choices=["usb", "http"],
-        default="usb",
-        help="Transport to use: 'usb' (binary BBP over CDC) or 'http' (WiFi REST API).",
+        choices=["auto", "usb", "http"],
+        default=os.environ.get("BUGBUSTER_TRANSPORT", "auto"),
+        help="Transport to use. 'auto' (default) picks USB when a board is "
+             "attached and falls back to HTTP; 'usb' = binary BBP over CDC; "
+             "'http' = WiFi REST API. Env: BUGBUSTER_TRANSPORT.",
     )
     parser.add_argument(
         "--port",
-        default=None,
-        help="USB serial port path (USB transport). "
-             "Examples: /dev/ttyACM0, /dev/cu.usbmodemXXXXXX, COM3",
+        default=os.environ.get("BUGBUSTER_PORT"),
+        help="USB serial port (USB transport). Omit or pass 'auto' to detect "
+             "the board automatically by USB descriptor + BBP handshake. "
+             "Examples: COM6, /dev/ttyACM0, /dev/cu.usbmodemXXXXXX. "
+             "Env: BUGBUSTER_PORT.",
     )
     parser.add_argument(
         "--host",
-        default="192.168.4.1",
-        help="BugBuster IP address or hostname (HTTP transport). Default: 192.168.4.1",
+        default=os.environ.get("BUGBUSTER_HOST", "192.168.4.1"),
+        help="BugBuster IP address or hostname (HTTP transport). "
+             "Default: 192.168.4.1. Env: BUGBUSTER_HOST.",
     )
     parser.add_argument(
         "--vlogic",

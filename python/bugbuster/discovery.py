@@ -182,4 +182,105 @@ def resolve_local(hostname: str, *, timeout: float = 2.0) -> Optional[str]:
         socket.setdefaulttimeout(None)
 
 
-__all__ = ["DiscoveredDevice", "discover_mdns", "discover", "resolve_local"]
+# ---------------------------------------------------------------------------
+# USB serial discovery
+# ---------------------------------------------------------------------------
+# The mainboard and the DAQ HAT are separate USB devices under Espressif's VID.
+USB_VID_ESPRESSIF = 0x303A
+USB_PID_MAINBOARD = 0x4002   # ESP32-S3 composite: CDC0 (BBP) + CDC1 (console)
+USB_PID_DAQ_HAT = 0x4001     # ESP32-P4 measurement data plane (vendor bulk)
+
+
+@dataclass(frozen=True)
+class UsbPort:
+    """A candidate BugBuster serial port found by scanning USB descriptors."""
+
+    device: str                  # "COM6" / "/dev/ttyACM0" / "/dev/cu.usbmodem..."
+    vid: Optional[int] = None
+    pid: Optional[int] = None
+    serial_number: str = ""
+    description: str = ""
+    location: str = ""
+    interface_index: Optional[int] = None   # USB interface behind this port
+
+    @property
+    def is_bugbuster(self) -> bool:
+        return self.vid == USB_VID_ESPRESSIF and self.pid == USB_PID_MAINBOARD
+
+
+def _interface_index(location: str) -> Optional[int]:
+    """Interface number from a pyserial location string, e.g. '1-4.1:x.0' -> 0.
+
+    The mainboard exposes two CDC interfaces on one composite device, so VID/PID
+    alone cannot tell BBP (CDC0) from the text console (CDC1). The interface
+    index is the only thing that distinguishes them, and it is the tail of the
+    location on every platform pyserial reports one.
+    """
+    if not location or "." not in location:
+        return None
+    tail = location.rsplit(".", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def list_usb_ports(all_ports: bool = False) -> List[UsbPort]:
+    """List serial ports, BugBuster mainboards first, best candidate first.
+
+    :param all_ports: include non-BugBuster ports (for error messages).
+    """
+    try:
+        from serial.tools import list_ports  # type: ignore
+    except ImportError:
+        return []
+
+    found: List[UsbPort] = []
+    for p in list_ports.comports():
+        port = UsbPort(
+            device=p.device,
+            vid=p.vid,
+            pid=p.pid,
+            serial_number=p.serial_number or "",
+            description=p.description or "",
+            location=p.location or "",
+            interface_index=_interface_index(p.location or ""),
+        )
+        if all_ports or port.is_bugbuster:
+            found.append(port)
+    # CDC0 carries BBP, so an unknown interface index sorts last, not first.
+    return sorted(found, key=lambda x: (not x.is_bugbuster,
+                                        999 if x.interface_index is None
+                                        else x.interface_index,
+                                        x.device))
+
+
+def find_usb_port(probe: bool = True, timeout: float = 2.0) -> Optional[str]:
+    """Auto-detect the mainboard's BBP serial port.
+
+    Ranks ports by USB descriptor, then (with ``probe``) confirms the choice by
+    running the BBP handshake - the only unambiguous test, since CDC0 and CDC1
+    are indistinguishable on hosts where pyserial reports no location string.
+
+    Returns the port name, or None if no board answered.
+    """
+    candidates = list_usb_ports()
+    if not candidates:
+        return None
+    if not probe:
+        return candidates[0].device
+
+    from .transport.usb import USBTransport
+    for cand in candidates:
+        try:
+            t = USBTransport(cand.device, timeout=timeout)
+            t.connect()
+            t.disconnect()
+            return cand.device
+        except Exception:
+            continue
+    return None
+
+
+__all__ = [
+    "DiscoveredDevice", "discover_mdns", "discover", "resolve_local",
+    "UsbPort", "list_usb_ports", "find_usb_port",
+    "USB_VID_ESPRESSIF", "USB_PID_MAINBOARD", "USB_PID_DAQ_HAT",
+]

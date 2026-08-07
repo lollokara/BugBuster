@@ -37,6 +37,16 @@ class DeviceError(Exception):
         super().__init__(f"Device error {name} (seq={seq})")
 
 
+class LinkDownError(RuntimeError):
+    """The reader thread died, so no response can ever arrive.
+
+    Distinct from :class:`TimeoutError`: a timeout means the device did not
+    answer in time, while this means the host stopped listening. Writes still
+    succeed in that state, so without this the link looks alive but every
+    command times out forever.
+    """
+
+
 class USBTransport:
     """
     Manages the USB CDC binary link to a BugBuster device.
@@ -75,6 +85,10 @@ class USBTransport:
 
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
+        # Set when the reader thread exits unexpectedly; cleared on reconnect.
+        self._link_error: Optional[BaseException] = None
+        # Reconnect automatically on the next command after a reader death.
+        self.auto_reconnect = True
 
         # Firmware info filled in after connect()
         self.proto_version = None
@@ -261,6 +275,41 @@ class USBTransport:
     # Command execution
     # ------------------------------------------------------------------
 
+    def is_healthy(self) -> bool:
+        """True if the port is open AND the reader thread is still running.
+
+        An open port alone is not enough: writes keep succeeding after the
+        reader dies, which is what makes that failure so hard to spot.
+        """
+        return (
+            self._serial is not None
+            and self._serial.is_open
+            and self._reader_thread is not None
+            and self._reader_thread.is_alive()
+            and self._link_error is None
+        )
+
+    def reconnect(self) -> None:
+        """Tear the link down and re-establish it (port + handshake).
+
+        Recovers a transport whose reader thread has died without needing the
+        owning process restarted.
+        """
+        log.warning("Reconnecting BBP transport on %s", self._port)
+        self._running = False
+        self._fail_pending(LinkDownError("transport reconnecting"))
+        try:
+            if self._serial is not None and self._serial.is_open:
+                self._serial.close()
+        except Exception as exc:
+            log.debug("close during reconnect failed: %s", exc)
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=2.0)
+        self._serial = None
+        self._reader_thread = None
+        self._link_error = None
+        self.connect()
+
     def send_command(self, cmd_id: int, payload: bytes = b'') -> bytes:
         """
         Send a CMD frame and block until the matching RSP arrives (or timeout).
@@ -268,6 +317,13 @@ class USBTransport:
         Returns the raw response payload bytes.
         Raises :class:`DeviceError` on ERR response, :class:`TimeoutError` on timeout.
         """
+        if not self.is_healthy():
+            if not self.auto_reconnect:
+                raise LinkDownError(
+                    f"USB link is down ({self._link_error}). "
+                    f"Call reconnect() to recover.")
+            self.reconnect()
+
         with self._seq_lock:
             seq = self._seq
             self._seq = (self._seq + 1) & 0xFFFF
@@ -331,11 +387,32 @@ class USBTransport:
         Continuously read bytes from the serial port, accumulate them into a
         buffer, and dispatch complete COBS frames as they arrive.
         """
+        exit_exc: Optional[BaseException] = None
+        try:
+            exit_exc = self._reader_body()
+        except BaseException as exc:       # never let this thread die silently
+            exit_exc = exc
+        finally:
+            if self._running:
+                # We were not asked to stop, so this is a failure: mark the
+                # link down and release every waiter now instead of leaving
+                # them to time out one by one against a transport that can
+                # never answer.
+                self._link_error = exit_exc or LinkDownError(
+                    "BBP reader thread exited unexpectedly")
+                self._running = False
+                self._fail_pending(LinkDownError(
+                    f"USB link is down ({self._link_error}). "
+                    f"Reconnect the transport to recover."))
+                log.error("BBP reader thread exited: %s", self._link_error)
+
+    def _reader_body(self) -> Optional[BaseException]:
+        """Read/dispatch loop. Returns the exception that ended it, if any."""
         buf = bytearray()
         while self._running:
             serial_port = self._serial  # local snapshot — may be set to None by disconnect()
             if serial_port is None:
-                break
+                return None
             try:
                 chunk = serial_port.read(self.READ_CHUNK)
             except serial.SerialException as exc:
@@ -349,7 +426,7 @@ class USBTransport:
                 # TypeError: Windows pyserial ctypes race when the port is closed
                 # (self._serial NULLed) mid-read — byref() on a freed OVERLAPPED.
                 log.error("Serial read error: %s", exc, exc_info=True)
-                break
+                return exc
 
             if not chunk:
                 continue
@@ -362,10 +439,22 @@ class USBTransport:
                 parts = buf.split(b'\x00')
                 # The last part is the new buffer (stale data after the last 0x00)
                 buf = bytearray(parts.pop())
-                
+
                 for frame_bytes in parts:
                     if frame_bytes:
                         self._dispatch_frame(bytes(frame_bytes))
+        return None
+
+    def _fail_pending(self, exc: Exception) -> None:
+        """Hand ``exc`` to every command still waiting for a response."""
+        with self._pending_lock:
+            waiters = list(self._pending.values())
+            self._pending.clear()
+        for q in waiters:
+            try:
+                q.put_nowait(exc)
+            except Exception:
+                pass
 
     def _dispatch_frame(self, raw: bytes) -> None:
         try:

@@ -22,6 +22,11 @@ void current_fusion_set_trust(current_fusion_t *f,
     if (i_trust_mid > 1e-4f) f->fine_trust_max[RANGE_MID] = i_trust_mid;
 }
 
+bool current_fusion_settling(const current_fusion_t *f)
+{
+    return (f->settle_remaining > 0) || (f->blend_remaining > 0);
+}
+
 void current_fusion_init(current_fusion_t *f, range_manager_t *rm,
                          uint32_t settle_samples, uint32_t blend_samples)
 {
@@ -66,6 +71,11 @@ void current_fusion_step(current_fusion_t *f, const fusion_input_t *in,
 
     // LO range: COARSE is the measurement.
     if (range_uses_coarse(in->range) || in->range == RANGE_UNKNOWN) {
+        // Still age the settle counter here. This branch returns early, so
+        // without it a blackout armed on entry to LO never expires and every
+        // subsequent LO sample reports as settling - on LO, COARSE is the
+        // intended source, not a fallback being used to cover a transition.
+        if (f->settle_remaining > 0) f->settle_remaining--;
         out->amps      = coarse_a;
         out->source    = FUSE_SRC_COARSE;
         out->saturated = !in->coarse_valid;

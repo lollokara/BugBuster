@@ -14,6 +14,49 @@ log = logging.getLogger(__name__)
 def register(mcp) -> None:
 
     @mcp.tool()
+    def reset_link() -> dict:
+        """
+        Recover a wedged USB control link without restarting the MCP server.
+
+        Symptom this fixes: every BBP command times out ("No response for
+        cmd=0x.. within 5.0s") while the device is clearly alive - HTTP still
+        answers and the DAQ data plane still streams. That happens when the
+        transport's reader thread dies (a device re-enumeration, e.g. the P4
+        resetting during an OTA, will do it). Writes keep succeeding because
+        the port is still open, so nothing looks wrong until every command
+        times out.
+
+        Closes the serial port, rejoins the reader thread, reopens and
+        re-runs the BBP handshake. Safe to call at any time; it does not touch
+        device state, IO configuration or the DAQ HAT.
+
+        Returns: method used, and link health before/after.
+        """
+        result = session.reconnect()
+        result["message"] = (
+            "Link healthy." if result.get("healthy_after")
+            else "Link still unhealthy - check the cable and that no other "
+                 "process (desktop app, pio device monitor) holds CDC0.")
+        return result
+
+    @mcp.tool()
+    def link_status() -> dict:
+        """
+        Report the health of the host<->device control link.
+
+        ``healthy`` is False when the port is open but the reader thread has
+        died - the failure mode where writes succeed and every response times
+        out. Use reset_link to recover.
+
+        Returns: transport, port, healthy.
+        """
+        return {
+            "transport": session.get_transport(),
+            "port": session.get_port(),
+            "healthy": session.link_healthy(),
+        }
+
+    @mcp.tool()
     def device_status() -> dict:
         """
         Return a full snapshot of the BugBuster device state.
@@ -293,34 +336,63 @@ def register(mcp) -> None:
             return f"Error: Failed to load board profile '{name}'."
 
     @mcp.tool()
-    def discover_devices(timeout_s: float = 2.0) -> dict:
+    def discover_devices(timeout_s: float = 2.0, usb: bool = True,
+                         network: bool = True) -> dict:
         """
-        Browse the LAN for BugBuster boards using mDNS / Bonjour.
+        Find BugBuster boards on USB and on the LAN.
 
-        The firmware advertises itself on _bugbuster._tcp once it joins WiFi.
-        This tool returns every device that answers within `timeout_s`. Useful
-        when the operator hasn't told you a specific IP — pick a device, then
-        pass `host=<ip>` to ota_get_info / pairing tools.
+        USB scan reads serial-port descriptors (Espressif VID 0x303A, mainboard
+        PID 0x4002) and reports which port is CDC0 - the one that speaks BBP.
+        The other CDC interface is the text console and will not answer.
+        Network scan browses mDNS `_bugbuster._tcp`, which the firmware
+        advertises once it joins WiFi.
+
+        Use this when a connection fails, or to find the port to pass to the
+        server's --port. The server auto-detects by default, so you normally
+        do not need to.
 
         Parameters:
-        - timeout_s: how long to wait for responses (1-5 s typical).
+        - timeout_s: mDNS wait (1-5 s typical).
+        - usb / network: enable each scan.
 
-        Returns: list of devices with hostname, ip, port, firmware version,
-        mac, BBP protocol version, model. Requires the `zeroconf` extra
-        (`pip install "bugbuster[network]"`).
+        Returns: usb_ports (device, vid_pid, interface, likely_bbp_port),
+        active_transport/active_port, and network devices. mDNS needs the
+        `zeroconf` extra (`pip install "bugbuster[network]"`).
         """
-        try:
-            from bugbuster.discovery import discover_mdns
-        except ImportError as e:
-            return {
-                "error": str(e),
-                "hint": 'pip install "bugbuster[network]"',
-                "devices": [],
-            }
-        devs = discover_mdns(timeout=float(timeout_s))
-        return {
-            "count": len(devs),
-            "devices": [
+        out: dict = {}
+
+        if usb:
+            try:
+                from bugbuster.discovery import list_usb_ports
+                ports = list_usb_ports(all_ports=True)
+                out["usb_ports"] = [
+                    {
+                        "device": p.device,
+                        "vid_pid": f"{p.vid:04X}:{p.pid:04X}" if p.vid else None,
+                        "description": p.description,
+                        "interface": p.interface_index,
+                        "is_bugbuster": p.is_bugbuster,
+                    }
+                    for p in ports
+                ]
+                bb_ports = [p for p in ports if p.is_bugbuster]
+                out["likely_bbp_port"] = bb_ports[0].device if bb_ports else None
+            except Exception as exc:
+                out["usb_error"] = str(exc)
+            out["active_transport"] = session.get_transport()
+            out["active_port"] = session.get_port()
+
+        if network:
+            try:
+                from bugbuster.discovery import discover_mdns
+            except ImportError as e:
+                out["network_error"] = str(e)
+                out["hint"] = 'pip install "bugbuster[network]"'
+                out["devices"] = []
+                return out
+            devs = discover_mdns(timeout=float(timeout_s))
+            out["count"] = len(devs)
+            out["devices"] = [
                 {
                     "hostname": d.hostname,
                     "fqdn": d.fqdn,
@@ -333,5 +405,5 @@ def register(mcp) -> None:
                     "http_base": d.http_base,
                 }
                 for d in devs
-            ],
-        }
+            ]
+        return out

@@ -23,6 +23,7 @@ def register_all(mcp) -> None:
     from .hat        import register as reg_hat
     from .daq        import register as reg_daq
     from .daq_cal    import register as reg_daq_cal
+    from .daq_power  import register as reg_daq_power
 
     reg_discovery(mcp)
     reg_io_config(mcp)
@@ -40,3 +41,4 @@ def register_all(mcp) -> None:
     reg_hat(mcp)
     reg_daq(mcp)
     reg_daq_cal(mcp)
+    reg_daq_power(mcp)

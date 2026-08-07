@@ -14,6 +14,7 @@ started with ``--transport http``.
 """
 
 from __future__ import annotations
+import logging
 import os
 from typing import Optional
 
@@ -22,10 +23,34 @@ from bugbuster.ota import OTAClient, OTAError
 
 from .. import session
 
+log = logging.getLogger(__name__)
+
 
 def _make_ota(host: Optional[str], admin_token: Optional[str]) -> OTAClient:
     h = host or session._host
     t = admin_token or session._admin_token
+
+    # The OTA endpoints are HTTP-only, but a USB-connected session already holds
+    # an authenticated link that can answer both questions the HTTP client needs.
+    # Ask the device rather than making the operator copy a token and an IP by
+    # hand - GET_ADMIN_TOKEN is USB-only precisely so it can bootstrap this.
+    if session.is_usb():
+        bb = None
+        if not t:
+            try:
+                bb = session.get_client()
+                t = bb.get_admin_token()
+            except Exception as exc:
+                log.debug("admin-token auto-fetch failed: %s", exc)
+        if not host:
+            try:
+                bb = bb or session.get_client()
+                sta_ip = (bb.wifi_get_status() or {}).get("sta_ip")
+                if sta_ip and sta_ip != "0.0.0.0":
+                    h = sta_ip
+            except Exception as exc:
+                log.debug("STA IP auto-detect failed: %s", exc)
+
     if not h:
         raise ValueError(
             "ota tools need a host (e.g. '192.168.4.1' or 'http://bugbuster-a1b2c3.local'). "
