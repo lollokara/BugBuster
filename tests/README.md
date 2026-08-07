@@ -13,7 +13,7 @@ The suite has five layers:
 | **Synthetic** | `tests/synthetic/` | no | Regression tests for LA USB bulk/streaming protocol, generated stimuli, timing edge-cases |
 | **Device** | `tests/device/` | yes (or `--sim`) | The same tests, driven against real hardware over USB / HTTP, or against the simulator with `--sim` |
 
-Current posture (2026-08-07): **1144 passing**, 163 skipped, 2 xpassed across
+Current posture (2026-08-07): **1203 passing**, 163 skipped, 2 xpassed across
 `unit + synthetic + simulator + device --sim`, plus 6 passing and 17 skipped in
 `integration + http_api` (`--sim-full`). Skips are hardware-only paths
 (HAT / SWD / LA / DAQ).

@@ -146,6 +146,27 @@
 
 ### Fixed
 
+- **Commands that do real device work no longer time out as if the link were
+  dead.** The transport applied one 5 s timeout to every command, but some do
+  substantial work before replying: `HAT_GET_STATUS` is bridged to the P4 over
+  UART and `DAQ_CONFIG` stops and restarts the whole acquisition pipeline.
+  Setting a decimation therefore timed out repeatedly on the bench and looked
+  exactly like a wedged link - the device was working normally the whole time,
+  and a retry always succeeded. `CMD_TIMEOUTS_S` in `constants.py` now gives
+  those commands realistic budgets (15-60 s), resolved inside
+  `USBTransport.send_command()`.
+
+  The lookup deliberately lives in the transport, which already receives the
+  command id, rather than being threaded through `send_command()`'s signature:
+  the first attempt did the latter and broke 22 tests, because every test double
+  and call-args assertion in the suite hard-codes the two-argument form. An
+  explicit `timeout=` argument still wins when a caller needs one.
+
+  Diagnostic note: the timeouts were reported against `cmd=0xC5`, which is
+  `HAT_GET_STATUS`, **not** `DAQ_CONFIG` - every MCP DAQ tool calls it first via
+  `require_hat()`, so a short timeout there surfaces as "the whole link is
+  wedged" no matter which tool was invoked.
+
 - **The ADC sample rate silently reverted on every P4 reboot (2.4.3).** Sample
   Rate and Filter/Decimation are two front-ends onto one piece of hardware
   state, with no defined precedence. `daq_settings_apply_all()` walks the schema

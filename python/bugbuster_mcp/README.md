@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**93 tools in 16 groups, 6 resources, 4 prompt workflows.**
+**112 tools in 17 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -41,8 +41,8 @@ That is what an MCP server does.
 
 | Option | Default | Description |
 |---|---|---|
-| `--transport {usb,http}` | `usb` | Binary BBP over USB CDC, or JSON REST over WiFi |
-| `--port PATH` | - | Serial port (required for USB transport) |
+| `--transport {auto,usb,http}` | `auto` | `auto` picks USB when a board is attached and falls back to HTTP. Binary BBP over USB CDC, or JSON REST over WiFi |
+| `--port PATH` | auto-detect | Serial port. Omit it: the server ranks ports by USB descriptor and confirms with the BBP handshake |
 | `--host IP` | `192.168.4.1` | Device hostname or IP (HTTP transport) |
 | `--vlogic FLOAT` | `3.3` | Digital IO logic level in volts, 1.8–5.0 |
 | `--admin-token TOKEN` | - | HTTP admin auth token |
@@ -114,7 +114,7 @@ Claude Code, or your client's tool inspector. The groups:
 
 | Group | Count | Covers |
 |---|---:|---|
-| `discovery` | 8 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery |
+| `discovery` | 10 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
 | `io_config` | 3 | `configure_io` (required before any read/write), `set_supply_voltage`, `reset_device` |
 | `analog` | 5 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current` |
 | `digital` | 2 | `read_digital`, `write_digital` |
@@ -125,6 +125,7 @@ Claude Code, or your client's tool inspector. The groups:
 | `power` | 5 | USB-PD status and selection, rail/e-fuse control, WiFi status and AP password |
 | `hat` | 13 | Logic Analyzer HAT: capabilities, rail status and control, calibration, LED state, LA routing, IO bank, level shifters |
 | `daq` | 11 | Power Profiler Pro HAT: settings, source control, measurement, energy/charge reset, triggers |
+| `daq_power` | 17 | Power-consumption profiling over the P4's own USB-HS data plane: capture (blocking and async), energy/state/periodicity report, window zoom, A/B compare, marker windows, CSV export, supply/range/rate/stability control |
 | `daq_cal` | 4 | Power Profiler Pro HAT calibration flow |
 | `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
 | `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |

@@ -23,7 +23,7 @@ from typing import Callable, Optional
 import serial  # pyserial
 
 from ..protocol import HANDSHAKE_MAGIC, build_frame, parse_frame, ProtocolError
-from ..constants import MsgType, ErrorCode
+from ..constants import MsgType, ErrorCode, CMD_TIMEOUTS_S
 
 log = logging.getLogger(__name__)
 
@@ -310,9 +310,22 @@ class USBTransport:
         self._link_error = None
         self.connect()
 
-    def send_command(self, cmd_id: int, payload: bytes = b'') -> bytes:
+    def _resolve_timeout(self, cmd_id: int,
+                         timeout: Optional[float] = None) -> float:
+        """Explicit argument wins, then the per-command table, then the default."""
+        if timeout is not None:
+            return timeout
+        return CMD_TIMEOUTS_S.get(cmd_id, self._timeout)
+
+    def send_command(self, cmd_id: int, payload: bytes = b'',
+                     timeout: Optional[float] = None) -> bytes:
         """
         Send a CMD frame and block until the matching RSP arrives (or timeout).
+
+        ``timeout`` overrides the transport default for this call - some
+        commands legitimately take many seconds on the device (see
+        ``CMD_TIMEOUTS_S``), and timing those out looks identical to a dead
+        link while the firmware is still working.
 
         Returns the raw response payload bytes.
         Raises :class:`DeviceError` on ERR response, :class:`TimeoutError` on timeout.
@@ -323,6 +336,8 @@ class USBTransport:
                     f"USB link is down ({self._link_error}). "
                     f"Call reconnect() to recover.")
             self.reconnect()
+
+        wait = self._resolve_timeout(cmd_id, timeout)
 
         with self._seq_lock:
             seq = self._seq
@@ -338,12 +353,12 @@ class USBTransport:
             self._serial.flush()
 
         try:
-            result = resp_queue.get(timeout=self._timeout)
+            result = resp_queue.get(timeout=wait)
         except queue.Empty:
             with self._pending_lock:
                 self._pending.pop(seq, None)
             raise TimeoutError(
-                f"No response for cmd=0x{cmd_id:02X} seq={seq} within {self._timeout}s"
+                f"No response for cmd=0x{cmd_id:02X} seq={seq} within {wait}s"
             ) from None
 
         if isinstance(result, Exception):

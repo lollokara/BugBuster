@@ -23,7 +23,7 @@
 ## What this is
 
 BugBuster is a **bench instrument you can hand to an AI**. One USB-C cable, one
-board, and a Model Context Protocol server that exposes **93 tools** - so Claude
+board, and a Model Context Protocol server that exposes **112 tools** - so Claude
 (or any MCP client) can read voltages, drive outputs, capture logic traces, scan
 an I²C bus, profile power draw, and single-step a target over SWD without a
 human in the measurement loop.
@@ -373,7 +373,7 @@ PYTHONPATH=python pytest tests/unit tests/synthetic tests/simulator tests/device
 PYTHONPATH=python pytest tests/integration tests/http_api --sim-full -q
 ```
 
-**1144 passed, 163 skipped** on the first command - skips are hardware-only
+**1203 passed, 163 skipped** on the first command - skips are hardware-only
 paths; 6 passed, 17 skipped on the second. Add `--hat`, `--daq`, `--swd-target`
 and `--device-usb=<PORT>` to run the same assertions against real hardware.
 Coverage is ratcheted: a drop fails the build, and lowering the floor is an
@@ -426,7 +426,7 @@ BugBuster/
 │
 ├── python/
 │   ├── bugbuster/             Control library (USB + HTTP)
-│   ├── bugbuster_mcp/         MCP server (93 tools, 16 groups)
+│   ├── bugbuster_mcp/         MCP server (112 tools, 17 groups)
 │   └── examples/              Annotated example scripts
 │
 ├── tests/                     pytest - unit, simulator, hardware-in-the-loop

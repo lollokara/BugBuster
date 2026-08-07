@@ -533,3 +533,34 @@ class IoClaimStatus(IntEnum):
     INVALID_SLOT      = 0x03  # Slot index >= 16
     LEASE_EXPIRED     = 0x04  # Diagnostic only, never returned by claim
     ADMIN_REQUIRED    = 0x05  # Force-release attempted without admin token
+
+
+# ---------------------------------------------------------------------------
+# Per-command response timeouts (seconds)
+# ---------------------------------------------------------------------------
+# The default transport timeout suits commands the firmware answers from RAM.
+# These do real work first - reprogramming converters, restarting the
+# acquisition pipeline, sweeping a calibration, or waiting on the HAT UART
+# while the P4 is busy - and timing them out looks exactly like a dead link
+# while the device is still working normally. Anything absent uses the
+# transport default.
+CMD_TIMEOUTS_S = {
+    # Bridged to the HAT over UART; the P4 may be mid-restart after an
+    # acquisition change or a reboot. Every MCP tool calls this via
+    # require_hat(), so a short timeout here masquerades as a wedged link.
+    CmdId.HAT_GET_STATUS:      15.0,
+    # Writing filter / decimation / sample rate stops and restarts the whole
+    # capture path on the P4.
+    CmdId.DAQ_CONFIG:          20.0,
+    CmdId.DAQ_CAL:             20.0,
+    CmdId.DAQ_TRIG:            10.0,
+    CmdId.DAQ_MEASURE:         10.0,
+    # Calibration sweeps and supply diagnostics measure per point.
+    CmdId.HAT_CALIBRATE_START:  60.0,
+    CmdId.HAT_CALIBRATE_IMPORT: 30.0,
+    CmdId.SELFTEST_AUTO_CAL:    60.0,
+    CmdId.SELFTEST_INT_SUPPLIES: 30.0,
+    CmdId.SELFTEST_MEASURE_SUPPLY: 20.0,
+    # Arbitrary user code on the device.
+    CmdId.SCRIPT_EVAL:          30.0,
+}
