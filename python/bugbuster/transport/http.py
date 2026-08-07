@@ -12,7 +12,7 @@ USB pairing and passed to the constructor via ``admin_token`` or
 ``set_admin_token``. The matching firmware constant is
 ``ADMIN_TOKEN_HEADER`` in ``Firmware/ESP32/src/config.h``.
 
-See BugBusterProtocol.md and webserver.cpp for the full endpoint reference.
+See bbp-protocol.md and webserver.cpp for the full endpoint reference.
 """
 
 import json

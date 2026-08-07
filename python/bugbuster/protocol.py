@@ -23,7 +23,7 @@ ESP32_FW_VERSION = (3, 4, 0)
 
 # ---------------------------------------------------------------------------
 # COBS (Consistent Overhead Byte Stuffing)
-# Reference: BugBusterProtocol.md §4
+# Reference: bbp-protocol.md §4
 # ---------------------------------------------------------------------------
 
 def cobs_encode(data: bytes) -> bytes:
@@ -89,7 +89,7 @@ def cobs_decode(data: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 # CRC-16/CCITT
 # Poly 0x1021, init 0xFFFF, no reflection, no final XOR
-# Reference: BugBusterProtocol.md §5.3
+# Reference: bbp-protocol.md §5.3
 # ---------------------------------------------------------------------------
 
 def crc16_ccitt(data: bytes) -> int:

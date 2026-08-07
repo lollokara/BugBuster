@@ -51,7 +51,7 @@ If the calibration data is invalid or missing, the system falls back to theoreti
 Calibration is **scoped to the active board profile**: the NVS namespace used for calibration
 data is keyed by the current profile ID, so swapping profiles (via `GET/POST /api/board`)
 selects a different calibration table automatically.  See
-[`Docs/board_profiles.md`](../../Docs/board_profiles.md) for the profile schema.
+[`Docs/board-profiles.md`](../../Docs/board-profiles.md) for the profile schema.
 
 On-device calibration can also be triggered from MicroPython using the `bugbuster` module
 (e.g. `bugbuster.idac_cal(ch=1)`).  Refer to

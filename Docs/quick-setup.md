@@ -1,4 +1,4 @@
-# Quick Setup — NVS-backed Preset System
+# Quick Setup - NVS-backed Preset System
 
 Quick Setup lets you snapshot the entire board state (analog channels, DAC
 outputs, IDAC, power rails, GPIO, MUX) into one of four persistent slots and
@@ -13,17 +13,17 @@ because they are stored in the ESP32-S3 NVS (Non-Volatile Storage) partition.
 |---|---|
 | Slot count | 4 (`qs_slot_0` … `qs_slot_3`) |
 | Max payload per slot | 1000 bytes (JSON, unformatted) |
-| Persistence | NVS — survives power cycle and firmware reset |
+| Persistence | NVS - survives power cycle and firmware reset |
 | NVS namespace | `quicksetup` |
 | Auth required | `X-BugBuster-Admin-Token` header on all mutating endpoints |
 
 A snapshot captures:
 
-- **Analog channels** (0–3) — function, ADC mux/range/rate, DAC code, bipolar flag
-- **IDAC** (DS4424, channels 0–2) — raw DAC code (−127 … 127)
-- **PCA9535 power rails** — VADJ1, VADJ2, 15 V rail, USB-hub enable, logic-IO enable, e-fuses 1–4
-- **GPIO** (12 digital IOs) — mode (disabled / input / output) + output level
-- **MUX switch matrix** (ADGS2414D, 8 API devices) — per-device switch state
+- **Analog channels** (0–3) - function, ADC mux/range/rate, DAC code, bipolar flag
+- **IDAC** (DS4424, channels 0–2) - raw DAC code (−127 … 127)
+- **PCA9535 power rails** - VADJ1, VADJ2, 15 V rail, USB-hub enable, logic-IO enable, e-fuses 1–4
+- **GPIO** (12 digital IOs) - mode (disabled / input / output) + output level
+- **MUX switch matrix** (ADGS2414D, 8 API devices) - per-device switch state
 
 ---
 
@@ -40,7 +40,7 @@ the desktop app's Settings tab.
 
 ### GET /api/quicksetup
 
-List all four slots. Returns metadata only — not the full JSON payload.
+List all four slots. Returns metadata only - not the full JSON payload.
 
 **Response 200**
 
@@ -64,7 +64,7 @@ Fields:
 | `name` | string | `"name"` field from the stored JSON (default: `"Current Setup"`) |
 | `ts` | uint32 | Unix timestamp (seconds) at save time, or 0 |
 | `size` | uint16 | Stored payload size in bytes |
-| `summaryHash` | uint8 | FNV-1a hash byte — quick dirty-check |
+| `summaryHash` | uint8 | FNV-1a hash byte - quick dirty-check |
 
 ---
 
@@ -72,11 +72,11 @@ Fields:
 
 Return the full JSON payload for slot `{slot}` (0–3).
 
-**Response 200** — raw JSON blob (Content-Type: `application/json`).
+**Response 200** - raw JSON blob (Content-Type: `application/json`).
 
-**Response 404** — slot is empty.
+**Response 404** - slot is empty.
 
-**Response 400** — slot number out of range.
+**Response 400** - slot number out of range.
 
 ---
 
@@ -87,9 +87,9 @@ No request body is required; the firmware reads live hardware state.
 
 Requires `X-BugBuster-Admin-Token`.
 
-**Response 200** — the newly saved JSON snapshot.
+**Response 200** - the newly saved JSON snapshot.
 
-**Response 500** — save failed or snapshot exceeded 1000 bytes.
+**Response 500** - save failed or snapshot exceeded 1000 bytes.
 
 ---
 
@@ -106,9 +106,9 @@ any sub-operation could not be applied; the rest of the state is still applied.
 { "ok": true, "applied": true }
 ```
 
-**Response 404** — slot is empty.
+**Response 404** - slot is empty.
 
-**Response 409** — partial failure
+**Response 409** - partial failure
 
 ```json
 {
@@ -119,7 +119,7 @@ any sub-operation could not be applied; the rest of the state is still applied.
 ```
 
 The `failed` array contains up to 8 component names. The rest of the snapshot
-was applied before the failure was detected — check the specific components
+was applied before the failure was detected - check the specific components
 listed.
 
 ---
@@ -143,7 +143,7 @@ Requires `X-BugBuster-Admin-Token`.
 ## BBP Binary Commands
 
 All Quick Setup commands share the `0xF_` opcode range on the BBP v4 wire
-protocol (USB CDC #0). See [`Firmware/BugBusterProtocol.md`](../Firmware/BugBusterProtocol.md)
+protocol (USB CDC #0). See [`Firmware/bbp-protocol.md`](../Firmware/bbp-protocol.md)
 for full frame format.
 
 | Opcode | Name | Direction | Description |
@@ -159,7 +159,7 @@ for full frame format.
 ## Snapshot JSON Shape
 
 This is the JSON the firmware generates and stores. You do not normally need to
-construct it manually — use `POST /api/quicksetup/{slot}` to capture live state.
+construct it manually - use `POST /api/quicksetup/{slot}` to capture live state.
 
 ```json
 {
@@ -203,9 +203,9 @@ Key field reference:
 | `analog.channels[n].dacCode` | 0–65535 (raw 16-bit) |
 | `analog.channels[n].bipolar` | `true` = ±12 V VOUT range, `false` = 0–11 V |
 | `idac.codes[n]` | −127 … 127 (DS4424 raw code) |
-| `pca.efuse` | 4-element bool array — efuse1..4 enable |
+| `pca.efuse` | 4-element bool array - efuse1..4 enable |
 | `gpio[n].mode` | `0` = disabled, `1` = input, `2` = output |
-| `mux.devices` | 8-element array — ADGS2414D switch-register values |
+| `mux.devices` | 8-element array - ADGS2414D switch-register values |
 
 ---
 
@@ -215,9 +215,9 @@ The Overview tab shows four Quick Setup tiles (labelled **QS 0** – **QS 3**).
 Each tile displays the slot name, save timestamp, and payload size when
 occupied.
 
-- **Save** — snapshots current board state into that slot.
-- **Apply** — restores that slot to hardware.
-- **Delete** — erases the slot.
+- **Save** - snapshots current board state into that slot.
+- **Apply** - restores that slot to hardware.
+- **Delete** - erases the slot.
 
 On firmware older than the Quick Setup feature the tiles fall back gracefully:
 the UI catches `404` responses from `/api/quicksetup` and renders the tiles as

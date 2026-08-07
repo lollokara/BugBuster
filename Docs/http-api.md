@@ -229,11 +229,11 @@ rebooting it kills the orchestrator. A release with no DAQ HAT images reports
 
 ---
 
-## 11b. Power Profiler Pro HAT — DAQ (9 URIs)
+## 11b. Power Profiler Pro HAT - DAQ (9 URIs)
 
 Present only when a DAQ HAT is attached; the mainboard proxies each call to the
 ESP32-P4 over the HAT UART link. All of these are reachable over **BLE as well
-as HTTP** — they go through the shared `api_core` dispatcher, so no transport
+as HTTP** - they go through the shared `api_core` dispatcher, so no transport
 work was needed for either.
 
 | Endpoint | Method | Purpose |
@@ -250,7 +250,7 @@ work was needed for either.
 
 > [!NOTE]
 > The measured-voltage field in `vdut/status` is sourced from the ADAQ7769
-> acquisition chain, not a dedicated VDUT sense ADC — that does not exist on
+> acquisition chain, not a dedicated VDUT sense ADC - that does not exist on
 > this board.
 
 ---

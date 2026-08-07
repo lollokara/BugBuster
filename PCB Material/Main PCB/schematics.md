@@ -1,4 +1,4 @@
-# BugBuster — Schematics Reference
+# BugBuster - Schematics Reference
 
 On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`, `USB.SchDoc`, `Power.SchDoc`, `Analog.SchDoc`, `IOs.SchDoc`) and cross-referenced with `config.h` and the BOM.
 
@@ -16,11 +16,11 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 ## Table of Contents
 
 1. [Net / Power Rail Glossary](#1-net--power-rail-glossary)
-2. [Sheet 1 — ESP32](#2-sheet-1--esp32)
-3. [Sheet 2 — USB and Hub](#3-sheet-2--usb-and-hub)
-4. [Sheet 3 — Power and Adjustments](#4-sheet-3--power-and-adjustments)
-5. [Sheet 4 — ADC Section (AD74416H)](#5-sheet-4--adc-section-ad74416h)
-6. [Sheet 5 — IOs, MUX, and Connectors](#6-sheet-5--ios-mux-and-connectors)
+2. [Sheet 1 - ESP32](#2-sheet-1--esp32)
+3. [Sheet 2 - USB and Hub](#3-sheet-2--usb-and-hub)
+4. [Sheet 3 - Power and Adjustments](#4-sheet-3--power-and-adjustments)
+5. [Sheet 4 - ADC Section (AD74416H)](#5-sheet-4--adc-section-ad74416h)
+6. [Sheet 5 - IOs, MUX, and Connectors](#6-sheet-5--ios-mux-and-connectors)
 7. [Cross-Sheet Net Summary](#7-cross-sheet-net-summary)
 8. [I2C Bus Summary](#8-i2c-bus-summary)
 9. [SPI Bus Summary](#9-spi-bus-summary)
@@ -40,9 +40,9 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 | `VADJ1_BUCK` | LTM8063 U4 VOUT | Adjustable 3–15 V. Feeds output ports P1 and P2 via e-fuses. |
 | `VADJ2_BUCK` | LTM8063 U6 VOUT | Adjustable 3–15 V. Feeds output ports P3 and P4 via e-fuses. |
 | `2V5_REF` | ADR4525BRZ VOUT | Precision 2.5 V reference for AD74416H REFO. |
-| `5V_BUCK` → `4.7 µF` | — | Input bulk capacitor on 5V rail (C14, C28, C29). |
-| `ESP_SDA` | GPIO42 | I2C data — shared bus: DS4424, HUSB238, PCA9535. |
-| `ESP_SCL` | GPIO41 | I2C clock — shared bus. |
+| `5V_BUCK` → `4.7 µF` | - | Input bulk capacitor on 5V rail (C14, C28, C29). |
+| `ESP_SDA` | GPIO42 | I2C data - shared bus: DS4424, HUSB238, PCA9535. |
+| `ESP_SCL` | GPIO41 | I2C clock - shared bus. |
 | `SPI_SDO` | AD74416H SDO | SPI MISO (data from AD74416H to ESP32 GPIO18). |
 | `SPI_SDI` | ESP32 GPIO17 | SPI MOSI (data to AD74416H). |
 | `SPI_CS_ADC` | ESP32 GPIO40 | AD74416H SYNC (active-low chip select). |
@@ -66,12 +66,12 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 | `VADJ1_PG` | LTM8063 U4 PG | Power-good feedback to PCA9535. |
 | `VADJ2_PG` | LTM8063 U6 PG | Power-good feedback to PCA9535. |
 | `IDAC_OUT0–OUT3` | DS4424 OUT0–OUT3 | OUT0 → LTM8078 FB (VLOGIC), OUT1 → LTM8063 U4 FB (VADJ1), OUT2 → LTM8063 U6 FB (VADJ2), OUT3 = NC. |
-| `3V3_ADJ_EN` | PCA9535 P0.6 | TPS74601 enable pin (legacy, bit 6 — `EN_MUX` in firmware, unused on current PCB). |
+| `3V3_ADJ_EN` | PCA9535 P0.6 | TPS74601 enable pin (legacy, bit 6 - `EN_MUX` in firmware, unused on current PCB). |
 | `EXP_TX / EXP_RX` | ESP32 GPIO43/GPIO44 | HAT UART TX/RX (921600 8N1). Also used as UART bridge when HAT not present. |
 
 ---
 
-## 2. Sheet 1 — ESP32
+## 2. Sheet 1 - ESP32
 
 **Component:** U1 = ESP32-S3-WROOM-1-N8R2
 **Supply:** 3V3_BUCK → module pin 2 (3V3)
@@ -97,7 +97,7 @@ On-board connections documented from the Altium schematic sheets (`ESP32.SchDoc`
 BOOT button (430473035826): A1/A2 ── GND,  B1/B2 ── LED_DIN net
 ```
 
-> **Note:** The BOOT button shares the `LED_DIN` net label in the schematic with a **PowerNets** annotation. This is the GPIO0 strapping pin used to enter download mode. The R5 pull-up ensures GPIO0 is HIGH (normal boot) when button is released. [UNSURE — verify PowerNets annotation meaning]
+> **Note:** The BOOT button shares the `LED_DIN` net label in the schematic with a **PowerNets** annotation. This is the GPIO0 strapping pin used to enter download mode. The R5 pull-up ensures GPIO0 is HIGH (normal boot) when button is released. [UNSURE - verify PowerNets annotation meaning]
 
 ### 2.3 I2C Pull-up Resistors
 
@@ -110,8 +110,8 @@ BOOT button (430473035826): A1/A2 ── GND,  B1/B2 ── LED_DIN net
 
 | Ref | Value | Connected to |
 |-----|-------|-------------|
-| C2 | 1 µF | U1 EN — GND |
-| C3 | 22 µF | U1 EN — GND |
+| C2 | 1 µF | U1 EN - GND |
+| C3 | 22 µF | U1 EN - GND |
 
 ### 2.5 GPIO Pin Assignments
 
@@ -169,9 +169,9 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 
 ---
 
-## 3. Sheet 2 — USB and Hub
+## 3. Sheet 2 - USB and Hub
 
-### 3.1 J1 — USB-C Device Connector (ESP32 native USB)
+### 3.1 J1 - USB-C Device Connector (ESP32 native USB)
 
 **Component:** USB4125-GF-A-0190 (6-pin SMD right-angle USB-C)
 
@@ -182,9 +182,9 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 | CC2 (B5) | CC2 | → HUSB238 CC2, R14 (5.1 kΩ) pull-down to GND |
 | D+ (A6 / Dp1) | USB_UP_P | → D4 (TPD2E1B06DRLR) IOB1/IOB2 |
 | D− (A7 / Dn1) | USB_UP_N | → D4 (TPD2E1B06DRLR) IOA1/IOA2 |
-| MNT (shell) | GND | — |
+| MNT (shell) | GND | - |
 
-### 3.2 J2 — USB-C Hub Upstream Connector
+### 3.2 J2 - USB-C Hub Upstream Connector
 
 **Component:** USB4085-GF-A (24-pin SMD right-angle USB-C)
 
@@ -192,13 +192,13 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 |-------------|-----|-------------|
 | VBUS (A4/A9/B4/B9) | VBUS | → D5 (NRVBA340T3G Schottky) anode |
 | D5 cathode | 5V_BUCK | Main 5 V supply feed |
-| CC1 (A5) / CC2 (B5) | CC1/CC2 | → U2 (USB2422) SMBCLK/SMBDATA ??? [UNSURE — likely not connected per hub config] |
+| CC1 (A5) / CC2 (B5) | CC1/CC2 | → U2 (USB2422) SMBCLK/SMBDATA ??? [UNSURE - likely not connected per hub config] |
 | SBU1/SBU2, DP1/DN1, DP2/DN2 | USB_UP_P / USB_UP_N | → D4 ESD protection → U2 USBDP UP / USBDM UP |
-| MNT | GND | — |
+| MNT | GND | - |
 
-> R13, R14 (5.1 kΩ): CC pull-down resistors — sets J1 as UFP (device, power consumer).
+> R13, R14 (5.1 kΩ): CC pull-down resistors - sets J1 as UFP (device, power consumer).
 
-### 3.3 D4 — USB ESD Protection
+### 3.3 D4 - USB ESD Protection
 
 **Component:** TPD2E1B06DRLR (TVS diode 5.5 V / 15 V, SOT-6)
 
@@ -210,7 +210,7 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 | IOB2 | USB_UP_P (to U2) |
 | GND | GND |
 
-### 3.4 D5 — VBUS Reverse-Polarity / Isolation Diode
+### 3.4 D5 - VBUS Reverse-Polarity / Isolation Diode
 
 **Component:** NRVBA340T3G (Schottky 40 V, 3 A, SMA)
 
@@ -219,7 +219,7 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 | Anode | VBUS (from J2) |
 | Cathode | 5V_BUCK |
 
-### 3.5 U22 — HUSB238 (USB-PD Sink Controller)
+### 3.5 U22 - HUSB238 (USB-PD Sink Controller)
 
 **I2C address: 0x08 (fixed)**
 
@@ -232,10 +232,10 @@ Driven via ESP-IDF RMT peripheral at 10 MHz, GRB byte order.
 | SCL | ESP_SCL | I2C (addr 0x08) |
 | SDA | ESP_SDA | I2C |
 | ISET | R11 (22.6 kΩ) → GND | Sets current limit |
-| VSET | R12 = NC | [UNSURE — NC resistor in BOM] |
-| GND | GND | — |
+| VSET | R12 = NC | [UNSURE - NC resistor in BOM] |
+| GND | GND | - |
 
-### 3.6 Q1 — AONR21307 (P-ch MOSFET, 30 V, 3×3 DFN)
+### 3.6 Q1 - AONR21307 (P-ch MOSFET, 30 V, 3×3 DFN)
 
 Controls connection from VBUS to 20V_USB rail.
 
@@ -243,11 +243,11 @@ Controls connection from VBUS to 20V_USB rail.
 |-----|-----|
 | Source | 20V_USB |
 | Gate | HUSB238 GATE (via R9/R10 divider) |
-| Drain | [UNSURE — output side, feeds LTM8078 and LTM8063 VIN] |
+| Drain | [UNSURE - output side, feeds LTM8078 and LTM8063 VIN] |
 
 > When HUSB238 GATE goes low (≈0 V), Q1 turns on (P-ch). The 49.9 kΩ / 5.1 kΩ divider between GATE and the rail scales the drive voltage for the gate threshold.
 
-### 3.7 U2 — USB2422T/MJ (USB 2.0 Hub Controller)
+### 3.7 U2 - USB2422T/MJ (USB 2.0 Hub Controller)
 
 **Crystal:** Y1 = ABM11W-24.0000MHz-8-B1U-T3 with C9, C10 (8 pF) load capacitors.
 
@@ -257,23 +257,23 @@ Controls connection from VBUS to 20V_USB rail.
 | VBUS DET | VBUS | Bus detect |
 | USBDP UP / USBDM UP | USB_UP_P / USB_UP_N | Upstream port (to J1 via D4) |
 | USBDP DN1 / USBDM DN1 | USB_DF1_P / USB_DF1_N | Downstream port 1 → ESP32 GPIO20/GPIO19 (native USB) |
-| USBDP DN2 / USBDM DN2 | USB_DF2_P / USB_DF2_N | Downstream port 2 → [UNSURE — external connector?] |
+| USBDP DN2 / USBDM DN2 | USB_DF2_P / USB_DF2_N | Downstream port 2 → [UNSURE - external connector?] |
 | RESET N | R15 (100 kΩ) → 3V3_BUCK | Pull-up (active low reset, released at power-on) |
-| EN_USB_HUB (SUSP IND / LOCAL PWR) | R16 (100 kΩ) → 3V3_BUCK | [UNSURE — whether this is directly the EN_USB_HUB signal or tied high] |
+| EN_USB_HUB (SUSP IND / LOCAL PWR) | R16 (100 kΩ) → 3V3_BUCK | [UNSURE - whether this is directly the EN_USB_HUB signal or tied high] |
 | SMBCLK / CFG SEL0 | GND | Configures hub via strapping |
 | SMBDATA / NON REM1 | GND | Configures hub via strapping |
 | XTALIN / XTALOUT | Y1 with C9/C10 | 24 MHz crystal |
 | CRFILT | R17 (12 kΩ) → C7 → GND | PLL filter |
-| RBIAS | [UNSURE — resistor to GND] | Bias current setting |
-| OCS1 N, OCS2 N | [× — not connected] | Over-current sense (unused) |
+| RBIAS | [UNSURE - resistor to GND] | Bias current setting |
+| OCS1 N, OCS2 N | [× - not connected] | Over-current sense (unused) |
 | PRTPWR1, PRTPWR2 | [× or to PCA9535] | Port power control [UNSURE] |
-| VSS | GND | — |
+| VSS | GND | - |
 
 ---
 
-## 4. Sheet 3 — Power and Adjustments
+## 4. Sheet 3 - Power and Adjustments
 
-### 4.1 U3 — LTM8078EY#PBF (Dual 40 V, 3 A Silent Switcher)
+### 4.1 U3 - LTM8078EY#PBF (Dual 40 V, 3 A Silent Switcher)
 
 Generates 5V_BUCK and 3V3_BUCK from 20V_USB.
 
@@ -283,8 +283,8 @@ Generates 5V_BUCK and 3V3_BUCK from 20V_USB.
 | VOUT1 | 5V_BUCK | 5 V output; R21 (45.3 kΩ) + R23 (78.7 kΩ) on FB1 set voltage |
 | VOUT2 | 3V3_BUCK | 3.3 V output; FB2 resistor network [UNSURE exact values] |
 | FB1 | R21 / R23 divider | Sets VOUT1 = 5 V |
-| FB2 | Resistor divider | Sets VOUT2 = 3.3 V [UNSURE — resistor refs] |
-| CLKOUT | → U4/U6 SYNC (?) | [UNSURE — may synchronise the DCDC switchers] |
+| FB2 | Resistor divider | Sets VOUT2 = 3.3 V [UNSURE - resistor refs] |
+| CLKOUT | → U4/U6 SYNC (?) | [UNSURE - may synchronise the DCDC switchers] |
 | PG1 | 5V power-good | [UNSURE destination] |
 | PG2 | 3V3 power-good | [UNSURE destination] |
 | RT | Timing resistor | [UNSURE value] |
@@ -297,7 +297,7 @@ Generates 5V_BUCK and 3V3_BUCK from 20V_USB.
 > - 5V_BUCK: C11 (0.1 µF) + C12 (22 µF)
 > - 3V3_BUCK: C16 (0.1 µF) + C17 (22 µF)
 
-### 4.2 U5 — TPS74601PDRVT (1 A LDO, Adjustable)
+### 4.2 U5 - TPS74601PDRVT (1 A LDO, Adjustable)
 
 Generates 3V3_ADJ (adjustable ~3.3 V) for AD74416H analog sub-supply.
 
@@ -310,7 +310,7 @@ Generates 3V3_ADJ (adjustable ~3.3 V) for AD74416H analog sub-supply.
 | PG | ANA_PG | Power-good output → ESP32 GPIO48 (via R7 pull-up to 3V3_BUCK) |
 | EP | GND | Exposed thermal pad |
 
-### 4.3 U4 and U6 — LTM8063EY#PBF (Adjustable 0.8–15 V, 2 A DCDC)
+### 4.3 U4 and U6 - LTM8063EY#PBF (Adjustable 0.8–15 V, 2 A DCDC)
 
 Two identical adjustable buck converters. Output voltage set by DS4424 current injection into the FB pin.
 
@@ -324,15 +324,15 @@ Two identical adjustable buck converters. Output voltage set by DS4424 current i
 | FB | R20 (45.3 kΩ) to VOUT + IDAC_OUT1 | R27 (45.3 kΩ) + IDAC_OUT2 | DS4424 current injection shifts FB voltage, adjusting Vout |
 | PG | VADJ1_PG | VADJ2_PG | Power-good → PCA9535 input |
 | VOUT | VADJ1_BUCK | VADJ2_BUCK | C18 / C26 (22 µF) output decoupling |
-| TR/SS | C19 / C27 (10000 pF = 10 nF) | — | Soft-start cap (4 ms SS annotation visible in schematic) |
-| SYNC | [UNSURE — possibly from LTM8078 CLKOUT] | — | — |
-| RT | [UNSURE — resistor to GND] | — | Frequency-setting resistor |
+| TR/SS | C19 / C27 (10000 pF = 10 nF) | - | Soft-start cap (4 ms SS annotation visible in schematic) |
+| SYNC | [UNSURE - possibly from LTM8078 CLKOUT] | - | - |
+| RT | [UNSURE - resistor to GND] | - | Frequency-setting resistor |
 | GND | GND | GND | Multiple pins |
 
 > **Voltage adjustment mechanism:**
 > The DS4424 current DAC output (IDAC_OUT1, IDAC_OUT2) injects or sinks a small current into the LTM8063 feedback node. This shifts the FB voltage seen by the converter, causing it to adjust its output to a different level than the R20/R27 fixed resistor alone would set.
 
-### 4.4 U7 — LTM8049IY (Dual ±2.5 V to ±24 V DCDC)
+### 4.4 U7 - LTM8049IY (Dual ±2.5 V to ±24 V DCDC)
 
 Generates ±15 V analog supplies for the AD74416H.
 
@@ -342,15 +342,15 @@ Generates ±15 V analog supplies for the AD74416H.
 | VOUT1P | +15V_ANA | R30 (165 kΩ) in feedback; C32 (22 µF), C34 (47 µF) output cap |
 | VOUT2N | -15V_ANA | R37 (178 kΩ) in feedback; C (47 µF) output cap |
 | RUN1, RUN2 | EN_15V_A | Enable from PCA9535. Soft-start cap C20 (10 nF, 20 ms SS annotation visible). |
-| PG2 | ANA_PG | Power-good output. R96 (100 kΩ) pull-up to 3V3_BUCK. Same net as TPS74601 PG — both supply power-good signals are wire-OR'd onto ANA_PG. |
+| PG2 | ANA_PG | Power-good output. R96 (100 kΩ) pull-up to 3V3_BUCK. Same net as TPS74601 PG - both supply power-good signals are wire-OR'd onto ANA_PG. |
 | FBX1 | R30 (165 kΩ) to VOUT1P | Sets +15 V feedback. |
 | FBX2 | R37 (178 kΩ) to VOUT2N | Sets −15 V feedback. |
-| SHARE1, SHARE2 | [UNSURE — possibly current sharing between internal converters] | |
+| SHARE1, SHARE2 | [UNSURE - possibly current sharing between internal converters] | |
 | CLKOUT1/CLKOUT2 | [UNSURE] | |
 | SYNC1, SYNC2 | [UNSURE] | |
 | GND | GND | C (0.1 µF + larger bulk) decoupling caps |
 
-### 4.5 U8 — DS4424+ (4-ch I²C Current DAC)
+### 4.5 U8 - DS4424+ (4-ch I²C Current DAC)
 
 **I2C address: 0x10 (7-bit) / 0x20 (8-bit write address). A0=GND, A1=GND.**
 
@@ -365,26 +365,26 @@ Generates ±15 V analog supplies for the AD74416H.
 | A1 | GND via R34 (154 kΩ) | Address bit 1 = 0 |
 | FS0 | R35 (154 kΩ) → GND | Full-scale current range select [UNSURE exact purpose] |
 | FS1–FS3 | R36 (154 kΩ) → GND | Full-scale range [UNSURE] |
-| OUT0 | IDAC_OUT0 | → LTM8078 Out2 (VLOGIC) FB node — adjusts level-shifter voltage (1.7–5.2 V, default 3.3 V) |
-| OUT1 | IDAC_OUT1 | → LTM8063 U4 (VADJ1) FB node — adjusts Block 1 supply (3–15 V) |
-| OUT2 | IDAC_OUT2 | → LTM8063 U6 (VADJ2) FB node — adjusts Block 2 supply (3–15 V) |
-| OUT3 | IDAC_OUT3 | [UNSURE — destination; possibly unused] |
-| EP | GND | — |
+| OUT0 | IDAC_OUT0 | → LTM8078 Out2 (VLOGIC) FB node - adjusts level-shifter voltage (1.7–5.2 V, default 3.3 V) |
+| OUT1 | IDAC_OUT1 | → LTM8063 U4 (VADJ1) FB node - adjusts Block 1 supply (3–15 V) |
+| OUT2 | IDAC_OUT2 | → LTM8063 U6 (VADJ2) FB node - adjusts Block 2 supply (3–15 V) |
+| OUT3 | IDAC_OUT3 | [UNSURE - destination; possibly unused] |
+| EP | GND | - |
 
-### 4.6 U21 — ADR4525BRZ (Precision 2.5 V Voltage Reference)
+### 4.6 U21 - ADR4525BRZ (Precision 2.5 V Voltage Reference)
 
 | Pin | Net | Notes |
 |-----|-----|-------|
 | VIN | 5V_BUCK | C77 (1 µF) + C78 (0.1 µF) decoupling |
 | VOUT | 2V5_REF | → AD74416H REFO. C79 (1 µF) + C80 (1 µF) output decoupling |
-| GND | GND | — |
-| NC | — | Unused pins (U21B in schematic notation is the same IC, second footprint section) |
+| GND | GND | - |
+| NC | - | Unused pins (U21B in schematic notation is the same IC, second footprint section) |
 
 ---
 
-## 5. Sheet 4 — ADC Section (AD74416H)
+## 5. Sheet 4 - ADC Section (AD74416H)
 
-### 5.1 U9 — AD74416HBCPZ (Quad-Channel Software-Configurable I/O)
+### 5.1 U9 - AD74416HBCPZ (Quad-Channel Software-Configurable I/O)
 
 **SPI device address: 0x00 (AD0=AD1=GND)**
 
@@ -399,7 +399,7 @@ Generates ±15 V analog supplies for the AD74416H.
 | DVCC81 | 3V3_ADJ (or 3V3_BUCK) [UNSURE] | C36 (10 µF) |
 | LVIN | -15V_ANA | C57 (0.1 µF) + C58 (10 µF) |
 | REFO | 2V5_REF | C44 (0.022 µF) |
-| AGND / DGND | GND | — |
+| AGND / DGND | GND | - |
 
 #### SPI and Control Pins
 
@@ -494,13 +494,13 @@ SNS_LF_x ──── AD74416H SELSELF_x (or SENSELF_x)
 
 #### ADC Channel Output Connectors
 
-Signals labeled `ADC_OUT_1` through `ADC_OUT_4` connect to J3/J4/J5 headers (M20-7830442, 8-position, 2.54 mm). [UNSURE — exact signal mapping per connector position]
+Signals labeled `ADC_OUT_1` through `ADC_OUT_4` connect to J3/J4/J5 headers (M20-7830442, 8-position, 2.54 mm). [UNSURE - exact signal mapping per connector position]
 
 ---
 
-## 6. Sheet 5 — IOs, MUX, and Connectors
+## 6. Sheet 5 - IOs, MUX, and Connectors
 
-### 6.1 U20 — PCA9535AHF (16-bit I²C GPIO Expander)
+### 6.1 U20 - PCA9535AHF (16-bit I²C GPIO Expander)
 
 **I2C address: 0x23 (A2=0, A1=1, A0=1)**
 24-pin HWQFN.
@@ -510,13 +510,13 @@ Signals labeled `ADC_OUT_1` through `ADC_OUT_4` connect to J3/J4/J5 headers (M20
 | SDA | ESP_SDA | I2C, pull-up on ESP32 sheet (R1 5.1 kΩ) |
 | SCL | ESP_SCL | I2C, pull-up R2 |
 | INT | MUX_INT | Active-low interrupt → ESP32 GPIO3 |
-| A0 | [pulled to set addr bit 0 = 1] | [UNSURE — resistor to VCC or GND] |
+| A0 | [pulled to set addr bit 0 = 1] | [UNSURE - resistor to VCC or GND] |
 | A1 | [pulled to set addr bit 1 = 1] | [UNSURE] |
 | A2 | GND (addr bit 2 = 0) | [UNSURE] |
-| VCC | 3V3_BUCK | — |
-| GND | GND | — |
+| VCC | 3V3_BUCK | - |
+| GND | GND | - |
 
-Port assignments [UNSURE — partially readable from schematic]:
+Port assignments [UNSURE - partially readable from schematic]:
 
 | Port | Bit | Net | Function |
 |------|-----|-----|---------|
@@ -534,25 +534,25 @@ Port assignments [UNSURE — partially readable from schematic]:
 
 > Full port map is not clearly readable at the available schematic resolution. The above is based on cross-referencing firmware (`pca9535.h/.cpp`) and partial schematic reading.
 
-### 6.2 U13 and U15 — TXS0108EPWR (8-bit Bidirectional Level Translator)
+### 6.2 U13 and U15 - TXS0108EPWR (8-bit Bidirectional Level Translator)
 
 Two identical instances, one per MUX block.
 
 | Pin | Net | Notes |
 |-----|-----|-------|
 | VCCA | 3V3_BUCK | Low-voltage side (ESP32 SPI logic, 3.3 V) |
-| VCCB | 5V_BUCK (visible in image) | High-voltage side for ADGS logic supply. [UNSURE — could be VADJ1/VADJ2 depending on which switches are connected; schematic image shows 5V_BUCK label on VCCB] |
+| VCCB | 5V_BUCK (visible in image) | High-voltage side for ADGS logic supply. [UNSURE - could be VADJ1/VADJ2 depending on which switches are connected; schematic image shows 5V_BUCK label on VCCB] |
 | OE | LVL_OE (ESP32 GPIO14) | Active-high output enable |
 | A1–A8 | SPI_SDI, SPI_SCLK, SPI_CS_MUX + control signals (3.3 V side) | From ESP32 |
 | B1–B8 | Level-shifted signals to ADGS2414D daisy-chain | To MUX switches |
 
-### 6.3 U10, U11, U16, U17 — ADGS2414DBCCZ (Octal SPST Analog Switch, MUX Matrix)
+### 6.3 U10, U11, U16, U17 - ADGS2414DBCCZ (Octal SPST Analog Switch, MUX Matrix)
 
 Four devices daisy-chained for the 32-switch signal routing matrix (U10, U11, U16, U17).
 
 | Pin | Net / Notes |
 |-----|------------|
-| VDD | VADJ1_BUCK or VADJ2_BUCK [UNSURE — which devices on which rail] |
+| VDD | VADJ1_BUCK or VADJ2_BUCK [UNSURE - which devices on which rail] |
 | GND | GND |
 | DIN | SPI MOSI (via TXS0108E level shifter) |
 | SCLK | SPI_SCLK (via level shifter) |
@@ -562,7 +562,7 @@ Four devices daisy-chained for the 32-switch signal routing matrix (U10, U11, U1
 
 `ADGS_NUM_DEVICES = 4` on PCB, plus U23 self-test = **5 total** in the daisy-chain. The shift register is 40 bits wide (5 × 8 switches), all sharing CS GPIO21.
 
-### 6.3a U23 — ADGS2414DBCCZ (Self-Test / Monitoring Switch)
+### 6.3a U23 - ADGS2414DBCCZ (Self-Test / Monitoring Switch)
 
 **U23 is the 5th device in the daisy-chain** (device index 4, same CS pin as the main 4).
 
@@ -577,7 +577,7 @@ Purpose: routes internal power rails and e-fuse IMON (current monitor) pins to a
 | 2 | S3 | EFUSE_MON_2 current sense |
 | 3 | S4 | AD74416H CH_D → shared measurement rail (R106 = 1 MΩ to GND) |
 | 4 | S5 | EFUSE_MON_4 current sense |
-| 5 | S6 | 3V3_ADJ (VLOGIC, direct — no divider) |
+| 5 | S6 | 3V3_ADJ (VLOGIC, direct - no divider) |
 | 6 | S7 | VADJ1_BUCK (via R107/R109 divider, ratio=0.7222) |
 | 7 | S8 | VADJ2_BUCK (via R108/R110 divider, ratio=0.7222) |
 
@@ -585,7 +585,7 @@ Purpose: routes internal power rails and e-fuse IMON (current monitor) pins to a
 
 **SAFETY INTERLOCK:** U17 S3 (device 2, bit 2) and U23 are **mutually exclusive**. Both route to AD74416H Channel D via a shared measurement rail.
 
-### 6.4 U12, U14, U18, U19 — TPS16410DRCR (E-Fuse, 2.7–40 V, 1.8 A)
+### 6.4 U12, U14, U18, U19 - TPS16410DRCR (E-Fuse, 2.7–40 V, 1.8 A)
 
 One per output port (P1–P4).
 
@@ -596,7 +596,7 @@ One per output port (P1–P4).
 | EN | EFUSE_EN_x from PCA9535 | Active-high enable |
 | FLT | EFUSE_FLT_x to PCA9535 | Active-low fault flag |
 | ILIM | R (to GND) | Sets current limit threshold |
-| GND | GND | — |
+| GND | GND | - |
 
 ### 6.5 Physical IO Architecture
 
@@ -604,23 +604,23 @@ The BugBuster has **12 physical IOs** organized into **2 Blocks**, each containi
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ BLOCK 1 — VADJ1 (3–15 V adjustable via IDAC ch 1)                     │
+│ BLOCK 1 - VADJ1 (3–15 V adjustable via IDAC ch 1)                     │
 │                                                                         │
 │   IO_Block 1 (EFUSE1)          IO_Block 2 (EFUSE2)                     │
 │   ┌─────────────────────┐      ┌─────────────────────┐                 │
-│   │ IO 1  — analog/HAT  │      │ IO 4  — analog/HAT  │                 │
-│   │ IO 2  — digital     │      │ IO 5  — digital     │                 │
-│   │ IO 3  — digital     │      │ IO 6  — digital     │                 │
+│   │ IO 1 - analog/HAT  │      │ IO 4 - analog/HAT  │                 │
+│   │ IO 2 - digital     │      │ IO 5 - digital     │                 │
+│   │ IO 3 - digital     │      │ IO 6 - digital     │                 │
 │   │ VCC   GND           │      │ VCC   GND           │                 │
 │   └─────────────────────┘      └─────────────────────┘                 │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ BLOCK 2 — VADJ2 (3–15 V adjustable via IDAC ch 2)                     │
+│ BLOCK 2 - VADJ2 (3–15 V adjustable via IDAC ch 2)                     │
 │                                                                         │
 │   IO_Block 3 (EFUSE3)          IO_Block 4 (EFUSE4)                     │
 │   ┌─────────────────────┐      ┌─────────────────────┐                 │
-│   │ IO 7  — analog/HAT  │      │ IO 10 — analog/HAT  │                 │
-│   │ IO 8  — digital     │      │ IO 11 — digital     │                 │
-│   │ IO 9  — digital     │      │ IO 12 — digital     │                 │
+│   │ IO 7 - analog/HAT  │      │ IO 10 - analog/HAT  │                 │
+│   │ IO 8 - digital     │      │ IO 11 - digital     │                 │
+│   │ IO 9 - digital     │      │ IO 12 - digital     │                 │
 │   │ VCC   GND           │      │ VCC   GND           │                 │
 │   └─────────────────────┘      └─────────────────────┘                 │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -634,7 +634,7 @@ Each IO_Block's VCC pin is only active when ALL of:
 3. E-fuse fault-free (EFUSE_FLT_x clear)
 4. Supply power-good (VADJ1_PG or VADJ2_PG asserted)
 
-#### IO Capabilities (MUX-exclusive — one function per IO at a time)
+#### IO Capabilities (MUX-exclusive - one function per IO at a time)
 
 | IO | Position | MUX Options |
 |----|----------|-------------|
@@ -650,11 +650,11 @@ Each IO_Block's VCC pin is only active when ALL of:
 | C     | 3        | IO9       | 2                  | U17 / 2    | GPIO10     | EFUSE3 |
 | D     | 4        | IO12      | 3                  | U16 / 3    | GPIO13     | EFUSE4 |
 
-#### VLOGIC — Common Logic Level
+#### VLOGIC - Common Logic Level
 
 All digital IOs are level-shifted to **VLOGIC** (1.7–5.2 V adjustable) via TXS0108E (U13, U15).
 - Controlled by: DS4424 IDAC OUT0 → LTM8078 Out2 feedback (NOT TPS74601)
-- Output Enable: ESP32 GPIO14 (LVL_OE) — **must be enabled** for any digital signal to pass
+- Output Enable: ESP32 GPIO14 (LVL_OE) - **must be enabled** for any digital signal to pass
 
 #### Serial Bridge
 
@@ -674,7 +674,7 @@ Each ADGS2414D device handles one IO_Block (3 IOs).
 | 2      | U17  | 3        | 7, 8, 9  | 8, 9, 10      |
 | 3      | U16  | 4        | 10,11,12 | 11, 12, 13    |
 
-Note: The analog-capable IOs (3rd position in each IO_Block) map as IO3→GPIO1, IO6→GPIO5, IO9→GPIO10, IO12→GPIO13. These do NOT conflict with SPI/I2C pins — the SPI bus uses GPIO16-18/40 on the production PCB.
+Note: The analog-capable IOs (3rd position in each IO_Block) map as IO3→GPIO1, IO6→GPIO5, IO9→GPIO10, IO12→GPIO13. These do NOT conflict with SPI/I2C pins - the SPI bus uses GPIO16-18/40 on the production PCB.
 
 #### Switch Group Structure (per device)
 
@@ -700,7 +700,7 @@ Group C (bits 6-7, S7-S8): Digital IO (position 3)
 ### 6.6 Terminal Block Connectors
 
 **Component:** Wurth 691382010005 (5-position, right-angle, screw terminal)
-(BOM: P1, P2, P3, P4 — one per IO_Block)
+(BOM: P1, P2, P3, P4 - one per IO_Block)
 
 | Position | Signal | Notes |
 |----------|--------|-------|
@@ -708,7 +708,7 @@ Group C (bits 6-7, S7-S8): Digital IO (position 3)
 | 2–4 | IO signals | Routed through ADGS2414D MUX matrix |
 | 5 | GND | Signal ground |
 
-#### Fifth MUX (U23) — Self-Test / Monitoring / Auto-Calibration
+#### Fifth MUX (U23) - Self-Test / Monitoring / Auto-Calibration
 
 U23 is the 5th ADGS2414D in the same daisy-chain (device index 4, same CS pin).
 Routes internal power rails and e-fuse IMON pins to a shared measurement rail,
@@ -716,22 +716,22 @@ which connects to AD74416H Channel D via S4.
 
 ```
 Switch Mapping:
-  S1 (bit 0): EFUSE_MON_3     — e-fuse 3 IMON (current monitor)
-  S2 (bit 1): EFUSE_MON_1     — e-fuse 1 IMON
-  S3 (bit 2): EFUSE_MON_2     — e-fuse 2 IMON
-  S4 (bit 3): ADC_OUT_4       — AD74416H Ch D → shared rail (MUST be closed for any measurement)
-  S5 (bit 4): EFUSE_MON_4     — e-fuse 4 IMON
-  S6 (bit 5): VADJ1_BUCK      — via R107(34.8kΩ)/R109(100kΩ) divider, ratio=0.7222 (measured)
-  S7 (bit 6): VADJ2_BUCK      — via R108(34.8kΩ)/R110(100kΩ) divider, ratio=0.7222 (measured)
-  S8 (bit 7): 3V3_ADJ         — VLOGIC, direct (no divider)
+  S1 (bit 0): EFUSE_MON_3 - e-fuse 3 IMON (current monitor)
+  S2 (bit 1): EFUSE_MON_1 - e-fuse 1 IMON
+  S3 (bit 2): EFUSE_MON_2 - e-fuse 2 IMON
+  S4 (bit 3): ADC_OUT_4 - AD74416H Ch D → shared rail (MUST be closed for any measurement)
+  S5 (bit 4): EFUSE_MON_4 - e-fuse 4 IMON
+  S6 (bit 5): VADJ1_BUCK - via R107(34.8kΩ)/R109(100kΩ) divider, ratio=0.7222 (measured)
+  S7 (bit 6): VADJ2_BUCK - via R108(34.8kΩ)/R110(100kΩ) divider, ratio=0.7222 (measured)
+  S8 (bit 7): 3V3_ADJ - VLOGIC, direct (no divider)
 
 D-side: all switches share one rail with R106 (1 MΩ) to GND (prevents floating).
 ```
 
 **IMON scaling (TPS1641x):** G_IMON = 50 µA/A, R_IOCP = 11 kΩ → V_IMON = I_OUT × 550 mV/A
 
-**SAFETY INTERLOCK:** U23 and U17 S3 (device 2, bit 2 — IO9 analog mode) are **mutually exclusive**.
-Both route to AD74416H Channel D — closing both simultaneously creates a short path.
+**SAFETY INTERLOCK:** U23 and U17 S3 (device 2, bit 2 - IO9 analog mode) are **mutually exclusive**.
+Both route to AD74416H Channel D - closing both simultaneously creates a short path.
 
 **Features:**
 - Boot-time supply verification (measure VADJ1, VADJ2, 3V3_ADJ)

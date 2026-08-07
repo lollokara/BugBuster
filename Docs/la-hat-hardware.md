@@ -1,21 +1,22 @@
-# RP2040 HAT PCB Reference
+# Logic Analyzer HAT - hardware reference
 
-**Status:** source-of-truth notes from the arrived HAT PCB schematic.
-**Created:** 2026-05-28.
-**Use with:** `Firmware/RP2040/src/bb_config.h`, `Firmware/ESP32/src/hat/hat.h`, `Firmware/HAT_Protocol.md`, and `.omx/plans/prd-rp2040-hat-pcb-bringup-refactor.md`.
-
-This document supersedes older preliminary HAT pin-map comments for the new RP2040 HAT PCB. It is a reference for firmware, host API, UI, and test work; it is not an implementation record.
+Pin map, connector pinouts, rail topology and LED scheme for the RP2040 HAT PCB.
+The firmware constants that implement this live in
+[Firmware/RP2040/src/bb_config.h](../Firmware/RP2040/src/bb_config.h); the ESP32
+side is in [Firmware/ESP32/src/hat/hat.h](../Firmware/ESP32/src/hat/hat.h) and
+the link between them in
+[Firmware/hat-uart-protocol.md](../Firmware/hat-uart-protocol.md).
 
 ## RP2040 Pin Map
 
 | RP2040 GPIO | Net / function | Notes |
 |---:|---|---|
-| 0 | ESPRX / HAT COM TX | UART0 HAT bus from RP2040 to ESP32 receive. Existing `BB_UART_TX_PIN` already uses GPIO0. |
-| 1 | ESPTX / HAT COM RX | UART0 HAT bus from ESP32 transmit to RP2040. Existing `BB_UART_RX_PIN` already uses GPIO1. |
-| 2 | LA CH1 low-speed route | Routed to ESP32 board EXT channel through the 4 muxes. This replaces the older SWCLK assignment. |
-| 3 | LA CH2 low-speed route | Routed to ESP32 board EXT channel through the 4 muxes. This replaces the older SWDIO assignment. |
-| 4 | LA CH3 low-speed route | Routed to ESP32 board EXT channel through the 4 muxes. This replaces older connector power enable use. |
-| 5 | LA CH4 low-speed route | Routed to ESP32 board EXT channel through the 4 muxes. This replaces older connector power enable use. |
+| 0 | ESPRX / HAT COM TX | UART0 HAT bus, RP2040 → ESP32 (`BB_UART_TX_PIN`). |
+| 1 | ESPTX / HAT COM RX | UART0 HAT bus, ESP32 → RP2040 (`BB_UART_RX_PIN`). |
+| 2 | LA CH1 low-speed route | Routed to the ESP32 board EXT channel through the 4 muxes. |
+| 3 | LA CH2 low-speed route | Routed to the ESP32 board EXT channel through the 4 muxes. |
+| 4 | LA CH3 low-speed route | Routed to the ESP32 board EXT channel through the 4 muxes. |
+| 5 | LA CH4 low-speed route | Routed to the ESP32 board EXT channel through the 4 muxes. |
 | 6 | I2C SDA | Shared HAT I2C bus. |
 | 7 | I2C SCL | Shared HAT I2C bus. |
 | 8 | HAT INT | Active-low interrupt to ESP32. Also use for status/event notification; do not send unsolicited UART frames. |
@@ -86,7 +87,11 @@ The HAT uses a DS4424 on the HAT I2C bus. Only three DS4424 outputs are used:
 
 Calibration is required for VADJ3 and VADJ4. For 3V3_ADJ, the HAT has no local readback path, so firmware should request or import the calibration data from the ESP32/mainboard 3.3 V calibration because the circuit is the same.
 
-Implementation guidance: the ESP32 firmware already has the canonical DS4424 driver in `Firmware/ESP32/src/hal/ds4424.cpp`. Use it as the reference for the signed source/sink register format, full-scale current assumptions, voltage-to-code behavior, calibration point interpolation, and save/load semantics. The HAT firmware should adapt only the RP2040 I2C and persistence layers where necessary.
+Implementation note: the canonical DS4424 driver is
+[Firmware/ESP32/src/hal/ds4424.cpp](../Firmware/ESP32/src/hal/ds4424.cpp). It
+defines the signed source/sink register format, full-scale current assumptions,
+voltage-to-code behaviour, calibration-point interpolation, and save/load
+semantics. The HAT firmware adapts only the RP2040 I²C and persistence layers.
 
 Voltage sense:
 
@@ -123,7 +128,8 @@ Two LA routes are required:
 | Low-speed route | GPIO2-GPIO5 | Four channels, routed to ESP32 EXT channel through the 4 muxes. |
 | High-speed route | GPIO10-GPIO15 / GPIO20-GPIO21 bank | Connector route through the high-speed level shifter, using GPIO22 DIR. Conn1 exposes three useful high-speed channels. |
 
-The desktop app must let the user choose between low-speed mux route and high-speed Conn1 route. The high-speed route has only three Conn1 channels.
+The desktop app lets the user choose between the low-speed mux route and the
+high-speed Conn1 route. The high-speed route exposes only three Conn1 channels.
 
 ## WS2812B LED Order And Meanings
 
@@ -140,26 +146,11 @@ GPIO9 drives eight WS2812B LEDs placed near output connectors on the HAT and mai
 | 7 | Mainboard IOBLOCK 4 | Same connector status schema as LED 3. |
 | 8 | SWD connector | Same connector status schema as LED 3, keyed to VADJ4 and SWD route/configuration. |
 
-Boot animation requirement:
+Boot animation:
 
 1. Fade each LED on and off from LED 1 to LED 8 like a wave.
 2. Pulse all LEDs green.
 3. Enter normal status mode.
 
-The exact runtime LED schema can be refined later, but firmware should expose HAT-bus messages that let the ESP32/mainboard update connector status without hardcoding all policy on the RP2040.
-
-## Existing Code That Is Currently Stale For This PCB
-
-- `Firmware/RP2040/src/bb_config.h` still maps SWD to GPIO2/3/29, connector power to GPIO4/5, LA to GPIO14-GPIO17, and current sense as 100 milliohm shunts.
-- `Firmware/RP2040/src/bb_power.c` currently models only two connector enables/currents and averages four ADC samples.
-- `Firmware/ESP32/src/hat/hat.h` mirrors older HAT function slots and two-connector power state.
-- `DesktopApp/BugBuster/src/tabs/hat.rs` presents four EXP_EXT functions and old connector A/B power controls.
-- `DesktopApp/BugBuster/src/tabs/la.rs` has LA channel controls but no route selector.
-- `DesktopApp/BugBuster/src/tabs/calibration.rs` calibrates mainboard DS4424 rails only and is not gated by HAT detection.
-
-## Open Decisions
-
-- Final HAT UART command IDs for LED status, HAT rail set/get/status, HAT rail calibration, and LA route selection.
-- Exact LED policy for transient states: calibration running, overcurrent, SWD target attached, and LA capture active.
-- Whether high-speed DIR is a global output/input mode or should be tracked per connector workflow with hard interlocks.
-- How ESP32 exports its 3V3_ADJ calibration data to the HAT: one-shot HAT command, shared BBP command, or host-mediated calibration import.
+Connector status is pushed from the ESP32 over the HAT UART rather than being
+policy baked into the RP2040.

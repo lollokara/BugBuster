@@ -49,35 +49,35 @@ Five owner kinds are defined in `Firmware/ESP32/src/io_owner.h`:
 |---|---:|---|
 | `IO_OWNER_NONE` | 0 | Unowned |
 | `IO_OWNER_USB` | 1 | BBP over CDC0 |
-| `IO_OWNER_HTTP` | 2 | HTTP REST — keyed by admin-token fingerprint |
+| `IO_OWNER_HTTP` | 2 | HTTP REST - keyed by admin-token fingerprint |
 | `IO_OWNER_SCRIPT` | 3 | On-device MicroPython VM |
 | `IO_OWNER_CLI` | 4 | On-device serial CLI |
-| `IO_OWNER_INTERNAL` | 5 | Selftest / boot / autocal — pre-empts any user owner |
+| `IO_OWNER_INTERNAL` | 5 | Selftest / boot / autocal - pre-empts any user owner |
 
 ---
 
 ## Lease Lifecycle
 
-**Claim** — a caller acquires one or more slots by sending `CMD_IO_CLAIM` (BBP),
+**Claim** - a caller acquires one or more slots by sending `CMD_IO_CLAIM` (BBP),
 `POST /api/io/owner` (HTTP), calling `bb.io_claim(...)` (Python), or entering
 `bugbuster.claim(...)` (MicroPython). If a slot is already held by a different
 owner the request is rejected with `IO_HELD_BY_OTHER`.
 
-**Renew** — a caller re-issues the same claim on a slot it already owns. The
+**Renew** - a caller re-issues the same claim on a slot it already owns. The
 `lease_until_ms` timestamp is extended and the existing claim is preserved. No
 error is returned.
 
-**Release** — a caller issues `CMD_IO_RELEASE` / `DELETE /api/io/owner` / exits
+**Release** - a caller issues `CMD_IO_RELEASE` / `DELETE /api/io/owner` / exits
 the `io_claim` context manager. Passing `n_slots = 0` (BBP) or an empty slot
 list releases all slots owned by that caller.
 
-**Expire** — when a non-zero lease duration was specified, `io_owner_tick()` (called
+**Expire** - when a non-zero lease duration was specified, `io_owner_tick()` (called
 from the firmware main loop) automatically releases slots whose `lease_until_ms`
 has passed. The default lease for most callers is 30 seconds; the desktop app
 renews on a 2-second timer while the tab is visible, guaranteeing slots free
 within a few seconds of a desktop crash.
 
-**Infinite lease** — pass `lease_ms = 0` to hold a slot until explicitly released.
+**Infinite lease** - pass `lease_ms = 0` to hold a slot until explicitly released.
 Use with care; a crashed client holding an infinite lease requires an admin
 force-release to recover.
 
@@ -92,7 +92,7 @@ force-release to recover.
 
 ### New Commands
 
-#### `CMD_IO_CLAIM` — `0xA7`
+#### `CMD_IO_CLAIM` - `0xA7`
 
 Request ownership of one or more slots.
 
@@ -107,7 +107,7 @@ Payload:
 
 Response: `status(u8)` + per-slot status byte array of length `n_slots` (total frame payload = 1 + `n_slots` bytes).
 
-#### `CMD_IO_RELEASE` — `0xA8`
+#### `CMD_IO_RELEASE` - `0xA8`
 
 Release one or more slots. Passing `n_slots = 0` releases all slots owned by
 the calling session.
@@ -121,7 +121,7 @@ Payload:
 
 Response: `status(u8)`.
 
-#### `CMD_IO_OWNER_STATUS` — `0xA9`
+#### `CMD_IO_OWNER_STATUS` - `0xA9`
 
 Query the full ownership table. No payload.
 
@@ -136,7 +136,7 @@ Each record (10 bytes, all multi-byte fields little-endian):
 | `token_fp32` | `u32 LE` | 4 |
 | `lease_until_ms` | `u32 LE` (low 32 bits of monotonic time) | 4 |
 
-#### `CMD_IO_FORCE_RELEASE` — `0xAA`
+#### `CMD_IO_FORCE_RELEASE` - `0xAA`
 
 Admin-token-gated unconditional release. Intended as a "get unstuck" escape
 hatch, not a normal flow.
@@ -155,7 +155,7 @@ Response: `status(u8)`.
 |---:|---|---|
 | `0x00` | `IO_OK` | Success |
 | `0x01` | `IO_HELD_BY_OTHER` | Slot already owned; next byte is current owner kind |
-| `0x02` | `IO_NOT_OWNED` | Release path — caller does not own this slot |
+| `0x02` | `IO_NOT_OWNED` | Release path - caller does not own this slot |
 | `0x03` | `IO_INVALID_SLOT` | Slot index out of range |
 | `0x04` | `IO_LEASE_EXPIRED` | Read-only diagnostic; never returned by claim |
 | `0x05` | `IO_ADMIN_REQUIRED` | Force-release attempted without admin token |
@@ -340,11 +340,11 @@ physically shorting signals together regardless of which client holds ownership.
 
 The ADGS analog MUX chain enforces **at most one switch closed per ADGS device**
 across the four devices in the chain (device indices 0..3). Device index 3 is the
-U23 self-test switch device and is exempt from this constraint — the selftest
+U23 self-test switch device and is exempt from this constraint - the selftest
 path may close its own switches independently while user routes are active on
 devices 0..2.
 
-### Default behaviour — auto-open-previous
+### Default behaviour - auto-open-previous
 
 When a caller requests a new analog route on a device that already has an active
 switch, the driver automatically opens the previous switch before closing the new
@@ -405,9 +405,9 @@ the driver level unconditionally.
 
 The following are explicitly out of scope:
 
-- **Per-bit ownership** inside a single IO — ownership is whole-IO only.
-- **Multi-writer / cooperative editing** — single-owner only.
-- **Cross-device coordination** — one ESP32 is the ownership boundary.
+- **Per-bit ownership** inside a single IO - ownership is whole-IO only.
+- **Multi-writer / cooperative editing** - single-owner only.
+- **Cross-device coordination** - one ESP32 is the ownership boundary.
 
 ---
 

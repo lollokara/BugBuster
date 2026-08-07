@@ -1,18 +1,32 @@
-# BugBuster Desktop App
+# BugBuster desktop app
 
-Tauri v2 + Leptos 0.7 desktop application for controlling the BugBuster hardware.
+Cross-platform GUI for the BugBuster mainboard and both HATs. Tauri v2 backend
+(Rust) with a Leptos 0.7 frontend compiled to WASM.
 
-**Current version:** `1.2.0` — managed by `scripts/desktop_version.py` (validates lockstep across `Cargo.toml`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`).
+Version `2.1.0`. Connects over USB CDC (BBP v10) or WiFi (HTTP REST).
 
-## Stack
+## Build
 
-- **Backend:** Rust (Tauri v2) -- serial/HTTP transport, BBP protocol, state management
-- **Frontend:** Leptos 0.7 (WASM) -- reactive UI compiled via Trunk
-- **Build:** Trunk (WASM) + Cargo (Tauri)
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk tauri-cli
 
-## Screenshots
+cd DesktopApp/BugBuster
+cargo tauri dev      # hot-reload frontend and backend
+cargo tauri build    # release bundle
+```
 
-The current desktop screenshots live under [`../../Docs/Images/screenshots/`](../../Docs/Images/screenshots/).
+## Tabs
+
+22 tabs in five categories.
+
+| Category | Tabs |
+|---|---|
+| **Overview** | Dashboard · Board Map · Voltages & Cal · Faults · Diagnostics |
+| **Analog** | ADC · VDAC · IDAC · IIN |
+| **Digital** | GPIO · DIN · DOUT · HV IO · IO Expander |
+| **Instruments** | Scope · Logic Analyzer · HS DAQ · WaveGen · Signal Path |
+| **System** | HAT · USB PD · UART |
 
 <table>
   <tr>
@@ -52,95 +66,79 @@ The current desktop screenshots live under [`../../Docs/Images/screenshots/`](..
   </tr>
 </table>
 
-## Development
-
-```bash
-# Install dependencies (first time)
-cargo install trunk
-cargo install tauri-cli
-
-# Dev mode (hot-reload frontend + backend)
-cargo tauri dev
-
-# Production build
-cargo tauri build
-```
-
-## GitHub Releases
-
-Cross-platform desktop releases are handled by `../../.github/workflows/desktop-release.yml`.
-
-Release flow:
-
-```bash
-# 1. Sync the desktop version in all release files
-python3 DesktopApp/BugBuster/scripts/desktop_version.py 0.6.0
-
-# 2. Commit the version bump
-git add DesktopApp/BugBuster/Cargo.toml \
-        DesktopApp/BugBuster/src-tauri/Cargo.toml \
-        DesktopApp/BugBuster/src-tauri/tauri.conf.json
-git commit -m "desktop: release 0.6.0"
-
-# 3. Push a release tag
-git tag desktop-v0.6.0
-git push origin main --tags
-```
-
-What the workflow does:
-- Builds the Tauri desktop bundle on `windows-latest`, `ubuntu-22.04`, and `macos-latest`
-- Uploads the generated installers and bundles to a GitHub Release draft
-- Verifies the three desktop version files stay synchronized
-- Rejects a pushed tag if it does not match the app version
-
-Current limitations:
-- macOS builds are not notarized yet
-- Windows builds are not code-signed yet
-- The workflow publishes one macOS runner build; if you need separate Intel and Apple Silicon artifacts, extend the matrix with explicit macOS targets
-
-## Project Structure
+## Layout
 
 ```
-src/                    Leptos frontend (WASM)
-  app.rs                Main app shell, routing, particle background
-  tauri_bridge.rs       Tauri invoke wrappers, type definitions
-  tabs/                 21 tab components (overview, adc, scope, LA, HAT,
-                        USB-PD, GPIO, UART, board-profile, etc.)
-  components/           Shared UI components
+src/                       Leptos frontend (WASM)
+  app.rs                   App shell, tab categories, routing
+  tauri_bridge.rs          invoke() wrappers and shared types
+  tabs/                    One module per tab
+  components/              Shared UI components
 
-src-tauri/              Tauri backend (Rust)
-  src/
-    lib.rs              Tauri plugin setup, command registration
-    commands.rs         40+ Tauri commands (device control, OTA, etc.)
-    connection_manager.rs  Transport lifecycle, state polling
-    usb_transport.rs    BBP over USB CDC (COBS framing)
-    http_transport.rs   REST API over WiFi (JSON re-encoding to BBP binary)
-    discovery.rs        Device discovery (USB enumeration + subnet scan)
-    bbp.rs              Protocol constants, frame builder, payload helpers
-    state.rs            DeviceState, ChannelState, connection types
-    transport.rs        Transport trait abstraction
+src-tauri/src/             Tauri backend (Rust)
+  lib.rs                   Plugin setup, command registration
+  commands.rs              117 Tauri commands
+  connection_manager.rs    Transport lifecycle, state polling
+  usb_transport.rs         BBP over USB CDC (COBS framing)
+  http_transport.rs        REST over WiFi, re-encoded to BBP binary
+  discovery.rs             USB enumeration + subnet scan
+  bbp.rs                   Protocol constants, frame builder, payload helpers
+  state.rs                 DeviceState, ChannelState, connection types
+  transport.rs             Transport trait abstraction
 
-styles.css              Global glass UI theme
-index.html              Trunk entry point
+styles.css                 Global glass UI theme
+index.html                 Trunk entry point
 ```
+
+`bbp.rs` holds `PROTO_VERSION`, which must stay in lockstep with
+`Firmware/ESP32/src/bbp/bbp.h` and `python/bugbuster/protocol.py`.
 
 ## Connecting
 
-The app auto-discovers devices on:
-- **USB:** Scans for Espressif VID serial ports, probes with BBP handshake
-- **WiFi:** Scans `192.168.4.1` (AP) + all local subnet IPs
+The app auto-discovers devices:
 
-USB is preferred for low-latency streaming. WiFi works for all features except real-time scope streaming and IDAC calibration.
+- **USB** - scans for Espressif VID serial ports and probes each with a BBP
+  handshake.
+- **WiFi** - scans `192.168.4.1` (the device AP) plus every local subnet IP.
 
-Mutating HTTP requests require an admin token. On first USB connect the desktop
-persists the token keyed by the device MAC; HTTP sessions then reuse the cached
-token automatically. If `/api/device/info` does not report a MAC, the app
-surfaces a clear "firmware too old" error instead of looping on pairing.
+USB is preferred. WiFi covers everything except real-time scope streaming and
+IDAC calibration.
 
-## Board configuration
+Mutating HTTP requests need an admin token. On the first USB connection the app
+persists a token keyed by the device MAC, and HTTP sessions reuse it
+automatically. If `/api/device/info` reports no MAC, the app raises a
+"firmware too old" error rather than looping on pairing.
 
-The `Board` tab lets you import/export board profiles (`.json`) that lock
-VLOGIC / VADJ1 / VADJ2 rails and declare per-pin names and directions. The
-MCP server consumes the same profiles via `list_boards` / `set_board` and
-enforces the rail lock in `bugbuster_mcp/safety.py`. See
-[`Docs/board_profiles.md`](../../Docs/board_profiles.md) for the schema.
+## Board profiles
+
+The **Board Map** tab imports and exports board profiles (`.json`) that lock the
+VLOGIC / VADJ1 / VADJ2 rails and declare per-pin names and directions. The MCP
+server reads the same profiles through `list_boards` / `set_board` and enforces
+the rail lock in `bugbuster_mcp/safety.py`.
+
+Schema: [Docs/board-profiles.md](../../Docs/board-profiles.md)
+
+## Releasing
+
+The version lives in three files. Never edit them by hand:
+
+```bash
+python scripts/desktop_version.py 2.2.0        # set
+python scripts/desktop_version.py --check      # verify lockstep
+```
+
+```bash
+git add Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json
+git commit -m "desktop: release 2.2.0"
+git tag desktop-v2.2.0
+git push origin main --tags
+```
+
+`.github/workflows/desktop-release.yml` then builds on `windows-latest`,
+`ubuntu-22.04` and `macos-latest`, uploads the bundles to a draft GitHub
+Release, and rejects the tag if it does not match the app version.
+
+**Known gaps:** macOS builds are not notarized, Windows builds are not
+code-signed, and the workflow produces a single macOS artifact - extend the
+matrix with explicit targets if you need separate Intel and Apple Silicon
+builds.

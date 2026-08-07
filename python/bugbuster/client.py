@@ -2236,7 +2236,7 @@ class BugBuster:
         ``present``, ``channels`` (list of :class:`IdacChannel`).
 
         IDAC channel mapping:
-          - 0 → VLOGIC (TPS74601, 1.8–5 V logic level for digital IOs)
+          - 0 → VLOGIC (LTM8078 Out2, 1.8–5 V logic level for digital IOs)
           - 1 → VADJ1 (LTM8063 #1, feeds IO_Block 1+2, IO 1–6)
           - 2 → VADJ2 (LTM8063 #2, feeds IO_Block 3+4, IO 7–12)
 
@@ -4410,7 +4410,7 @@ def _parse_status(resp: bytes) -> dict:
         val,    = struct.unpack_from('<f', resp, off + 3)
         diagnostics.append({"source": src, "raw_code": rc, "value": val})
 
-    # MUX state: 4 bytes at offset 163 (BugBusterProtocol.md §GET_STATUS).
+    # MUX state: 4 bytes at offset 163 (bbp-protocol.md §GET_STATUS).
     # Older firmware returns a 163-byte response without this block — degrade
     # gracefully to an empty list so clients don't crash mid-upgrade.
     mux_states: list[int] = []

@@ -13,7 +13,7 @@ Firmware/
 │   │   └── ...                       # Bundled JS/CSS assets
 │   ├── components/
 │   │   └── micropython/              # MicroPython IDF component (frozen modules: bb_helpers, bb_devices, bb_logging; quicksetup; bus/ext_bus)
-│   │       ├── manifest.py           # Freeze list — points to python/firmware_modules/
+│   │       ├── manifest.py           # Freeze list - points to python/firmware_modules/
 │   │       ├── mpconfigport.h        # Port configuration
 │   │       └── micropython/          # Upstream MicroPython submodule
 │   └── src/
@@ -74,10 +74,10 @@ Firmware/
 │   │   ├── bb_la_rle.c/h             # RLE compression for LA data
 │   │   └── bb_la_usb.c/h             # USB vendor bulk endpoint for LA streaming
 │   └── lib/debugprobe/               # Upstream debugprobe (unmodified)
-├── BugBusterProtocol.md              # BBP binary protocol specification
-├── FirmwareStructure.md              # This file
-├── HAT_Architecture.md               # HAT expansion board design document
-└── HAT_Protocol.md                   # HAT UART protocol specification
+├── bbp-protocol.md              # BBP binary protocol specification
+├── firmware-structure.md              # This file
+├── la-hat-architecture.md               # HAT expansion board design document
+└── hat-uart-protocol.md                   # HAT UART protocol specification
 ```
 ---
 ## 1. ESP32 VARIANT & HARDWARE
@@ -185,18 +185,18 @@ code = (current_mA / 25.0) * 65535
 All channels support dynamic switching with safe transition sequence (HIGH_IMP → target):
 | Code | Function | Type | ADC Input | DAC Output |
 |------|----------|------|-----------|-----------|
-| 0 | CH_FUNC_HIGH_IMP | Safe state | — | — |
+| 0 | CH_FUNC_HIGH_IMP | Safe state | - | - |
 | 1 | CH_FUNC_VOUT | Voltage out | Monitor | ✓ (0-12V unipolar) |
 | 2 | CH_FUNC_IOUT | Current out | Compliance | ✓ (0-25 mA) |
-| 3 | CH_FUNC_VIN | Voltage in | ✓ | — |
-| 4 | CH_FUNC_IIN_EXT_PWR | Current in (ext) | ✓ | — |
-| 5 | CH_FUNC_IIN_LOOP_PWR | Current in (loop) | ✓ | — |
-| 7 | CH_FUNC_RES_MEAS | RTD/resistance | ✓ | — |
-| 8 | CH_FUNC_DIN_LOGIC | Digital input | Comparator | — |
-| 9 | CH_FUNC_DIN_LOOP | Digital input (loop) | Comparator | — |
+| 3 | CH_FUNC_VIN | Voltage in | ✓ | - |
+| 4 | CH_FUNC_IIN_EXT_PWR | Current in (ext) | ✓ | - |
+| 5 | CH_FUNC_IIN_LOOP_PWR | Current in (loop) | ✓ | - |
+| 7 | CH_FUNC_RES_MEAS | RTD/resistance | ✓ | - |
+| 8 | CH_FUNC_DIN_LOGIC | Digital input | Comparator | - |
+| 9 | CH_FUNC_DIN_LOOP | Digital input (loop) | Comparator | - |
 | 10 | CH_FUNC_IOUT_HART | Current HART out | Compliance | ✓ (0-25 mA) |
-| 11 | CH_FUNC_IIN_EXT_PWR_HART | Current in HART (ext) | ✓ | — |
-| 12 | CH_FUNC_IIN_LOOP_PWR_HART | Current in HART (loop) | ✓ | — |
+| 11 | CH_FUNC_IIN_EXT_PWR_HART | Current in HART (ext) | ✓ | - |
+| 12 | CH_FUNC_IIN_LOOP_PWR_HART | Current in HART (loop) | ✓ | - |
 ### Channel Switching Sequence (Safety-Critical)
 1. Force channel to HIGH_IMP (safe state)
 2. Wait 300 µs (or 4200 µs for IOUT_HART)
@@ -271,9 +271,9 @@ Per-channel setup with:
 #### **OPTIONS /api/*** (CORS Preflight)
 - Returns 204 with CORS headers
 ### Data Streaming Methods
-**SSE (Server-Sent Events):** `GET /api/scope/stream` — preferred for real-time scope waveform data.
-**HTTP Polling:** `GET /api/scope?since=<seq>` — fallback when SSE is unavailable.
-**WebSocket:** `/api/scripts/repl/ws` — MicroPython REPL. Also used for ADC DSP streaming.
+**SSE (Server-Sent Events):** `GET /api/scope/stream` - preferred for real-time scope waveform data.
+**HTTP Polling:** `GET /api/scope?since=<seq>` - fallback when SSE is unavailable.
+**WebSocket:** `/api/scripts/repl/ws` - MicroPython REPL. Also used for ADC DSP streaming.
 - Buckets: timestamp_ms, 4× channel avg, 4× channel min, 4× channel max
 - Bucket interval: 10 ms
 ---

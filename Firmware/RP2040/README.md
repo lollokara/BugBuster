@@ -1,100 +1,148 @@
-# BugBuster HAT — RP2040 Firmware
+# Logic Analyzer HAT - RP2040 firmware
 
-Firmware for the BugBuster HAT expansion board, based on a fork of
+Firmware for the BugBuster Logic Analyzer HAT, built on a fork of
 [raspberrypi/debugprobe](https://github.com/raspberrypi/debugprobe).
 
-**Current version:** `bb-hat-2.0` (PROBE_VERSION in `CMakeLists.txt`; USB descriptor string).
+Version `bb-hat-5.0`.
 
-## Architecture
-
-- **debugprobe core** (unmodified): CMSIS-DAP v2, SWD via PIO 0, CDC UART bridge, SWO
-- **BugBuster extensions** (this code): UART command handler, power management, logic analyzer
-
-### Module Structure
-
-```
-src/
-├── bb_main.c              — FreeRTOS command task, UART dispatcher, IRQ signaling
-├── bb_main_integrated.c   — debugprobe integration (FreeRTOS task creation)
-├── bb_config.h            — Pin definitions, protocol constants, command IDs
-├── bb_protocol.c/h        — HAT UART framing (CRC-8, sync byte 0xAA, frame timeout)
-├── bb_power.c/h           — Connector power enable/disable, ADC current sense, fault detection
-├── bb_pins.c/h            — EXP_EXT pin routing (SWDIO/SWCLK/GPIO/TRACE)
-├── bb_swd.c/h             — SWD status queries + target detect (line-reset + DPIDR read; bench validation pending)
-├── bb_la.c/h              — Logic analyzer engine: PIO 1 capture, DMA with IRQ completion
-├── bb_la.pio              — PIO capture programs (1ch, 2ch, 4ch)
-├── bb_la_trigger.pio      — PIO trigger programs (rising, falling, high, low)
-├── bb_la_rle.c/h          — Run-length encoding compression for LA data
-├── bb_la_usb.c/h          — LA USB transport helpers (CDC streaming + vendor bulk readout)
-└── bb_usb_descriptors.c   — USB descriptors (CMSIS-DAP + CDC + LA vendor interface)
-```
-
-### Task/Thread Model (FreeRTOS)
-
-| Task | Priority | Purpose |
-|------|----------|---------|
-| `bb_cmd_task` | tskIDLE+1 | UART command processing, subsystem polling (1ms) |
-| `usb_thread` | tskIDLE+2 | TinyUSB event handler |
-| `dap_task` | tskIDLE+1 | CMSIS-DAP command processing (debugprobe) |
-
-### Communication Flows
-
-- **ESP32 ↔ RP2040**: UART0 @ 921600 baud, HAT protocol framing (0xAA sync, CRC-8)
-- **USB CMSIS-DAP**: HID interface (EP 0x04/0x85) — inherited from debugprobe
-- **USB CDC**: UART bridge (EP 0x81/0x02/0x83)
-- **USB LA Streaming**: CDC serial port (start/stop control + raw sample stream)
-- **USB LA Bulk Readout**: Vendor bulk interface (EP 0x06/0x87) for completed captures
+The debugprobe core is unmodified: CMSIS-DAP v2, SWD over PIO 0, the CDC UART
+bridge, and SWO. Everything under `bb_*` is the BugBuster extension - the HAT
+UART command handler, power management, and the logic-analyzer engine on PIO 1.
 
 ## Build
 
-Requires Pico SDK 2.0+ and arm-none-eabi-gcc.
+Needs Pico SDK 2.0+ and `arm-none-eabi-gcc` (verified against
+arm-gnu-toolchain 13.3.rel1).
 
 ```bash
 git submodule update --init --recursive
 mkdir build && cd build
 cmake -DPICO_BOARD=bugbuster_hat ..
-make -j$(nproc)
+make -j
 ```
 
-## Pin Assignments
+Produces `bugbuster_hat.uf2`. Flash by holding BOOTSEL and copying it to the
+`RPI-RP2` volume, or:
 
-| Pin | Function | Direction |
-|-----|----------|-----------|
-| GPIO0 | UART0 TX (to BugBuster) | Output |
-| GPIO1 | UART0 RX (from BugBuster) | Input |
-| GPIO2 | SWCLK (to target) | Output |
-| GPIO3 | SWDIO (to target) | Bidirectional |
-| GPIO4 | EN_A (connector A power) | Output |
-| GPIO5 | EN_B (connector B power) | Output |
-| GPIO6 | I2C1 SDA (DS4424 DAC) | Bidirectional |
-| GPIO7 | I2C1 SCL (DS4424 DAC) | Output |
-| GPIO8 | IRQ (shared with BugBuster) | Open-drain (active low, 2ms pulse) |
-| GPIO9 | LED_STATUS | Output |
-| GPIO10-13 | EXP_EXT_1-4 | Configurable |
-| GPIO14-17 | LA capture inputs | Input (PIO 1) |
-| GPIO20 | FAULT_A (overcurrent) | Input (active low) |
-| GPIO21 | FAULT_B (overcurrent) | Input (active low) |
-| GPIO25 | LED_ACTIVITY (onboard) | Output |
-| GPIO26 | ADC0 — Current sense A | Analog input |
-| GPIO27 | ADC1 — Current sense B | Analog input |
+```bash
+picotool reboot -f -u && picotool load -x build/bugbuster_hat.uf2
+```
 
-*Pin assignments are preliminary and will be finalized with HAT PCB layout.*
+After reflashing the RP2040, reset the ESP32 (DTR/RTS) so its `hat_init()` runs
+again and re-detects the HAT.
 
-## Known Limitations
+The version lives in **two** places and CI only checks the first:
+`CMakeLists.txt:PROBE_VERSION` (the USB descriptor string) and
+`bb_main.c:BB_HAT_FW_MAJOR/MINOR` (what the HAT reports over the UART PING).
+Bump both together.
 
-1. **SWD target detection implemented, bench validation pending** — `bb_swd_detect_target()` sends a SWD line-reset + JTAG-to-SWD switch sequence and reads DPIDR via `probe_write_bits`/`probe_read_bits` from debugprobe. ACK check and DPIDR capture are in place. Result has not yet been validated against real hardware.
-4. **Power fault pin polarity assumed active-low** — Needs confirmation from HAT schematic.
-5. **ADC current sense has no calibration** — Readings may be 5-10% off without offset/gain compensation.
-6. **GPIO8 IRQ signaling** — Firmware-wired: power fault and LA-done events trigger a 2 ms active-low pulse on GPIO8. Bench validation against real hardware is pending.
+## Modules
 
-## Logic Analyzer
+```
+src/
+  bb_main.c            FreeRTOS command task, UART dispatch, IRQ signalling
+  bb_main_integrated.c debugprobe integration and task creation
+  bb_config.h          Pin map, protocol constants, command IDs
+  bb_protocol.c        HAT UART framing - 0xAA sync, CRC-8, frame timeout
+  bb_power.c           Rail enables, ADC current sense, fault detection
+  bb_pins.c            HAT IO bank routing
+  bb_swd.c             SWD status and target detect (line reset + DPIDR read)
+  bb_la.c              LA engine - PIO 1 capture, double-buffered DMA
+  bb_la.pio            Capture programs (1 / 2 / 4 channel)
+  bb_la_trigger.pio    Hardware trigger programs (rising, falling, high, low)
+  bb_la_rle.c          Run-length encoding for capture data
+  bb_la_usb.c          Vendor-bulk endpoint lifecycle and streaming
+  bb_usb_descriptors.c USB descriptors - CMSIS-DAP + CDC + LA vendor interface
+  bb_hat_v2.c          HAT v2 command surface (rails, LEDs, LA route, calibration)
+  bb_fw_update.c       OTA image reception from the ESP32
+  bb_ws2812.pio        WS2812B status LED driver
+```
 
-- **Channels**: 1, 2, or 4 (GPIO14-17)
-- **Sample rate**: Up to system clock (125 MHz) via PIO clock divider
-- **Buffer**: 200 KB SRAM (~51K 32-bit words)
-- **Modes**: Raw (DMA with completion IRQ) or RLE-compressed (PIO FIFO polling)
-- **Trigger**: Rising/falling/both-edge, level high/low on any channel (PIO-to-PIO hardware trigger)
-- **DMA**: Dynamically claimed channel with interrupt-driven completion detection
-- **Streaming**: vendor-bulk endpoint `0x87` (8×2432 ring buffer).  Supports 1 MHz / 4-ch continuous capture with SMP core affinity and SIE reset on rearm.  Host re-use across consecutive runs requires a STOP-first preflight; recovery counters (`usb_rearm_pending`, `request_count`, `complete_count`) are surfaced via `HAT_LA_STATUS`.
-- **LA-done IRQ**: RP2040 GPIO8 pulses the shared ESP32 IRQ line when a capture transitions to DONE, allowing the host-side LA task to consume without polling.
-- **Log relay**: `bb_la_log()` messages forwarded to the host as BBP `0xEC LA_LOG` events when enabled via `HAT_LA_LOG_ENABLE`.
+## Tasks
+
+| Task | Core | Priority | Purpose |
+|---|---|---|---|
+| `bb_cmd_task` | 1 | tskIDLE+1 | HAT UART commands, 1 ms subsystem polling |
+| `usb_thread` | 0 | tskIDLE+2 | TinyUSB event handling |
+| `dap_task` | - | tskIDLE+1 | CMSIS-DAP processing (from debugprobe) |
+
+The core affinity is deliberate. Two rules follow from it and must not be
+broken:
+
+1. **Never call TinyUSB endpoint functions from `bb_cmd_task`** - no
+   `write_clear`, `read_flush`, `fifo_clear` or `abort_xfer`. TinyUSB is
+   single-threaded. Set `s_need_endpoint_rearm` instead and let
+   `bb_la_usb_send_pending()` drain it on the USB thread.
+2. **Never call `bb_la_log()` from inside `bb_la_usb_send_pending()`** - it
+   races Core 1's HAT UART and emits spurious `0x11 BBP_ERR_TIMEOUT`.
+
+`tud_vendor_n_write_clear()` is reserved for genuine stuck-endpoint recovery
+with a bounded timeout. The RP2040 SIE `abort_done` register hangs after roughly
+ten calls with no pending transfer, so routine cleanup uses `soft_reset()`
+instead.
+
+## USB interfaces
+
+| Interface | Class | Endpoints | Purpose |
+|---|---|---|---|
+| 0 | vendor bulk | `0x04` OUT / `0x85` IN | CMSIS-DAP v2 - OpenOCD, pyOCD, probe-rs |
+| 1 | CDC-ACM | `0x81` notif, `0x02` OUT, `0x83` IN | Target UART bridge |
+| 3 | vendor bulk | `0x06` OUT / `0x87` IN | Logic-analyzer data stream |
+
+`tud_descriptor_configuration_cb()` rewrites the LA interface's
+`bInterfaceSubClass`/`bInterfaceProtocol` to `0xFF/0xFF` at runtime. **Do not
+remove this.** Without it the custom CMSIS-DAP driver claims the LA endpoints,
+which breaks OpenOCD (`CMD_INFO failed`) and leaves `tud_vendor_n_mounted()`
+false for the LA stream.
+
+Sanity check with the probe attached:
+
+```bash
+pyocd list          # expect: BugBuster HAT (CMSIS-DAP + LA)
+openocd -c "adapter driver cmsis-dap" \
+        -c "cmsis_dap_vid_pid 0x2E8A 0x000C" \
+        -c "adapter speed 1000" -c "transport select swd" \
+        -c "init" -c "shutdown"
+```
+
+The VID/PID `0x2E8A:0x000C` is inherited from debugprobe, intentionally.
+
+## Pin map
+
+Authoritative source: [bb_config.h](src/bb_config.h). Board-level detail
+including connector pinouts, rail topology and the LED scheme is in
+[../../Docs/la-hat-hardware.md](../../Docs/la-hat-hardware.md).
+
+| GPIO | Function |
+|---|---|
+| 0 / 1 | UART0 TX / RX - HAT bus to the ESP32, 921600 8N1 |
+| 2–5 | LA channels 0–3 (PIO 1), low-speed route through the mainboard MUX |
+| 6 / 7 | I²C1 SDA / SCL - DS4424 rail trim DAC |
+| 8 | IRQ to the ESP32 - open drain, active low |
+| 9 | WS2812B data - 8 status LEDs |
+| 10–15 | Level-shifted HAT IO (Conn1 and Conn2) |
+| 16 / 17 / 18 | SWDIO / TRACE-SWO / SWCLK - dedicated debug connector |
+| 19 | Level-shifter output enable |
+| 20 / 21 | Level-shifted HAT IO (Conn2) |
+| 22 | Level-shifter direction |
+| 23 / 24 / 25 | VADJ3 / 3V3_ADJ / VADJ4 enables |
+| 26 / 27 | VADJ3 / VADJ4 current-monitor ADC (50 mΩ shunt) |
+| 28 / 29 | VADJ3 / VADJ4 voltage-sense ADC (110k/10k divider, ×12) |
+
+## Already implemented
+
+Read the source before proposing work in these areas - they are done, benched,
+and easy to regress:
+
+- PIO hardware triggers and RLE compression (`bb_la.c`, `bb_la_rle.c`)
+- Double-buffered DMA streaming and the LA-done IRQ (`bb_la.c`)
+- Vendor-bulk endpoint lifecycle, rearm and STOP preflight (`bb_la_usb.c`)
+- The USB descriptor subclass patch (`bb_usb_descriptors.c`)
+- SWD teardown and cleanup (`bb_swd.c`)
+
+## See also
+
+- [../hat-uart-protocol.md](../hat-uart-protocol.md) - ESP32 ↔ HAT wire format
+- [../la-hat-architecture.md](../la-hat-architecture.md) - subsystem architecture
+- [../../Docs/logic-analyzer.md](../../Docs/logic-analyzer.md) - capture modes,
+  routing and host-side streaming

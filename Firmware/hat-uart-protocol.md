@@ -1,41 +1,42 @@
-﻿# BugBuster HAT Protocol Specification
+﻿# HAT UART protocol
 
-**Version:** 2.0 (`bb-hat-3.3`)
-**Date:** 2026-06-15
-**Transport:** UART 921600 8N1 (GPIO43 TX, GPIO44 RX)
-**Roles:** BugBuster = Master, HAT = Slave
+The control link between the ESP32-S3 mainboard and whichever HAT is attached.
+UART 921600 8N1 (ESP32 GPIO43 TX, GPIO44 RX). The mainboard is always bus
+master and initiates every transaction.
+
+Command IDs and payload structs are defined in
+[ESP32/src/hat/hat.h](ESP32/src/hat/hat.h) (mainboard side) and
+[RP2040/src/bb_protocol.h](RP2040/src/bb_protocol.h) /
+[DAQ_HAT/ESP32P4/src/link/s3_link.h](DAQ_HAT/ESP32P4/src/link/s3_link.h) (HAT
+side). Where this document and those headers disagree, the headers win.
 
 ---
 
 ## 1. Overview
 
-The HAT (Hardware Attached on Top) protocol defines communication between the
-BugBuster main board and expansion HAT boards connected via the HAT header.
-BugBuster is always the bus master — it initiates all transactions.
+### 1.0 Scope - what this UART carries, and what it doesn't
 
-### 1.0 Scope — what this UART carries (and doesn't)
+This is the **HAT control plane**: configuration, status polling, power
+management, pin routing, and Logic Analyzer arming. Frames are small (≤ 32-byte
+payload) and master-polled.
 
-This UART protocol is the **HAT control plane**: configuration, status polling,
-power management, pin routing, and Logic Analyzer arming.
-Frames are small (≤ 32-byte payload) and master-polled.
+**High-bandwidth data does not flow over this UART.** Each HAT exposes its own
+USB device and the host talks to it directly:
 
-**High-bandwidth data does NOT flow over this UART.** The RP2040 HAT exposes
-its own USB device, and the host talks to it directly for:
+- **CMSIS-DAP v2 SWD debug** - RP2040 USB interface 0, vendor bulk EP
+  `0x04`/`0x85`. OpenOCD, pyOCD, probe-rs and VS Code connect straight to the
+  RP2040; neither the mainboard nor this UART is in the debug path.
+- **Logic Analyzer streaming and readout** - RP2040 USB interface 3, vendor bulk
+  EP `0x06`/`0x87`. Samples go PIO → DMA → USB FIFO → host libusb, bypassing
+  this UART entirely. Packet format, ring sizing and the rearm protocol are in
+  [`../Docs/logic-analyzer.md`](../Docs/logic-analyzer.md).
+- **Target UART bridge** - RP2040 USB interface 1, CDC-ACM.
+- **Power measurement stream** - the ESP32-P4's own USB High-Speed port.
 
-- **CMSIS-DAP v2 SWD debug** — vendor interface 1 (EP `0x04`/`0x85`). Host
-  debug tools (OpenOCD, pyOCD, probe-rs, VS Code) connect straight to the
-  RP2040 USB; neither BugBuster nor this UART is in the debug path.
-- **Logic Analyzer streaming and one-shot readout** — vendor bulk interface 0
-  (EP `0x06`/`0x87`). LA sample bytes stream from PIO → DMA → USB FIFO →
-  host libusb claim, completely bypassing this UART. See
-  [`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md) for the packet
-  format, ring buffer sizing, and rearm protocol.
-- **Target UART bridge** — CDC interfaces 2/3 on the RP2040 USB.
-
-So this HAT UART protocol sees `LA_CONFIG` / `LA_ARM` / `LA_STREAM_START` /
-`LA_STOP` (tiny control frames) but never the captured samples themselves.
-That split is what makes sustained 1 MHz / 4-ch LA streaming possible — a
-921600-baud UART could never carry 4 MB/s of raw LA data.
+So this UART sees `LA_CONFIG` / `LA_ARM` / `LA_STREAM_START` / `LA_STOP` - tiny
+control frames - but never the captured samples. That split is what makes
+sustained 1 MHz 4-channel LA streaming possible: a 921600-baud UART could never
+carry 4 MB/s of raw sample data.
 
 ### 1.1 Physical Interface
 
@@ -66,7 +67,7 @@ That split is what makes sustained 1 MHz / 4-ch LA streaming possible — a
 - CRC-8 integrity check on every frame
 - Deterministic response times (all commands have timeouts)
 - Extensible command space for future HAT types
-- Master-slave architecture — HAT never transmits unsolicited data on UART (uses IRQ pin instead)
+- Master-slave architecture - HAT never transmits unsolicited data on UART (uses IRQ pin instead)
 
 ---
 
@@ -153,7 +154,7 @@ All UART communication uses a fixed frame structure. Both commands
 
 ### 3.2 CRC-8 Calculation
 
-- **Polynomial:** 0x07 (x^8 + x^2 + x + 1) — same as AD74416H SPI CRC
+- **Polynomial:** 0x07 (x^8 + x^2 + x + 1) - same as AD74416H SPI CRC
 - **Initial value:** 0x00
 - **Input:** CMD byte + all PAYLOAD bytes
 - **Does NOT include** SYNC or LEN in the CRC computation
@@ -241,7 +242,7 @@ Command IDs use the range **0x01–0x7F**.
 
 ---
 
-### Group 1 — Discovery & Configuration (0x01–0x06)
+### Group 1 - Discovery & Configuration (0x01–0x06)
 
 #### 0x01 PING
 
@@ -283,14 +284,14 @@ Request HAT identification and firmware version.
 
 Configure EXP_EXT pin function assignments.
 
-**Mode A — Single pin** (LEN=2):
+**Mode A - Single pin** (LEN=2):
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
 | 0 | pin | u8 | 0=EXP_EXT_1 … 3=EXP_EXT_4 |
 | 1 | function | u8 | Pin function code (see §6) |
 
-**Mode B — All pins** (LEN=4):
+**Mode B - All pins** (LEN=4):
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -369,7 +370,7 @@ Query HAT hardware capabilities and firmware version. Must be called after
 
 ---
 
-### Group 2 — Power & IO Voltage (0x10–0x13)
+### Group 2 - Power & IO Voltage (0x10–0x13)
 
 #### 0x10 SET_POWER
 
@@ -402,7 +403,7 @@ Enable or disable power to a HAT connector (Target 1 or Target 2).
 Read power status for both connectors.
 
 **Request payload:** Empty
-**Response:** RSP_POWER_STATUS (0x83) — same layout as SET_POWER response
+**Response:** RSP_POWER_STATUS (0x83) - same layout as SET_POWER response
 **Timeout:** 300 ms
 
 ---
@@ -437,9 +438,7 @@ Read the currently applied IO voltage.
 
 ---
 
-### Group 3 — DAP / SWD Debug (0x20–0x22)
-
-### Group 4 — DAP / SWD Debug (0x20–0x22)
+### Group 4 - DAP / SWD Debug (0x20–0x22)
 
 #### 0x20 GET_DAP_STATUS
 
@@ -483,13 +482,13 @@ Adjust the SWD clock frequency.
 
 ---
 
-### Group 5 — Logic Analyzer (0x30–0x3B)
+### Group 5 - Logic Analyzer (0x30–0x3B)
 
 All LA commands operate on the RP2040 PIO-based logic analyzer. The actual
 sample data is transported over the RP2040 USB vendor-bulk endpoint, not this
-UART. See [`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md).
+UART. See [`../Docs/logic-analyzer.md`](../Docs/logic-analyzer.md).
 
-**GPIO pins (bb-hat-3.0):** CH0=GPIO2, CH1=GPIO3, CH2=GPIO4, CH3=GPIO5
+**GPIO pins:** CH0=GPIO2, CH1=GPIO3, CH2=GPIO4, CH3=GPIO5
 
 ---
 
@@ -527,7 +526,7 @@ Set the trigger condition for the next capture.
 
 | Type | Name | Description |
 |------|------|-------------|
-| 0 | NONE | No trigger — capture starts immediately on arm |
+| 0 | NONE | No trigger - capture starts immediately on arm |
 | 1 | RISING | Rising edge on specified channel |
 | 2 | FALLING | Falling edge on specified channel |
 | 3 | BOTH | Any edge on specified channel |
@@ -667,15 +666,15 @@ Select the LA signal route.
 
 | Value | Name | Description |
 |-------|------|-------------|
-| 0 | LOW_SPEED | Via EXP_EXT pins — shared with SWD, slower |
-| 1 | HIGH_SPEED | Direct PIO GPIOs (GPIO2–GPIO5) — default for `bb-hat-3.0` |
+| 0 | LOW_SPEED | Via EXP_EXT pins - shared with SWD, slower |
+| 1 | HIGH_SPEED | Direct PIO GPIOs (GPIO2–GPIO5) - default for `bb-hat-3.0` |
 
 **Response:** RSP_OK (0x80) + `[route:u8]` (applied route)
 **Timeout:** 200 ms
 
 ---
 
-### Group 6 — Rails, LEDs & Calibration (0x40–0x48)
+### Group 6 - Rails, LEDs & Calibration (0x40–0x48)
 
 These commands control the `bb-hat-3.0` PCB features: three adjustable
 supply rails, a WS2812B LED strip, DS4424-based calibrated voltage control,
@@ -696,7 +695,7 @@ HAT_CAP_SHIFTED_IO` flags in GET_CAPS response.
 |------|------|
 | 0 | OK |
 | 1 | OVERCURRENT_FAULT |
-| 2 | CAL_INVALID — voltage set/enable rejected; calibration not valid |
+| 2 | CAL_INVALID - voltage set/enable rejected; calibration not valid |
 | 3 | PG_FAIL |
 
 ---
@@ -738,7 +737,7 @@ Enable or disable a supply rail.
 | 0 | rail_id | u8 | Rail ID (0–2) |
 | 1 | enable | bool | true = enable, false = disable |
 
-**Response:** RSP_RAIL_STATUS (0x88) — same format as GET_RAIL_STATUS
+**Response:** RSP_RAIL_STATUS (0x88) - same format as GET_RAIL_STATUS
 
 Returns `HAT_ERR_CAL_INVALID` (0x05) if the rail has no valid calibration
 and `enable=true` is requested for VADJ3 or VADJ4.
@@ -827,7 +826,7 @@ Poll calibration sweep progress and retrieve results.
 | Bit | Meaning |
 |-----|---------|
 | 0 | Insufficient points collected |
-| 1 | Coverage gap — setpoint outside measured range |
+| 1 | Coverage gap - setpoint outside measured range |
 | 2 | Max measured-voltage gap too large |
 | 3 | Invalid (NaN/inf) measurement in table |
 | 4 | Non-monotonic trend detected |
@@ -903,12 +902,31 @@ with `CAL_INVALID` if no valid calibration is present.
 | 0 | rail_id | u8 | 1 = VADJ3, 2 = VADJ4 (rail 0 uses SET_IO_VOLTAGE instead) |
 | 1–2 | voltage_mv | u16 | Target voltage in mV (LE, 1800–36000) |
 
-**Response:** RSP_RAIL_STATUS (0x88) — same format as GET_RAIL_STATUS
+**Response:** RSP_RAIL_STATUS (0x88) - same format as GET_RAIL_STATUS
 
 Returns `HAT_ERR_CAL_INVALID` if calibration is absent or the requested
 voltage is outside the calibrated range by more than 200 mV.
 
 **Timeout:** 300 ms
+
+---
+
+### Group 7 - Power Profiler Pro HAT (0x50–0x66)
+
+When the attached HAT is the Power Profiler Pro HAT, the mainboard also drives a
+DAQ-specific command range over the same framing: channel LEDs, telemetry push,
+trigger arming and markers, the C6 mainboard-settings tunnel, DUT supply
+control, acquisition config, and multi-MCU OTA relay.
+
+These commands are byte-for-byte mirrored between the two firmwares and are
+defined in [ESP32/src/hat/hat.h](ESP32/src/hat/hat.h) (`HAT_CMD_DAQ_*`,
+`HAT_CMD_MB_*`) and
+[DAQ_HAT/ESP32P4/src/link/s3_link.h](DAQ_HAT/ESP32P4/src/link/s3_link.h)
+(`HATP_CMD_*`). Those headers are the reference - do not add a payload to one
+without the other.
+
+The C6 display link that sits behind this tunnel is documented separately in
+[DAQ_HAT/display-protocol.md](DAQ_HAT/display-protocol.md).
 
 ---
 
@@ -927,7 +945,7 @@ Response IDs use the range **0x80–0xFF**.
 | 0x86 | RSP_LA_DATA | LA_READ_DATA (0x35) | Raw captured bytes (≤ 28) |
 | 0x87 | RSP_CAPS | GET_CAPS (0x06) | 12-byte capabilities payload (see §5.1 Group 1) |
 | 0x88 | RSP_RAIL_STATUS | GET_RAIL_STATUS, SET_RAIL_ENABLE, SET_RAIL_VOLTAGE | `[count:u8, rail×7]` |
-| 0x89 | RSP_LA_LOG | Unsolicited | Log line bytes (≤ 32 chars) — forwarded to host via `BBP_EVT_LA_LOG` (0xEC) |
+| 0x89 | RSP_LA_LOG | Unsolicited | Log line bytes (≤ 32 chars) - forwarded to host via `BBP_EVT_LA_LOG` (0xEC) |
 | 0x8A | RSP_CALIBRATE_STATUS | CALIBRATE_STATUS (0x44) | 30-byte calibration status payload (see §5.1 Group 6) |
 
 ### 5.3 Error Codes
@@ -950,47 +968,36 @@ Response IDs use the range **0x80–0xFF**.
 
 Each EXP_EXT pin is assigned a function using a single byte:
 
-| Code | Name | Description | Typical Use |
-|------|------|-------------|-------------|
-| 0x00 | DISCONNECTED | Pin not routed / high-impedance | Default after reset |
-| 0x01 | SWDIO | Serial Wire Debug data I/O | ARM Cortex-M debug |
-| 0x02 | SWCLK | Serial Wire Debug clock | ARM Cortex-M debug |
-| 0x03 | TRACE1 | Trace data line 1 / SWO | ARM SWV/ITM trace output |
-| 0x04 | TRACE2 | Trace data line 2 | Extended trace |
-| 0x05 | GPIO1 | General-purpose I/O 1 | Logic analyzer, trigger |
-| 0x06 | GPIO2 | General-purpose I/O 2 | Logic analyzer, trigger |
-| 0x07 | GPIO3 | General-purpose I/O 3 | Logic analyzer, trigger |
-| 0x08 | GPIO4 | General-purpose I/O 4 | Logic analyzer, trigger |
-| 0x09–0xFF | *(Reserved)* | For future HAT types | — |
+| Code | Name | Description |
+|------|------|-------------|
+| 0x00 | DISCONNECTED | Pin not routed / high-impedance. Default after reset. |
+| 0x01–0x04 | *(reserved)* | Formerly SWDIO / SWCLK / TRACE1 / TRACE2. Rejected. |
+| 0x05 | GPIO1 | General-purpose IO 1 - logic analyzer, trigger |
+| 0x06 | GPIO2 | General-purpose IO 2 |
+| 0x07 | GPIO3 | General-purpose IO 3 |
+| 0x08 | GPIO4 | General-purpose IO 4 |
+| 0x09–0xFF | *(reserved)* | Future HAT types |
 
-Codes 0x01–0x08 are **reserved** when SWD pin slots 1–4 are in use; sending
-them returns `INVALID_FUNC`.
+**Slots 0x01–0x04 are permanently reserved.** SWD now lives on a dedicated
+3-pin connector driven by the debugprobe PIO on fixed GPIOs, so those functions
+are no longer assignable through the pin matrix. The numeric values are kept for
+wire compatibility: `bb_pins_set()` rejects them with `INVALID_FUNC`, and the
+Python client raises `HatPinFunctionError`.
 
-### 6.1 Recommended Presets
+### 6.1 Recommended preset
 
-**SWD Debug:**
-```
-EXP_EXT_1 = SWDIO  (0x01)
-EXP_EXT_2 = SWCLK  (0x02)
-EXP_EXT_3 = TRACE1 (0x03)
-EXP_EXT_4 = TRACE2 (0x04)
-```
+**GPIO mode** - logic analyzer or general IO:
 
-**SWD + SWO (3-pin debug with trace):**
-```
-EXP_EXT_1 = SWDIO  (0x01)
-EXP_EXT_2 = SWCLK  (0x02)
-EXP_EXT_3 = TRACE1 (0x03)
-EXP_EXT_4 = GPIO4  (0x08)
-```
-
-**GPIO Mode (logic analyzer / general I/O):**
 ```
 EXP_EXT_1 = GPIO1  (0x05)
 EXP_EXT_2 = GPIO2  (0x06)
 EXP_EXT_3 = GPIO3  (0x07)
 EXP_EXT_4 = GPIO4  (0x08)
 ```
+
+For SWD, wire the target to the dedicated debug connector - no pin
+configuration is involved. See
+[la-hat-architecture.md](la-hat-architecture.md).
 
 ---
 
@@ -1074,7 +1081,7 @@ BugBuster may pulse GPIO15 LOW briefly (1 ms) to wake a sleeping HAT.
 - On CRC error, respond with RSP_ERROR + CRC_ERROR code (0x06)
 - On unknown command, respond with RSP_ERROR + INVALID_CMD code (0x01)
 - Implement a 500 ms watchdog on the UART RX state machine
-- CALIBRATE_START on rail 0 (3V3_ADJ) returns INVALID_ARG — only VADJ3/VADJ4 calibrate
+- CALIBRATE_START on rail 0 (3V3_ADJ) returns INVALID_ARG - only VADJ3/VADJ4 calibrate
 
 ### 10.2 BugBuster Firmware Guidelines
 
@@ -1086,12 +1093,14 @@ BugBuster may pulse GPIO15 LOW briefly (1 ms) to wake a sleeping HAT.
 
 ### 10.3 Future Extensibility
 
-- Command IDs 0x07–0x0F and 0x49–0x7F are reserved for future commands
+- Command IDs 0x07–0x0F and 0x49–0x4F are reserved for future commands;
+  0x50–0x66 belong to the Power Profiler Pro HAT (Group 7)
 - Response IDs 0x8B–0xFF are reserved for future response types
 - Pin function codes 0x09–0xFF are reserved for future HAT types
 - HAT type codes 0x02–0xFE are reserved for future hardware variants
-- The LEN field allows payloads up to 32 bytes; multi-frame transfers require
-  a new command definition if larger payloads are needed
+- The LEN field allows payloads up to 32 bytes; anything larger needs a chunked
+  command of its own - see the mainboard tunnel (`MB_POLL` / `MB_RESULT`) for a
+  worked example
 
 ---
 
@@ -1125,7 +1134,7 @@ Slave  TX: AA 03 82 01 03 00 [CRC]
                 └──────────────── SYNC
 ```
 
-### A.3 SET_PIN_CONFIG — SWD Debug Preset
+### A.3 SET_PIN_CONFIG - SWD Debug Preset
 
 ```
 Master TX: AA 04 03 01 02 03 04 [CRC]

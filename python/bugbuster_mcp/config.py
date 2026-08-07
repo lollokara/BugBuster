@@ -10,7 +10,7 @@ BugBuster MCP — Safety configuration and default limits.
 MAX_VADJ_VOLTAGE = 15.0          # V
 MIN_VADJ_VOLTAGE = 3.0           # V
 
-# VLOGIC limits (TPS74601)
+# VLOGIC limits (LTM8078 Out2, trimmed by DS4424 OUT0)
 MAX_VLOGIC = 5.0                 # V
 MIN_VLOGIC = 1.8                 # V
 

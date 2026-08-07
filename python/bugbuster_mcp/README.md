@@ -1,396 +1,211 @@
-# BugBuster MCP Server
+# BugBuster MCP server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that exposes the BugBuster hardware debugging platform to AI models. Once configured, an AI assistant (Claude, etc.) can autonomously measure signals, control outputs, manage power, capture waveforms, and program/debug target devices — all through natural language.
+An [MCP](https://modelcontextprotocol.io) server that gives an AI model direct
+control of BugBuster hardware. Once it is registered, the model can measure
+signals, drive outputs, manage power rails, capture traces, scan buses, and
+debug a target over SWD - on its own, without a human relaying readings.
 
-## Prerequisites
+**93 tools in 16 groups, 6 resources, 4 prompt workflows.**
 
-- **BugBuster hardware** connected via USB or WiFi
-- **macOS** (these instructions use Homebrew; adapt paths for Linux/Windows)
-- **Python 3.11+** (installed via Homebrew)
-- **uv** package manager (installed via Homebrew)
+## Install
 
----
-
-## Installation
-
-### 1. Install uv
+Requires Python 3.11+ and BugBuster hardware on USB or WiFi.
 
 ```bash
-brew install uv
+cd python
+pip install -e ".[mcp]"
 ```
 
-### 2. Create a virtual environment
+This installs `bugbuster` (the control library), `mcp` (the Python SDK), and
+`pydantic`, and puts a `bugbuster-mcp` executable on your PATH.
 
-From the `python/` directory:
+## Run
+
+Find the serial port first - `ls /dev/cu.usbmodem*` (macOS),
+`ls /dev/ttyACM*` (Linux), or Device Manager → Ports (Windows). BugBuster
+exposes two CDC interfaces; use the **lower-numbered** one (CDC #0, the command
+port).
 
 ```bash
-cd /path/to/BugBuster/python
-
-uv venv --python 3.11 .venv
+bugbuster-mcp --transport usb --port /dev/cu.usbmodem1234561 --vlogic 3.3
 ```
 
-### 3. Install the package with MCP dependencies
+Over WiFi instead (default AP `BugBuster` / `bugbuster123` at `192.168.4.1`):
 
 ```bash
-uv pip install --python .venv/bin/python -e ".[mcp]"
+bugbuster-mcp --transport http --host 192.168.4.1 --vlogic 3.3
 ```
 
-This installs:
-- `bugbuster` — the core Python library (USB and HTTP transports)
-- `mcp` — Anthropic's MCP Python SDK
-- `pydantic` — input validation
-
----
-
-## Finding your USB port
-
-Before running the server, find the BugBuster's serial port.
-
-**macOS:**
-```bash
-ls /dev/cu.usbmodem*
-```
-BugBuster exposes two CDC interfaces. Use the **first** one (lower number), which is the command/protocol port (CDC #0).
-
-**Linux:**
-```bash
-ls /dev/ttyACM*
-```
-
-**Windows:**
-Check Device Manager → Ports (COM & LPT). Use the lower-numbered COM port.
-
----
-
-## Running the server
-
-### USB (recommended — full functionality)
-
-```bash
-.venv/bin/python -m bugbuster_mcp \
-    --transport usb \
-    --port /dev/cu.usbmodemXXXXXX \
-    --vlogic 3.3
-```
-
-### WiFi / HTTP
-
-```bash
-.venv/bin/python -m bugbuster_mcp \
-    --transport http \
-    --host 192.168.4.1 \
-    --vlogic 3.3
-```
-
-> The default BugBuster WiFi AP is `BugBuster` / `bugbuster123`, IP `192.168.4.1`.
-
-### All options
+Started correctly, the process looks like it has hung - it is waiting on stdio.
+That is what an MCP server does.
 
 | Option | Default | Description |
-|--------|---------|-------------|
-| `--transport` | `usb` | `usb` (binary BBP) or `http` (WiFi REST) |
-| `--port` | — | USB serial port path (required for USB transport) |
-| `--host` | `192.168.4.1` | BugBuster hostname or IP (HTTP transport) |
-| `--vlogic` | `3.3` | Logic level for digital IOs in volts (1.8–5.0 V) |
-| `--log-level` | `WARNING` | Logging verbosity: DEBUG, INFO, WARNING, ERROR |
+|---|---|---|
+| `--transport {usb,http}` | `usb` | Binary BBP over USB CDC, or JSON REST over WiFi |
+| `--port PATH` | - | Serial port (required for USB transport) |
+| `--host IP` | `192.168.4.1` | Device hostname or IP (HTTP transport) |
+| `--vlogic FLOAT` | `3.3` | Digital IO logic level in volts, 1.8–5.0 |
+| `--admin-token TOKEN` | - | HTTP admin auth token |
+| `--log-level LEVEL` | `WARNING` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
-### Transport comparison
+### USB or HTTP?
 
-| Feature | USB | HTTP |
-|---------|-----|------|
+USB is the full-capability transport. HTTP trades capability for remote access.
+
+| | USB | HTTP |
+|---|---|---|
 | Latency | < 1 ms | ~10 ms |
-| ADC streaming | Yes | No |
-| Logic analyzer | Yes | No |
-| SWD / HAT | Yes | No |
-| Register access | Yes | No |
-| Remote access | No | Yes |
-| Cable required | Yes | No |
+| ADC streaming, logic analyzer | yes | no |
+| SWD, HAT, register access | yes | no |
+| Remote access | no | yes |
 
----
+CDC #0 holds a single-client lock: the MCP server, the desktop app, and a serial
+monitor cannot use it at the same time.
 
-## Integrating with Claude Code
+## Register with an MCP client
 
-Add the server to your Claude Code MCP configuration.
-
-### Option A — Direct path (simplest)
-
-Edit `~/.claude/settings.json` and add to `mcpServers`:
+Claude Desktop (`claude_desktop_config.json`) or Claude Code (`~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
     "bugbuster": {
-      "command": "/absolute/path/to/BugBuster/python/.venv/bin/python",
-      "args": [
-        "-m", "bugbuster_mcp",
-        "--transport", "usb",
-        "--port", "/dev/cu.usbmodemXXXXXX",
-        "--vlogic", "3.3"
-      ]
+      "command": "bugbuster-mcp",
+      "args": ["--transport", "usb",
+               "--port", "/dev/cu.usbmodem1234561",
+               "--vlogic", "3.3"]
     }
   }
 }
 ```
 
-Replace `/absolute/path/to/BugBuster/python` and the port with your actual values.
-
-### Option B — Via uv run
+If `bugbuster-mcp` is not on the client's PATH, point at the interpreter
+instead:
 
 ```json
 {
-  "mcpServers": {
-    "bugbuster": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project", "/absolute/path/to/BugBuster/python",
-        "--python", "3.11",
-        "python", "-m", "bugbuster_mcp",
-        "--transport", "usb",
-        "--port", "/dev/cu.usbmodemXXXXXX",
-        "--vlogic", "3.3"
-      ]
-    }
-  }
+  "command": "/absolute/path/to/BugBuster/python/.venv/bin/python",
+  "args": ["-m", "bugbuster_mcp", "--transport", "usb", "--port", "/dev/cu.usbmodem1234561"]
 }
 ```
 
-### Applying the configuration
+Run `/mcp` in Claude Code to reload. The server should report as connected with
+a tool count.
 
-In Claude Code, run `/mcp` to reload MCP servers, or restart Claude Code. The `bugbuster` server should appear as connected with a tool count.
+## Set VLOGIC before connecting a target
 
----
+`--vlogic` is the level-shifter voltage applied to all 12 digital IOs. It must
+match the target's IO voltage.
 
-## VLOGIC — important setup decision
-
-**VLOGIC** is the logic-level voltage applied to all 12 digital IOs through the TXS0108E level shifters. It must match the target device's IO voltage.
-
-| Target device | `--vlogic` |
-|---------------|------------|
-| 5 V AVR/Arduino | `5.0` |
+| Target | `--vlogic` |
+|---|---|
+| 5 V AVR / Arduino | `5.0` |
 | 3.3 V ARM / ESP32 / RP2040 | `3.3` (default) |
 | 1.8 V low-power MCU | `1.8` |
 
-**VLOGIC is fixed at server startup and cannot be changed by AI tools.** This is intentional — changing the logic level while a target is connected could damage it. If you need a different voltage, restart the server with the correct `--vlogic` value.
+**VLOGIC cannot be changed by any tool.** Raising it while a target is attached
+could destroy the target, so it is fixed at startup. To change it, restart the
+server.
 
----
+## Tools
 
-## Available tools (41 total)
+The authoritative list is whatever the running server advertises - `/mcp` in
+Claude Code, or your client's tool inspector. The groups:
 
-### Discovery & board
-| Tool | Description |
-|------|-------------|
-| `device_status` | Full device snapshot (channels, power, HAT, faults). Call first to orient. |
-| `device_info` | Silicon ID, firmware version, transport type. |
-| `check_faults` | Active hardware faults with remediation hints. |
-| `selftest` | Internal self-test: supply voltages, e-fuse currents, boot status. |
-| `list_boards` | List available board profiles by name. |
-| `set_board` | Activate a board profile; subsequent tool calls consult it for safety limits. |
+| Group | Count | Covers |
+|---|---:|---|
+| `discovery` | 8 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery |
+| `io_config` | 3 | `configure_io` (required before any read/write), `set_supply_voltage`, `reset_device` |
+| `analog` | 5 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current` |
+| `digital` | 2 | `read_digital`, `write_digital` |
+| `waveform` | 10 | Waveform generation, ADC snapshots, logic-analyzer capture - each with a blocking form and an async `_start` / `_status` / `_result` form |
+| `bus` | 9 | I²C and SPI: `plan_*` dry runs, `scan_i2c_bus`, `spi_transfer`, `spi_jedec_id`, deferred queued transactions |
+| `debug` | 3 | `setup_serial_bridge`, `setup_swd`, `uart_config` |
+| `target` | 3 | `target_power_up`, `enter_bootloader`, `release_bootloader` |
+| `power` | 5 | USB-PD status and selection, rail/e-fuse control, WiFi status and AP password |
+| `hat` | 13 | Logic Analyzer HAT: capabilities, rail status and control, calibration, LED state, LA routing, IO bank, level shifters |
+| `daq` | 11 | Power Profiler Pro HAT: settings, source control, measurement, energy/charge reset, triggers |
+| `daq_cal` | 4 | Power Profiler Pro HAT calibration flow |
+| `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
+| `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |
+| `advanced` | 3 | `mux_control`, `register_access`, `idac_control` - risk-gated |
+| `scripting` | 1 | `run_device_script` - evaluate Python on the on-device MicroPython engine |
 
-### IO configuration
-| Tool | Description |
-|------|-------------|
-| `configure_io` | Set IO mode (analog in/out, digital, current, RTD, HAT). Must be called before read/write. |
-| `set_supply_voltage` | Set VADJ1 or VADJ2 (3–15 V). Cannot set VLOGIC (user-controlled). |
-| `reset_device` | Safe reset: all outputs off, MUX open, HAL re-initialized. |
+Two rules the model has to follow, and the tools enforce:
 
-### Analog measurement
-| Tool | Description |
-|------|-------------|
-| `read_voltage` | Read voltage on an ANALOG_IN IO (24-bit ADC, 0–12 V). |
-| `read_current` | Read 4–20 mA loop current on a CURRENT_IN IO. |
-| `read_resistance` | Read resistance in Ω, or temperature in °C for PT100/PT1000. |
+1. Call `device_status` first, to orient.
+2. Call `configure_io` before reading or writing any IO. An IO is in analog
+   **or** digital mode, never both.
 
-### Analog output
-| Tool | Description |
-|------|-------------|
-| `write_voltage` | Set DAC voltage on an ANALOG_OUT IO (0–12 V unipolar, ±12 V bipolar). |
-| `write_current` | Set current source on a CURRENT_OUT IO (0–8 mA safe default, up to 25 mA). |
+### Resources
 
-### Digital IO
-| Tool | Description |
-|------|-------------|
-| `read_digital` | Read logic level on a DIGITAL_IN IO. |
-| `write_digital` | Set logic level on a DIGITAL_OUT IO. |
+Read-only state the model can pull for context:
 
-### Waveform & capture
-| Tool | Description |
-|------|-------------|
-| `start_waveform` | Generate sine/square/triangle/sawtooth on an ANALOG_OUT IO (0.01–100 Hz). |
-| `stop_waveform` | Stop waveform generator (DAC holds last value). |
-| `capture_adc_snapshot` | Capture N samples over T seconds; returns min/max/mean/stddev/frequency/preview. |
-| `capture_logic_analyzer` | Capture 1–4 digital channels at up to 10 MHz (HAT required). |
-
-### UART & debug
-| Tool | Description |
-|------|-------------|
-| `setup_serial_bridge` | Route UART bridge to two IOs (TX/RX) at a specified baud rate. |
-| `setup_swd` | Configure SWD debug probe for ARM Cortex-M targets (HAT required). |
-| `uart_config` | Read or update UART bridge settings (baud, data bits, parity, stop bits). |
-
-### Power management
-| Tool | Description |
-|------|-------------|
-| `usb_pd_status` | Read USB-C PD contract: negotiated voltage, current, available PDOs. |
-| `usb_pd_select` | Request a USB PD voltage: 5/9/12/15/18/20 V. |
-| `power_control` | Enable/disable power rails or e-fuses manually. |
-| `wifi_status` | Read WiFi connection status, SSID, IP address. |
-| `wifi_set_ap_password` | Set the SoftAP password (persisted to NVS, applied live; 8–63 chars). |
-
-### Bus (I2C / SPI)
-| Tool | Description |
-|------|-------------|
-| `plan_i2c_bus` | Dry-run: preview the full route for an external I2C bus (no hardware changes). |
-| `plan_spi_bus` | Dry-run: preview the full route for an external SPI bus (no hardware changes). |
-| `scan_i2c_bus` | Configure and scan an external I2C bus; returns detected addresses. |
-| `spi_transfer` | Configure an external SPI bus and run one bounded full-duplex transfer. |
-| `spi_jedec_id` | Configure SPI and read JEDEC ID (0x9F command) — quick flash/peripheral smoke test. |
-| `defer_i2c_read` | Queue an I2C read on the already-configured bus (deferred worker). |
-| `defer_i2c_write_read` | Queue an I2C write/read transaction on the already-configured bus. |
-| `defer_spi_transfer` | Queue an SPI transfer on the already-configured bus (deferred worker). |
-| `get_deferred_bus_result` | Poll a queued deferred I2C/SPI operation by job ID. |
-
-### Scripting
-| Tool | Description |
-|------|-------------|
-| `run_device_script` | Evaluate a Python script on the embedded MicroPython engine (ESP32 on-device). |
-
-### Advanced (low-level)
-| Tool | Description |
-|------|-------------|
-| `mux_control` | Direct ADGS2414D switch matrix control. Requires `i_understand_the_risk=True`. |
-| `register_access` | Raw AD74416H SPI register read/write. USB only. Requires risk acknowledgment. |
-| `idac_control` | Direct DS4424 current DAC control (power supply fine-tuning). |
-
----
-
-## Resources
-
-Resources provide read-only state that the AI can query for context (6 total):
-
-| URI | Description |
-|-----|-------------|
-| `bugbuster://status` | Full device state JSON |
-| `bugbuster://power` | Supply voltages, USB PD, e-fuse status |
+| URI | Contents |
+|---|---|
+| `bugbuster://status` | Full device state |
+| `bugbuster://power` | Supply voltages, USB-PD contract, e-fuse status |
 | `bugbuster://faults` | Active faults with remediation hints |
-| `bugbuster://hat` | HAT detection, pin config, logic analyzer state |
-| `bugbuster://capabilities` | Static limits: IO modes, voltage ranges, feature availability |
-| `bugbuster://board` | Active board profile JSON (null if none set) |
+| `bugbuster://hat` | HAT detection, pin config, logic-analyzer state |
+| `bugbuster://capabilities` | Static limits - IO modes, voltage ranges, feature availability |
+| `bugbuster://board` | Active board profile, or `null` |
 
----
+### Prompt workflows
 
-## Prompt templates
-
-Four guided workflows are included:
+Type `/` in Claude Code to pick one.
 
 | Prompt | Use case |
-|--------|----------|
-| `debug_unknown_device` | Non-invasive characterization of an unknown connected device |
-| `measure_signal` | Structured single-channel signal measurement with statistics |
-| `program_target` | Firmware flashing via SWD (requires HAT) |
-| `power_cycle_test` | Automated power cycle reliability testing |
-
-To use a prompt in Claude Code, type `/` and select the workflow.
-
----
+|---|---|
+| `debug_unknown_device` | Non-invasive characterisation of an unknown board |
+| `measure_signal` | Structured single-channel measurement with statistics |
+| `program_target` | Firmware flashing over SWD (Logic Analyzer HAT required) |
+| `power_cycle_test` | Automated power-cycle reliability testing |
 
 ## Safety model
 
-The server enforces hardware protection at the tool layer:
+Enforced in the tool layer, below the prompt - the model cannot argue its way
+past these. Constants live in [config.py](config.py); the checks are in
+[safety.py](safety.py).
 
-- **MUX mutual exclusivity** — `configure_io` sets exactly one signal path per IO. Each IO can be analog OR digital, not both. This is enforced by the HAL and cannot be bypassed through normal tools.
-- **E-fuse auto-enable** — Configuring an IO as an output automatically enables the e-fuse (overcurrent protection) for that IO_Block.
-- **Conservative current default** — `write_current` defaults to max 8 mA. Pass `allow_full_range=True` to use the full 0–25 mA range.
-- **Voltage confirmation** — `set_supply_voltage` requires `confirm=True` for voltages above 12 V.
-- **VLOGIC locked** — Cannot be changed by AI tools; only settable via `--vlogic` at startup.
-- **Risk gates** — `mux_control` and `register_access` require `i_understand_the_risk=True` to prevent accidental low-level operations.
-- **Post-action fault check** — After every output-driving tool call, e-fuse and power-good states are checked; warnings are included in the response.
+| Rule | Effect |
+|---|---|
+| MUX exclusivity | `configure_io` sets exactly one signal path per IO. Analog or digital, never both. Enforced in the HAL. |
+| E-fuse auto-arm | Configuring an IO as an output enables overcurrent protection for its IO block. |
+| Current ceiling | `write_current` caps at 8 mA. `allow_full_range=True` unlocks the full 25 mA. |
+| Voltage confirmation | `set_supply_voltage` above 12 V requires `confirm=True`. Hard maximum 15 V. |
+| VLOGIC lock | Not settable by any tool. `--vlogic` at startup only. |
+| Risk gates | `mux_control` and `register_access` require `i_understand_the_risk=True`. |
+| Rail lock | An active board profile can mark VLOGIC / VADJ1 / VADJ2 `locked`; changes are then rejected. |
+| Post-action fault check | After every output-driving call, e-fuse and power-good state is read back and warnings are attached to the response. |
 
-### IO capability reference
+### IO capabilities
 
 ```
-IOs 3, 6, 9, 12  — analog-capable
-  Modes: ANALOG_IN, ANALOG_OUT, CURRENT_IN, CURRENT_OUT, RTD, HART, HAT
-  Plus all digital modes below
+IOs 3, 6, 9, 12          analog-capable
+                         ANALOG_IN, ANALOG_OUT, CURRENT_IN, CURRENT_OUT,
+                         RTD, HART, HAT - plus every digital mode
 
-IOs 1,2,4,5,7,8,10,11  — digital only
-  Modes: DIGITAL_IN, DIGITAL_OUT, DIGITAL_IN_LOW, DIGITAL_OUT_LOW, DISABLED
+IOs 1,2,4,5,7,8,10,11    digital only
+                         DIGITAL_IN, DIGITAL_OUT, DIGITAL_IN_LOW,
+                         DIGITAL_OUT_LOW, DISABLED
 
-All IOs: DISABLED (safe default, high-impedance)
+all IOs                  DISABLED - safe default, high impedance
 ```
 
 ### Power topology
 
 ```
-VADJ1 (rail 1) → IOs 1–6  (IO_Blocks 1 & 2, E-fuses 1 & 2)
-VADJ2 (rail 2) → IOs 7–12 (IO_Blocks 3 & 4, E-fuses 3 & 4)
-VLOGIC         → all 12 IOs (level shifters, fixed at startup)
+VADJ1  →  IOs 1–6   (IO blocks 1 & 2, e-fuses 1 & 2)
+VADJ2  →  IOs 7–12  (IO blocks 3 & 4, e-fuses 3 & 4)
+VLOGIC →  all 12 IOs (level shifters, fixed at startup)
 ```
-
----
-
-## Troubleshooting
-
-**Server doesn't connect to the device**
-- Verify the port: `ls /dev/cu.usbmodem*` (macOS) or `ls /dev/ttyACM*` (Linux)
-- Use CDC #0 (the lower-numbered port of the two BugBuster CDC ports)
-- Check USB connection and that the BugBuster firmware is running
-
-**`mcp` module not found**
-```bash
-uv pip install --python .venv/bin/python "mcp>=1.0"
-```
-
-**Claude Code doesn't show the server**
-- Run `/mcp` in Claude Code to reload
-- Check that the path in `settings.json` is absolute, not relative
-- Run the command manually in a terminal to see any startup errors:
-  ```bash
-  .venv/bin/python -m bugbuster_mcp --transport usb --port /dev/cu.usbmodemXXXX
-  ```
-  (It will hang waiting for stdio — that means it started correctly. Press Ctrl+C.)
-
-**HAT tools fail**
-- SWD, logic analyzer, and `capture_logic_analyzer` require the RP2040 HAT expansion board
-- Check `device_status` → `hat.detected` is `true`
-- HAT commands are USB-only; HTTP transport does not support them
-
-**Logic analyzer captures empty data**
-- Use `trigger_type="none"` for an immediate (force-triggered) capture
-- Verify the signal is connected to EXP_EXT pins 1–4 on the HAT connector
-- The RP2040 HAT logic analyzer uses GPIO14–17 internally
-
-**`set_supply_voltage` rejected for VLOGIC**
-- VLOGIC is fixed at startup. Restart the server with `--vlogic <voltage>`.
-
----
-
-## Example session
-
-Once configured in Claude Code, you can ask the AI:
-
-> "I have a device connected to BugBuster. Can you identify what it is and check if it's working?"
-
-The AI will call `device_status` → `selftest` → configure IOs as `ANALOG_IN` → `read_voltage` → try `setup_serial_bridge` → report findings.
-
-> "Measure the signal on IO 1 for 2 seconds and tell me the frequency."
-
-The AI will call `configure_io(1, "ANALOG_IN")` → `capture_adc_snapshot(1, duration_s=2)` → report frequency and waveform statistics.
-
-> "Set IO 4 to output 3.3 V."
-
-The AI will call `set_supply_voltage(rail=1, voltage=3.3)` → `configure_io(4, "ANALOG_OUT")` → `write_voltage(4, 3.3)` → check for faults.
-
----
 
 ## Board profiles
 
-A **board profile** is a JSON file describing the DUT's pin map, rail locks,
-SWD target, and UART baudrate.  When a profile is active, the MCP safety layer
-refuses to change any rail marked `locked: true`, so an AI cannot accidentally
-drive VLOGIC to 5 V on a 3.3 V board.
-
-Schema (nested — see [`Docs/board_profiles.md`](../../Docs/board_profiles.md)):
+A board profile is a JSON file describing a DUT's pin map, rail locks, SWD
+target, and UART baud rate. With a profile active, the safety layer refuses to
+change any rail marked `locked: true` - so the model cannot drive VLOGIC to 5 V
+on a 3.3 V board.
 
 ```json
 {
@@ -400,43 +215,51 @@ Schema (nested — see [`Docs/board_profiles.md`](../../Docs/board_profiles.md))
   "vadj1":  { "value": 3.3, "locked": true },
   "vadj2":  { "value": 5.0, "locked": false },
   "pins": {
-    "1": { "name": "PA0_BTN", "type": "GPIO",    "direction": "IN" },
+    "1": { "name": "PA0_BTN",   "type": "GPIO",    "direction": "IN" },
     "3": { "name": "USART2_TX", "type": "UART_TX", "direction": "OUT" },
-    "4": { "name": "USART2_RX", "type": "UART_RX", "direction": "IN" },
-    "8": { "name": "SWDIO",   "type": "SWD",    "direction": "INOUT" },
-    "9": { "name": "SWCLK",   "type": "SWD",    "direction": "OUT" }
+    "8": { "name": "SWDIO",     "type": "SWD",     "direction": "INOUT" },
+    "9": { "name": "SWCLK",     "type": "SWD",     "direction": "OUT" }
   },
   "swd":  { "target": "stm32f4x" },
   "uart": { "baudrate": 115200 }
 }
 ```
 
-Profiles live in `python/bugbuster_mcp/board_profiles/*.json` and are loaded
-via three tools and one resource:
+Profiles live in [board_profiles/](board_profiles/). `list_boards()` enumerates
+them, `set_board(name)` activates one, and `bugbuster://board` exposes the
+active profile. The desktop app's **Board** tab writes to the same directory, so
+an exported profile is immediately visible here.
 
-| Surface | What it does |
-|---|---|
-| `list_boards()` | Enumerate available profile names |
-| `set_board(name)` | Activate a profile; subsequent tool calls consult it |
-| `bugbuster://board` | Resource exposing the active profile (or `null`) |
-| `safety.validate_vadj_voltage` / `validate_vlogic` | Reject any change that violates a locked rail |
+Full schema: [Docs/board-profiles.md](../../Docs/board-profiles.md)
 
-The desktop app's **Board** tab writes profiles to the same directory, so an
-exported profile is immediately visible to the MCP server.
+## Testing without hardware
 
----
-
-## Hardware-free testing
-
-All MCP tools can be exercised end-to-end against the in-process simulator
-in `tests/mock/`, without a board:
+Every tool can be exercised end to end against the in-process simulator:
 
 ```bash
 PYTHONPATH=python:tests pytest tests/unit tests/simulator -q
 PYTHONPATH=python:tests pytest tests/device --sim -q
 ```
 
-The simulator implements every BBP CmdId and mirrors the firmware `/api`
-schema, including the BBP v4 `macAddress` field on `/api/device/info` (required
-by the desktop pairing flow).  See [`../../tests/README.md`](../../tests/README.md)
-for the layered test taxonomy.
+The simulator implements every BBP command ID and mirrors the firmware `/api`
+schema. See [tests/README.md](../../tests/README.md).
+
+## Troubleshooting
+
+**Server won't connect.** Confirm the port, and that it is CDC #0 (the
+lower-numbered of the two). Close anything else holding it - the desktop app or
+a serial monitor will block the port.
+
+**Client doesn't show the server.** Run `/mcp` to reload. Use absolute paths in
+the config. Run the command manually in a terminal to see startup errors.
+
+**HAT tools fail.** SWD and logic-analyzer tools need the Logic Analyzer HAT.
+Check `device_status` → `hat.detected`. HAT commands are USB-only.
+
+**Logic analyzer returns nothing.** Use `trigger_type="none"` for an immediate
+capture, and confirm the signal reaches the HAT LA channels - see
+[Docs/logic-analyzer.md](../../Docs/logic-analyzer.md) for the two routing
+options.
+
+**`set_supply_voltage` rejected for VLOGIC.** By design. Restart with
+`--vlogic <voltage>`.

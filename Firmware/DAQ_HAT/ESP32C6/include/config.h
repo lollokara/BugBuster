@@ -125,7 +125,7 @@
 // ---------------------------------------------------------------------------
 // REMOVED (2026-07-23): a boot-time GPIO strap on "C6 GPIO2" was tried here
 // to survive the P4's ESP-Hosted host stack hard-resetting the C6 when
-// bringing up the SDIO transport. Abandoned: Docs/FIRMWARE_HARDWARE_REFERENCE.md
+// bringing up the SDIO transport. Abandoned: Docs/daq-hat-hardware.md
 // §5's verified C6 wiring map does not list this pin as connected to the P4
 // at all (the old "C6 GPIO2 (IO2) -> P4 GPIO6" note in the P4's config.h was
 // never verified against the schematic), which matches the observed

@@ -327,7 +327,7 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // ── Static channel metadata ────────────────────────────────────────────────
     let ch_colors = ["#10b981", "#06b6d4", "#ff4d6a"];
     let ch_titles = [
-        "Level Shifter  ·  TPS74601PDRVT",
+        "Level Shifter  ·  LTM8078 Out2",
         "V_ADJ1 — Domain A  ·  LTM8063 #1",
         "V_ADJ2 — Domain B  ·  LTM8063 #2",
     ];

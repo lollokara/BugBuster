@@ -10,7 +10,7 @@ annotated working examples.
 
 ---
 
-## 1. Script won't eval — "queue_full" or no response
+## 1. Script won't eval - "queue_full" or no response
 
 **Symptom:** `POST /api/scripts/eval` returns `{"ok": false, "err": "queue_full"}`.
 
@@ -25,13 +25,13 @@ rejected immediately.
 2. Wait for `GET /api/scripts/status` → `"running": false`.
 3. Re-submit your script.
 
-The queue is not a FIFO pipeline for serial execution — it is a small buffer
+The queue is not a FIFO pipeline for serial execution - it is a small buffer
 to absorb bursts. For sequential workflows, wait for `"running": false` before
 submitting the next eval.
 
 ---
 
-## 2. Heap watermark warning — what 80% means
+## 2. Heap watermark warning - what 80% means
 
 **Symptom:** `GET /api/scripts/status` returns `"watermarkSoftHit": true`, or
 you see `"mode"` flip from `"PERSISTENT"` back to `"EPHEMERAL"` unexpectedly.
@@ -56,12 +56,12 @@ The GC heap is 1 MB from PSRAM. 80% = ~820 KB used.
   call `gc.collect()` from your script.
 - If the hard watermark is repeatedly hit, split your work across multiple
   ephemeral evals rather than keeping everything in one persistent session.
-- Check `autoResetCount` in the status response — non-zero means the VM has
+- Check `autoResetCount` in the status response - non-zero means the VM has
   been force-reset at least once this boot.
 
 ---
 
-## 3. Import errors — ModuleNotFoundError
+## 3. Import errors - ModuleNotFoundError
 
 **Symptom:** Script raises `ModuleNotFoundError: No module named 'foo'`.
 
@@ -70,7 +70,7 @@ The GC heap is 1 MB from PSRAM. 80% = ~820 KB used.
 | Cause | Fix |
 |---|---|
 | Module not frozen into firmware | Use only modules listed in `Docs/MicroPython Examples/11_frozen_helpers.py` |
-| VFS not mounted (ephemeral eval, cold start) | The VM mounts `vfs_posix` on `/` at each init — if you see this on first eval, try again; cold-start timing can occasionally lose the mount |
+| VFS not mounted (ephemeral eval, cold start) | The VM mounts `vfs_posix` on `/` at each init - if you see this on first eval, try again; cold-start timing can occasionally lose the mount |
 | Importing from SPIFFS path wrong | Files uploaded via `POST /api/scripts/files?name=foo.py` are stored in SPIFFS. Use `import foo` only in persistent mode with `vfs_posix` mounted; see example `14_vfs_import.py` |
 | Circular import | Split into smaller modules |
 
@@ -94,7 +94,7 @@ connecting while a session is active receives WebSocket close code **4002**
 2. If no other tab is open, the previous session may not have cleaned up.
    Refreshing the page or waiting ~30 seconds for the server-side idle timeout
    will release the slot.
-3. On reconnect the session context is freshly initialized — there is no
+3. On reconnect the session context is freshly initialized - there is no
    stale state from the previous connection.
 
 The REPL WebSocket is at `ws://<device>/api/scripts/repl`.
@@ -131,7 +131,7 @@ See example [`10_persistent_session.py`](MicroPython%20Examples/10_persistent_se
 
 ---
 
-## 6. stdout goes missing — the vfs_posix / fd 1 gotcha
+## 6. stdout goes missing - the vfs_posix / fd 1 gotcha
 
 **Symptom:** `print()` output does not appear in logs or the REPL, but the
 script runs without error.
@@ -140,12 +140,12 @@ script runs without error.
 VM init), POSIX file descriptors 1 and 2 are captured by the VFS layer. Any
 code that writes directly to the underlying libc `fd 1` (e.g., C extensions
 calling `write(1, ...)` directly) bypasses MicroPython's output routing and
-never reaches `mp_hal_stdout_tx_strn` — the function that feeds the log ring
+never reaches `mp_hal_stdout_tx_strn` - the function that feeds the log ring
 and the REPL WebSocket.
 
 **Fixes:**
 
-- Use `print()` or `sys.stdout.write()` from Python — these route through
+- Use `print()` or `sys.stdout.write()` from Python - these route through
   `mp_hal_stdout_tx_strn` correctly.
 - If you are writing a C extension: call `scripting_log_push()` (the internal
   C API) rather than writing to fd 1 directly.
@@ -215,7 +215,7 @@ counter exposed over HTTP.
 
 ## 8. Upload and autorun a script
 
-**Step 1 — Upload the file:**
+**Step 1 - Upload the file:**
 
 ```bash
 curl -X POST "http://bugbuster.local/api/scripts/files?name=blink.py" \
@@ -229,14 +229,14 @@ Response: `{"ok": true}`
 File names must match `[a-zA-Z0-9_.-]+\.py` and be at most 32 characters.
 Maximum file size is 32 768 bytes.
 
-**Step 2 — Run it once:**
+**Step 2 - Run it once:**
 
 ```bash
 curl -X POST "http://bugbuster.local/api/scripts/run-file?name=blink.py" \
      -H "X-BugBuster-Admin-Token: $TOKEN"
 ```
 
-**Step 3 — Set it as autorun:**
+**Step 3 - Set it as autorun:**
 
 ```bash
 curl -X POST "http://bugbuster.local/api/scripts/autorun/enable?name=blink.py" \
@@ -288,7 +288,7 @@ the stack, a `KeyboardInterrupt` is raised inside the script.
 
 **Caveats:**
 
-- The stop is **cooperative** — a script blocked inside a C extension that
+- The stop is **cooperative** - a script blocked inside a C extension that
   never returns to the Python VM will not be interrupted.
 - C-level sleep calls go through `mp_hal_delay_ms()`, which checks the stop
   flag and will interrupt those too.
@@ -310,7 +310,7 @@ directly:
 import bugbuster as bb
 ```
 
-Do not attempt to `pip install` or `import bugbuster` from SPIFFS — the frozen
+Do not attempt to `pip install` or `import bugbuster` from SPIFFS - the frozen
 module takes precedence and the SPIFFS version will be shadowed.
 
 **Channel numbering:** Channels are 0-indexed in the Python API (0–3), matching

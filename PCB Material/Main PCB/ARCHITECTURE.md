@@ -149,7 +149,7 @@ ADC task resumes polling
 
 ## 4. Communication Protocol (BBP)
 
-**Full specification:** `Firmware/BugBusterProtocol.md`
+**Full specification:** `Firmware/bbp-protocol.md`
 
 ### 4.1 Framing
 
@@ -346,8 +346,8 @@ g_deviceState                   ConnectionManager                Leptos signals
 
 | File | Description |
 |------|-------------|
-| `Firmware/BugBusterProtocol.md` | Full BBP protocol specification (framing, handshake, commands, streaming) |
-| `Firmware/FirmwareStructure.md` | Firmware reference: ADC/DAC config, channel functions, HTTP endpoints, task structure |
+| `Firmware/bbp-protocol.md` | Full BBP protocol specification (framing, handshake, commands, streaming) |
+| `Firmware/firmware-structure.md` | Firmware reference: ADC/DAC config, channel functions, HTTP endpoints, task structure |
 | `Firmware/ESP32/platformio.ini` | PlatformIO build config (ESP-IDF, ESP32-S3) |
 | `Firmware/ESP32/partitions.csv` | Flash partition table (app + SPIFFS) |
 | `Firmware/ESP32/data/index.html` | Embedded web dashboard (served via SPIFFS) |

@@ -1,7 +1,7 @@
-# BugBuster — Release checklist
+# BugBuster - Release checklist
 
 Three components ship under independent tags, each validated by a dedicated
-CI workflow. **All three validators must pass locally before pushing tags** —
+CI workflow. **All three validators must pass locally before pushing tags** - 
 otherwise the workflow fails before building any artifacts.
 
 ---
@@ -17,8 +17,8 @@ otherwise the workflow fails before building any artifacts.
 
 The DAQ HAT workflow builds **both** chips under one tag and validates it
 against the **P4's** version. The two chips publish deliberately different
-image formats — the P4 an app-only OTA image, the C6 a full merged image from
-0x0 — because the C6 is written by the ESP-ROM loader rather than into an A/B
+image formats - the P4 an app-only OTA image, the C6 a full merged image from
+0x0 - because the C6 is written by the ESP-ROM loader rather than into an A/B
 slot. Publishing an app-only binary as the C6 asset bricks the chip; see
 `.mex/patterns/daq-hat-release-images.md`.
 
@@ -30,19 +30,19 @@ pushed tag and asserts the helper returns the same string.
 
 ## Files to edit per component
 
-### RP2040 (single file — automated)
+### RP2040 (single file - automated)
 
-1. **`Firmware/RP2040/CMakeLists.txt`** — `set(PROBE_VERSION "bb-hat-X.Y")`.
+1. **`Firmware/RP2040/CMakeLists.txt`** - `set(PROBE_VERSION "bb-hat-X.Y")`.
    This is the **only** file you need to edit. It is the canonical source that:
    - CI reads and validates against the pushed tag.
    - Gets written into the generated `version.h` (USB product string / debugprobe).
    - Is parsed by CMake to inject `BB_HAT_FW_MAJOR` / `BB_HAT_FW_MINOR` as
      compile definitions, so `bb_main.c` picks them up automatically via
-     `#ifndef` fallback guards — no manual edit required in that file.
+     `#ifndef` fallback guards - no manual edit required in that file.
 
 `Firmware/RP2040/src/bb_main.c` retains `#ifndef BB_HAT_FW_MAJOR/MINOR`
 fallback guards for IDE / out-of-CMake builds. Do **not** add bare
-(non-guarded) `#define` lines there — `firmware_version.py rp2040` will
+(non-guarded) `#define` lines there - `firmware_version.py rp2040` will
 detect and reject a mismatch.
 
 Run to verify before tagging:
@@ -59,14 +59,14 @@ a top-level `SHA256SUMS.txt`.
 
 ### ESP32 (single file)
 
-1. **`Firmware/ESP32/src/bbp/bbp.h`** — `BBP_FW_VERSION_MAJOR` /
+1. **`Firmware/ESP32/src/bbp/bbp.h`** - `BBP_FW_VERSION_MAJOR` /
    `_MINOR` / `_PATCH`. CI joins them with dots.
 
 ### Desktop (three files, validated in lockstep)
 
-1. **`DesktopApp/BugBuster/Cargo.toml`** — top-level Leptos UI crate.
-2. **`DesktopApp/BugBuster/src-tauri/Cargo.toml`** — Tauri backend crate.
-3. **`DesktopApp/BugBuster/src-tauri/tauri.conf.json`** — JSON, no trailing
+1. **`DesktopApp/BugBuster/Cargo.toml`** - top-level Leptos UI crate.
+2. **`DesktopApp/BugBuster/src-tauri/Cargo.toml`** - Tauri backend crate.
+3. **`DesktopApp/BugBuster/src-tauri/tauri.conf.json`** - JSON, no trailing
    commas.
 
 Use `scripts/desktop_version.py X.Y.Z` (positional) to set all three at once
@@ -151,7 +151,7 @@ binaries have been distributed.
 
 ---
 
-## RP2040 version — single source of truth (resolved 2026-05-04)
+## RP2040 version - single source of truth (resolved 2026-05-04)
 
 Previously, `PROBE_VERSION` in `CMakeLists.txt` and the `BB_HAT_FW_MAJOR/MINOR`
 literals in `bb_main.c` had to be kept in sync manually. This is now automated:

@@ -153,11 +153,11 @@ bb.script_reset()
 
 **Status fields** (returned by `GET /api/scripts/status`):
 
-- `mode` — 0=ephemeral, 1=persistent
-- `globalsBytes` — estimated heap used by globals
-- `globalsCount` — number of global variables
-- `watermarkSoftHit` — soft limit (80%) reached, `gc.collect()` ran
-- `autoResetCount` — number of times VM auto-reset due to threshold or idle
+- `mode` - 0=ephemeral, 1=persistent
+- `globalsBytes` - estimated heap used by globals
+- `globalsCount` - number of global variables
+- `watermarkSoftHit` - soft limit (80%) reached, `gc.collect()` ran
+- `autoResetCount` - number of times VM auto-reset due to threshold or idle
 
 **Auto-reset triggers:**
 
@@ -465,11 +465,11 @@ BugBuster Protocol (BBP v4) script commands are multiplexed over USB CDC. No tok
 | Opcode | Command | Purpose | Payload | Response |
 |--------|---------|---------|---------|----------|
 | 0xF5 | SCRIPT_EVAL | Submit source inline | flags(1) + len(2) + src | ok(1) + id(4) |
-| 0xF6 | SCRIPT_STATUS | Get engine state | — | running(1) + id(4) + runs(4) + errors(4) + err_len(1) + error(...) |
-| 0xF7 | SCRIPT_LOGS | Drain log ring | — | len(2) + data |
-| 0xF8 | SCRIPT_STOP | Request stop | — | ok(1) |
+| 0xF6 | SCRIPT_STATUS | Get engine state | - | running(1) + id(4) + runs(4) + errors(4) + err_len(1) + error(...) |
+| 0xF7 | SCRIPT_LOGS | Drain log ring | - | len(2) + data |
+| 0xF8 | SCRIPT_STOP | Request stop | - | ok(1) |
 | 0xF9 | SCRIPT_UPLOAD | Store file to SPIFFS | name_len(2) + name + src_len(4) + src | ok(1) + err_len(1) + error(...) |
-| 0xFA | SCRIPT_LIST | List stored files | — | count(2) + [name_len(2) + name + size(4)]* |
+| 0xFA | SCRIPT_LIST | List stored files | - | count(2) + [name_len(2) + name + size(4)]* |
 | 0xFB | SCRIPT_RUN_FILE | Run stored file | name_len(2) + name | ok(1) + id(4) + err_len(1) + error(...) |
 | 0xFC | SCRIPT_DELETE | Delete stored file | name_len(2) + name | ok(1) + err_len(1) + error(...) |
 | 0xFD | SCRIPT_AUTORUN | Autorun control (multiplexed) | op(1) + [name_len(2) + name]* | op-specific |
@@ -521,5 +521,5 @@ If `io12_high=false`, you have a pull-down on IO12 or a button held. Wire a pull
 
 **WebSocket REPL closes immediately**
 
-- Close code **4001:** token mismatch — re-pair and retry
-- Close code **4002:** another REPL session is active — close the other tab first
+- Close code **4001:** token mismatch - re-pair and retry
+- Close code **4002:** another REPL session is active - close the other tab first

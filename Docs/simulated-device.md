@@ -10,8 +10,8 @@
 The `SimulatedDevice` (in `tests/mock/simulated_device.py`) provides a full in-process software replica of the BugBuster hardware stack. It lets the Python client, MCP server, and HTTP routes be exercised without physical hardware, and acts as the pre-release validation platform for all non-firmware-binary changes.
 
 Two transport modes are supported:
-- **BBP USB (simulated CDC)** — `--sim` flag, uses `SimulatedTransport` in `tests/mock/transport.py`
-- **HTTP** — `--sim-full` flag, spins up a real `ThreadingWSGIServer` backed by `SimulatedDevice` (`tests/mock/sim_http_server.py`)
+- **BBP USB (simulated CDC)** - `--sim` flag, uses `SimulatedTransport` in `tests/mock/transport.py`
+- **HTTP** - `--sim-full` flag, spins up a real `ThreadingWSGIServer` backed by `SimulatedDevice` (`tests/mock/sim_http_server.py`)
 
 ---
 
@@ -34,14 +34,14 @@ Two transport modes are supported:
 | `handlers/scripts.py` | SCRIPT_EVAL, SCRIPT_STATUS, SCRIPT_LOGS, SCRIPT_STOP, SCRIPT_UPLOAD, SCRIPT_LIST, SCRIPT_RUN_FILE, SCRIPT_DELETE, SCRIPT_AUTORUN | 9 |
 | `handlers/io_owner.py` | IO_CLAIM, IO_RELEASE, IO_OWNER_STATUS, IO_FORCE_RELEASE | 4 |
 | `handlers/bus.py` | EXT_I2C_SETUP, EXT_I2C_SCAN, EXT_I2C_WRITE, EXT_I2C_READ, EXT_I2C_WRITE_READ, EXT_SPI_SETUP, EXT_SPI_TRANSFER, EXT_JOB_SUBMIT, EXT_JOB_GET | 9 |
-| `handlers/quicksetup.py` | (re-exported via core.py) | — |
+| `handlers/quicksetup.py` | (re-exported via core.py) | - |
 
 **Not yet simulated (3 commands):**
 
 | Command | ID | Notes |
 |---------|----|-------|
-| `OTA` | 0x77 | USB firmware update — safe to stub with error response |
-| `START_ADC_DSP_STREAM` | 0x64 | DSP-filtered stream — copy ADC stream logic |
+| `OTA` | 0x77 | USB firmware update - safe to stub with error response |
+| `START_ADC_DSP_STREAM` | 0x64 | DSP-filtered stream - copy ADC stream logic |
 | `STOP_ADC_DSP_STREAM` | 0x65 | Stop DSP stream |
 
 ---
@@ -96,38 +96,38 @@ The device tracks 59+ attributes grouped by subsystem:
 
 ## Known Gaps and Reliability Issues
 
-### Priority 1 — Fixed
+### Priority 1 - Fixed
 
 | Issue | Fix |
 |-------|-----|
 | `PCA_GET_STATUS` returned 12 bytes, dropped 9 enable fields | `power.py` now returns 21 bytes keyed by `PcaControl` int enum |
 | `_parse_pca_status` silently truncated enable flags | `client.py` parser reads all 21 bytes with graceful fallback |
 
-### Priority 1 — Active Bugs
+### Priority 1 - Active Bugs
 
 | Issue | File | Impact |
 |-------|------|--------|
-| **Streaming thread crash when no transport** — `device._transport` is `None` in unit tests; accessing `_event_handlers` raises `AttributeError` | `handlers/streaming.py:58,94` | Streaming tests silently fail |
-| **LA ARM/FORCE skip to DONE** — both handlers set `la_state = "DONE"` unconditionally, bypassing ARMED → CAPTURING → DONE | `handlers/hat.py:395,403` | Can't validate LA state machine in tests |
+| **Streaming thread crash when no transport** - `device._transport` is `None` in unit tests; accessing `_event_handlers` raises `AttributeError` | `handlers/streaming.py:58,94` | Streaming tests silently fail |
+| **LA ARM/FORCE skip to DONE** - both handlers set `la_state = "DONE"` unconditionally, bypassing ARMED → CAPTURING → DONE | `handlers/hat.py:395,403` | Can't validate LA state machine in tests |
 
-### Priority 2 — Coverage Gaps
+### Priority 2 - Coverage Gaps
 
 | Gap | File | Notes |
 |-----|------|-------|
-| `IDAC_CAL_ADD_POINT` is a no-op — doesn't store calibration points | `handlers/idac.py` | Calibration curve tests always pass vacuously |
+| `IDAC_CAL_ADD_POINT` is a no-op - doesn't store calibration points | `handlers/idac.py` | Calibration curve tests always pass vacuously |
 | `USBPD_SELECT_PDO` accepts any value with no range check (valid: 1–6) | `handlers/misc.py` | Invalid PDO codes silently accepted |
-| `OTA` (0x77) has no handler — raises "unknown command" | — | Blocks OTA flow tests |
-| `START/STOP_ADC_DSP_STREAM` (0x64/0x65) missing | — | DSP stream tests unrunnable |
+| `OTA` (0x77) has no handler - raises "unknown command" | - | Blocks OTA flow tests |
+| `START/STOP_ADC_DSP_STREAM` (0x64/0x65) missing | - | DSP stream tests unrunnable |
 
-### Priority 3 — Robustness
+### Priority 3 - Robustness
 
 | Issue | Notes |
 |-------|-------|
 | `QS_GET/QS_SAVE` don't validate slot index | Out-of-range slot silently ignored |
 | `WIFI_SET_AP_PASSWORD` persist-failure path (result=0x02) never tested | Only happy-path tested |
 | `IO_CLAIM` emits hardcoded event ID `0x86` instead of `CmdId.EVT_IO_PREEMPTED` | Lease expiry events misidentified |
-| Time never advances automatically in tests — `device.tick(now_ms)` must be called manually for lease expiry | |
-| HAT calibration handlers return hardcoded state=2 (success) — can't test failure/timeout paths | |
+| Time never advances automatically in tests - `device.tick(now_ms)` must be called manually for lease expiry | |
+| HAT calibration handlers return hardcoded state=2 (success) - can't test failure/timeout paths | |
 
 ---
 
@@ -153,31 +153,31 @@ PYTHONPATH=python python -m pytest tests/device/test_05_power.py --sim -v
 
 ### Short-term (unblock existing test gaps)
 
-1. **Fix streaming transport guard** (`streaming.py:58,94`) — check `device._transport is not None` before dispatching events. For transport-less tests, queue events in `_pending_events` instead.
+1. **Fix streaming transport guard** (`streaming.py:58,94`) - check `device._transport is not None` before dispatching events. For transport-less tests, queue events in `_pending_events` instead.
 
-2. **Fix LA state machine** (`hat.py`) — `HAT_LA_ARM` → set `la_state = "ARMED"`, `HAT_LA_FORCE` → set `la_state = "CAPTURING"` then `"DONE"` asynchronously (or `"DONE"` immediately for synchronous tests). This unblocks `test_11_hat.py` LA sequences.
+2. **Fix LA state machine** (`hat.py`) - `HAT_LA_ARM` → set `la_state = "ARMED"`, `HAT_LA_FORCE` → set `la_state = "CAPTURING"` then `"DONE"` asynchronously (or `"DONE"` immediately for synchronous tests). This unblocks `test_11_hat.py` LA sequences.
 
-3. **Add OTA stub handler** (`core.py`) — return a "not supported in simulator" error code (`BBP_ERR_UNSUPPORTED`) rather than crashing with "unknown command".
+3. **Add OTA stub handler** (`core.py`) - return a "not supported in simulator" error code (`BBP_ERR_UNSUPPORTED`) rather than crashing with "unknown command".
 
-4. **Add DSP stream handlers** (`streaming.py`) — copy the ADC stream loop with a DSP-filtered sine (can just pass through the same synthetic data).
+4. **Add DSP stream handlers** (`streaming.py`) - copy the ADC stream loop with a DSP-filtered sine (can just pass through the same synthetic data).
 
 ### Medium-term (correctness)
 
-5. **IDAC calibration round-trip** — store calibration points in `idac[ch]['cal_points']` in `IDAC_CAL_ADD_POINT`, use them in `IDAC_CAL_SAVE` to compute a linear fit, validate with `test_05_power.py`.
+5. **IDAC calibration round-trip** - store calibration points in `idac[ch]['cal_points']` in `IDAC_CAL_ADD_POINT`, use them in `IDAC_CAL_SAVE` to compute a linear fit, validate with `test_05_power.py`.
 
-6. **USBPD range validation** — return `BBP_ERR_INVALID_PARAM` for PDO codes outside 1–6.
+6. **USBPD range validation** - return `BBP_ERR_INVALID_PARAM` for PDO codes outside 1–6.
 
-7. **Slot bounds check in QS_GET/QS_SAVE** — return error payload for `idx >= 4`.
+7. **Slot bounds check in QS_GET/QS_SAVE** - return error payload for `idx >= 4`.
 
-8. **IO event ID fix** — replace hardcoded `0x86` with `int(CmdId.EVT_IO_PREEMPTED)`.
+8. **IO event ID fix** - replace hardcoded `0x86` with `int(CmdId.EVT_IO_PREEMPTED)`.
 
 ### Long-term (platform quality)
 
-9. **Deterministic time model** — add `device.advance_time(ms)` helper that advances `_now_ms` and fires any expired leases automatically. Removes the need for manual `tick()` calls in tests.
+9. **Deterministic time model** - add `device.advance_time(ms)` helper that advances `_now_ms` and fires any expired leases automatically. Removes the need for manual `tick()` calls in tests.
 
-10. **HAT calibration failure paths** — add `device.hat_cal_force_error = True` hook that makes `HAT_CALIBRATE_STATUS` return a failure, so the client error-handling path can be tested.
+10. **HAT calibration failure paths** - add `device.hat_cal_force_error = True` hook that makes `HAT_CALIBRATE_STATUS` return a failure, so the client error-handling path can be tested.
 
-11. **Persistent CI gate** — add `.github/workflows/sim-tests.yml` that runs the full `--sim` suite on every push touching `python/`, `tests/`, or the firmware BBP headers, so simulator regressions are caught before release.
+11. **Persistent CI gate** - add `.github/workflows/sim-tests.yml` that runs the full `--sim` suite on every push touching `python/`, `tests/`, or the firmware BBP headers, so simulator regressions are caught before release.
 
 ---
 

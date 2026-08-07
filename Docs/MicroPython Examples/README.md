@@ -6,8 +6,8 @@ This folder contains runnable MicroPython examples for the BugBuster on-device s
 
 BugBuster runs **MicroPython 1.24.1** bytecode (no native compilation) in a hermetic FreeRTOS task with 1 MB PSRAM heap. Scripts execute under two modes:
 
-- **Ephemeral mode** (default) — interpreter initializes, runs your code, tears down. No state persists across calls. Lightweight; use for one-off tasks.
-- **Persistent mode** (`persist=true`) — interpreter stays alive between calls. Globals and imports survive across `script_eval` calls. Auto-resets on heap watermark (≥80 % soft, ≥95 % hard) or idle timeout (10 minutes default). Use for multi-step workflows.
+- **Ephemeral mode** (default) - interpreter initializes, runs your code, tears down. No state persists across calls. Lightweight; use for one-off tasks.
+- **Persistent mode** (`persist=true`) - interpreter stays alive between calls. Globals and imports survive across `script_eval` calls. Auto-resets on heap watermark (≥80 % soft, ≥95 % hard) or idle timeout (10 minutes default). Use for multi-step workflows.
 
 All scripts have full access to hardware (analog channels, I2C, SPI, network, logging). Cancellation via `script_stop` injects `KeyboardInterrupt` at the next `bugbuster.sleep()` call, allowing graceful shutdown.
 
@@ -15,15 +15,15 @@ All scripts have full access to hardware (analog channels, I2C, SPI, network, lo
 
 ## Running scripts: 5 ways
 
-1. **Inline eval (ephemeral)** — `curl -X POST /api/scripts/eval` with code in the body. Simplest for testing snippets. See "Quick Start" below.
+1. **Inline eval (ephemeral)** - `curl -X POST /api/scripts/eval` with code in the body. Simplest for testing snippets. See "Quick Start" below.
 
-2. **Persistent session** — `POST /api/scripts/eval?persist=true` keeps the VM alive. Call `POST /api/scripts/reset` to tear it down. Use the host-side `with bb.script_session()` context manager (Python) for ergonomic multi-statement workflows.
+2. **Persistent session** - `POST /api/scripts/eval?persist=true` keeps the VM alive. Call `POST /api/scripts/reset` to tear it down. Use the host-side `with bb.script_session()` context manager (Python) for ergonomic multi-statement workflows.
 
-3. **Upload + run by name** — `POST /api/scripts/files?name=...` uploads a script to SPIFFS; `POST /api/scripts/run-file?name=...` executes it by name. Max 32 KB source. Persistent across device reboots (stored on disk).
+3. **Upload + run by name** - `POST /api/scripts/files?name=...` uploads a script to SPIFFS; `POST /api/scripts/run-file?name=...` executes it by name. Max 32 KB source. Persistent across device reboots (stored on disk).
 
-4. **Autorun at boot** — Enable a stored script to run automatically at boot via `POST /api/scripts/autorun/enable?name=...`. Guarded by three safety gates: sentinel file, 5-second grace window, and IO12 HIGH. See "Files and Autorun" section and the script management guide (`Docs/MicroPython Examples/script-management.md`).
+4. **Autorun at boot** - Enable a stored script to run automatically at boot via `POST /api/scripts/autorun/enable?name=...`. Guarded by three safety gates: sentinel file, 5-second grace window, and IO12 HIGH. See "Files and Autorun" section and the script management guide (`Docs/MicroPython Examples/script-management.md`).
 
-5. **WebSocket REPL** — `GET /api/scripts/repl/ws` opens an interactive terminal. Supports command history, syntax highlighting, and persistent session state. See `repl.md` for protocol details.
+5. **WebSocket REPL** - `GET /api/scripts/repl/ws` opens an interactive terminal. Supports command history, syntax highlighting, and persistent session state. See `repl.md` for protocol details.
 
 ---
 
@@ -150,28 +150,28 @@ v = ch.read_voltage()                 # Read ADC (V), returns float
 ch.set_do(True)                       # Set digital output (bool)
 ```
 
-**Channel functions** — choose one per channel:
+**Channel functions** - choose one per channel:
 
 | Function | Code | Use | Output | Input |
 |---|---|---|---|---|
-| `FUNC_HIGH_IMP` | 0 | High impedance (default) | — | — |
-| `FUNC_VOUT` | 1 | Voltage output | 0–5 V DAC | — |
-| `FUNC_IOUT` | 2 | Current output | 0–20 mA DAC | — |
-| `FUNC_VIN` | 3 | Voltage input | — | 0–5 V ADC |
-| `FUNC_IIN_EXT_PWR` | 4 | Current input (external power) | — | 0–20 mA ADC |
-| `FUNC_IIN_LOOP_PWR` | 5 | Current input (loop power) | — | 0–20 mA ADC |
-| `FUNC_RES_MEAS` | 6 | Resistance measurement | — | 0–100 Ω ADC |
-| `FUNC_DIN_LOGIC` | 7 | Digital input (3.3 V logic) | — | 0 = LOW, 1 = HIGH |
-| `FUNC_DIN_LOOP` | 8 | Digital input (loop power) | — | 0 = LOW, 1 = HIGH |
-| `FUNC_IOUT_HART` | 9 | Current output + HART modem | 0–20 mA + HART | — |
-| `FUNC_IIN_EXT_PWR_HART` | 10 | Current input + HART (external) | — | 0–20 mA ADC + HART |
-| `FUNC_IIN_LOOP_PWR_HART` | 11 | Current input + HART (loop) | — | 0–20 mA ADC + HART |
+| `FUNC_HIGH_IMP` | 0 | High impedance (default) | - | - |
+| `FUNC_VOUT` | 1 | Voltage output | 0–5 V DAC | - |
+| `FUNC_IOUT` | 2 | Current output | 0–20 mA DAC | - |
+| `FUNC_VIN` | 3 | Voltage input | - | 0–5 V ADC |
+| `FUNC_IIN_EXT_PWR` | 4 | Current input (external power) | - | 0–20 mA ADC |
+| `FUNC_IIN_LOOP_PWR` | 5 | Current input (loop power) | - | 0–20 mA ADC |
+| `FUNC_RES_MEAS` | 6 | Resistance measurement | - | 0–100 Ω ADC |
+| `FUNC_DIN_LOGIC` | 7 | Digital input (3.3 V logic) | - | 0 = LOW, 1 = HIGH |
+| `FUNC_DIN_LOOP` | 8 | Digital input (loop power) | - | 0 = LOW, 1 = HIGH |
+| `FUNC_IOUT_HART` | 9 | Current output + HART modem | 0–20 mA + HART | - |
+| `FUNC_IIN_EXT_PWR_HART` | 10 | Current input + HART (external) | - | 0–20 mA ADC + HART |
+| `FUNC_IIN_LOOP_PWR_HART` | 11 | Current input + HART (loop) | - | 0–20 mA ADC + HART |
 
 **Methods:**
-- `set_function(func)` — select a channel function (must be called first)
-- `set_voltage(v, bipolar=False)` — output voltage in volts (0–5 V); ignore for non-DAC functions
-- `read_voltage()` — read ADC as voltage in volts; returns `float`
-- `set_do(bool)` — set digital output (does not apply to input functions)
+- `set_function(func)` - select a channel function (must be called first)
+- `set_voltage(v, bipolar=False)` - output voltage in volts (0–5 V); ignore for non-DAC functions
+- `read_voltage()` - read ADC as voltage in volts; returns `float`
+- `set_do(bool)` - set digital output (does not apply to input functions)
 
 **Limits:** `supply` (for external loads) ≤ 5.0 V (enforced at I2C/SPI setup time).
 
@@ -188,20 +188,20 @@ i2c.close()                                                 # Release the shared
 ```
 
 **Constructor arguments:**
-- `sda_io`, `scl_io` — **IO terminal numbers 1–12** (never raw GPIO)
-- `freq` — I2C bus frequency in Hz; default 400,000
-- `pullups` — `'external'` (recommended, default), `'internal'` (weak), or `'off'`
-- `supply` — external power supply voltage (3.3–5.0 V); default 3.3 V
-- `vlogic` — logic-level voltage (3.3 or 5.0 V); default 3.3 V
+- `sda_io`, `scl_io` - **IO terminal numbers 1–12** (never raw GPIO)
+- `freq` - I2C bus frequency in Hz; default 400,000
+- `pullups` - `'external'` (recommended, default), `'internal'` (weak), or `'off'`
+- `supply` - external power supply voltage (3.3–5.0 V); default 3.3 V
+- `vlogic` - logic-level voltage (3.3 or 5.0 V); default 3.3 V
 
 **Methods:**
-- `close()` — release the shared external I2C controller so another wire pair can be configured
-- `scan(start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50)` — find all responding 7-bit addresses; returns `list[int]`
-- `writeto(addr, buf, timeout_ms=50)` — write bytes to address
-- `readfrom(addr, n, timeout_ms=50)` — read N bytes from address
-- `writeto_then_readfrom(addr, wr_buf, rd_n, timeout_ms=50)` — atomic write+read (common for register access)
+- `close()` - release the shared external I2C controller so another wire pair can be configured
+- `scan(start=0x08, stop=0x77, skip_reserved=True, timeout_ms=50)` - find all responding 7-bit addresses; returns `list[int]`
+- `writeto(addr, buf, timeout_ms=50)` - write bytes to address
+- `readfrom(addr, n, timeout_ms=50)` - read N bytes from address
+- `writeto_then_readfrom(addr, wr_buf, rd_n, timeout_ms=50)` - atomic write+read (common for register access)
 
-**Wiring note:** The firmware applies routing automatically — MUX, level-shifter, VADJ, e-fuse, all handled transparently on the device.
+**Wiring note:** The firmware applies routing automatically - MUX, level-shifter, VADJ, e-fuse, all handled transparently on the device.
 
 **Limits:** Single transaction ≤ 255 bytes.
 
@@ -215,15 +215,15 @@ spi.close()                                                  # Release the share
 ```
 
 **Constructor arguments:**
-- `sck_io` — **IO terminal 1–12** (required)
-- `mosi_io`, `miso_io`, `cs_io` — **IO terminal 1–12 or `None`** (optional)
-- `freq` — SPI clock in Hz; default 1,000,000
-- `mode` — SPI mode 0–3 (CPOL/CPHA); default 0
-- `supply`, `vlogic` — same as I2C
+- `sck_io` - **IO terminal 1–12** (required)
+- `mosi_io`, `miso_io`, `cs_io` - **IO terminal 1–12 or `None`** (optional)
+- `freq` - SPI clock in Hz; default 1,000,000
+- `mode` - SPI mode 0–3 (CPOL/CPHA); default 0
+- `supply`, `vlogic` - same as I2C
 
 **Methods:**
-- `transfer(buf)` — full-duplex SPI transfer; returns `bytes` (same length as input)
-- `close()` — release the shared external SPI controller so another wire group can be configured
+- `transfer(buf)` - full-duplex SPI transfer; returns `bytes` (same length as input)
+- `close()` - release the shared external SPI controller so another wire group can be configured
 
 **Limits:** Single transfer ≤ 512 bytes.
 
@@ -251,16 +251,16 @@ if status['connected']:
 ```
 
 **Functions:**
-- `hat_status()` — ESP32 HAT snapshot with presence, UART health, firmware version, pin config, SWD flags, and cached telemetry
-- `hat_caps()` — HAT capability metadata (`rail_count`, `led_count`, `shifted_io_count`, firmware version, etc.)
-- `hat_rails()` — list of rail dictionaries (`rail_id`, `enabled`, `voltage_mv`, `current_ma`, `status`)
-- `hat_set_rail_enable(rail_id, enable)` — enable/disable a HAT rail
-- `hat_set_rail_voltage(rail_id, voltage_mv)` — set adjustable rail target in mV
-- `hat_led(led_id, color_code)` — set status LED 1..8 using `HAT_LED_*` constants
-- `hat_io_bank(dirs, ups=0, dns=0, vals=0)` — configure shifted IO direction, pulls, and output values as 8-bit masks
-- `hat_level_shift(oe, dir)` — override HAT level-shifter OE/DIR and return the applied state
-- `hat_calibrate_start(rail_id)`, `hat_calibrate_status()`, `hat_calibrate_import(rail_id, points)` — HAT rail calibration controls
-- `hat_setup_swd(target_voltage_mv=3300, connector=0)` — set up the dedicated HAT CMSIS-DAP/SWD connector
+- `hat_status()` - ESP32 HAT snapshot with presence, UART health, firmware version, pin config, SWD flags, and cached telemetry
+- `hat_caps()` - HAT capability metadata (`rail_count`, `led_count`, `shifted_io_count`, firmware version, etc.)
+- `hat_rails()` - list of rail dictionaries (`rail_id`, `enabled`, `voltage_mv`, `current_ma`, `status`)
+- `hat_set_rail_enable(rail_id, enable)` - enable/disable a HAT rail
+- `hat_set_rail_voltage(rail_id, voltage_mv)` - set adjustable rail target in mV
+- `hat_led(led_id, color_code)` - set status LED 1..8 using `HAT_LED_*` constants
+- `hat_io_bank(dirs, ups=0, dns=0, vals=0)` - configure shifted IO direction, pulls, and output values as 8-bit masks
+- `hat_level_shift(oe, dir)` - override HAT level-shifter OE/DIR and return the applied state
+- `hat_calibrate_start(rail_id)`, `hat_calibrate_status()`, `hat_calibrate_import(rail_id, points)` - HAT rail calibration controls
+- `hat_setup_swd(target_voltage_mv=3300, connector=0)` - set up the dedicated HAT CMSIS-DAP/SWD connector
 
 **Constants:**
 - Rails: `HAT_RAIL_3V3_ADJ`, `HAT_RAIL_VADJ3`, `HAT_RAIL_VADJ4`
@@ -410,9 +410,9 @@ bugbuster.mqtt_publish(topic='sensors/temp', payload=b'25.3',
 ```
 
 **Signatures:**
-- `bugbuster.http_get(url, headers=None, timeout_ms=10000)` — returns attrtuple `(status, body)` where `status` is int, `body` is bytes
-- `bugbuster.http_post(url, body=b"", headers=None, timeout_ms=10000)` — same return
-- `bugbuster.mqtt_publish(topic, payload, host, port=1883, username=None, password=None)` — void; raises `OSError` on failure
+- `bugbuster.http_get(url, headers=None, timeout_ms=10000)` - returns attrtuple `(status, body)` where `status` is int, `body` is bytes
+- `bugbuster.http_post(url, body=b"", headers=None, timeout_ms=10000)` - same return
+- `bugbuster.mqtt_publish(topic, payload, host, port=1883, username=None, password=None)` - void; raises `OSError` on failure
 
 **TLS:** all HTTPS calls use `esp_crt_bundle_attach` with the Mozilla CA certificate bundle; no manual certificate handling needed.
 
@@ -501,21 +501,21 @@ python -m bugbuster.script status --usb /dev/cu.usbmodem...
 
 See the examples folder for V2-specific scripts:
 
-- **`10_persistent_session.py`** — demonstrates persistent mode globals and multi-statement workflows
-- **`11_frozen_helpers.py`** — uses `bb_helpers.dac_ramp()` and `bb_devices.TMP102()`
-- **`12_network_post.py`** — HTTP POST to a remote endpoint with HTTPS
-- **`13_on_device_decorator.py`** — shows the host-side `@on_device` decorator usage pattern
-- **`15_mcp4725_dac.py`** — MCP4725 DAC control through `bb_devices.MCP4725()`
-- **`17_ds18b20_1wire.py`** — OneWire temperature readout with `bb_devices.DS18B20()`
-- **`30_ssd1306_display.py`** — OLED text output using `bb_devices.SSD1306()`
+- **`10_persistent_session.py`** - demonstrates persistent mode globals and multi-statement workflows
+- **`11_frozen_helpers.py`** - uses `bb_helpers.dac_ramp()` and `bb_devices.TMP102()`
+- **`12_network_post.py`** - HTTP POST to a remote endpoint with HTTPS
+- **`13_on_device_decorator.py`** - shows the host-side `@on_device` decorator usage pattern
+- **`15_mcp4725_dac.py`** - MCP4725 DAC control through `bb_devices.MCP4725()`
+- **`17_ds18b20_1wire.py`** - OneWire temperature readout with `bb_devices.DS18B20()`
+- **`30_ssd1306_display.py`** - OLED text output using `bb_devices.SSD1306()`
 
 Classic examples (still valid):
-- **`02_channel_voltage_sweep.py`** — sweep 0–5 V on channel 0 with ADC readback
-- **`04_i2c_scan.py`** — scan IO2/IO3 for I2C devices
-- **`05_i2c_register_read.py`** — read temperature sensor register
-- **`06_spi_flash_jedec_id.py`** — read JEDEC ID from SPI flash
-- **`07_cooperative_sleep.py`** — demonstrate graceful cancellation with `KeyboardInterrupt`
-- **`14_vfs_import.py`** — demonstrates importing user-uploaded modules from SPIFFS
+- **`02_channel_voltage_sweep.py`** - sweep 0–5 V on channel 0 with ADC readback
+- **`04_i2c_scan.py`** - scan IO2/IO3 for I2C devices
+- **`05_i2c_register_read.py`** - read temperature sensor register
+- **`06_spi_flash_jedec_id.py`** - read JEDEC ID from SPI flash
+- **`07_cooperative_sleep.py`** - demonstrate graceful cancellation with `KeyboardInterrupt`
+- **`14_vfs_import.py`** - demonstrates importing user-uploaded modules from SPIFFS
 
 ---
 
@@ -534,9 +534,9 @@ Classic examples (still valid):
 
 To run a script automatically at every boot, **all three gates must pass:**
 
-1. **Sentinel file** — `/spiffs/.autorun_enabled` must exist (created by `POST /api/scripts/autorun/enable?name=...`)
-2. **5-second grace window** — if any HTTP/BBP/CLI activity occurs in the first 5 seconds after boot, autorun is cancelled (so you can always recover via host connection)
-3. **IO12 must read HIGH** — on boot, if IO12 is LOW (pulled to GND), autorun is disabled. Default (no external wiring, internal pull-up) reads HIGH and **autorun runs**. To prevent autorun, wire a 10 kΩ pull-down to GND or a button to GND on IO12.
+1. **Sentinel file** - `/spiffs/.autorun_enabled` must exist (created by `POST /api/scripts/autorun/enable?name=...`)
+2. **5-second grace window** - if any HTTP/BBP/CLI activity occurs in the first 5 seconds after boot, autorun is cancelled (so you can always recover via host connection)
+3. **IO12 must read HIGH** - on boot, if IO12 is LOW (pulled to GND), autorun is disabled. Default (no external wiring, internal pull-up) reads HIGH and **autorun runs**. To prevent autorun, wire a 10 kΩ pull-down to GND or a button to GND on IO12.
 
 **Recovery:** if autorun crashes the device, the OTA bootloader will roll back to the previous firmware within 30 seconds (no manual recovery needed). To suppress autorun while developing:
 - Pull IO12 LOW at boot (simplest: temporary jumper to GND)
@@ -595,11 +595,11 @@ This allows you to:
 
 ## Limitations
 
-1. **VFS enabled** — `MICROPY_VFS` is active. Scripts can `import` user modules from `/spiffs/scripts/`. Upload your `.py` files via the web UI or API, and they are immediately importable by other scripts.
+1. **VFS enabled** - `MICROPY_VFS` is active. Scripts can `import` user modules from `/spiffs/scripts/`. Upload your `.py` files via the web UI or API, and they are immediately importable by other scripts.
 
-2. **No threading** — `MICROPY_PY_THREAD` is disabled. The `_thread` module is not available.
+2. **No threading** - `MICROPY_PY_THREAD` is disabled. The `_thread` module is not available.
 
-3. **No native emitter** — `@micropython.native` and `@viper` decorators will crash the device (deferred to V3). Use pure Python.
+3. **No native emitter** - `@micropython.native` and `@viper` decorators will crash the device (deferred to V3). Use pure Python.
 
 4. **Size limits:**
    - Script source ≤ 32 KB
@@ -607,11 +607,11 @@ This allows you to:
    - SPI transfer ≤ 512 bytes
    - Log ring 4 KB (drained by `GET /api/scripts/logs`)
 
-5. **Voltage cap** — `supply` parameter ≤ 5.0 V. Exceeding this raises `ValueError` at setup time.
+5. **Voltage cap** - `supply` parameter ≤ 5.0 V. Exceeding this raises `ValueError` at setup time.
 
-6. **HTTP routes require auth** — all `/api/scripts/*` endpoints need `X-BugBuster-Admin-Token` header (BBP/USB does not require auth — cable = trust).
+6. **HTTP routes require auth** - all `/api/scripts/*` endpoints need `X-BugBuster-Admin-Token` header (BBP/USB does not require auth - cable = trust).
 
-7. **Available modules** — `bugbuster`, `bb_helpers`, `bb_devices`, `bb_logging`, and Python built-ins. VFS allows importing any user file from `/spiffs/scripts/`. No `time`, `os`, `random`, `socket` (use `bugbuster` equivalents).
+7. **Available modules** - `bugbuster`, `bb_helpers`, `bb_devices`, `bb_logging`, and Python built-ins. VFS allows importing any user file from `/spiffs/scripts/`. No `time`, `os`, `random`, `socket` (use `bugbuster` equivalents).
 
 ---
 
@@ -679,8 +679,8 @@ This allows you to:
 
 ## Further Reading
 
-- **`Docs/scripting-plan-v2.md`** — full V2 feature roadmap and implementation notes
-- **`Docs/MicroPython Examples/repl.md`** — WebSocket REPL protocol and usage
-- **`Docs/MicroPython Examples/script-management.md`** — detailed autorun, script storage, and persistence management guide
-- **`Firmware/BugBusterProtocol.md` § 6.23** — wire-format details for script opcodes
-- **`python/bugbuster/client.py`** — Python API for remote script execution (USB/HTTP)
+- **`Docs/scripting-plan-v2.md`** - full V2 feature roadmap and implementation notes
+- **`Docs/MicroPython Examples/repl.md`** - WebSocket REPL protocol and usage
+- **`Docs/MicroPython Examples/script-management.md`** - detailed autorun, script storage, and persistence management guide
+- **`Firmware/bbp-protocol.md` § 6.23** - wire-format details for script opcodes
+- **`python/bugbuster/client.py`** - Python API for remote script execution (USB/HTTP)

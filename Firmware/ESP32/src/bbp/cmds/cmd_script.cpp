@@ -10,7 +10,7 @@
 //   BBP_CMD_SCRIPT_RUN_FILE   (0xFB)  Run a stored script file
 //   BBP_CMD_SCRIPT_DELETE     (0xFC)  Delete a stored script file
 //
-// Wire format — see BugBusterProtocol.md §6.X
+// Wire format — see bbp-protocol.md §6.X
 // No auth gate: all ops are cable-gated (USB only, no WiFi).
 // =============================================================================
 #include "cmd_registry.h"

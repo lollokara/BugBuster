@@ -1,36 +1,28 @@
-# External I2C/SPI Bus Engine
+# External I²C / SPI bus
 
 BugBuster can turn any valid subset of the 12 front-panel IO terminals into a
-target-facing I2C or SPI bus. The host asks for physical IO numbers; the Python
-planner resolves the real ESP32 GPIOs, power domain, e-fuse, level shifter, and
-MUX switches, then the ESP32 binds a separate external peripheral for bus
-traffic.
+target-facing I²C or SPI bus. You ask for physical IO numbers; the Python
+planner resolves the real ESP32 GPIOs, power domain, e-fuse, level shifter and
+MUX switches, and the ESP32 binds a separate peripheral for the bus traffic.
 
-This feature is intended for testing external devices without hand-building
-adapter firmware.
+The point is to talk to an external device without hand-building adapter
+firmware.
 
 ---
 
 ## Status
 
-Implemented:
+Working: the Python route planner and applier (`BugBuster.bus`), I2C setup /
+scan / write / read / write-read, SPI setup / full-duplex transfer / JEDEC ID,
+the MCP tools (dry-run planning, I2C scan, SPI transfer, JEDEC ID, deferred
+jobs), the BBP command set, the `/api/bus/*` HTTP endpoints, and the USB
+deferred-job queue. Simulator handlers live in `tests/mock/handlers/bus.py`,
+with unit coverage in `tests/unit/test_bus.py` and
+`tests/unit/test_mcp_bus.py`.
 
-- Python route planner and route applier: `BugBuster.bus`
-- I2C setup, scan, write, read, write-read
-- SPI setup, full-duplex transfer, JEDEC ID helper
-- MCP tools for dry-run planning, I2C scan, SPI transfer, JEDEC ID, and deferred jobs
-- ESP32 direct BBP commands for I2C/SPI operations
-- ESP32 direct HTTP endpoints under `/api/bus/*`
-- ESP32 USB deferred job queue for timing-tolerant host workflows
-
-## Roadmap
-
-- [ ] Bench verification on real I2C/SPI targets — pending
-- [ ] Desktop and web UI — not started
-- [ ] USB BBP bus-status command — not started
-- [x] Durable session lease model — delivered; see `Docs/IoOwnership.md`
-- [ ] Optional HTTP deferred-job endpoints — not started
-- [ ] Simulator/device-test coverage for the new BBP opcodes — not started
+Not there yet: bench verification against real I2C and SPI targets, any desktop
+or web UI, a BBP bus-status command, and HTTP equivalents of the deferred-job
+endpoints.
 
 ---
 

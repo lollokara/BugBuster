@@ -5,7 +5,7 @@ Covers: DS4424 IDAC (VADJ1/VADJ2 adjustable supplies), PCA9535 I/O expander
 (power enable / e-fuse control), fault log, and IDAC calibration save.
 
 IDAC channel mapping:
-  0 = VLOGIC (TPS74601, 1.8–5 V logic level)
+  0 = VLOGIC (LTM8078 Out2, 1.8–5 V logic level)
   1 = VADJ1  (LTM8063 #1, IO 1–6)
   2 = VADJ2  (LTM8063 #2, IO 7–12)
   3 = not connected

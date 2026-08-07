@@ -57,7 +57,7 @@
 //
 // REMOVED (2026-07-23): C6_IO2_PIN was briefly repurposed as a "WiFi-
 // coprocessor boot strap" to survive the reset esp_wifi_init() triggers on
-// the C6 (see below) -- abandoned because Docs/FIRMWARE_HARDWARE_REFERENCE.md
+// the C6 (see below) -- abandoned because Docs/daq-hat-hardware.md
 // §5's verified C6 wiring map doesn't list this pin as connected to the P4 at
 // all (this "reserved" note was itself never verified against the
 // schematic), matching the strap always reading asserted regardless of what

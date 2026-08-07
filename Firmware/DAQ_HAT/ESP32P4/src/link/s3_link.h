@@ -3,7 +3,7 @@
 // =============================================================================
 // s3_link.h — ESP32-S3 mainboard link: HAT-protocol slave on the P4 DAQ board.
 //
-// Implements the existing BugBuster HAT protocol (Firmware/HAT_Protocol.md) so
+// Implements the existing BugBuster HAT protocol (Firmware/hat-uart-protocol.md) so
 // the S3 mainboard can drive the DAQ HAT exactly as it drove the RP2040 HAT:
 //
 //   Frame: [SYNC 0xAA][LEN][CMD][PAYLOAD 0..32][CRC8]   (CRC over CMD+PAYLOAD)
@@ -28,7 +28,7 @@
 extern "C" {
 #endif
 
-// Framing constants (match HAT_Protocol.md). The LEN field is a full byte, so
+// Framing constants (match hat-uart-protocol.md). The LEN field is a full byte, so
 // the DAQ link raises the payload cap above the legacy 32-byte convention to
 // carry OTA metadata (56 B) and stream firmware in larger chunks. Standard
 // control commands still use small (<= 32 B) payloads for compatibility.

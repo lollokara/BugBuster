@@ -1,31 +1,32 @@
 # BugBuster Test Suite
 
 Test framework for the BugBuster industrial I/O board.  Covers the Python API,
-the HTTP REST endpoints, and &mdash; via both &mdash; the ESP32 and RP2040 firmware.
+the HTTP REST endpoints, and - via both - the ESP32 and RP2040 firmware.
 
 The suite has five layers:
 
 | Layer | Dir | Needs hardware? | What it validates |
 |---|---|---|---|
-| **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow — **plus the source-parity guards below** |
-| **Simulator** | `tests/simulator/` | no | End-to-end BBP + HTTP round-trips against `SimulatedDevice` (102 BBP handlers, `/api/*` surface) |
-| **Mock** | `tests/mock/` | no | `SimulatedDevice`, `SimulatedUSBTransport`, `SimulatedHTTPTransport` — shared fixtures used by the simulator and device layers |
+| **Unit** | `tests/unit/` | no | Pure-Python logic: parsers, HAL routing, HAT guards, rail-lock enforcement, auth flow - **plus the source-parity guards below** |
+| **Simulator** | `tests/simulator/` | no | End-to-end BBP + HTTP round-trips against `SimulatedDevice` (140 BBP handlers, `/api/*` surface) |
+| **Mock** | `tests/mock/` | no | `SimulatedDevice`, `SimulatedUSBTransport`, `SimulatedHTTPTransport` - shared fixtures used by the simulator and device layers |
 | **Synthetic** | `tests/synthetic/` | no | Regression tests for LA USB bulk/streaming protocol, generated stimuli, timing edge-cases |
 | **Device** | `tests/device/` | yes (or `--sim`) | The same tests, driven against real hardware over USB / HTTP, or against the simulator with `--sim` |
 
-Current posture (2026-08-06): **1140 passing**, 150 skipped, 2 xpassed across
-`unit + synthetic + simulator + device --sim`, plus 6 in `tests/integration`
-(`--sim-full`). Skips are hardware-only paths (HAT / SWD / LA).
+Current posture (2026-08-07): **1144 passing**, 163 skipped, 2 xpassed across
+`unit + synthetic + simulator + device --sim`, plus 6 passing and 17 skipped in
+`integration + http_api` (`--sim-full`). Skips are hardware-only paths
+(HAT / SWD / LA / DAQ).
 
 ```bash
 # The full hardware-free run, as CI executes it
 PYTHONPATH=python pytest tests/unit tests/synthetic tests/simulator tests/device --sim -q
-PYTHONPATH=python pytest tests/integration --sim-full -q
+PYTHONPATH=python pytest tests/integration tests/http_api --sim-full -q
 ```
 
 ## Source-parity guards (the tests that read the firmware)
 
-A large part of `tests/unit/` does not exercise Python at all — it **parses the
+A large part of `tests/unit/` does not exercise Python at all - it **parses the
 firmware C/C++ sources** and asserts the host, the simulator and the firmware
 still agree. This exists because the expensive bugs on this project have all
 been drift bugs, not logic bugs: a constant retyped in three places, or a
@@ -44,7 +45,7 @@ retype it.**
 | `test_memory_telemetry.py` | `tasks.h`, `bbp.h`, `bbp.cpp`, `cmd_registry.cpp` | task-stack sizing, internal-DRAM regressions (see below) |
 | `test_direct_daq_ota.py` | `tasks.h`, `main.cpp`, `ble_service.cpp` | task stacks shrunk below their measured peak; OTA workers moved to PSRAM stacks |
 
-These fail on a **firmware** edit, which is the point — change
+These fail on a **firmware** edit, which is the point - change
 `ad74416h_regs.h`'s `AdcRate` enum and the Python suite goes red until the
 simulator is updated to match.
 
@@ -59,7 +60,7 @@ SRAM posture, which is the resource this board actually runs out of:
 - `CMD_REGISTRY_MAX` must still cover every registered descriptor, so a new
   subsystem block cannot be silently dropped at boot;
 - seven named scratch buffers must stay **file-scope** `static EXT_RAM_BSS_ATTR`
-  — the attribute is silently ignored on function-scope statics, so a `static`
+ - the attribute is silently ignored on function-scope statics, so a `static`
   array declared inside a function lands in internal DRAM no matter what;
 - no function-scope `static` arrays may reappear in `ws_stream.cpp`,
   `repl_ws.cpp` or `hat.cpp`, where that trap has already bitten;
@@ -67,14 +68,14 @@ SRAM posture, which is the resource this board actually runs out of:
   is what stops every USB disconnect from enqueueing a deep handler onto
   `cmdProc`'s stack.
 
-Runtime memory has its own tooling — see
-[`Docs/MemoryTesting.md`](../Docs/MemoryTesting.md) and
+Runtime memory has its own tooling - see
+[`Docs/memory-testing.md`](../Docs/memory-testing.md) and
 `tests/tools/mem_watch.py`.
 
 ## Setup
 
 ```bash
-# From repo root — works on macOS and Linux
+# From repo root - works on macOS and Linux
 bash tests/setup.sh
 source .venv/bin/activate
 ```
@@ -156,8 +157,8 @@ python tests/run_tests.py --usb /dev/cu.usbmodem1234 --http 192.168.4.1 --hat
 | `wavegen` | 8 | Waveform generator (SINE/SQUARE/TRIANGLE/SAWTOOTH) |
 | `wifi` | 7 | WiFi status, scan |
 | `selftest` | 7 | Boot test, supply measurement, e-fuse currents, auto-cal |
-| `streaming` | 8 | ADC/scope streaming — USB only |
-| `hat` | 15 | HAT connector, LA, SWD — requires `--hat` |
+| `streaming` | 8 | ADC/scope streaming - USB only |
+| `hat` | 15 | HAT connector, LA, SWD - requires `--hat` |
 | `faults` | 10 | Alert clearing, fault log, alert masks |
 | `http` | 14 | Direct HTTP REST endpoint contract tests |
 
@@ -197,7 +198,7 @@ admin-token pairing flow (injected automatically by `SimulatedHTTPTransport`).
 
 > **Write simulator handlers against the FIRMWARE, not against the client.**
 > `tests/mock/handlers/idac.py` was once written to match a broken client
-> parser — 26 bytes/channel for 4 channels, where the firmware wrote 44 bytes
+> parser - 26 bytes/channel for 4 channels, where the firmware wrote 44 bytes
 > for 3. The suite was green and `idac_get_status()` returned
 > `target_v = 726302457856.0 V` on real hardware. When adding a handler, read
 > the `bbp_put_*` sequence in the firmware and mirror it, then pin it with a
@@ -222,7 +223,7 @@ PYTHONPATH=python python tests/tools/mem_watch.py --device-usb COM6 --stress \
 ```
 
 `--stress` starts the ADC and scope streams while sampling. **Idle numbers lie**
-— always compare under load. Stack high-water marks also grow late, so exercise
+ - always compare under load. Stack high-water marks also grow late, so exercise
 the deep paths (connect/disconnect cycles, HTTP, the CLI `tui`, an OTA query)
 before trusting a reading.
 
@@ -232,7 +233,7 @@ before trusting a reading.
 |--------|---------|
 | `usb_only` | Requires USB transport (streaming, HAT power, register access) |
 | `http_only` | Requires HTTP transport |
-| `requires_hat` | Requires HAT expansion board — enable with `--hat` |
+| `requires_hat` | Requires HAT expansion board - enable with `--hat` |
 | `destructive` | Modifies persistent device state (skipped with `--skip-destructive`) |
 | `slow` | Takes > 5 seconds |
 | `streaming` | Uses ADC/scope streaming (USB only) |

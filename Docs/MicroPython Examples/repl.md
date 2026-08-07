@@ -42,7 +42,7 @@ The server echoes the characters back so the terminal renders them.
 | Printable chars | Accumulated in a line buffer (max 511 chars). |
 | `CR` or `LF` (0x0D / 0x0A) | Submits the current line to MicroPython for evaluation. |
 | `Backspace` (0x08 or 0x7F) | Removes the last character from the line buffer. |
-| `Ctrl-C` (0x03) | Calls `scripting_stop()` — injects `KeyboardInterrupt` into the running VM. |
+| `Ctrl-C` (0x03) | Calls `scripting_stop()` - injects `KeyboardInterrupt` into the running VM. |
 
 Each submitted line is evaluated in **persistent mode** (`persist=true`), so
 globals are retained between lines exactly as in a standard REPL.
@@ -60,7 +60,7 @@ Sending byte `0x03` while a long-running script is executing causes a
 a few milliseconds).  This is the same mechanism used by the `/api/scripts/stop`
 REST endpoint.
 
-## Example — raw WebSocket client (Python)
+## Example - raw WebSocket client (Python)
 
 ```python
 import asyncio

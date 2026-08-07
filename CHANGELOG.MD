@@ -1106,7 +1106,7 @@ compression).
 - **Python / MCP**: `bb.daq_trigger` accessor (`python/bugbuster/daq_config.py`,
   `CmdId.DAQ_TRIG = 0xCE`) with `set_io`/`get_io`/`set_logic`/`arm`/`status`/
   `get_all`; MCP tools `daq_set_io_role`, `daq_set_trigger_logic`, `daq_arm`,
-  `daq_get_trigger_state`. BBP wire history → 3.4 (see `Firmware/BugBusterProtocol.md` §6.20).
+  `daq_get_trigger_state`. BBP wire history → 3.4 (see `Firmware/bbp-protocol.md` §6.20).
 
 ### BLE control plane (ESP32-S3 + iOS) — NEW (in progress)
 A low-rate Bluetooth LE control plane on the ESP32-S3 mainboard so a phone can
@@ -1217,8 +1217,8 @@ BugBuster without first being on the LAN; the same admin token gates both paths.
 A new ESP32-P4-based DAQ HAT firmware that implements a 24-bit, nA–3A
 seamless-autoranging precision **power analyzer** + **source-measure unit**
 (Joulescope / Otii / Nordic PPK2 class). Full device documentation in
-`Firmware/DAQ_HAT/README.md`; architecture in `Docs/PowerAnalyzer_Architecture.md`;
-netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
+`Firmware/DAQ_HAT/README.md`; architecture in `Docs/power-analyzer.md`;
+netlist-verified hardware map in `Docs/daq-hat-hardware.md`.
 
 - **ADAQ7769-1 driver suite**: complete register map (`adaq7769_regs.h`), low-level
   SPI Mode-3 transport with the part's CRC-8 (`adaq7769_ll`), high-level HAL
@@ -1423,8 +1423,8 @@ netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
 - **3 new CLI commands** (`version`/`ver`, `heap`, `stack_hwm`/`hwm`) added to `cli_cmds_sys.cpp` and the command table in `cli_cmdtab.cpp`. `version` shows ESP32 app version, build date, IDF version, and RP2040 HAT firmware. `heap` shows internal free/min-ever/largest-block + PSRAM with fragmentation warning. `stack_hwm` prints FreeRTOS high-water marks for all 4 measurement tasks with `*** LOW ***` warning below 128 words. `g_wavegenTask` promoted from `static` to a proper global exported in `tasks.h` (was `s_wavegenTask`; updated in `bbp.cpp`, `webserver.cpp`, `cmd_streaming.cpp`).
 
 #### Docs
-- **`Docs/SimulatedDevice.md`** — full reference for the BugBuster Python simulator: handler coverage table (144 commands across 15 files), test file → feature matrix, state field inventory, known gaps, and a reliability improvement roadmap.
-- **`Docs/MemoryTesting.md`** — ESP32-S3 memory safety guide: SRAM layout diagram, pre-ship checklist (binary gate, stack HWM, heap fragmentation, canary), common failure modes and fixes, and CI integration notes.
+- **`Docs/simulated-device.md`** — full reference for the BugBuster Python simulator: handler coverage table (144 commands across 15 files), test file → feature matrix, state field inventory, known gaps, and a reliability improvement roadmap.
+- **`Docs/memory-testing.md`** — ESP32-S3 memory safety guide: SRAM layout diagram, pre-ship checklist (binary gate, stack HWM, heap fragmentation, canary), common failure modes and fixes, and CI integration notes.
 
 ### Fixed
 
@@ -1454,7 +1454,7 @@ netlist-verified hardware map in `Docs/FIRMWARE_HARDWARE_REFERENCE.md`.
 #### ESP32 firmware
 - **USB OTA control command (0x77)**: New BBP command for firmware updates over USB. Implements `INFO` (read partition/version info), `BEGIN` (start upload with SHA-256 validation), `CHUNK` (960-byte data chunks), and `ROLLBACK` ops. Integrated with `update_manager` to support reliable USB-driven flashing of both ESP32 and RP2040. (`bbp.h`, `cmd_ota.cpp`)
 - **RP2040 Stage Helper**: New `update_manager_flash_rp2040_stage` function allows flashing a pre-staged RP2040 binary from SPIFFS without re-fetching a manifest, improving the "local upload" flow. (`update_manager.cpp`)
-- **WIFI_FORGET command (0x0A)**: New BBP command erases saved STA credentials (`sta_ssid` / `sta_pass`) from NVS and disconnects. Implemented in `wifi_manager.cpp` (`wifi_forget_credentials()`), registered in `cmd_wifi.cpp`, documented in `BugBusterProtocol.md`. Returns a bool indicating NVS erase success.
+- **WIFI_FORGET command (0x0A)**: New BBP command erases saved STA credentials (`sta_ssid` / `sta_pass`) from NVS and disconnects. Implemented in `wifi_manager.cpp` (`wifi_forget_credentials()`), registered in `cmd_wifi.cpp`, documented in `bbp-protocol.md`. Returns a bool indicating NVS erase success.
 - **RP2040 HTTP upload endpoint**: New `POST /api/ota/upload_rp2040` endpoint in `webserver.cpp` accepts a raw RP2040 `.bin` body (admin-gated, max 1 MB) and stages it to `/scripts/update-rp2040.bin` on SPIFFS for the update manager to pick up.
 
 #### Desktop app
@@ -1697,7 +1697,7 @@ Highlights to schedule next:
 - Tests: simulator missing `WIFI_SET_AP_PASSWORD` (0xEF) handler (H16);
   completeness test asserts only handler existence (H17).
 - CI: floating-tag third-party actions on the desktop release path (H18).
-- Docs: stale version badge in `README.md`; `ReleaseChecklist.md`
+- Docs: stale version badge in `README.md`; `release-checklist.md`
   `--expect` values lag canon; "28 tools" repeated three times in README
   (real count 41 / actual MCP server 45).
 
@@ -1801,9 +1801,9 @@ ring-overflow path, ESP32 AP-password live change, and SWD detect.
 ### Added
 
 #### Documentation
-- New `Docs/QuickSetup.md` — user guide for the 4-slot NVS-backed preset
+- New `Docs/quick-setup.md` — user guide for the 4-slot NVS-backed preset
   system (HTTP CRUD, BBP `0xF0..0xF4`, desktop tile UI, 1000-byte limit).
-- New `Docs/MicroPython-Troubleshooting.md` — 10-entry FAQ covering eval
+- New `Docs/micropython-troubleshooting.md` — 10-entry FAQ covering eval
   queue, heap watermark, REPL close code 4002, persistence vs ephemeral,
   `vfs_posix` stdout routing, log cursor (`?since=`), upload + autorun.
 - New `Docs/bugs-improvements-2026-05-04.md` — backlog snapshot from the
@@ -1813,10 +1813,10 @@ ring-overflow path, ESP32 AP-password live change, and SWD detect.
 - `Firmware/ESP32/README.md` gained MicroPython Scripting, Board Profiles,
   and External Bus subsections; `README_CALIBRATION.md` notes board-profile
   scoping and on-device script access.
-- `Firmware/HAT_Architecture.md` §6 BBP table extended.
-- `Firmware/BugBusterProtocol.md` Appendix A: ext-bus `0x75/0x76` and `0xB8–0xBE`, QuickSetup `0xF0–0xF4`,
+- `Firmware/la-hat-architecture.md` §6 BBP table extended.
+- `Firmware/bbp-protocol.md` Appendix A: ext-bus `0x75/0x76` and `0xB8–0xBE`, QuickSetup `0xF0–0xF4`,
   `WIFI_SET_AP_PASSWORD 0xEF`.
-- `Firmware/FirmwareStructure.md` updated for Vite/Preact `web/` build,
+- `Firmware/firmware-structure.md` updated for Vite/Preact `web/` build,
   MicroPython component, `bus/ext_bus`, `quicksetup` modules.
 
 #### CI / tooling
@@ -1878,10 +1878,10 @@ ring-overflow path, ESP32 AP-password live change, and SWD detect.
   HAT `bb-hat-2.1`, Desktop `0.6.0`; test count `249`).
 - `CLAUDE.md` replaced empty template with a pointer to `AGENTS.md` and
   `.mex/ROUTER.md`.
-- `Docs/ReleaseChecklist.md`: combined-release subsection added; manual
+- `Docs/release-checklist.md`: combined-release subsection added; manual
   PROTO_VERSION grep replaced with a pointer to the new CI gate; RP2040
   two-file warning replaced with the single-source rule.
-- `Docs/ExternalBus.md` pending-items list reformatted as `## Roadmap`
+- `Docs/external-bus.md` pending-items list reformatted as `## Roadmap`
   with explicit status labels.
 - MCP tool inventory in `python/bugbuster_mcp/README.md` updated to 41
   tools (was advertised as 28; actual count had drifted to 40 before
@@ -2094,7 +2094,7 @@ v4. Tags: `esp-fw-v3.0.0`, `hat-fw-v2.0`, `desktop-v0.5.0`.
 - Rendering optimizations (dense mode), E2E tests.
 
 #### Board profiles
-- JSON schema (`Docs/board_profiles.md`) with nested `{value, locked}` for
+- JSON schema (`Docs/board-profiles.md`) with nested `{value, locked}` for
   VLOGIC / VADJ1 / VADJ2, per-pin `name` / `type` / `direction`, and optional
   `swd` / `uart` blocks.
 - Desktop **Board** tab — pin-mode editor, rail lock, drive-strength
@@ -2148,7 +2148,7 @@ v4. Tags: `esp-fw-v3.0.0`, `hat-fw-v2.0`, `desktop-v0.5.0`.
 
 ### Changed
 
-- `BugBusterProtocol.md` bumped to v3.0.0 (BBP wire v4).
+- `bbp-protocol.md` bumped to v3.0.0 (BBP wire v4).
 - **Renamed "Analog" to "ADC"** across the stack (Badges, Inspector, Protocol
   constants) for hardware consistency.
 - `pico-sdk` submodule: forked TinyUSB with `abort_done` timeout fix and

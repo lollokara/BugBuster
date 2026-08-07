@@ -3,7 +3,7 @@ Unit tests for board-profile rail-lock enforcement.
 
 The MCP safety layer must refuse to change a voltage rail (VADJ1, VADJ2, VLOGIC)
 when the active board profile declares it ``locked: true``.  Profiles use the
-nested schema documented in ``Docs/board_profiles.md``::
+nested schema documented in ``Docs/board-profiles.md``::
 
     {
       "name": "...",

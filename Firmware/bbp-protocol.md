@@ -1,32 +1,30 @@
-# BugBuster Binary Protocol Specification
+# BBP - BugBuster Binary Protocol
 
-**Version:** 3.4.0
-**BBP Protocol Version:** 9
-**Transport:** USB CDC (Virtual COM Port) + HTTP REST API (WiFi)
-**Target:** ESP32-S3 (TinyUSB, Full-Speed 12 Mbps)
-**Status:** Active
+**Wire version 10** · firmware `5.1.0` · USB CDC (virtual COM port) and HTTP
+REST over WiFi · ESP32-S3, TinyUSB Full-Speed.
 
----
+A persistent binary link between a host and the BugBuster mainboard. It carries
+every device operation with sub-millisecond latency and streams raw 24-bit ADC
+data at the full hardware rate - things HTTP polling cannot do.
 
-## 1. Overview & Goals
+> **The code is the authority.** `PROTO_VERSION` and the command registry live in
+> `Firmware/ESP32/src/bbp/bbp.h` and `Firmware/ESP32/src/bbp/cmd_registry.cpp`,
+> mirrored in `python/bugbuster/protocol.py` and
+> `DesktopApp/BugBuster/src-tauri/src/bbp.rs`. All three are held in lockstep by
+> `Firmware/tools/check_proto_version.py`, run on every push and pull request by
+> `.github/workflows/proto-version-check.yml`. A per-command ID registry is
+> maintained in
+> [`.mex/manifests/bbp-protocol.manifest.md`](../.mex/manifests/bbp-protocol.manifest.md).
 
-The BugBuster Binary Protocol (BBP) provides a high-throughput, low-latency interface
-between the BugBuster device and a host application over USB CDC. It replaces HTTP
-polling with a persistent binary link capable of streaming raw 24-bit ADC data at
-the full hardware rate (up to 9.6 kSPS x 4 channels).
+## 1. Overview
 
-**Design goals:**
-- Full feature parity with the existing HTTP REST API
-- Continuous ADC data streaming at up to ~38.4k samples/sec aggregate
-- Sub-millisecond command latency (no HTTP overhead)
-- Cross-platform: Mac, Linux, Windows (standard CDC/ACM driver, no custom driver)
-- Coexists with the UART bridge on CDC #1 (unchanged)
-- Zero-configuration: CLI auto-detects the host app and switches modes
-
-**What stays the same:**
-- CDC #1 remains the transparent UART bridge (COM port passthrough)
-- The HTTP/WiFi interface remains available in parallel
-- The command queue architecture is reused (BBP enqueues the same `Command` structs)
+**Properties:**
+- Full feature parity with the HTTP REST API
+- Continuous ADC streaming up to ~38.4k samples/sec aggregate
+- Sub-millisecond command latency
+- Standard CDC/ACM driver on macOS, Linux and Windows - nothing custom
+- CDC #1 stays a transparent UART bridge, unaffected
+- The CLI auto-detects a host app and switches CDC #0 into binary mode
 
 ---
 
@@ -41,6 +39,8 @@ the full hardware rate (up to 9.6 kSPS x 4 channels).
 
 The ESP32-S3 TinyUSB stack supports exactly 2 CDC interfaces. CDC #0 is shared
 between the text CLI and the binary protocol, switching at runtime via handshake.
+CDC #0 also holds a **single-client lock** - the MCP server, the desktop app and
+a serial monitor cannot use it at the same time.
 
 ### 2.2 Throughput Budget
 
@@ -139,7 +139,7 @@ delimiter** byte.
 
 ```
 [COBS-encoded payload] [0x00]
- â””â”€ variable length â”€â”˜  â”” delimiter
+ └─ variable length ─┘  └ delimiter
 ```
 
 The payload (before COBS encoding) is the raw BBP message described in Section 5.
@@ -211,7 +211,7 @@ All messages (after COBS decoding) share a common header:
 
 ```
 Byte   Field         Size    Description
-â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+─────────────────────────────────────────────────────
 0      MSG_TYPE      1       Message type (see 5.1)
 1-2    SEQ           2       Sequence number (little-endian)
 3      CMD_ID        1       Command/event identifier
@@ -308,7 +308,7 @@ Per channel (4x, starting at offset 15, stride = 30 bytes):
 +0      channel_id          u8      Channel index (0-3)
 +1      function            u8      Channel function code (0-12)
 +2      adc_raw             u24     ADC raw code (24-bit)
-+5      adc_value           f32     Converted ADC value (V, mA, or Î© for RES_MEAS)
++5      adc_value           f32     Converted ADC value (V, mA, or Ω for RES_MEAS)
 +9      adc_range           u8      ADC range code
 +10     adc_rate            u8      ADC rate code
 +11     adc_mux             u8      ADC mux code
@@ -319,7 +319,7 @@ Per channel (4x, starting at offset 15, stride = 30 bytes):
 +23     do_state            bool    Digital output state
 +24     channel_alert       u16     Per-channel alert bits
 +26     channel_alert_mask  u16     Per-channel alert mask bits
-+28     rtd_excitation_ua   u16     RTD excitation current in ÂµA (125 or 250; 0 when not in RES_MEAS)
++28     rtd_excitation_ua   u16     RTD excitation current in µA (125 or 250; 0 when not in RES_MEAS)
 
 Per diagnostic slot (4x, starting at offset 135, stride = 7 bytes):
 +0      source              u8      Diagnostic source code (0-13)
@@ -583,15 +583,15 @@ The converted `adc_value` in GET_STATUS will be in Ohms: R = V_adc / I_excitatio
 **Request payload:**
 ```
 0       channel         u8      Channel (0-3)
-1       current         u8      Excitation current: 0 = 500 ÂµA, 1 = 1000 ÂµA (1 mA)
+1       current         u8      Excitation current: 0 = 500 µA, 1 = 1000 µA (1 mA)
 ```
 
 **Response payload:** Echoes request.
 
-| current | RTD_CURRENT bit | I_excitation   | Max R (0â€“625 mV range) | Max R (0â€“12 V range) |
+| current | RTD_CURRENT bit | I_excitation   | Max R (0–625 mV range) | Max R (0–12 V range) |
 |---------|----------------|----------------|------------------------|----------------------|
-| 0       | 0              | 500 ÂµA         | 1250 Î©                 | 24 kÎ©                |
-| 1       | 1              | 1000 ÂµA (1 mA) | 625 Î©                  | 12 kÎ©                |
+| 0       | 0              | 500 µA         | 1250 Ω                 | 24 kΩ                |
+| 1       | 1              | 1000 µA (1 mA) | 625 Ω                  | 12 kΩ                |
 
 > **Note:** Always set the channel function to RES_MEAS (0x07) before calling SET_RTD_CONFIG.
 > Switching away from RES_MEAS clears RTD_CONFIG automatically.
@@ -709,11 +709,11 @@ If U17 S2 is closed, all self-test measurement commands return -1.  If U23 is
 active, U17 S2 cannot be closed.
 
 HTTP equivalents:
-- `GET /api/selftest` â€” boot result, calibration status, and supply-monitor worker state
-- `GET /api/selftest/supply/{rail}` â€” measure supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
-- `GET /api/selftest/efuse` â€” all 4 e-fuse currents
-- `POST /api/selftest/calibrate` body `{"channel": 1}` â€” start auto-calibration
-- `POST /api/selftest/worker` body `{"enabled": true}` â€” enable/disable the supply monitor worker
+- `GET /api/selftest` - boot result, calibration status, and supply-monitor worker state
+- `GET /api/selftest/supply/{rail}` - measure supply rail (0=VADJ1, 1=VADJ2, 2=3V3_ADJ)
+- `GET /api/selftest/efuse` - all 4 e-fuse currents
+- `POST /api/selftest/calibrate` body `{"channel": 1}` - start auto-calibration
+- `POST /api/selftest/worker` body `{"enabled": true}` - enable/disable the supply monitor worker
 
 #### 0x05 SELFTEST_STATUS
 Get boot self-test result, calibration status, and supply-monitor worker state.
@@ -772,7 +772,7 @@ Total: 17 bytes
 ```
 
 Rail order matches `SELFTEST_RAIL_COUNT` (3): indices 0=VADJ1, 1=VADJ2, 2=VLOGIC.
-Values are corrected for voltage dividers (VADJ1/VADJ2 through R_top=34.8kÎ© / R_bottom=100kÎ© divider).
+Values are corrected for voltage dividers (VADJ1/VADJ2 through R_top=34.8kΩ / R_bottom=100kΩ divider).
 
 #### 0x08 SELFTEST_AUTO_CAL
 Start automatic IDAC calibration. Sweeps DAC codes, measures output via U23,
@@ -808,16 +808,16 @@ Equivalent to `GET /api/selftest/supplies`.
 6       dvcc_v          f32     Digital supply (breadboard: ~5V, PCB: ~3.3V)
 10      avcc_v          f32     Analog supply AVCC (~5V both modes)
 14      avss_v          f32     Negative analog supply (breadboard: ~-16V, PCB: ~-15V)
-18      temp_c          f32     Die temperature in Â°C
+18      temp_c          f32     Die temperature in °C
 ```
 
 Expected supply ranges:
 
 | Supply | Breadboard | PCB |
 |--------|-----------|-----|
-| AVDD_HI | 18â€“25 V | 13.5â€“16.5 V |
-| DVCC | 4.5â€“5.5 V | 3.0â€“3.6 V |
-| AVCC | 4.5â€“5.5 V | 4.5â€“5.5 V |
+| AVDD_HI | 18–25 V | 13.5–16.5 V |
+| DVCC | 4.5–5.5 V | 3.0–3.6 V |
+| AVCC | 4.5–5.5 V | 4.5–5.5 V |
 | AVSS | -20 to -13 V | -16.5 to -13.5 V |
 
 #### 0x0B SELFTEST_WORKER
@@ -848,16 +848,16 @@ level shifters to the physical terminal blocks.  The MUX routing is managed
 by the host library (SET_MUX_ALL); the DIO commands only drive the ESP32
 GPIO pins themselves.
 
-IO numbering: 1â€“12 (matches the HAL port numbers).
+IO numbering: 1–12 (matches the HAL port numbers).
 
-- IOs 1, 4, 7, 10 â€” first IO of each IO_Block (also analog-capable)
-- IOs 2, 3, 5, 6, 8, 9, 11, 12 â€” digital-only (positions 2 & 3)
+- IOs 1, 4, 7, 10 - first IO of each IO_Block (also analog-capable)
+- IOs 2, 3, 5, 6, 8, 9, 11, 12 - digital-only (positions 2 & 3)
 
 HTTP equivalents:
-- `GET /api/dio` â€” read all 12 IO states
-- `GET /api/dio/{n}` â€” read single IO
-- `POST /api/dio/{n}/config` body `{"mode": 1}` â€” configure direction
-- `POST /api/dio/{n}/set` body `{"value": true}` â€” set output level
+- `GET /api/dio` - read all 12 IO states
+- `GET /api/dio/{n}` - read single IO
+- `POST /api/dio/{n}/config` body `{"mode": 1}` - configure direction
+- `POST /api/dio/{n}/set` body `{"value": true}` - set output level
 
 #### 0x43 DIO_GET_ALL
 Read the state of all 12 digital IOs (equivalent to `GET /api/dio`).
@@ -1090,11 +1090,11 @@ Graceful exit from binary mode. Device returns to CLI.
 | 11 | IIN_EXT_HART | Current input HART (ext power) |
 | 12 | IIN_LOOP_HART | Current input HART (loop) |
 
-**ADC Range codes:** See FirmwareStructure.md Section 2.
-**ADC Rate codes:** See FirmwareStructure.md Section 2.
-**ADC Mux codes:** See FirmwareStructure.md Section 2.
+**ADC Range codes:** See firmware-structure.md Section 2.
+**ADC Rate codes:** See firmware-structure.md Section 2.
+**ADC Mux codes:** See firmware-structure.md Section 2.
 **GPIO Mode codes:** 0=HIGH_IMP, 1=OUTPUT, 2=INPUT, 3=DIN_OUT, 4=DO_EXT
-**Diagnostic Source codes:** See FirmwareStructure.md Section 12.
+**Diagnostic Source codes:** See firmware-structure.md Section 12.
 
 ### 6.10b Deferred External Bus Jobs
 
@@ -1110,8 +1110,8 @@ Queue a deferred external I2C or SPI operation.  Returns a job ID immediately.
 0       bus             u8      0 = I2C (I2C_NUM_1), 1 = SPI (SPI3_HOST)
 1       op              u8      I2C: 0=write, 1=read, 2=write_read  SPI: 0=transfer
 2       addr            u8      I2C device address (ignored for SPI)
-3       write_len       u8      Bytes to write (0â€“28)
-4       read_len        u8      Bytes to read back (0â€“28)
+3       write_len       u8      Bytes to write (0–28)
+4       read_len        u8      Bytes to read back (0–28)
 5..N    write_data      u8[]    Write payload (write_len bytes)
 ```
 
@@ -1141,7 +1141,7 @@ Poll a previously submitted job for completion and retrieve its result.
 ### 6.10c External Bus (I2C / SPI)
 
 Direct (non-deferred) access to the external I2C bus (`I2C_NUM_1`) and external SPI bus
-(`SPI3_HOST`).  See [`Docs/ExternalBus.md`](../Docs/ExternalBus.md) for wiring and limits.
+(`SPI3_HOST`).  See [`Docs/external-bus.md`](../Docs/external-bus.md) for wiring and limits.
 
 #### 0xB8 EXT_I2C_SETUP
 Configure external I2C bus pins and frequency.
@@ -1172,7 +1172,7 @@ Write bytes to an external I2C device.
 **Request payload:**
 ```
 0       addr            u8      7-bit device address
-1       len             u8      Number of bytes (1â€“30)
+1       len             u8      Number of bytes (1–30)
 2..N    data            u8[]    Payload
 ```
 
@@ -1184,7 +1184,7 @@ Read bytes from an external I2C device.
 **Request payload:**
 ```
 0       addr            u8      7-bit device address
-1       len             u8      Number of bytes to read (1â€“30)
+1       len             u8      Number of bytes to read (1–30)
 ```
 
 **Response payload:**
@@ -1200,8 +1200,8 @@ Register-style write then repeated-start read (combined transaction).
 **Request payload:**
 ```
 0       addr            u8      7-bit device address
-1       write_len       u8      Register/command bytes (1â€“14)
-2       read_len        u8      Bytes to read back (1â€“14)
+1       write_len       u8      Register/command bytes (1–14)
+2       read_len        u8      Bytes to read back (1–14)
 3..N    write_data      u8[]
 ```
 
@@ -1217,7 +1217,7 @@ Configure external SPI bus pins and frequency.
 2       sck_gpio        u8
 3       cs_gpio         u8
 4       freq_khz        u32     Clock in kHz
-8       mode            u8      SPI mode 0â€“3
+8       mode            u8      SPI mode 0–3
 ```
 
 **Response payload:** `ok(u8)`
@@ -1228,7 +1228,7 @@ Full-duplex SPI transfer (MOSI bytes in, MISO bytes out).
 **Request payload:**
 ```
 0       cs_assert       u8      1 = assert CS before transfer, 0 = manual CS
-1       len             u8      Transfer length (1â€“28)
+1       len             u8      Transfer length (1–28)
 2..N    tx_data         u8[]    Bytes to transmit
 ```
 
@@ -1340,7 +1340,7 @@ Offset  Field           Type    Description
 
 The IO ownership system prevents two callers (host sessions, scripts, or internal
 subsystems) from driving the same signal path simultaneously. There are 16 ownership
-slots (indices 0â€“15) corresponding to the IO/channel resources.  Callers must
+slots (indices 0–15) corresponding to the IO/channel resources.  Callers must
 `IO_CLAIM` a slot before executing commands that drive it; the firmware returns
 `ERR_IO_OWNERSHIP_REQUIRED` (0x12) if a different session already holds the slot.
 Leases expire automatically after `lease_ms` milliseconds.
@@ -1360,8 +1360,8 @@ Atomically acquire one or more slots. Returns per-slot status.
 
 **Request payload:**
 ```
-0       n_slots         u8      Number of slots to claim (1â€“16)
-1..N    slots           u8[]    Slot indices (one per entry, 0â€“15)
+0       n_slots         u8      Number of slots to claim (1–16)
+1..N    slots           u8[]    Slot indices (one per entry, 0–15)
 N+1     lease_ms        u32     Lease duration in milliseconds (LE)
 N+5     purpose_tag     u32     Caller-defined opaque tag for debug (LE)
 ```
@@ -1381,7 +1381,7 @@ Release a single previously claimed slot.
 
 **Request payload:**
 ```
-0       slot_idx        u8      Slot index (0â€“15)
+0       slot_idx        u8      Slot index (0–15)
 1       session_id      u8      Session ID of the releasing caller
 ```
 
@@ -1406,11 +1406,11 @@ Dump the full ownership table. Useful for debugging ownership conflicts.
 ```
 
 #### 0xAA IO_FORCE_RELEASE
-Admin command â€” release a slot unconditionally regardless of owner. Pass `0xFF` to release all 16 slots at once.
+Admin command - release a slot unconditionally regardless of owner. Pass `0xFF` to release all 16 slots at once.
 
 **Request payload:**
 ```
-0       slot_idx        u8      Slot to release (0â€“15), or 0xFF = release all
+0       slot_idx        u8      Slot to release (0–15), or 0xFF = release all
 ```
 
 **Response payload:**
@@ -1441,7 +1441,7 @@ Get all PCA9535 port states.
 8-11    efuse_flt[4]    bool    E-Fuse fault flags (active = fault)
 12      vadj1_en        bool    V_ADJ1 enable state
 13      vadj2_en        bool    V_ADJ2 enable state
-14      en_15v          bool    Â±15V analog supply enable
+14      en_15v          bool    ±15V analog supply enable
 15      en_mux          bool    MUX power enable
 16      en_usb_hub      bool    USB hub enable
 17-20   efuse_en[4]     bool    E-Fuse enable states
@@ -1462,13 +1462,13 @@ Set a named control output.
 |------|------|-------------|
 | 0 | VADJ1_EN | V_ADJ1 regulator enable |
 | 1 | VADJ2_EN | V_ADJ2 regulator enable |
-| 2 | EN_15V_A | Â±15V analog supply enable |
+| 2 | EN_15V_A | ±15V analog supply enable |
 | 3 | EN_MUX | MUX switch power enable |
 | 4 | EN_USB_HUB | USB hub enable |
-| 5 | EFUSE1_EN | E-Fuse 1 enable (â†’ P1) |
-| 6 | EFUSE2_EN | E-Fuse 2 enable (â†’ P2) |
-| 7 | EFUSE3_EN | E-Fuse 3 enable (â†’ P3) |
-| 8 | EFUSE4_EN | E-Fuse 4 enable (â†’ P4) |
+| 5 | EFUSE1_EN | E-Fuse 1 enable (→ P1) |
+| 6 | EFUSE2_EN | E-Fuse 2 enable (→ P2) |
+| 7 | EFUSE3_EN | E-Fuse 3 enable (→ P3) |
+| 8 | EFUSE4_EN | E-Fuse 4 enable (→ P4) |
 
 #### 0xB2 PCA_SET_PORT
 Set raw output port value (only output-configured bits are applied).
@@ -1497,8 +1497,8 @@ Get recent PCA9535 fault events (ring buffer, last 16).
 
 **Response payload:**
 ```
-0       count           u8      Number of events (0â€“16)
-Per event (countÃ—):
+0       count           u8      Number of events (0–16)
+Per event (count×):
 +0      type            u8      0=efuse_trip, 1=efuse_clear, 2=pg_lost, 3=pg_restored
 +1      channel         u8      E-fuse index (0-3) or PG source (0=logic, 1=vadj1, 2=vadj2)
 +2      timestamp_ms    u32     Milliseconds since boot
@@ -1512,7 +1512,7 @@ BugBuster is the UART master. PCB mode only.
 
 **Detection (bb-hat-3.0):** GPIO47 is a binary digital input with an internal pull-up.
 HAT boards pull GPIO47 LOW; with no HAT attached it floats HIGH. HIGH = no HAT, LOW = HAT present.
-The ESP32 reads this pin directly â€” no ADC threshold comparison is used.
+The ESP32 reads this pin directly - no ADC threshold comparison is used.
 
 **EXP_EXT_1-4:** Four I/O lines independently configurable as:
 DISCONNECTED(0), RESERVED(1), RESERVED(2), RESERVED(3), RESERVED(4),
@@ -1520,7 +1520,7 @@ GPIO1(5), GPIO2(6), GPIO3(7), GPIO4(8).
 
 #### 0xC3 HAT_GET_CAPS
 Query the HAT capability flags and resource counts. This is the authoritative source
-for what the attached HAT supports â€” check before using rails, LEDs, or LA routes.
+for what the attached HAT supports - check before using rails, LEDs, or LA routes.
 
 **Request payload:** (empty)
 
@@ -1560,14 +1560,14 @@ Read the live status of all HAT power rails.
 ```
 0       count           u8      Number of rails (3 on bb-hat-3.0)
 
-Per rail (count Ã— 7 bytes):
+Per rail (count × 7 bytes):
 +0      rail_id         u8      Rail ID: 0=3V3_ADJ, 1=VADJ3, 2=VADJ4
 +1      enabled         bool    Rail output enabled
 +2      voltage_mv      u16     Measured/target voltage in mV (LE)
 +4      current_ma      u16     Measured current in mA (LE)
 +6      status          u8      Rail status flags (0=OK, non-zero=fault)
 
-Total: 1 + 3Ã—7 = 22 bytes
+Total: 1 + 3×7 = 22 bytes
 ```
 
 #### 0xC5 HAT_GET_STATUS
@@ -1712,7 +1712,7 @@ Set the output voltage of a variable rail (VADJ3 or VADJ4 only; 3V3_ADJ is fixed
 
 **Response payload:** Same as `HAT_GET_RAIL_STATUS` (full rail status snapshot).
 
-Valid range: 800 mV â€“ 3300 mV for VADJ3/VADJ4. Returns `ERR_INVALID_PARAM` (0x03)
+Valid range: 800 mV – 3300 mV for VADJ3/VADJ4. Returns `ERR_INVALID_PARAM` (0x03)
 if `rail_id = 0` (3V3_ADJ is not adjustable).
 
 #### 0xD2 HAT_SET_RAIL_ENABLE
@@ -1754,10 +1754,10 @@ subsystem sweeps DAC codes, measures the resulting voltage, fits a piecewise lin
 curve, and stores it to RP2040 flash so accurate mV targeting survives reboots.
 
 Calibration is a multi-step flow:
-1. `HAT_CALIBRATE_START` â€” arms the calibration engine for a given rail.
+1. `HAT_CALIBRATE_START` - arms the calibration engine for a given rail.
 2. Poll `HAT_CALIBRATE_STATUS` until `state` reaches 2 (success) or 3 (failed).
 3. If successful, the calibration table is held in a transactional candidate buffer.
-4. `HAT_CALIBRATE_IMPORT` â€” commits an externally-measured table (alternative path).
+4. `HAT_CALIBRATE_IMPORT` - commits an externally-measured table (alternative path).
 
 #### 0xAB HAT_CALIBRATE_START
 Begin the automated calibration sequence for a rail.
@@ -1783,7 +1783,7 @@ Poll the calibration state machine. Safe to call while calibration is running.
 ```
 Offset  Field           Type    Description
 0       state           u8      0=idle, 1=running, 2=success, 3=failed, 4=validating
-1       progress        u8      Completion percentage (0â€“100)
+1       progress        u8      Completion percentage (0–100)
 2       rail_id         u8      Rail being calibrated
 3       last_error      u8      HAT-side error code (0=none)
 4       persist_state   u8      Flash persistence state (0=not saved, 1=saved)
@@ -1808,7 +1808,7 @@ automated sweep). Each entry is a `(code:i8, measured_mv:i32 LE)` 5-byte pair.
 ```
 0       rail_id         u8      Rail ID (1=VADJ3, 2=VADJ4)
 1       count           u8      Number of calibration points (must be > 0)
-2..N    entries         bytes   count Ã— 5 bytes: [code:u8(i8), measured_mv:u32 LE]
+2..N    entries         bytes   count × 5 bytes: [code:u8(i8), measured_mv:u32 LE]
 ```
 
 **Response payload:** (empty on success)
@@ -1842,7 +1842,7 @@ Control the output-enable and direction of the level-shifter bank.
 **Request payload:**
 ```
 0       oe              bool    true = enable level shifter outputs
-1       dir             bool    true = Bâ†’A direction, false = Aâ†’B
+1       dir             bool    true = B→A direction, false = A→B
 ```
 
 **Response payload:**
@@ -1855,7 +1855,7 @@ Control the output-enable and direction of the level-shifter bank.
 
 ### 6.13c HAT Logic Analyzer
 
-The RP2040 HAT provides a PIO-based logic analyzer with 1/2/4-channel capture at up to 125 MHz. Data is captured via DMA into a 76 KB SRAM buffer (19,456 Ã— 32-bit words).
+The RP2040 HAT provides a PIO-based logic analyzer with 1/2/4-channel capture at up to 125 MHz. Data is captured via DMA into a 76 KB SRAM buffer (19,456 × 32-bit words).
 
 **Sample packing (raw mode):**
 - 1-channel: 32 samples per 32-bit word
@@ -1895,7 +1895,7 @@ Set trigger condition for the next capture.
 
 | Type | Name | Description |
 |------|------|-------------|
-| 0 | NONE | No trigger â€” capture starts immediately on arm |
+| 0 | NONE | No trigger - capture starts immediately on arm |
 | 1 | RISING | Rising edge on specified channel |
 | 2 | FALLING | Falling edge on specified channel |
 | 3 | BOTH | Any edge on specified channel |
@@ -2002,7 +2002,7 @@ Force a reset of the HAT's USB subsystem. Useful for clearing hung USB states du
 **Response payload:** (empty)
 
 #### 0xEE HAT_LA_STREAM_START
-Start continuous streaming mode. Capture parameters must be pre-configured via `0xCF HAT_LA_CONFIG` and the capture must be `ARM`'d. This opcode is a **control** command â€” it tells the RP2040 to begin emitting `PKT_START` followed by `PKT_DATA` on its vendor-bulk IN endpoint. Sample bytes themselves do NOT traverse this BBP link; see Â§6.13d below for the out-of-band data path.
+Start continuous streaming mode. Capture parameters must be pre-configured via `0xCF HAT_LA_CONFIG` and the capture must be `ARM`'d. This opcode is a **control** command - it tells the RP2040 to begin emitting `PKT_START` followed by `PKT_DATA` on its vendor-bulk IN endpoint. Sample bytes themselves do NOT traverse this BBP link; see §6.13d below for the out-of-band data path.
 
 **Request payload:** (empty)
 **Response payload:** (empty)
@@ -2017,7 +2017,7 @@ Bits [31:28] = 4-bit channel values (MSB-first: CH3, CH2, CH1, CH0)
 Bits [27:0]  = 28-bit run length (number of consecutive identical samples)
 ```
 
-Maximum run length per entry: 268,435,455 (0x0FFFFFFF). Runs exceeding this are split across multiple entries. Typical compression ratio for digital signals: 10â€“100Ã—.
+Maximum run length per entry: 268,435,455 (0x0FFFFFFF). Runs exceeding this are split across multiple entries. Typical compression ratio for digital signals: 10–100×.
 
 ### 6.13d HAT LA USB Data Plane (out-of-band)
 
@@ -2030,12 +2030,12 @@ the **data plane**. The host must open both to use streaming.
 The ESP32 is not in the LA data path. This is what allows sustained 1 MHz /
 4-channel streaming even while BBP is busy with unrelated commands.
 
-**Interface â€” RP2040 USB composite device:**
+**Interface - RP2040 USB composite device:**
 
 | Interface | Class | Endpoints | Purpose |
 |---|---|---|---|
-| **0 (vendor)** | Vendor-specific | `0x06` OUT Â· `0x87` IN (64 B FS) | **LA streaming / readout** |
-| 1 (vendor) | Vendor-specific | `0x04` OUT Â· `0x85` IN | CMSIS-DAP v2 |
+| **0 (vendor)** | Vendor-specific | `0x06` OUT · `0x87` IN (64 B FS) | **LA streaming / readout** |
+| 1 (vendor) | Vendor-specific | `0x04` OUT · `0x85` IN | CMSIS-DAP v2 |
 | 2-3 (CDC) | Communications | `0x81` / `0x02` / `0x83` | Target UART bridge |
 
 **Packet layout** (every bulk packet, both directions):
@@ -2057,12 +2057,12 @@ packet.
 | Type | `info` | Meaning |
 |---|---|---|
 | `PKT_START` (0x01) | `0x00` | stream armed, data follows |
-| `PKT_START` (0x01) | `0x80` | `START_REJECTED` â€” config invalid or already streaming |
+| `PKT_START` (0x01) | `0x80` | `START_REJECTED` - config invalid or already streaming |
 | `PKT_DATA` (0x02)  | `0x00` | raw sample bytes (packing depends on 1/2/4 ch config) |
-| `PKT_DATA` (0x02)  | `0x01` | `COMPRESSED` â€” payload is RLE pairs `[value:u8][countâˆ’1:u8]` |
-| `PKT_STOP` (0x03)  | `0x01` | `HOST` â€” host issued `HAT_LA_STOP` |
-| `PKT_STOP` (0x03)  | `0x02` | `USB_SHORT_WRITE` â€” TinyUSB FIFO backpressure deadlock |
-| `PKT_STOP` (0x03)  | `0x03` | `DMA_OVERRUN` â€” PIO FIFO overflowed before DMA could drain |
+| `PKT_DATA` (0x02)  | `0x01` | `COMPRESSED` - payload is RLE pairs `[value:u8][count−1:u8]` |
+| `PKT_STOP` (0x03)  | `0x01` | `HOST` - host issued `HAT_LA_STOP` |
+| `PKT_STOP` (0x03)  | `0x02` | `USB_SHORT_WRITE` - TinyUSB FIFO backpressure deadlock |
+| `PKT_STOP` (0x03)  | `0x03` | `DMA_OVERRUN` - PIO FIFO overflowed before DMA could drain |
 | `PKT_ERROR` (0x04) | `0x01..` | reserved for future error codes |
 
 **One-shot readout** (`0xD8 HAT_LA_READ`) uses the same vendor-bulk endpoint
@@ -2082,7 +2082,7 @@ The rearm state is exposed via `HAT_LA_STATUS` (`0xD7`):
 
 | Field | Meaning |
 |---|---|
-| `usb_rearm_pending` | `1` while STOPâ†’SIEâ†’FIFO sequence is in flight |
+| `usb_rearm_pending` | `1` while STOP→SIE→FIFO sequence is in flight |
 | `usb_rearm_request_count` | host-initiated rearm attempts |
 | `usb_rearm_complete_count` | successful rearms (should equal `request_count`) |
 
@@ -2092,14 +2092,14 @@ of the RP2040.
 
 **Throughput budget:**
 
-- RP2040 USB is Full-Speed (12 Mbps) â€” ceiling â‰ˆ 1.1 MB/s sustained on vendor
+- RP2040 USB is Full-Speed (12 Mbps) - ceiling ≈ 1.1 MB/s sustained on vendor
   bulk with low fragmentation.
-- At 1 MHz Ã— 4 ch Ã— 1 B = 1 MB/s raw; within budget.
-- RLE typically buys 10â€“30Ã— reduction on digital workloads, so compressed
+- At 1 MHz × 4 ch × 1 B = 1 MB/s raw; within budget.
+- RLE typically buys 10–30× reduction on digital workloads, so compressed
   streams can simulate much higher effective sample rates.
 
 Full reference implementation and host-side parser guidance:
-[`../Docs/LogicAnalyzer.md`](../Docs/LogicAnalyzer.md).
+[`../Docs/logic-analyzer.md`](../Docs/logic-analyzer.md).
 
 ### 6.14 HUSB238 USB PD (I2C, addr 0x08)
 
@@ -2376,7 +2376,7 @@ Results are sorted by signal strength (strongest first), deduplicated by SSID.
 ```
 
 #### 0xEF WIFI_SET_AP_PASSWORD
-Set the SoftAP WPA2-PSK password. The new password is persisted to NVS and applied live via `esp_wifi_set_config()` â€” no reboot required. Current AP clients are disconnected immediately when the password takes effect.
+Set the SoftAP WPA2-PSK password. The new password is persisted to NVS and applied live via `esp_wifi_set_config()` - no reboot required. Current AP clients are disconnected immediately when the password takes effect.
 
 **Request payload:**
 ```
@@ -2393,7 +2393,7 @@ Offset  Field           Type    Description
                                 0x02 = failed (validation error or esp_wifi_set_config failure)
 ```
 
-Returns `ERR_INVALID_PARAM` if `pass_len` is outside the 8â€“63 character range.
+Returns `ERR_INVALID_PARAM` if `pass_len` is outside the 8–63 character range.
 
 **Web API equivalent:** `POST /api/wifi/ap_password` with body `{"password":"..."}` and header `X-BugBuster-Admin-Token: <token>`. Returns `{"success":true,"persisted":true,"message":"AP password updated and applied live"}` on full success, or `{"success":true,"persisted":false,"message":"AP password applied live but NVS write failed; will revert after reboot"}` when the live apply succeeded but NVS persistence failed.
 
@@ -2562,7 +2562,7 @@ Set the state of a single switch in the matrix.
 
 MicroPython scripts run on the ESP32-S3 inside a dedicated FreeRTOS task.
 All four commands are **USB-only** (cable-gated; no HTTP surface, no auth token
-required).  BBP wire-protocol version stays at **7** â€” no handshake change.
+required).  BBP wire-protocol version stays at **7** - no handshake change.
 
 Script source max: **32 768 bytes** (32 KB).
 Log ring drain: up to **1020 bytes** per call.
@@ -2578,7 +2578,7 @@ Submit a Python source string for evaluation.
 ```
 
 `flags` bit 0 (`persist`): when set, the MicroPython VM is kept alive across
-evaluations (persistent mode). Persistent mode is sticky â€” once entered, it
+evaluations (persistent mode). Persistent mode is sticky - once entered, it
 remains active until an explicit RESET_VM (sub=4), idle timeout (10 min), or
 hard heap watermark auto-reset. Setting `persist=0` after entering persistent
 mode is a no-op.
@@ -2627,13 +2627,13 @@ raises `KeyboardInterrupt` at the next opcode boundary.
 
 #### 0xF9 SCRIPT_UPLOAD
 Upload a Python script file to SPIFFS persistent storage.  Name rules:
-1â€“32 characters, `[A-Za-z0-9_.-]`, must end in `.py`, must not start with `.`.
+1–32 characters, `[A-Za-z0-9_.-]`, must end in `.py`, must not start with `.`.
 
 **Request payload:**
 ```
-0       name_len    u8          Length of script name in bytes (1â€“32)
+0       name_len    u8          Length of script name in bytes (1–32)
 1       name        char[n]     Script filename (e.g. "hello.py")
-1+n     body_len    u16         Length of Python source in bytes (0â€“32768)
+1+n     body_len    u16         Length of Python source in bytes (0–32768)
 3+n     body        u8[body]    Python source bytes
 ```
 
@@ -2667,7 +2667,7 @@ to SCRIPT_EVAL but the source is read from storage rather than the payload.
 
 **Request payload:**
 ```
-0       name_len    u8          Length of script name (1â€“32)
+0       name_len    u8          Length of script name (1–32)
 1       name        char[n]     Script filename
 ```
 
@@ -2684,7 +2684,7 @@ Delete a stored script file from SPIFFS.
 
 **Request payload:**
 ```
-0       name_len    u8          Length of script name (1â€“32)
+0       name_len    u8          Length of script name (1–32)
 1       name        char[n]     Script filename
 ```
 
@@ -2728,7 +2728,7 @@ Response:
 Request:
 ```
 0       sub           u8          0x01
-1       name_len      u8          Length of script name (1â€“32)
+1       name_len      u8          Length of script name (1–32)
 2       name          char[n]     Name of stored script to set as autorun target
 ```
 
@@ -2745,7 +2745,7 @@ Request: `[0x02]`
 
 Response:
 ```
-0       ok            u8          1 = success (idempotent â€” returns 1 even if already disabled)
+0       ok            u8          1 = success (idempotent - returns 1 even if already disabled)
 1       err_len       u8          0 normally
 2       err           char[e]     Error description (if err_len > 0)
 ```
@@ -2795,11 +2795,11 @@ Response:
 2. 5-second boot grace window: any inbound BBP frame, HTTP request, or CLI
    keystroke cancels autorun for this boot cycle.
 3. IO12 must read HIGH at boot. Default (internal pull-up + nothing wired) is
-   HIGH â†’ autorun runs. Hold IO12 LOW (jumper to GND, button, external 10 kÎ©
+   HIGH → autorun runs. Hold IO12 LOW (jumper to GND, button, external 10 kΩ
    pull-down) to suppress autorun: hold-LOW-to-disable.
 
 OTA rollback: `esp_ota_mark_app_valid_cancel_rollback()` is called inside
-`autorun_boot_check()` after the grace window â€” a crash before this point
+`autorun_boot_check()` after the grace window - a crash before this point
 causes the ESP-IDF bootloader to roll back to the previous OTA slot.
 
 HTTP equivalents (all require admin token):
@@ -2814,7 +2814,7 @@ HTTP equivalents (all require admin token):
 QuickSetup slots store a complete snapshot of the device configuration (channel
 functions, DAC targets, MUX routing, IDAC voltages, HAT state) that can be
 recalled in one command.  Each slot is identified by a short ASCII name and
-stored in NVS.  See [`Docs/QuickSetup.md`](../Docs/QuickSetup.md) for the
+stored in NVS.  See [`Docs/quick-setup.md`](../Docs/quick-setup.md) for the
 slot schema and Python API.
 
 #### 0xF0 QS_LIST
@@ -2824,7 +2824,7 @@ List all saved QuickSetup slots.
 
 **Response payload:**
 ```
-0       count           u8      Number of slots (0â€“16)
+0       count           u8      Number of slots (0–16)
 Per slot (variable stride):
 +0      name_len        u8      Length of slot name
 +1..N   name            char[]  ASCII slot name
@@ -2858,7 +2858,7 @@ Snapshot current device state into a named slot (creates or overwrites).
 **Response payload:** `ok(u8)`, `err_len(u8)`, `err(char[])`
 
 #### 0xF3 QS_APPLY
-Apply a saved slot â€” restores all captured settings in the correct sequence.
+Apply a saved slot - restores all captured settings in the correct sequence.
 
 **Request payload:**
 ```
@@ -2877,7 +2877,7 @@ Delete a named slot from NVS.
 1..N    name            char[]  Slot name
 ```
 
-**Response payload:** `ok(u8)` (1 = deleted, 0 = not found â€” idempotent)
+**Response payload:** `ok(u8)` (1 = deleted, 0 = not found - idempotent)
 
 ---
 
@@ -2906,7 +2906,7 @@ defines t=0). HV/analog-capable IOs (3, 6, 9, 12 → AD74416H A..D) may use a
 digital level or an analog voltage threshold. Multiple triggers combine with OR
 (first fires) or AND (all must fire) logic.
 
-### 6.20.1 BBP CMD_DAQ_TRIG (0xCE) — host → S3
+### 6.20.1 BBP CMD_DAQ_TRIG (0xCE) - host → S3
 
 Sub-op multiplexed; `payload[0]` selects the operation. Handled **locally on the
 S3** (it owns the IO event engine); edge events are forwarded to the P4 by the
@@ -2921,7 +2921,7 @@ engine.
 | 0x04 | STATUS | -- | `logic(u8)`, `armed(u8)`, `fired(u8)`, `_pad(u8)` |
 | 0x05 | GET_ALL | -- | `logic`,`armed`,`fired`,`_pad` + 12 × `io_cfg` |
 
-**`io_cfg` (8 bytes, packed LE)** — wire-identical to `daq_trig_io_cfg_t`:
+**`io_cfg` (8 bytes, packed LE)** - wire-identical to `daq_trig_io_cfg_t`:
 ```
 0       role            u8      0=Off, 1=Flag, 2=Trigger
 1       edge            u8      0=rising, 1=falling, 2=any
@@ -2941,7 +2941,7 @@ The S3 IO engine forwards events and arming to the P4 over the existing HAT UART
 (SYNC 0xAA / LEN / CMD / PAYLOAD / CRC-8). Both payloads are byte-for-byte
 mirrored on the P4 side (`s3link_daq_arm_t` / `s3link_daq_mark_t`).
 
-**HATP_CMD_DAQ_ARM (0x5B)** — arm/disarm the trigger latch:
+**HATP_CMD_DAQ_ARM (0x5B)** - arm/disarm the trigger latch:
 ```
 0       armed           u8      1 = arm, 0 = free-run/disarm
 1       trig_logic      u8      0=none, 1=OR, 2=AND (informational)
@@ -2949,7 +2949,7 @@ mirrored on the P4 side (`s3link_daq_arm_t` / `s3link_daq_mark_t`).
 4..7    pre_samples     u32 LE  requested pre-trigger depth (samples)
 ```
 
-**HATP_CMD_DAQ_MARK (0x5C)** — a digital event fired on an S3 IO:
+**HATP_CMD_DAQ_MARK (0x5C)** - a digital event fired on an S3 IO:
 ```
 0       channel         u8      S3 IO number (1..12)
 1       edge            u8      0 = falling, 1 = rising
@@ -2965,7 +2965,7 @@ command. Markers carry the fused-sample index they align to, so the host renders
 them at full fidelity through every multi-resolution zoom level (flags are
 preserved through compression).
 
-**USB_REC_MARKER (0x05)** record payload — `usb_marker_payload_t` (16 B):
+**USB_REC_MARKER (0x05)** record payload  `usb_marker_payload_t` (16 B):
 ```
 0..3    sample_index    u32 LE  fused-sample index this marker aligns to
 4..11   timestamp_us    u64 LE  shared sync-epoch timestamp (µs)
@@ -2975,7 +2975,7 @@ preserved through compression).
 15      _pad            u8
 ```
 
-**USB_CMD_ARM (0x88)** control command — `usb_cmd_arm_t` (8 B):
+**USB_CMD_ARM (0x88)** control command  `usb_cmd_arm_t` (8 B):
 ```
 0       armed           u8      1 = arm trigger latch, 0 = free-run/disarm
 1       trig_logic      u8      0=none, 1=OR, 2=AND (informational)
@@ -3155,7 +3155,7 @@ slot immediately.
 
 **Event payload:**
 ```
-0       slot            u8      Slot index that was preempted (0â€“15)
+0       slot            u8      Slot index that was preempted (0–15)
 1       new_owner_kind  u8      Kind of the subsystem that took over (see IO owner kinds)
 ```
 
@@ -3176,7 +3176,7 @@ session. Supplements the `ERR_IO_OWNERSHIP_REQUIRED` error code with slot contex
 
 On-device DSP pipeline: samples at full ADC hardware rate (up to 9.6 kSPS), accumulates
 256-sample windows, applies a Hann-windowed 256-point FFT, detects voltage spikes, and
-pushes compressed summary events. ~8.6Ã— smaller than raw streaming (~89 bytes/window vs
+pushes compressed summary events. ~8.6× smaller than raw streaming (~89 bytes/window vs
 768 bytes raw at 8 FFT peaks + 3 spikes). Over WiFi, events are forwarded via the
 `/api/ws/stream` WebSocket as stream type `0x03` (`adc-dsp`).
 
@@ -3185,11 +3185,11 @@ pushes compressed summary events. ~8.6Ã— smaller than raw streaming (~89 byte
 **Request payload (9 bytes):**
 ```
 Offset  Field               Type    Description
-0       channel             u8      ADC channel to stream (0â€“3)
+0       channel             u8      ADC channel to stream (0–3)
 1       rate_code           u8      AdcRate enum value (e.g. 13 = 9.6 kSPS)
-2       window_samples      u16     Window size â€” must be 256 (v1 only)
+2       window_samples      u16     Window size - must be 256 (v1 only)
 4       spike_threshold     f32     V above mean to classify as a spike
-8       n_fft_peaks         u8      0 = skip FFT; 1â€“16 = dominant bins to report
+8       n_fft_peaks         u8      0 = skip FFT; 1–16 = dominant bins to report
 ```
 
 **Response payload (11 bytes):**
@@ -3217,20 +3217,20 @@ Unsolicited compressed DSP summary pushed once per 256-sample window (~37/sec at
 ```
 Offset  Field               Type    Description
 0       channel             u8      ADC channel
-1       window_start_us     u32     Timestamp of first sample in window (Âµs, wrapping)
+1       window_start_us     u32     Timestamp of first sample in window (µs, wrapping)
 5       n_samples           u16     Samples in this window (always 256 in v1)
 7       min_v               f32     Minimum voltage in window
 11      max_v               f32     Maximum voltage in window
 15      mean_v              f32     Mean voltage in window
 19      rms_v               f32     RMS voltage in window
-23      n_fft_peaks         u8      Number of FFT peak entries (0â€“16)
+23      n_fft_peaks         u8      Number of FFT peak entries (0–16)
 
 Per FFT peak (5 bytes each, repeated n_fft_peaks times):
-  +0    bin_index           u8      FFT bin index (0â€“127); frequency = bin Ã— Fs/256
-  +1    magnitude           f32     Normalised magnitude (2/N Ã— |X[k]|)
+  +0    bin_index           u8      FFT bin index (0–127); frequency = bin × Fs/256
+  +1    magnitude           f32     Normalised magnitude (2/N × |X[k]|)
 
 After FFT peaks:
-  +0    n_spikes            u8      Number of spike entries (0â€“16)
+  +0    n_spikes            u8      Number of spike entries (0–16)
 
 Per spike (8 bytes each, repeated n_spikes times):
   +0    offset_us           u32     Offset from window_start_us
@@ -3384,82 +3384,86 @@ CLI/BBP, interface 2 = UART bridge).
 
 ```
 Host                                    Device
-  â”‚                                       â”‚
-  â”‚â”€â”€â”€â”€ 0xBB 0x42 0x55 0x47 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€>â”‚  (magic bytes)
-  â”‚                                       â”‚
-  â”‚<â”€â”€â”€â”€ 0xBB 0x42 0x55 0x47 0x08 â”€â”€â”€â”€â”€â”€â”€â”‚  (ACK, proto v8, fw version)
-  â”‚         0x03 0x02 0x00                â”‚
-  â”‚                                       â”‚  (device enters binary mode)
-  â”‚                                       â”‚
-  â”‚â”€â”€â”€â”€ [COBS: CMD seq=1 GET_STATUS] â”€â”€â”€>â”‚
-  â”‚                                       â”‚
-  â”‚<â”€â”€â”€â”€ [COBS: RSP seq=1 status...] â”€â”€â”€â”€â”‚
-  â”‚                                       â”‚
+  │                                       │
+  │──── 0xBB 0x42 0x55 0x47 ────────────>│  (magic bytes)
+  │                                       │
+  │<──── 0xBB 0x42 0x55 0x47 0x08 ───────│  (ACK, proto v8, fw version)
+  │         0x03 0x02 0x00                │
+  │                                       │  (device enters binary mode)
+  │                                       │
+  │──── [COBS: CMD seq=1 GET_STATUS] ───>│
+  │                                       │
+  │<──── [COBS: RSP seq=1 status...] ────│
+  │                                       │
 ```
 
 ### 11.2 Configure Channel and Start ADC Stream
 
 ```
 Host                                    Device
-  â”‚                                       â”‚
-  â”‚â”€â”€ CMD seq=2 SET_CHANNEL_FUNC â”€â”€â”€â”€â”€â”€â”€>â”‚  ch=0, func=3 (VIN)
-  â”‚   [0x01][0x02,0x00][0x10][0x00,0x03] â”‚
-  â”‚                                       â”‚
-  â”‚<â”€â”€ RSP seq=2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  OK, ch=0, func=3
-  â”‚                                       â”‚
-  â”‚â”€â”€ CMD seq=3 SET_ADC_CONFIG â”€â”€â”€â”€â”€â”€â”€â”€â”€>â”‚  ch=0, mux=0, range=0, rate=13
-  â”‚                                       â”‚
-  â”‚<â”€â”€ RSP seq=3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  OK
-  â”‚                                       â”‚
-  â”‚â”€â”€ CMD seq=4 START_ADC_STREAM â”€â”€â”€â”€â”€â”€â”€>â”‚  mask=0x01, divider=1
-  â”‚                                       â”‚
-  â”‚<â”€â”€ RSP seq=4 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  mask=0x01, div=1, rate=9600
-  â”‚                                       â”‚
-  â”‚<â”€â”€ EVT ADC_DATA (batch 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  50 samples, ch0 only
-  â”‚<â”€â”€ EVT ADC_DATA (batch 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  50 samples
-  â”‚<â”€â”€ EVT ADC_DATA (batch 3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  50 samples
-  â”‚    ... continuous ...                 â”‚
-  â”‚                                       â”‚
-  â”‚â”€â”€ CMD seq=5 STOP_ADC_STREAM â”€â”€â”€â”€â”€â”€â”€â”€>â”‚
-  â”‚                                       â”‚
-  â”‚<â”€â”€ RSP seq=5 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  OK, streaming stopped
-  â”‚                                       â”‚
+  │                                       │
+  │── CMD seq=2 SET_CHANNEL_FUNC ───────>│  ch=0, func=3 (VIN)
+  │   [0x01][0x02,0x00][0x10][0x00,0x03] │
+  │                                       │
+  │<── RSP seq=2 ────────────────────────│  OK, ch=0, func=3
+  │                                       │
+  │── CMD seq=3 SET_ADC_CONFIG ─────────>│  ch=0, mux=0, range=0, rate=13
+  │                                       │
+  │<── RSP seq=3 ────────────────────────│  OK
+  │                                       │
+  │── CMD seq=4 START_ADC_STREAM ───────>│  mask=0x01, divider=1
+  │                                       │
+  │<── RSP seq=4 ────────────────────────│  mask=0x01, div=1, rate=9600
+  │                                       │
+  │<── EVT ADC_DATA (batch 1) ──────────│  50 samples, ch0 only
+  │<── EVT ADC_DATA (batch 2) ──────────│  50 samples
+  │<── EVT ADC_DATA (batch 3) ──────────│  50 samples
+  │    ... continuous ...                 │
+  │                                       │
+  │── CMD seq=5 STOP_ADC_STREAM ────────>│
+  │                                       │
+  │<── RSP seq=5 ────────────────────────│  OK, streaming stopped
+  │                                       │
 ```
 
 ### 11.3 Graceful Disconnect
 
 ```
 Host                                    Device
-  â”‚                                       â”‚
-  â”‚â”€â”€ CMD seq=99 DISCONNECT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€>â”‚
-  â”‚                                       â”‚
-  â”‚<â”€â”€ RSP seq=99 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  OK
-  â”‚                                       â”‚  (device reverts to CLI)
-  â”‚<â”€â”€â”€â”€ "\r\n[CLI Ready]\r\n" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚  (text mode)
-  â”‚                                       â”‚
+  │                                       │
+  │── CMD seq=99 DISCONNECT ────────────>│
+  │                                       │
+  │<── RSP seq=99 ──────────────────────│  OK
+  │                                       │  (device reverts to CLI)
+  │<──── "\r\n[CLI Ready]\r\n" ─────────│  (text mode)
+  │                                       │
 ```
 
 ---
 
 ## 12. Protocol Version History
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2026-03-27 | Initial specification |
-| 1.1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
-| 1.2 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
-| 1.3 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
-| 1.4 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
-| 1.5 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
-| 1.6 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
-| 1.7 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 ÂµA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26â†’28, total 147â†’155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
-| 1.8 | 2026-04-01 | Added GET /api/debug and POST /api/mux/switch REST endpoints |
-| 1.9 | 2026-05-04 | Added WIFI_SET_AP_PASSWORD (0xEF): configurable SoftAP password persisted to NVS, applied live; POST /api/wifi/ap_password HTTP endpoint (admin-auth); added esp_task_wdt_reset() feeds around blocking wifi_scan (before scan_start, after scan_start returns, inside per-AP copy loop) |
-| 2.0 | 2026-05-10 | HAT capability system: HAT_GET_CAPS (0xC3) returning HatCaps struct; HAT_GET_RAIL_STATUS (0xC4) returning live rail snapshots; HAT_SET_RAIL_VOLTAGE (0xB5), HAT_SET_RAIL_ENABLE (0xD2) for VADJ3/VADJ4 power management; HAT_SET_LED_STATE (0xD3) for manual WS2812B control. BBP proto bumped to 5 |
-| 2.1 | 2026-05-15 | HAT calibration subsystem: HAT_CALIBRATE_START (0xAB), HAT_CALIBRATE_STATUS (0xAC, 30-byte response with transactional candidate table fields), HAT_CALIBRATE_IMPORT (0xAD) for DS4424 IDAC curve fitting; HAT shifted IO bank: HAT_SET_IO_BANK (0xAE), HAT_SET_LEVEL_SHIFT (0xAF). BBP proto bumped to 6 |
-| 2.2 | 2026-06-04 | IO Ownership system: IO_CLAIM (0xA7), IO_RELEASE (0xA8), IO_OWNER_STATUS (0xA9), IO_FORCE_RELEASE (0xAA) â€” 16-slot lease table with kind/session/token/expiry; EVT_IO_PREEMPTED (0x86), EVT_IO_OWNER_REJECT (0x87) events; ERR_IO_OWNERSHIP_REQUIRED (0x12), ERR_ADGS_ROUTE_REJECTED (0x13) error codes; HAT_LA_SET_ROUTE (0xD4) with ADGS MUX mutual-exclusion enforcement; ADC_LEDS_SET_MODE (0x47) for manual LED control; SELFTEST_EFUSE_CURRENTS (0x07) replaced by SELFTEST_SUPPLY_VOLTAGES_CACHED returning 3-rail voltage cache; HAT detection updated to binary GPIO47 mode (bb-hat-3.0); UART baud corrected to 921600. BBP proto bumped to 7 (firmware 3.2.0 / Desktop 0.7.0) |
-| 3.3 | 2026-06-04 | ADC DSP streaming: START_ADC_DSP_STREAM (0x64), STOP_ADC_DSP_STREAM (0x65), BBP_EVT_ADC_DSP (0x88) â€” on-device Hann-windowed 256-point FFT + spike detection + running stats; FreeRTOS DSP task on Core 0 with ping-pong double buffers; WiFi delivery via WebSocket stream type 0x03 ("adc-dsp") on /api/ws/stream; HTTP control via POST /api/adc/dsp/start|stop; Python API start_adc_dsp_stream() / stop_adc_dsp_stream() transport-agnostic. BBP proto bumped to 8 (firmware 3.3.0) |
-| 3.4 | 2026-06-23 | DAQ trigger/flag subsystem (Section 6.20): DAQ_TRIG (0xCE) host→S3 sub-op multiplexed IO config (SET_IO/GET_IO/SET_LOGIC/ARM/STATUS/GET_ALL) with 8-byte `daq_trig_io_cfg_t` (role/edge/source/threshold). S3 IO event engine forwards events to the P4 over the HAT link via HATP_CMD_DAQ_ARM (0x5B) and HATP_CMD_DAQ_MARK (0x5C). P4 USB-HS stream gains USB_REC_MARKER (0x05, `usb_marker_payload_t` with sample_index/timestamp_us/channel/edge/kind) and USB_CMD_ARM (0x88) control; markers carry the fused-sample index so flags survive multi-resolution decimation. Flags = pink event lines, triggers = cyan, rendered in the desktop DAQ tab + timeline |
+`Version` is the ESP32-S3 firmware version at the time of the change; `Proto` is
+`BBP_PROTO_VERSION` on the wire.
+
+| Version | Proto | Date | Changes |
+|---------|:-----:|------|---------|
+| 1.0 | 1 | 2026-03-27 | Initial specification |
+| 1.1 | 1 | 2026-03-28 | Added I2C device commands: DS4424 IDAC (0xA0-A3), PCA9535 GPIO expander (0xB0-B2), HUSB238 USB-PD (0xC0-C2), Waveform generator (0xD0-D1) |
+| 1.2 | 1 | 2026-03-28 | Added UI-driven calibration commands: IDAC_CAL_ADD_POINT (0xA4), IDAC_CAL_CLEAR (0xA5), IDAC_CAL_SAVE (0xA6) |
+| 1.3 | 1 | 2026-03-29 | GET_STATUS now includes diagnostic slots; IDAC calibration commands (0xA4-0xA6) fully documented; added Section 6.16 Scope API (HTTP polling endpoint) |
+| 1.4 | 1 | 2026-03-28 | Added WiFi management commands: WIFI_GET_STATUS (0xE1), WIFI_CONNECT (0xE2); Section 6.17; added SET_LSHIFT_OE (0xE0) to Appendix A |
+| 1.5 | 1 | 2026-03-29 | Added WIFI_SCAN (0xE4); WiFi credentials persist in NVS |
+| 1.6 | 1 | 2026-03-30 | Added SET_LSHIFT_OE (0xE0), SET_SPI_CLOCK (0xE3) sections; OTA update endpoint (POST /api/ota/upload); device version endpoint (GET /api/device/version); A/B OTA partition table with rollback |
+| 1.7 | 1 | 2026-03-31 | Added SET_RTD_CONFIG (0x1D) command for RTD excitation current selection (125/250 µA); GET_STATUS per-channel payload extended by 2 bytes (rtd_excitation_ua u16, stride 26→28, total 147→155 bytes); adc_value for RES_MEAS now returned in Ohms (R = V_adc / I_exc) |
+| 1.8 | 1 | 2026-04-01 | Added GET /api/debug and POST /api/mux/switch REST endpoints |
+| 1.9 | 4 | 2026-05-04 | Added WIFI_SET_AP_PASSWORD (0xEF): configurable SoftAP password persisted to NVS, applied live; POST /api/wifi/ap_password HTTP endpoint (admin-auth); added esp_task_wdt_reset() feeds around blocking wifi_scan (before scan_start, after scan_start returns, inside per-AP copy loop) |
+| 2.0 | 5 | 2026-05-10 | HAT capability system: HAT_GET_CAPS (0xC3) returning HatCaps struct; HAT_GET_RAIL_STATUS (0xC4) returning live rail snapshots; HAT_SET_RAIL_VOLTAGE (0xB5), HAT_SET_RAIL_ENABLE (0xD2) for VADJ3/VADJ4 power management; HAT_SET_LED_STATE (0xD3) for manual WS2812B control |
+| 2.1 | 6 | 2026-05-15 | HAT calibration subsystem: HAT_CALIBRATE_START (0xAB), HAT_CALIBRATE_STATUS (0xAC, 30-byte response with transactional candidate table fields), HAT_CALIBRATE_IMPORT (0xAD) for DS4424 IDAC curve fitting; HAT shifted IO bank: HAT_SET_IO_BANK (0xAE), HAT_SET_LEVEL_SHIFT (0xAF) |
+| 2.2 | 7 | 2026-06-04 | IO Ownership system: IO_CLAIM (0xA7), IO_RELEASE (0xA8), IO_OWNER_STATUS (0xA9), IO_FORCE_RELEASE (0xAA) - 16-slot lease table with kind/session/token/expiry; EVT_IO_PREEMPTED (0x86), EVT_IO_OWNER_REJECT (0x87) events; ERR_IO_OWNERSHIP_REQUIRED (0x12), ERR_ADGS_ROUTE_REJECTED (0x13) error codes; HAT_LA_SET_ROUTE (0xD4) with ADGS MUX mutual-exclusion enforcement; ADC_LEDS_SET_MODE (0x47) for manual LED control; SELFTEST_EFUSE_CURRENTS (0x07) replaced by SELFTEST_SUPPLY_VOLTAGES_CACHED returning 3-rail voltage cache; HAT detection updated to binary GPIO47 mode (bb-hat-3.0); UART baud corrected to 921600 |
+| 3.3 | 8 | 2026-06-04 | ADC DSP streaming: START_ADC_DSP_STREAM (0x64), STOP_ADC_DSP_STREAM (0x65), BBP_EVT_ADC_DSP (0x88) - on-device Hann-windowed 256-point FFT + spike detection + running stats; FreeRTOS DSP task on Core 0 with ping-pong double buffers; WiFi delivery via WebSocket stream type 0x03 ("adc-dsp") on /api/ws/stream; HTTP control via POST /api/adc/dsp/start|stop; Python API start_adc_dsp_stream() / stop_adc_dsp_stream() transport-agnostic |
+| 3.5 | 9 | 2026-06-15 | Scope ADC mode: while a scope stream is active the firmware drops the four always-on ADC diagnostic conversion slots and converts only the channels enabled on the scope, raising the effective per-channel rate from ~5 SPS to the configured channel rate. START_SCOPE_STREAM (0x62) takes an optional 1-byte logical channel mask (0 or absent = all channels); every stop path restores diagnostics. A supply-monitor interlock keeps CH D converting regardless of the mask. Python on_scope_data() gains a ch_mask parameter |
+| 3.4 | 10 | 2026-06-23 | DAQ trigger/flag subsystem (Section 6.20): DAQ_TRIG (0xCE) host→S3 sub-op multiplexed IO config (SET_IO/GET_IO/SET_LOGIC/ARM/STATUS/GET_ALL) with 8-byte `daq_trig_io_cfg_t` (role/edge/source/threshold). S3 IO event engine forwards events to the P4 over the HAT link via HATP_CMD_DAQ_ARM (0x5B) and HATP_CMD_DAQ_MARK (0x5C). P4 USB-HS stream gains USB_REC_MARKER (0x05, `usb_marker_payload_t` with sample_index/timestamp_us/channel/edge/kind) and USB_CMD_ARM (0x88) control; markers carry the fused-sample index so flags survive multi-resolution decimation. Flags = pink event lines, triggers = cyan, rendered in the desktop DAQ tab + timeline |
 
 ---
 
@@ -3551,7 +3555,7 @@ Host                                    Device
 | 0xC4 | HAT_GET_RAIL_STATUS | H->D | -- | Live rail voltage/current/status |
 | 0xC5 | HAT_GET_STATUS | H->D | -- | `GET /api/hat` |
 | 0xC6 | HAT_SET_PIN | H->D | pin, func | `POST /api/hat/config` |
-| 0xC7 | HAT_SET_ALL_PINS | H->D | 4Ã— func | `POST /api/hat/config` |
+| 0xC7 | HAT_SET_ALL_PINS | H->D | 4× func | `POST /api/hat/config` |
 | 0xC8 | HAT_RESET | H->D | -- | `POST /api/hat/reset` |
 | 0xC9 | HAT_DETECT | H->D | -- | `POST /api/hat/detect` |
 | 0xCA | HAT_SET_POWER | H->D | conn, enable | `POST /api/hat/power` |

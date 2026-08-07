@@ -1,4 +1,4 @@
-# BugBuster — Real-world scenarios
+# BugBuster - Real-world scenarios
 
 Concrete examples of what AI assistants do with BugBuster once it's wired up
 via the MCP server.  Every scenario here is a plausible first-session task an
@@ -10,11 +10,11 @@ engineer might hand off verbatim.
 
 > **You:** "The temperature sensor on IO 3 reads 150 °C but the room is 22 °C. Figure out why."
 
-> **AI:** Configures IO 3 as analog input. Reads voltage (0.48 V — consistent with
+> **AI:** Configures IO 3 as analog input. Reads voltage (0.48 V - consistent with
 > 150 °C for a PT100). Switches to RTD mode with 4-wire excitation. Measures
 > 108.7 Ω.  Notes that a PT100 at 22 °C should read ~108.9 Ω. Concludes: the
 > sensor is correct; the target's ADC reference voltage is wrong. Measures the
-> target's 3.3 V rail on IO 6 — reads 2.87 V.  Reports:
+> target's 3.3 V rail on IO 6 - reads 2.87 V.  Reports:
 >
 > *"Your 3.3 V reference is sagging to 2.87 V, which causes the firmware's
 > voltage-to-temperature conversion to over-read by 128 °C."*
@@ -42,7 +42,7 @@ What happened under the hood:
 > blinks at 0.98 Hz (within 1 Hz ±5% tolerance)."*
 
 This exercises the capture pipeline and logic-analyzer engine on the HAT
-alongside analog measurements — the kind of multi-modal sequencing that is
+alongside analog measurements - the kind of multi-modal sequencing that is
 tedious to script by hand but trivial over MCP.
 
 ---
@@ -70,9 +70,9 @@ MUX matrix to route signals through the correct pins.
 
 ## See also
 
-- [`../python/bugbuster_mcp/README.md`](../python/bugbuster_mcp/README.md) — tool
+- [`../python/bugbuster_mcp/README.md`](../python/bugbuster_mcp/README.md) - tool
   catalog, safety model, and how these workflows map to individual MCP calls.
-- [`LogicAnalyzer.md`](LogicAnalyzer.md) — vendor-bulk streaming architecture
+- [`logic-analyzer.md`](logic-analyzer.md) - vendor-bulk streaming architecture
   used by scenario 3.
-- [`Hardware.md`](Hardware.md) — IC list and power topology for the board the
+- [`mainboard-hardware.md`](mainboard-hardware.md) - IC list and power topology for the board the
   scenarios drive.

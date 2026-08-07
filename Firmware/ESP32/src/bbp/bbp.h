@@ -5,7 +5,7 @@
 //
 // High-throughput binary protocol over USB CDC #0.
 // Shares the CDC port with the text CLI; auto-switches via handshake.
-// See BugBusterProtocol.md for the full specification.
+// See bbp-protocol.md for the full specification.
 // =============================================================================
 
 #include <stdint.h>

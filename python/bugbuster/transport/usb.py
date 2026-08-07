@@ -11,7 +11,7 @@ Protocol overview:
      The device echoes SEQ in its RSP/ERR response so the host can match them.
   6. Unsolicited EVT frames are dispatched to registered callbacks.
 
-See BugBusterProtocol.md §2–§5 for the complete wire specification.
+See bbp-protocol.md §2–§5 for the complete wire specification.
 """
 
 import threading

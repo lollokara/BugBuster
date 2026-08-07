@@ -2,7 +2,7 @@
 
 > How to detect SRAM exhaustion, stack overflows, and heap fragmentation before shipping firmware.
 
-**Live figures — fw 5.0.0, measured on hardware under load (2026-08-06):**
+**Live figures - fw 5.0.0, measured on hardware under load (2026-08-06):**
 internal SRAM 54.4 KB free of 250.0 KB, min-ever 44.5 KB, largest contiguous
 block 36.0 KB, fragmentation 33.8 %. Static DRAM 84.8 KB against the 160 KB
 gate; build RAM 26.5 %, flash 50.1 %.
@@ -41,7 +41,7 @@ gate; build RAM 26.5 %, flash 50.1 %.
 │  Free typically                  ~7 MB                             │
 └────────────────────────────────────────────────────────────────────┘
 
-Flash: 16 MB — partitions.csv layout:
+Flash: 16 MB - partitions.csv layout:
   app0 / app1 (OTA A/B)   4 MB each   (firmware is ~2.1 MB → 1.9 MB headroom)
   spiffs (web UI)          4 MB
   scripts (MicroPython)    3 MB
@@ -50,11 +50,11 @@ Flash: 16 MB — partitions.csv layout:
 
 Task stack sizes are defined once in `Firmware/ESP32/src/tasks.h`
 (`TASK_STACK_*`) and pinned by `tests/unit/test_direct_daq_ota.py`. The comment
-block above those macros records the measured peak justifying each size — read
+block above those macros records the measured peak justifying each size - read
 it before changing one.
 
-**Critical rule — PSRAM stacks are unsafe during OTA/NVS/SPIFFS writes.**  
-D-cache is disabled for those operations, which silently corrupts PSRAM-backed stacks on both cores regardless of whether the task touches flash itself. Tasks that run during OTA (`wifi_rc`, `cli_update`, `repl_tx`) accept this risk; measurement tasks (`adcPoll`, `faultMon`, `wavegen`, `cmdProc`) must use internal SRAM stacks. The constraint applies to **stacks**, not data buffers — payload staging lives in PSRAM safely.
+**Critical rule - PSRAM stacks are unsafe during OTA/NVS/SPIFFS writes.**  
+D-cache is disabled for those operations, which silently corrupts PSRAM-backed stacks on both cores regardless of whether the task touches flash itself. Tasks that run during OTA (`wifi_rc`, `cli_update`, `repl_tx`) accept this risk; measurement tasks (`adcPoll`, `faultMon`, `wavegen`, `cmdProc`) must use internal SRAM stacks. The constraint applies to **stacks**, not data buffers - payload staging lives in PSRAM safely.
 
 ---
 
@@ -77,12 +77,12 @@ Two traps have each cost several KB on this project:
 **`EXT_RAM_BSS_ATTR` is silently ignored on function-scope statics.** A
 `static uint8_t buf[1500];` declared *inside* a function lands in internal DRAM
 regardless of the attribute. In an `nm` dump these appear as mangled
-`_ZZL<function>E<name>` symbols — one at a `0x3FC……` address is this bug. Move
+`_ZZL<function>E<name>` symbols - one at a `0x3FC……` address is this bug. Move
 the buffer to file scope. Four instances were found this way, 8 216 B combined.
 
 **A `const` table that gets `memcpy`'d loses its free ride.** Per-subsystem
 `static const CmdDescriptor[]` blocks live in flash `.rodata` at zero internal
-cost — until `cmd_registry.cpp` copied all of them into a `CmdDescriptor[256]`
+cost - until `cmd_registry.cpp` copied all of them into a `CmdDescriptor[256]`
 in `.bss`, 8 192 B for 143 commands. Store pointers to const tables; do not copy
 them.
 
@@ -120,7 +120,7 @@ Thresholds (edit at the top of `check_memory.py`):
 ### 2. Live memory telemetry (runtime, all surfaces)
 
 `tasks_get_registry()` in `tasks.h`/`tasks.cpp` is the **single** task table read
-by all three surfaces — if they ever disagree, that is a bug worth chasing
+by all three surfaces - if they ever disagree, that is a bug worth chasing
 before trusting any of them:
 
 | Surface | How |
@@ -141,7 +141,7 @@ PYTHONPATH=python python tests/tools/mem_watch.py --device-usb COM6 --stress `
 `min_ever_bytes`, `largest_block_bytes`, `total_bytes` plus derived `used_pct`,
 `fragmentation_pct`, `worst_task` and `warnings()`.
 
-**`--stress` matters. Idle numbers lie** — it starts the ADC and scope streams
+**`--stress` matters. Idle numbers lie** - it starts the ADC and scope streams
 while sampling.
 
 ### 3. Stack High-Water Mark Reporting (runtime)
@@ -162,7 +162,7 @@ handle and logs the result. Reading the output:
 > **Units trap that cost a real bug:** on ESP-IDF,
 > `uxTaskGetStackHighWaterMark()` returns **bytes**, not words. The thresholds
 > were once written against word-scaled values (`< 128` / `< 256`), so a task
-> with 380 bytes free — 81 % of its stack consumed — logged as healthy.
+> with 380 bytes free - 81 % of its stack consumed - logged as healthy.
 > Thresholds are now 512 / 1024 **bytes**.
 
 **Red flags:**
@@ -171,13 +171,13 @@ handle and logs the result. Reading the output:
 
 > **High-water marks grow late.** A reading taken 5 s after boot is not the
 > peak. `cmdProc` measured 824 B at a fresh boot, 1256 B after ordinary BBP
-> traffic, and 1672 B after a single USB connect/disconnect cycle — two earlier
+> traffic, and 1672 B after a single USB connect/disconnect cycle - two earlier
 > "right-sizing" passes recorded 832 B and left the stack 376 B from empty.
 > Exercise the deep paths (connect/disconnect, HTTP, the CLI `tui`, a
 > `DEVICE_RESET`, an OTA query) before trusting a number.
 
 > **Getting a real reboot:** `client.reset()` and the CLI `reset` pulse the
-> **AD74416H** reset pin — they do not restart the ESP32 (uptime keeps
+> **AD74416H** reset pin - they do not restart the ESP32 (uptime keeps
 > climbing), so high-water marks never clear. To force a genuine reboot for a
 > clean measurement, re-run an OTA upload; the device reboots after a 1 s grace
 > period. Confirm via `MemoryStatus.uptime_ms`.
@@ -220,9 +220,9 @@ ESP_LOGI("heap", "Internal free: %lu KB  min-ever: %lu KB  largest block: %lu KB
 number; `mem_watch.py --fail-largest-under-kb` gates on it.
 
 The existing heap log points are:
-- `main.cpp` — once at boot
-- `webserver.cpp` — in `/api/status` response
-- `cli_menu.cpp` — in the TUI diagnostics panel
+- `main.cpp` - once at boot
+- `webserver.cpp` - in `/api/status` response
+- `cli_menu.cpp` - in the TUI diagnostics panel
 
 A fourth log point in `tasks.cpp` (after all tasks are created) was added in this session; it prints the post-creation heap headroom and each task's initial stack allocation.
 
@@ -266,18 +266,18 @@ The kernel tried to allocate a TCB + stack from the internal heap and failed. Ei
 - Static SRAM is exhausted (check `check_memory.py` output)
 - Heap is fragmented (check `largest_free_block` log)
 
-Fix: reduce an existing task's stack, move a **data buffer** (never a stack) to PSRAM with `EXT_RAM_BSS_ATTR` at file scope, or reduce `SPIRAM_MALLOC_RESERVE_INTERNAL` by 4–8 KB. Before any of that, run the `nm` dump above — the two traps in *Where internal DRAM actually goes* have each been worth several KB.
+Fix: reduce an existing task's stack, move a **data buffer** (never a stack) to PSRAM with `EXT_RAM_BSS_ATTR` at file scope, or reduce `SPIRAM_MALLOC_RESERVE_INTERNAL` by 4–8 KB. Before any of that, run the `nm` dump above - the two traps in *Where internal DRAM actually goes* have each been worth several KB.
 
 ### Watchdog during OTA / NVS write
 
 OTA disables D-cache for flash writes. PSRAM accesses with D-cache off stall indefinitely → Core 0 watchdog fires. This has two causes:
-1. A task on Core 0 is blocked on a PSRAM read inside the OTA window — move it to Core 1 or use `MALLOC_CAP_INTERNAL` for its hot path.
-2. A PSRAM-backed stack is being used during the flash window — move that task's stack to internal SRAM.
+1. A task on Core 0 is blocked on a PSRAM read inside the OTA window - move it to Core 1 or use `MALLOC_CAP_INTERNAL` for its hot path.
+2. A PSRAM-backed stack is being used during the flash window - move that task's stack to internal SRAM.
 
 ### Stack overflow on the command processor
 
 `cmdProc` (3 072 B) drains the `g_cmdQueue` command queue. Its depth is set by
-the deepest **queued** handler, not by the traffic you are sending — a producer
+the deepest **queued** handler, not by the traffic you are sending - a producer
 you did not think about is the usual cause. `tasks_apply_channel_function()`
 (SPI stop/restart, `ADC_CONFIG` read-back, MUX routing, `clearAllAlerts()`)
 costs 1 672 B and reaches this task from `BBP_CMD_DEVICE_RESET` and from the
@@ -299,11 +299,11 @@ WiFi TCP stacks and mbedTLS record buffers are allocated on-demand from internal
 
 ## Further Reading
 
-- `Firmware/ESP32/src/tasks.h` — `TASK_STACK_*` with the measured peak justifying each size
-- `Firmware/ESP32/sdkconfig.defaults` — all memory-critical knobs with inline comments
-- `Firmware/ESP32/partitions.csv` — partition layout with sizes
-- `Firmware/tools/check_memory.py` — post-build size gate source
-- `tests/tools/mem_watch.py` — live dashboard and CI threshold gate
-- `python/bugbuster/memory.py` — `MemoryStatus`, derived metrics, warnings
-- `tests/unit/test_memory_telemetry.py` — host-side regression guards
+- `Firmware/ESP32/src/tasks.h` - `TASK_STACK_*` with the measured peak justifying each size
+- `Firmware/ESP32/sdkconfig.defaults` - all memory-critical knobs with inline comments
+- `Firmware/ESP32/partitions.csv` - partition layout with sizes
+- `Firmware/tools/check_memory.py` - post-build size gate source
+- `tests/tools/mem_watch.py` - live dashboard and CI threshold gate
+- `python/bugbuster/memory.py` - `MemoryStatus`, derived metrics, warnings
+- `tests/unit/test_memory_telemetry.py` - host-side regression guards
 - ESP-IDF docs: *Heap Memory Allocation*, *FreeRTOS Stack Overflow Detection*

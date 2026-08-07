@@ -4,7 +4,7 @@
 // bb_config.h — BugBuster HAT board pin definitions and constants
 //
 // Pin assignments for the BugBuster HAT expansion board (RP2040-based).
-// PCB reference: Docs/HAT_RP2040_PCB_Reference.md
+// PCB reference: Docs/la-hat-hardware.md
 // =============================================================================
 
 #include "hardware/uart.h"

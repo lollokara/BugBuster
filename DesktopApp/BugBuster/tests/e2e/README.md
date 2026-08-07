@@ -1,4 +1,4 @@
-# BugBuster Desktop App — E2E Tests
+# BugBuster Desktop App - E2E Tests
 
 End-to-end tests for the BugBuster Tauri desktop app using [WebDriverIO](https://webdriver.io/) and [tauri-driver](https://crates.io/crates/tauri-driver).
 
@@ -54,8 +54,8 @@ npx wdio run wdio.conf.ts --spec specs/01_app_launch.spec.ts
 
 ## Architecture
 
-- **`wdio.conf.ts`** — WebDriverIO configuration; starts/stops `tauri-driver` subprocess
-- **`specs/`** — Test specs using Mocha BDD syntax (`describe`/`it`)
+- **`wdio.conf.ts`** - WebDriverIO configuration; starts/stops `tauri-driver` subprocess
+- **`specs/`** - Test specs using Mocha BDD syntax (`describe`/`it`)
 - Tests run against the **real compiled app binary** (no mocks at the WebDriver level)
 - Tests currently cover the **disconnected state** only (no device required)
 

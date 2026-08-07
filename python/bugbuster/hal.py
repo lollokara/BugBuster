@@ -32,7 +32,7 @@ e-fuse output) and a GND pin.
     │   └─────────────────────┘          └─────────────────────┘             │
     └─────────────────────────────────────────────────────────────────────────┘
 
-    VLOGIC: 1.8–5 V adjustable (IDAC ch 0, TPS74601) — common to both blocks.
+    VLOGIC: 1.8–5 V adjustable (IDAC ch 0, LTM8078 Out2) — common to both blocks.
     All digital IOs are level-shifted to VLOGIC via TXS0108E (OE = GPIO14).
 
 MUX switch matrix

@@ -1,329 +1,298 @@
-# BugBuster DAQ HAT — IoT Power Analyzer
+# Power Profiler Pro HAT - firmware
 
-> A 24-bit, nA–3A seamless-autoranging precision **power analyzer** and
-> **source-measure unit** built on the BugBuster DAQ HAT. It measures, conditions,
-> and analyzes device-under-test (DUT) power consumption on-device, then streams
-> the results to a PC over USB High-Speed — in the same class as Joulescope,
-> Qoitech Otii, and Nordic PPK2.
+A 24-bit, nA–3 A seamless-autoranging power analyzer and source-measure unit, in
+the class of Joulescope, Qoitech Otii and Nordic PPK2. The whole analysis
+pipeline runs on the HAT; the PC receives results, not raw samples.
 
-**Target:** ESP32-P4 (RISC-V dual-core @ 360 MHz, 32 MB PSRAM, 16 MB flash)
-**Firmware:** ESP-IDF 5.5 (PlatformIO / pioarduino) · **Status:** in active development
-**Firmware version:** see [`include/version.h`](ESP32P4/include/version.h)
+Two MCUs, both in one Waveshare module:
 
----
+| | Chip | Role | Version | Source |
+|---|---|---|---|---|
+| **P4** | ESP32-P4, dual RISC-V @ 360 MHz, 32 MB PSRAM, 16 MB flash | Acquisition, DSP, USB-HS streaming | `2.1.0` | [ESP32P4/](ESP32P4/) |
+| **C6** | ESP32-C6 | Local display, buttons, wireless | `2.2.0` | [ESP32C6/](ESP32C6/) |
 
-## 1. What it does
+Built with ESP-IDF 5.5 via PlatformIO.
 
-The DAQ HAT turns a DUT current/voltage measurement into a full power-analysis
-pipeline that runs entirely on the ESP32-P4:
+## What it does
 
-- **Measure** DUT current from **nanoamps to 3 amps** with seamless hardware
-  auto-ranging, plus true DUT voltage via 4-wire Kelvin sense.
-- **Source** the DUT with an integrated programmable supply (0–20 V, up to 2.5 A).
-- **Compute** instantaneous power, accumulated energy (mWh/J) and charge (mAh/C),
-  running statistics, multi-resolution zoom tiers, and a continuous FFT spectrum.
-- **Stream** the results live to a PC application over USB High-Speed.
-- **Integrate** into the BugBuster system as a HAT on the ESP32-S3 mainboard,
-  with network connectivity and robust over-the-air firmware updates.
+- **Measure** DUT current from nanoamps to 3 A with seamless hardware
+  auto-ranging, plus true DUT voltage over 4-wire Kelvin sense.
+- **Source** the DUT from an integrated programmable supply, 0–20 V up to 2.5 A.
+- **Compute** instantaneous power, accumulated energy (mWh/J) and charge
+  (mAh/C), running statistics, multi-resolution zoom tiers, and a continuous
+  FFT spectrum - all on the P4.
+- **Stream** the results to a PC over USB High-Speed, or over WiFi to the iOS
+  app.
 
----
-
-## 2. System architecture
+## How it connects
 
 ```mermaid
 flowchart TB
-    PC["PC Application"]
-    subgraph HAT["DAQ HAT"]
-        P4["ESP32-P4<br/>acquisition + DSP brain"]
+    PC["PC application"]
+    subgraph HAT["Power Profiler Pro HAT"]
+        P4["ESP32-P4<br/>acquisition + DSP"]
         C6["ESP32-C6<br/>display + wireless"]
     end
-    S3["ESP32-S3 mainboard<br/>network gateway · HV-tolerant IO · markers"]
+    S3["ESP32-S3 mainboard<br/>gateway · HV-tolerant IO · markers"]
 
-    PC <-->|"USB HS vendor-bulk<br/>measurement stream"| P4
-    PC <-->|"BBP control (network)"| S3
-    S3 <-->|"HAT UART + IRQ<br/>(BBP-compatible)"| P4
+    PC <-->|"USB-HS vendor bulk (measurement stream)"| P4
+    PC <-->|"BBP control"| S3
+    S3 <-->|"HAT UART + IRQ"| P4
     P4 -->|"DDP"| C6
     S3 -.->|"digital event markers"| P4
 ```
 
-- **Data plane** — the P4 streams high-rate measurement frames out its **own
-  USB-HS** port (J5) directly to the PC, independent of the control plane.
-- **Control plane** — BBP control arrives at the S3 mainboard and is forwarded to
-  the P4 over the HAT UART (same connector/protocol the RP2040 HAT used). The S3
-  detects the HAT type at boot and dynamically loads the DAQ resource set.
-- **Co-processor** — the ESP32-C6 (on the same module) drives the local display
-  and wireless link.
+The **data plane** leaves the P4's own USB-HS port (J5) straight to the PC. The
+**control plane** arrives at the S3 mainboard and is forwarded over the HAT
+UART. They are independent, so stream throughput does not depend on control
+traffic.
 
----
+P4 ↔ C6 wire format: [display-protocol.md](display-protocol.md)
 
-## 3. Signal chain & auto-ranging
+## Signal chain and auto-ranging
 
-Three ADAQ7769-1 24-bit Σ-Δ µModules form the acquisition front-end. Current is
-ranged in the **analog domain** by an SR-latch feedback loop across a 51 Ω / 2 Ω /
-50 mΩ shunt ladder; the P4 observes (and can override) the active range.
+Three ADAQ7769-1 24-bit Σ-Δ µModules. Current is ranged in the **analog
+domain** by an SR-latch feedback loop across a 51 Ω / 2 Ω / 50 mΩ shunt ladder;
+the P4 observes the active range and can override it.
 
 ```mermaid
 flowchart LR
-    DUT["DUT (in series)"] --> SH["Shunt ladder<br/>51Ω / 2Ω / 50mΩ<br/>+ AD8411A CSAs"]
-    SH --> FINE["ADAQ #0 FINE<br/>51Ω/2Ω via mux<br/>dedicated SPI bus A"]
-    SH --> COARSE["ADAQ #1 COARSE<br/>50mΩ always-valid<br/>shared SPI bus B"]
-    VIN["DUT V (Kelvin sense)"] --> VOLT["ADAQ #2 VOLTAGE<br/>differential<br/>shared SPI bus B"]
+    DUT["DUT (in series)"] --> SH["Shunt ladder 51Ω / 2Ω / 50mΩ<br/>+ AD8411A CSAs"]
+    SH --> FINE["ADAQ #0 FINE<br/>51Ω/2Ω via mux · SPI bus A"]
+    SH --> COARSE["ADAQ #1 COARSE<br/>50mΩ always valid · SPI bus B"]
+    VIN["DUT V (Kelvin sense)"] --> VOLT["ADAQ #2 VOLTAGE<br/>differential · SPI bus B"]
     FINE --> FUSE
-    COARSE --> FUSE["Range manager<br/>+ fusion<br/>seamless i&#91;n&#93;"]
+    COARSE --> FUSE["Range manager + fusion"]
     VOLT --> DSP
-    FUSE --> DSP["Power DSP core"]
+    FUSE --> DSP["Power DSP"]
 ```
 
-| Range | Active shunt | ADC path | Approx. span | Role |
-|-------|--------------|----------|--------------|------|
-| HI  | 51 Ω  | FINE (muxed) | nA – ~1.4 mA  | precision low-current |
-| MID | 2 Ω   | FINE (muxed) | ~1.4 – 37 mA  | precision mid |
-| LO  | 50 mΩ | COARSE (dedicated) | ~37 mA – 3 A | high-current + gap-fill |
+| Range | Shunt | ADC path | Span | Role |
+|---|---|---|---|---|
+| HI | 51 Ω | FINE (muxed) | nA – ~1.4 mA | precision low current |
+| MID | 2 Ω | FINE (muxed) | ~1.4 – 37 mA | precision mid |
+| LO | 50 mΩ | COARSE (dedicated) | ~37 mA – 3 A | high current, and gap fill |
 
-**Seamless reconstruction:** the COARSE channel (always valid on the 50 mΩ shunt)
-fills the gap whenever the FINE channel switches range, with boundary hysteresis
-and a short cross-fade, so the fused current `i[n]` has no holes or steps. All
-three ADAQ share one MCLK and a SYNC line for sample-aligned acquisition.
+The COARSE channel is always valid, so it fills the gap whenever FINE switches
+range - with boundary hysteresis and a short cross-fade. The fused current
+`i[n]` therefore has no holes or steps. All three ADAQs share one MCLK and a
+SYNC line for sample-aligned acquisition.
 
----
+**COARSE and VOLTAGE share SPI bus B and a single SYNC line**, so they cannot be
+phase-staggered. Any acquisition mode that starves one starves the other.
 
-## 4. On-device DSP pipeline
+## DSP pipeline
 
 ```mermaid
 flowchart LR
-    I["i&#91;n&#93; (fused)"] --> MR["Multi-resolution<br/>min/max/mean tiers<br/>(zoom)"]
+    I["i&#91;n&#93; fused"] --> MR["Multi-resolution<br/>min/max/mean tiers"]
     V["v&#91;n&#93;"] --> PWR["p = v · i"]
     I --> PWR
-    PWR --> ENE["Energy mWh / J<br/>Charge mAh / C<br/>(double accumulators)"]
+    PWR --> ENE["Energy mWh/J<br/>Charge mAh/C"]
     PWR --> STAT["Statistics<br/>min/max/mean/RMS/std"]
-    PWR --> FFT["Welch FFT<br/>continuous spectrum"]
-    MR --> OUT
+    PWR --> FFT["Welch FFT"]
+    MR --> OUT["USB framer"]
     ENE --> OUT
     STAT --> OUT
-    FFT --> OUT["USB framer"]
+    FFT --> OUT
 ```
 
-- **Power** `p[n] = v[n]·i[n]`, with voltage held/interpolated between the slower
-  voltage-channel updates.
-- **Energy / charge** integrated in `double` (trapezoidal) for drift-free long
-  runs; independently resettable for marker-windowed measurements.
-- **Statistics** — min / max / mean / RMS / std over the active window.
-- **Multi-resolution** — cascaded ×100 decimation tiers (min/max/mean per bucket)
-  for PC pan/zoom without full-rate transfer.
-- **Spectrum** — continuous Welch FFT (esp-dsp, 64–4096 pt, Hann /
+- **Power** - `p[n] = v[n]·i[n]`, voltage held and interpolated between the
+  slower voltage-channel updates.
+- **Energy and charge** - trapezoidal integration in `double` for drift-free
+  long runs, independently resettable for marker-windowed measurements.
+- **Multi-resolution** - cascaded ×100 decimation tiers (min/max/mean per
+  bucket) so the PC can pan and zoom without a full-rate transfer.
+- **Spectrum** - continuous Welch FFT (esp-dsp, 64–4096 pt, Hann /
   Blackman-Harris / rectangular, 50 % overlap) on current or power.
 
----
+### Super Resolution mode
 
-## 5. Specifications
+A low-noise acquisition mode: maximum ADC decimation (Sinc3 ×8192, exactly
+1000 sps at fMOD/8192) followed by a Blackman-windowed-sinc FIR decimator
+(`src/dsp/sr_filter.c`). Output is 1 ksps current, 500 sps voltage.
+
+Best measured noise density is **0.70 nA/√Hz** at Sinc5 ×256 - about 0.4 bits
+quieter than the Wideband ×256 default, at no cost. Noise is flat with
+temperature (median −0.03 bits over ΔT +26.3 °C). Method, sweep tooling and
+traps: [../../Docs/noise-characterisation.md](../../Docs/noise-characterisation.md)
+
+## Specifications
 
 | Parameter | Value |
-|-----------|-------|
+|---|---|
 | ADC | 3× ADAQ7769-1, 24-bit Σ-Δ, up to 1.024 MSPS each |
-| Current range | nA – 3 A, 3 hardware ranges (51 / 2 / 0.05 Ω), seamless autorange |
-| Current sample rate | configurable, target **250 kSPS** (≤512 kSPS shared bus / 1.024 MSPS dedicated) |
-| Voltage measurement | differential 4-wire Kelvin sense, target **50 kSPS** |
-| Source / SMU | 0–20 V output, ≤2.5 A limit (LTM8056 + DS4424 trim) |
+| Current range | nA – 3 A, three hardware ranges (51 / 2 / 0.05 Ω), seamless autorange |
+| Current sample rate | Configurable; 443 kSPS aggregate measured at the saturation point |
+| Voltage | Differential 4-wire Kelvin sense, target 50 kSPS |
+| Source / SMU | 0–20 V, ≤ 2.5 A (LTM8056 + DS4424 trim) |
 | Reference | 4.096 V (ADR4540) |
-| Temperature monitors | 2× AD7415 (I²C, ADG + power areas) |
-| Compute | power, energy (mWh/J), charge (mAh/C), min/max/mean/RMS/std, multi-res zoom, Welch FFT |
-| Host interface | USB 2.0 High-Speed vendor-bulk (J5) — live measurement stream |
-| Control interface | BugBuster HAT UART (BBP-compatible) via ESP32-S3 |
-| Memory | 32 MB PSRAM (sample ring + multi-res buffers + deep capture), 16 MB flash |
-| OTA | dual-slot A/B, SHA-256 verified, streaming (no full-image staging), rollback-safe |
-
-### Source / SMU detail
+| Temperature | 2× AD7415 over I²C (ADG area, power area) |
+| Host interface | USB 2.0 High-Speed vendor bulk on J5 |
+| Control interface | HAT UART via the ESP32-S3 |
+| Memory | 32 MB PSRAM (sample ring, multi-res buffers, deep capture), 16 MB flash |
+| OTA | Dual-slot A/B, SHA-256 verified, streamed, rollback-safe |
 
 ```
-V_DUT = 10.85 V − 90.9 kΩ · I_DAC(ch1)   →   ~1.76 … 19.94 V
-Current limit: full-scale 2.636 A via DS4424 ch0 (LTM8056 CTL)
-Input/output current monitored on ESP32-P4 ADC1 (IINMON / IOUTMON)
+V_DUT = 10.85 V − 90.9 kΩ · I_DAC(ch1)    →  ~1.76 … 19.94 V
+Current limit: full scale 2.636 A via DS4424 ch0 (LTM8056 CTL)
+IINMON / IOUTMON monitored on ESP32-P4 ADC1
 ```
 
----
+## USB stream format
 
-## 6. Feature comparison
-
-| Feature | PPK2 | Otii | Joulescope | **DAQ HAT** |
-|---------|:----:|:----:|:----------:|:-----------:|
-| Seamless autorange | ✓ | ✓ | ✓ | ✓ (3 HW ranges, dual-ADC gap-fill) |
-| Source / SMU | ✓ | ✓ | – | ✓ (0–20 V, 2.5 A) |
-| Energy / charge | ✓ | ✓ | ✓ | ✓ (mWh / J / mAh / C) |
-| Statistics (min/max/mean/RMS/std) | ✓ | ✓ | ✓ | ✓ |
-| Multi-resolution zoom | ✓ | ✓ | ✓ | ✓ |
-| FFT / spectrum | – | – | ✓ | ✓ (continuous Welch) |
-| Digital event markers | ✓ (8) | ✓ | ✓ | ✓ (via S3) |
-| Continuous live streaming | ✓ | ✓ | ✓ | ✓ (USB-HS) |
-| Network + OTA | – | – | – | ✓ (via S3) |
-
----
-
-## 7. USB streaming protocol
-
-A compact, CRC-protected, framed vendor-bulk stream (separate from BBP):
+A compact, CRC-protected, framed vendor-bulk stream, separate from BBP:
 
 ```
-┌──────┬─────┬─────┬──────┬───────┬────────────┬────────────┬──────┐
-│ MAGIC│ VER │TYPE │FLAGS │  SEQ  │ PAYLOAD LEN │  PAYLOAD   │CRC16 │
-│ BB 50│  1B │ 1B  │ 1B+1 │  4B   │     2B      │   N bytes  │  2B  │
-└──────┴─────┴─────┴──────┴───────┴────────────┴────────────┴──────┘
+┌──────┬─────┬─────┬──────┬───────┬─────────────┬───────────┬──────┐
+│ MAGIC│ VER │TYPE │FLAGS │  SEQ  │ PAYLOAD LEN │  PAYLOAD  │CRC16 │
+│ BB 50│  1B │ 1B  │  2B  │  4B   │      2B     │  N bytes  │  2B  │
+└──────┴─────┴─────┴──────┴───────┴─────────────┴───────────┴──────┘
 ```
 
 | Record (device → PC) | Contents |
-|----------------------|----------|
-| `WAVEFORM` | block of fused samples (i, v, p, range, source, flags) |
-| `STATS` | min/max/mean/RMS/std for I, V, P |
-| `ENERGY` | energy mWh/J, charge mAh/C, elapsed time |
-| `FFT` | spectrum magnitude bins |
-| `MARKER` | digital event index + timestamp |
-| `STATUS` | range, streaming/source state, set-points |
+|---|---|
+| `WAVEFORM` | Block of fused samples - i, v, p, range, source, flags |
+| `STATS` | min / max / mean / RMS / std for I, V, P |
+| `ENERGY` | Energy mWh/J, charge mAh/C, elapsed time |
+| `FFT` | Spectrum magnitude bins |
+| `MARKER` | Digital event index and timestamp |
+| `STATUS` | Range, streaming and source state, set points, board temperatures |
 
 Control (PC → device): `START`, `STOP`, `SET_RATE`, `RANGE_LOCK`,
 `RESET_ENERGY`, `RESET_STATS`, `FFT_CONFIG`, `SET_SOURCE`.
 
----
-
-## 8. Firmware module map
+## Module map
 
 ```
 ESP32P4/
-├── include/
-│   ├── config.h          board pin map, shunts, SMU, S3-link, power rails
-│   └── version.h         semantic firmware version + product id
-├── src/
-│   ├── adaq7769/         24-bit ADC driver: regs, low-level SPI+CRC, HAL, DMA stream
-│   ├── range/            range_manager — observe/override autorange + per-range cal
-│   ├── fusion/           current_fusion — seamless FINE+COARSE reconstruction
-│   ├── dsp/              power_dsp (p/E/Q/stats) · multires (zoom) · spectrum (FFT)
-│   ├── smu/              programmable DUT supply (LTM8056 via DS4424) + IIN/IOUT mon
-│   ├── ad741x/           AD7415 I²C temperature sensors
-│   ├── ds4424/           DS4424 I²C IDAC (source-voltage / current-limit trim)
-│   ├── stream/           usb_proto · usb_stream (framer) · usb_backend (TinyUSB HS)
-│   ├── link/             s3_link — HAT-protocol slave to the ESP32-S3 mainboard
-│   ├── ota/              streaming dual-slot OTA with SHA-256 + rollback
-│   ├── perf/             daq_perf — per-stage cycle profiler (see §10a)
-│   ├── board/            daq_board — full board integration + command dispatch
-│   └── main.c            bring-up + processing/stream loop
-└── partitions.csv        dual-OTA partition table (ota_0 / ota_1 / otadata)
+  include/config.h      Board pin map, shunts, SMU, S3 link, power rails
+  include/version.h     Semantic version + product id (bb-daq-p4)
+  src/adaq7769/         24-bit ADC driver - registers, SPI+CRC, HAL, DMA stream
+  src/range/            Autorange observe/override, per-range calibration
+  src/fusion/           Seamless FINE + COARSE reconstruction
+  src/dsp/              power_dsp · multires · spectrum · sr_filter
+  src/smu/              Programmable DUT supply and IIN/IOUT monitoring
+  src/ad741x/           AD7415 temperature sensors
+  src/ds4424/           IDAC trim for source voltage and current limit
+  src/stream/           usb_proto · usb_stream (framer) · usb_backend (TinyUSB HS)
+  src/link/             s3_link - HAT-protocol slave to the mainboard
+  src/ota/              Streaming dual-slot OTA with SHA-256 and rollback
+  src/perf/             daq_perf - per-stage cycle profiler
+  src/board/            Board integration and command dispatch
+  partitions.csv        Dual-OTA partition table
+
+ESP32C6/
+  src/display.c gfx.c ui.c menu.c theme.c     ST7789 UI
+  src/ddp.c                                   Display protocol link to the P4
+  src/buttons.c npx.c settings.c              Input, LEDs, persisted settings
+  src/wifi_hosted.c                           Wireless link
 ```
 
----
+## Build
 
-## 9. Firmware versioning & OTA
+```bash
+cd Firmware/DAQ_HAT/ESP32P4
+pio run -e esp32p4
+pio run -e esp32p4 -t upload --upload-port <PORT>
 
-- **Versioning** — central [`version.h`](ESP32P4/include/version.h) with semantic
-  `MAJOR.MINOR.PATCH`, packed `FW_VERSION_U32`, and `FW_PRODUCT_ID` (`bb-daq-p4`).
-  Reported over the S3 link via `GET_VERSION`.
-- **Split / streaming OTA** — the S3 mainboard is the network gateway but **cannot
-  stage a full image**, so firmware streams chunk-by-chunk: each `OTA_DATA` frame
-  is written **straight to the P4 flash** (only the current chunk in RAM). Chunks
-  are offset-checked and **resumable** after a link hiccup.
-- **Integrity & safety** — product-id + size guards, full-image **SHA-256**
-  verification before switching the boot partition, **dual-slot A/B** layout, and
-  **rollback**: a new image boots `PENDING_VERIFY` and must self-confirm
-  (`ota_confirm()`) after a health check or the bootloader reverts.
+cd ../ESP32C6
+pio run -e esp32c6 -t upload --upload-port <PORT>
+```
+
+The first build downloads the ESP-IDF 5.5 RISC-V toolchain and the managed
+components (`esp_tinyusb`, `esp-dsp`) - expect several minutes.
+
+**PlatformIO does not merge new `sdkconfig.defaults` values into an already
+generated `sdkconfig.esp32p4`.** After editing defaults, grep the generated file
+to confirm the value landed. A `CONFIG_TINYUSB_VENDOR_TX_BUFSIZE` that never
+applied silently dropped 100 % of waveform frames - the host saw only 10 Hz
+summary frames and nothing else.
+
+The build uses `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`): +9.2 % capture
+throughput and a *smaller* image than the IDF default `-Og`.
+
+## Profiling
+
+`faststat` tells you how many samples survived; it cannot tell you where the
+time went. The `perf` console command (`src/perf/daq_perf.h`) timestamps every
+stage of both hot loops with the RISC-V cycle counter.
+
+```bash
+# on the P4 console (prompt "daq> ")
+perf on      # arm sampling; also resets counters and the task snapshot
+perf off     # stop BEFORE dumping, or the console print pollutes the result
+perf show    # stages, per-task CPU and stack, heap, active tunables
+
+# from the host
+python tests/tools/daq_p4_profile.py --window 5   # ODR sweep with cycle budgets
+python tests/tools/daq_p4_sanity.py               # sample integrity + linearity
+```
+
+Reading the output:
+
+- **`k` column** - `C` is CPU work, `W` is blocked wall time. Never add a `W`
+  row to a CPU budget.
+- **Read `min` next to `avg`.** `daq_fast` runs at priority 12 and is preempted
+  by TinyUSB (13), `daq_ctrl`/`s3_link` (14) and `daq_repl` (15), so averages
+  include preemption. `min` is the uncontended cost.
+- **`adaq_cap` shows zero runtime in the task table.** FreeRTOS credits run time
+  at context switches and that task never yields - use the `cap.*` stages.
+- `-DDAQ_PERF_ENABLED=0` in `platformio.ini` compiles the profiler out entirely
+  (−1152 B RAM, −7754 B flash, no residual branch).
+
+## OTA
+
+The S3 is the network gateway but cannot stage a full image, so firmware is
+streamed chunk by chunk: each `OTA_DATA` frame is written straight to P4 flash,
+holding only the current chunk in RAM. Chunks are offset-checked and resumable
+after a link hiccup.
 
 ```mermaid
 sequenceDiagram
     participant S3 as ESP32-S3 (gateway)
-    participant P4 as ESP32-P4 (DAQ)
+    participant P4 as ESP32-P4
     S3->>P4: OTA_BEGIN(size, version, sha256, product_id)
-    loop chunked (resumable)
+    loop chunked, resumable
         S3->>P4: OTA_DATA(offset, bytes)
         P4->>P4: esp_ota_write → flash + SHA update
     end
     S3->>P4: OTA_END
     P4->>P4: verify SHA-256 → set boot partition
     Note over P4: reboot → PENDING_VERIFY
-    P4->>P4: self-test → ota_confirm() (else rollback)
+    P4->>P4: self-test → ota_confirm(), else rollback
 ```
 
----
+The C6 is flashed by the P4 driving its ROM loader, so the P4 must still be
+running its current image when the C6 is written. That is why the system-wide
+update order is **RP2040 → C6 → P4 → S3**.
 
-## 10. Building
+## Status
 
-```bash
-cd Firmware/DAQ_HAT/ESP32P4
-python -m platformio run -e esp32p4          # build
-python -m platformio run -e esp32p4 -t upload --upload-port <COMx>
-```
+Done: ADAQ7769-1 driver, range manager and per-range calibration, seamless
+fusion, power DSP, USB-HS streaming, multi-resolution zoom and Welch FFT,
+programmable SMU, S3 HAT link with sync epoch, streaming OTA with rollback,
+Super Resolution mode, C6 display and firmware screens.
 
-**Notes**
-- First build downloads the ESP-IDF 5.5 RISC-V toolchain and managed components
-  (`esp_tinyusb`, `esp-dsp`) — several minutes.
-- Board id in `platformio.ini` is `esp32-p4-evboard`.
-- The USB-HS vendor class is enabled in `sdkconfig.defaults`
-  (`CONFIG_TINYUSB_VENDOR_COUNT=1`); the dual-OTA partition table is selected via
-  `CONFIG_PARTITION_TABLE_CUSTOM` → `partitions.csv`.
-- **PlatformIO does not merge new `sdkconfig.defaults` values into an existing
-  generated `sdkconfig.esp32p4`.** After editing defaults, grep the generated
-  file to confirm the value landed. A `CONFIG_TINYUSB_VENDOR_TX_BUFSIZE` that
-  never applied silently dropped 100% of waveform frames.
-- Built at `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`): +9.2% capture
-  throughput and a smaller image than the IDF default `-Og`.
+Planned: logging and export, DRDY-gated DMA fast path toward 1 MSPS on the
+shared bus, per-board factory calibration.
 
----
+Open question: the ×32 (256 kSPS) acquisition settings measure roughly 300×
+worse in noise *density* than the best settings. Not yet explained.
 
-## 10a. Profiling the acquisition pipeline
+Some GPIO assignments around the S3-link UART/IRQ versus ADAQ3 DRDY and J5
+expansion are still flagged in `config.h` and should be reconciled against the
+final schematic.
 
-`faststat` tells you how many samples survived; it cannot tell you *where* the
-time went. The `perf` console command (`src/perf/daq_perf.h`) timestamps every
-stage of both hot loops with the RISC-V cycle counter:
+## See also
 
-```bash
-# on the P4 console (prompt "daq> ")
-perf on            # arm sampling (also resets counters + task snapshot)
-perf off           # stop BEFORE dumping, or the console print pollutes it
-perf show          # stages + per-task CPU/stack + heap + active tunables
+- [../../Docs/daq-hat-hardware.md](../../Docs/daq-hat-hardware.md) - netlist-verified
+  pinout, IC list, power tree, I²C addresses
+- [../../Docs/power-analyzer.md](../../Docs/power-analyzer.md) - architecture and
+  design rationale
+- [display-protocol.md](display-protocol.md) - P4 ↔ C6 wire format
+- [../hat-uart-protocol.md](../hat-uart-protocol.md) - ESP32-S3 ↔ HAT wire format
 
-# from the host
-python tests/tools/daq_p4_profile.py --window 5          # ODR sweep + budgets
-python tests/tools/daq_p4_sanity.py                      # sample integrity
-```
-
-Reading it:
-- **`k` column** — `C` is CPU work, `W` is blocked/waiting wall time. Never add
-  a `W` row to a CPU budget.
-- **Read `min` next to `avg`.** `daq_fast` runs at priority 12 and is preempted
-  by TinyUSB (13), `daq_ctrl`/`s3_link` (14) and `daq_repl` (15), so averages
-  include preemption. `min` is the uncontended cost.
-- **`adaq_cap` reports 0 runtime in the task table** — FreeRTOS credits run time
-  at context switches, and that task never yields. Use the `cap.*` stages.
-- Set `-DDAQ_PERF_ENABLED=0` in `platformio.ini` to compile the profiler out
-  completely (−1152 B RAM, −7754 B flash, no residual branch).
-
----
-
-## 11. Hardware reference
-
-The authoritative, netlist-verified pinout, IC list, power tree, and I²C address
-map is in [`../../Docs/FIRMWARE_HARDWARE_REFERENCE.md`](../../Docs/FIRMWARE_HARDWARE_REFERENCE.md).
-The system architecture and design rationale are in
-[`../../Docs/PowerAnalyzer_Architecture.md`](../../Docs/PowerAnalyzer_Architecture.md).
-
-Key ICs: 3× **ADAQ7769-1** (24-bit DAQ), 3× **AD8411A** (current-sense amp),
-**ADGS2414D/ADG5204** (mux), **LTM8056** (DUT buck-boost), **DS4424** (quad IDAC),
-**ADR4540** (4.096 V ref), **SiT8208** (16.384 MHz MCLK), 2× **AD7415** (temp).
-
----
-
-## 12. Roadmap
-
-| Stage | Status |
-|-------|:------:|
-| ADAQ7769-1 driver (regs, SPI+CRC, HAL, DMA streaming) | ✅ |
-| Range manager + per-range calibration | ✅ |
-| Seamless current fusion (FINE + COARSE) | ✅ |
-| Power DSP (power, energy, charge, statistics) | ✅ |
-| USB-HS streaming + TinyUSB vendor backend | ✅ |
-| Multi-resolution zoom + continuous Welch FFT | ✅ |
-| Programmable source / SMU (0–20 V, 2.5 A) | ✅ |
-| ESP32-S3 HAT link (BBP-compatible) + sync epoch | ✅ |
-| Firmware versioning + streaming OTA + rollback | ✅ |
-| Triggers + logging / export | ⏳ planned |
-| DRDY-gated DMA fast path (toward 1 MSPS shared bus) | ⏳ planned |
-| Per-board factory calibration | ⏳ planned |
-
-> ⚠ **Pre-bring-up note:** some final GPIO assignments (S3-link UART/IRQ vs. ADAQ3
-> DRDY / J5 expansion) are flagged in `config.h` and must be reconciled against the
-> final schematic before hardware bring-up.
+Key ICs: 3× ADAQ7769-1 (24-bit DAQ), 3× AD8411A (current-sense amp), ADG5204
+(mux), LTM8056 (DUT buck-boost), DS4424 (quad IDAC), ADR4540 (4.096 V
+reference), SiT8208 (16.384 MHz MCLK), 2× AD7415 (temperature).

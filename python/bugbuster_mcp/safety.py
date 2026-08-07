@@ -112,7 +112,7 @@ def validate_vlogic(voltage: float) -> None:
     if not (MIN_VLOGIC <= voltage <= MAX_VLOGIC):
         raise ValueError(
             f"VLOGIC {voltage:.2f} V is outside the valid range "
-            f"{MIN_VLOGIC}-{MAX_VLOGIC} V (TPS74601 limits)."
+            f"{MIN_VLOGIC}-{MAX_VLOGIC} V (LTM8078 level-shifter rail limits)."
         )
 
 
