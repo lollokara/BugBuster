@@ -174,8 +174,8 @@ typedef struct __attribute__((packed)) {
     // Extension v2 (bytes 28-35)
     uint8_t  adaq_ok_bits;      // 28 — bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok
     uint8_t  fine_err_pct;      // 29 — FINE STATUS_ERR % of last window (0-100)
-    uint16_t drop_fine;         // 30 — FINE pairing-resync drops (saturates 65535)
-    uint16_t drop_coarse;       // 32 — COARSE pairing-resync drops
+    uint16_t drop_fine;         // 30 — FINE pairing-resync drops (saturates, see cal note)
+    uint16_t drop_coarse;       // 32 — COARSE pairing-resync drops (saturates)
     uint8_t  fine_diag_sticky;  // 34 — OR of all MASTER_STATUS bits seen on FINE (ADAQ 0x2D)
     uint8_t  _pad;              // 35
     // Extension v3 (bytes 36-55): USB streaming performance counters.
@@ -184,7 +184,7 @@ typedef struct __attribute__((packed)) {
     uint32_t fifo_drop_frames;  // 44 — frames dropped for back-pressure/no-transport
     uint32_t ring_high_water;   // 48 — max adaq ring fill seen (samples)
     uint32_t wave_i_index_lo;   // 52 — low 32 bits of live fused index
-    // Extension v4 (bytes 56-72): direct-USB relay/staging ingest progress.
+    // Extension v4 (bytes 56-75): direct-USB relay/staging ingest progress.
     // Sourced from relay_stage_get_status(); sha256 is intentionally omitted
     // (too large for a 10Hz frame) — desktop only needs progress/state here.
     uint8_t  relay_target;      // 56 — relay_target_t (0=none, 1=C6, 2=S3)
@@ -201,7 +201,7 @@ typedef struct __attribute__((packed)) {
     uint32_t wave_v_frames;     // 76 — WAVE_V frames handed to the transport
     uint32_t wave_i_drops;      // 80 — WAVE_I frames dropped (back-pressure/no transport)
     uint32_t wave_v_drops;      // 84 — WAVE_V frames dropped
-    // --- extension v6 (offsets 88..95): acquisition configuration readback.
+    // --- extension v6 (offsets 92..99): acquisition configuration readback.
     // The device reports what it ACTUALLY applied, never what was requested:
     // the driver clamps filter/decimation combinations the part cannot hit,
     // and a UI that echoed its own request would silently misreport the rate.
@@ -209,7 +209,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  adc_dec;       // 89  ADAQ_DEC_*, or 0xFF when SINC3 programmable
     uint16_t stream_decim;  // 90  P4 stream decimation (>=1)
     uint32_t odr_mhz;       // 92  actual ODR, milli-SPS (ODR * 1000)
-    // --- extension v7 (offsets 96..99): onboard board temperatures, 0.1 C.
+    // --- extension v7 (offsets 100..103): onboard board temperatures, 0.1 C.
     // The two AD7415s (U2 analog area, U28 power area). USB_TEMP_NA when the
     // sensor is absent or has not been polled yet.
     //
@@ -224,9 +224,21 @@ typedef struct __attribute__((packed)) {
     // low-frequency drift, and thermal drift is the largest known contributor.
     // Without a temperature stamped on the same frames, a drifting sigma is
     // indistinguishable from converter 1/f.
-    int16_t  t_board0_c10;  // 96  AD7415 U2  (analog area)
-    int16_t  t_board1_c10;  // 98  AD7415 U28 (power area)
-} usb_status_payload_t;     // total: 100 bytes
+    int16_t  t_board0_c10;  // 96   AD7415 U2  (analog area)
+    int16_t  t_board1_c10;  // 98   AD7415 U28 (power area)
+    // --- extension v8 (offsets 100..103): per-range current calibration validity.
+    // Bit-packed flags: bit0=HI calibrated, bit1=MID calibrated, bit2=LO calibrated.
+    // When a bit is 0, the corresponding range applies UNCALIBRATED conversion
+    // (design shunt/gain constants, zero offset, unity gain correction) and may
+    // carry significant offset/gain error. Host must flag captures taken while
+    // any active range is uncalibrated as suspect. Sourced from smu_cal.h's
+    // smu_range_cal_blob_t.have[] array (NVS-persisted interactive TUI meter cal).
+    //
+    // Appended, never inserted: every field above keeps its v2 offset so a host
+    // built against an older header still parses everything it knows about.
+    uint8_t  cal_have_rcal; // 100  per-range current cal validity (bits 0-2)
+    uint8_t  _pad3[3];      // 101-103  reserved
+} usb_status_payload_t;     // total: 104 bytes
 
 #define USB_TEMP_NA  ((int16_t)0x7FFF)   // sensor absent / not yet polled
 

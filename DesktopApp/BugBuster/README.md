@@ -77,7 +77,7 @@ src/                       Leptos frontend (WASM)
 
 src-tauri/src/             Tauri backend (Rust)
   lib.rs                   Plugin setup, command registration
-  commands.rs              117 Tauri commands
+  commands.rs              173 Tauri commands
   connection_manager.rs    Transport lifecycle, state polling
   usb_transport.rs         BBP over USB CDC (COBS framing)
   http_transport.rs        REST over WiFi, re-encoded to BBP binary

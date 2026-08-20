@@ -21,6 +21,22 @@ extern "C" {
 
 #define IO_OWNER_NUM_SLOTS  16
 
+// Ceiling applied to IO_OWNER_INTERNAL claims that ask for an infinite lease.
+//
+// INTERNAL is the one kind that io_owner_release_all_except() deliberately
+// preserves, so a client reconnect cannot clear it. An INTERNAL claim that is
+// never restored - a selftest that bails between claim and restore, say - would
+// therefore hold its slot until reboot, and every later claim on that slot is
+// refused with no way for a host to recover. Bounding it means the leak heals
+// itself instead. Long INTERNAL holds (an auto-calibration sweep) must re-claim
+// to refresh, which io_owner_acquire() already supports for the same owner.
+#define IO_OWNER_INTERNAL_MAX_LEASE_MS  600000u   // 10 minutes
+
+// Lease for the per-measurement selftest claim on the U23 channel slot. The
+// measurement itself is a single ADC read, so anything beyond a few seconds is
+// a stuck claim rather than a slow one.
+#define IO_OWNER_SELFTEST_LEASE_MS      5000u
+
 // Owner kind — who holds the slot
 typedef enum {
     IO_OWNER_NONE     = 0,
@@ -56,7 +72,9 @@ void io_owner_tick(uint64_t now_ms);
  * @param kind      Requester kind
  * @param session_id   Caller's session byte (used for release matching)
  * @param token_fp32   HTTP token fingerprint (0 for non-HTTP callers)
- * @param lease_ms     Lease duration in ms (0 = infinite)
+ * @param lease_ms     Lease duration in ms (0 = infinite, except for
+ *                     IO_OWNER_INTERNAL which is capped at
+ *                     IO_OWNER_INTERNAL_MAX_LEASE_MS)
  * @param now_ms       Current monotonic time
  * @return true on success (slot was free or already owned by same session)
  */

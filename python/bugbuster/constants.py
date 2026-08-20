@@ -497,20 +497,25 @@ class CmdId(IntEnum):
 # ---------------------------------------------------------------------------
 
 class ErrorCode(IntEnum):
-    INVALID_CMD     = 0x01
-    INVALID_CHANNEL = 0x02
-    INVALID_PARAM   = 0x03
-    SPI_FAIL        = 0x04
-    QUEUE_FULL      = 0x05
-    BUSY            = 0x06
-    INVALID_STATE   = 0x07
-    CRC_FAIL        = 0x08
-    FRAME_TOO_LARGE = 0x09
-    STREAM_ACTIVE   = 0x0A
-    # ERR_TIMEOUT            = 0x11  (firmware/Tauri only — not surfaced in Python)
-    IO_OWNERSHIP_REQUIRED  = 0x12
-    CAL_INVALID            = 0x13
-
+    """BBP error codes returned in ERR messages (see bbp-protocol.md §3.3).
+    
+    This enum MUST match the firmware error table exactly (Firmware/ESP32/src/bbp/bbp.h).
+    A parity test enforces this - see tests/unit/test_error_code_parity.py.
+    """
+    INVALID_CMD             = 0x01
+    INVALID_CHANNEL         = 0x02  # INVALID_CH in firmware
+    INVALID_PARAM           = 0x03
+    SPI_FAIL                = 0x04
+    QUEUE_FULL              = 0x05
+    BUSY                    = 0x06
+    INVALID_STATE           = 0x07
+    CRC_FAIL                = 0x08
+    FRAME_TOO_LARGE         = 0x09
+    STREAM_ACTIVE           = 0x0A
+    TIMEOUT                 = 0x11
+    IO_OWNERSHIP_REQUIRED   = 0x12
+    ADGS_ROUTE_REJECTED     = 0x13  # MUX mutual-exclusion rejected route
+    UNSUPPORTED_HAT         = 0x14  # Command requires different HAT type (LA vs DAQ)
 
 # ---------------------------------------------------------------------------
 # IO Ownership (BBP v5+)

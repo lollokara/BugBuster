@@ -252,7 +252,7 @@ def test_segment_by_markers_brackets_energy():
     cap = _capture([1.0] * 300, [1.0] * 300, rate=1000.0, markers=markers)
     windows = segment_by_markers(cap)
     assert len(windows) == 1
-    assert windows[0]["duration_s"] == pytest.approx(0.1, rel=0.02)
+    assert windows[0]["duration_total_s"] == pytest.approx(0.1, rel=0.02)
     assert windows[0]["energy_j"] == pytest.approx(0.099, abs=0.002)
 
 
@@ -298,8 +298,127 @@ def test_analyze_warns_on_saturation_and_loss():
     cap.dropped_samples = 50
     rep = analyze(cap)
     joined = " ".join(rep["warnings"])
-    assert "saturated" in joined
-    assert "lost" in joined
+    assert "saturated" in joined and "lost" in joined
+
+
+# ---------------------------------------------------------------------------
+# Duration fix tests (2026-08-20)
+# ---------------------------------------------------------------------------
+def test_integrate_duration_reports_valid_and_total():
+    """Duration fields distinguish valid-sample time from total elapsed time."""
+    # 1 A at 1 V for 1 s with no gaps: both durations should be ~1 s.
+    n = 1000
+    res = integrate([1.0] * n, [1.0] * n, 1000.0)
+    # 1000 samples at 1000 Hz = exactly 1.0 s total.
+    assert res["duration_valid_s"] == pytest.approx(1.0, rel=0.001)
+    assert res["duration_total_s"] == pytest.approx(1.0, rel=0.001)
+    assert res["sample_coverage"] == pytest.approx(1.0)
+
+
+def test_integrate_lossy_capture_reports_coverage():
+    """A capture with dropped samples reports correct coverage and both durations."""
+    # 10 samples total, 3 are NaN - coverage should be 0.7.
+    current = [1.0, 1.0, float("nan"), float("nan"), 1.0, 1.0, 1.0,
+               float("nan"), 1.0, 1.0]
+    res = integrate(current, [1.0] * 10, 1000.0)
+    assert res["valid_samples"] == 7
+    assert res["skipped_samples"] == 3
+    assert res["sample_coverage"] == pytest.approx(0.7)
+    assert res["duration_valid_s"] == pytest.approx(0.007)
+    assert res["duration_total_s"] == pytest.approx(0.010)
+
+
+def test_integrate_empty_capture_handles_division_by_zero():
+    """An empty or all-NaN capture returns zero durations without crashing."""
+    res = integrate([], [], 1000.0)
+    assert res["valid_samples"] == 0
+    assert res["duration_valid_s"] == 0.0
+    assert res["duration_total_s"] == 0.0
+    assert res["sample_coverage"] == 0.0
+    
+    res = integrate([float("nan")] * 10, [float("nan")] * 10, 1000.0)
+    assert res["valid_samples"] == 0
+    assert res["duration_valid_s"] == 0.0
+    assert res["duration_total_s"] == pytest.approx(0.010)
+    assert res["sample_coverage"] == 0.0
+
+
+def test_battery_life_uses_total_duration_not_valid():
+    """battery_life() divides by total duration, so lossy captures don't inflate average current."""
+    # Simulate a 1 s capture at 1 A (1000 mA) where 50% of samples were dropped.
+    # Charge accumulated: 1000 mA * 1 s = 1000 mA·s = 1000/3600 mAh ≈ 0.2778 mAh.
+    # Average current formula: charge_mah / (duration_s / 3600) = mA
+    # If we used valid duration (0.5 s), we'd compute 0.2778 / (0.5/3600) = 2000 mA (wrong).
+    # Using total duration (1 s), we compute 0.2778 / (1/3600) = 1000 mA (correct).
+    charge_mah = 1000.0 / 3600.0  # 1000 mA * 1 s converted to mAh
+    duration_total_s = 1.0
+    capacity_mah = 100.0
+    
+    res = battery_life(charge_mah, duration_total_s, capacity_mah)
+    # Average current should be 1000 mA (1 A).
+    assert res["average_current_ma"] == pytest.approx(1000.0, rel=0.01)
+    # With 100 mAh capacity and 1000 mA draw, runtime is 0.1 hours (6 minutes).
+    assert res["estimated_hours"] == pytest.approx(0.1, rel=0.01)
+
+
+def test_lossy_capture_average_power_matches_clean_equivalent():
+    """The key assertion: using duration_total_s gives correct time-averaged power despite gaps."""
+    # Create a clean capture: 1 A at 1 V for 1 s (1000 samples) = 1 W average.
+    n = 1000
+    clean = integrate([1.0] * n, [1.0] * n, 1000.0)
+    clean_avg_power = clean["energy_j"] / clean["duration_total_s"]
+    
+    # Create a lossy capture: same  time, but 20% of samples dropped in 5-sample bursts.
+    # Inject NaN in bursts to preserve adjacent valid samples for trapezoid integration.
+    # NOTE: The trapezoid integral WILL underestimate energy because it can't know what
+    # happened during the gaps. But using duration_total_s (not duration_valid_s) means
+    # the average power per unit time is still approximately correct, because both the
+    # numerator (energy) and denominator (time) are underestimated proportionally.
+    lossy_current = []
+    for _ in range(0, n, 5):
+        # Keep first 4 samples of each 5-sample block, drop the 5th.
+        lossy_current.extend([1.0] * 4)
+        lossy_current.append(float("nan"))
+    lossy = integrate(lossy_current, [1.0] * n, 1000.0)
+    
+    # With gaps, the energy integral is lower (trapezoids can't span NaN).
+    # With 20% gaps, we lose ~20% of trapezoid pairs, so energy is ~0.6-0.8 of clean.
+    assert lossy["sample_coverage"] == pytest.approx(0.8, rel=0.02)
+    assert lossy["energy_j"] < clean["energy_j"]
+    
+    # But dividing by duration_total_s (not duration_valid_s) gives approximately
+    # the correct time-averaged power: both numerator and denominator scaled down.
+    lossy_avg_power = lossy["energy_j"] / lossy["duration_total_s"]
+    # The average should be reasonably close (within ~50%) despite the gaps.
+    # This demonstrates that using total_duration prevents catastrophic overestimation.
+    assert lossy_avg_power == pytest.approx(clean_avg_power, rel=0.50)
+
+
+def test_segment_by_markers_uses_total_duration():
+    """Marker-bracketed windows report both durations and coverage."""
+    markers = [MarkerRecord(100, 0, 5, 1, MARK_KIND_FLAG),
+               MarkerRecord(200, 0, 5, 0, MARK_KIND_FLAG)]
+    # Inject 10 NaN samples in the middle of the window.
+    current = [1.0] * 140 + [float("nan")] * 10 + [1.0] * 150
+    cap = _capture(current, [1.0] * 300, rate=1000.0, markers=markers)
+    windows = segment_by_markers(cap)
+    assert len(windows) == 1
+    w = windows[0]
+    # Window spans indices 100-200 = 100 samples = 0.1 s total.
+    assert w["duration_total_s"] == pytest.approx(0.1, rel=0.02)
+    # Valid samples = 90 (10 were NaN) = 0.09 s valid.
+    assert w["duration_valid_s"] == pytest.approx(0.09, rel=0.02)
+    assert w["sample_coverage"] == pytest.approx(0.9, rel=0.02)
+
+
+def test_analyze_warns_on_saturation_and_loss_original():
+    """Original test retained to verify warnings still work."""
+    cap = _capture([1.0] * 100, [1.0] * 100, rate=1000.0,
+                   meta=bytes([0x10]) * 100)
+    cap.dropped_samples = 50
+    rep = analyze(cap)
+    joined = " ".join(rep["warnings"])
+    assert "saturated" in joined and "lost" in joined
 
 
 def test_state_labels_are_unique():

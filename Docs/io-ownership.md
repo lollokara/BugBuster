@@ -236,8 +236,7 @@ for slot in table:
 
 ## MCP Tools
 
-The MCP server exposes 4 new IO-ownership tools (total MCP tool count: **59**
-after this landing):
+The MCP server exposes 4 IO-ownership tools (of **119** tools in 18 groups):
 
 | Tool | Description |
 |---|---|

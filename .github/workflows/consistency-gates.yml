@@ -1,0 +1,32 @@
+name: Consistency Gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    name: Protocol versions, doc counts, sdkconfig effectiveness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.11"
+
+      # BBP + DAQ USB stream + DDP. The DAQ USB header has four independent
+      # host decoders, which is the shape that produced the 0x13 collision.
+      - name: Wire protocol versions in lockstep
+        run: python Firmware/tools/check_proto_version.py --verbose
+
+      # Every surface audited on 2026-08-20 had count drift, and the 2026-08-07
+      # documentation reset had already fixed all of it once.
+      - name: Documented counts match source
+        run: python Firmware/tools/check_doc_counts.py
+
+      # PlatformIO silently ignores new sdkconfig.defaults keys. This already
+      # dropped 100 percent of DAQ waveform frames once.
+      - name: sdkconfig.defaults keys are effective
+        run: python Firmware/tools/check_sdkconfig_effective.py --verbose

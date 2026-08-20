@@ -1,0 +1,239 @@
+{
+  "tag": "b3-post",
+  "captured_at": 1787229137.2505078,
+  "probes": {
+    "device_info": {
+      "ok": true,
+      "data": [
+        true,
+        133,
+        768,
+        0
+      ]
+    },
+    "ping": {
+      "ok": true,
+      "data": [
+        3735928559,
+        384991
+      ]
+    },
+    "status": {
+      "ok": true,
+      "data": {
+        "spi_ok": true,
+        "die_temp_c": 43.910614013671875,
+        "alert_status": 32,
+        "alert_mask": 0,
+        "supply_alert_status": 0,
+        "supply_alert_mask": 0,
+        "live_status": 6,
+        "channels": [
+          {
+            "id": 0,
+            "function": 0,
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 1,
+            "function": 0,
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 2,
+            "function": 3,
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 3,
+            "function": 0,
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          }
+        ],
+        "diagnostics": [
+          {
+            "source": 1,
+            "raw_code": 2785,
+            "value": 43.910614013671875
+          },
+          {
+            "source": 5,
+            "raw_code": 20574,
+            "value": 15.092996597290039
+          },
+          {
+            "source": 2,
+            "raw_code": 26247,
+            "value": 3.3374783992767334
+          },
+          {
+            "source": 3,
+            "raw_code": 19589,
+            "value": 5.230827331542969
+          }
+        ],
+        "mux_states": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "memory": {
+      "ok": true,
+      "data": {
+        "internal": "HeapPool(free_bytes=55299, min_ever_bytes=44779, largest_block_bytes=36864, total_bytes=255667)",
+        "psram": "HeapPool(free_bytes=7151648, min_ever_bytes=7144676, largest_block_bytes=7077888, total_bytes=8322040)",
+        "uptime_ms": 385212,
+        "tasks": [
+          "TaskStack(name='adcPoll', declared_bytes=2560, free_bytes=1264, running=True)",
+          "TaskStack(name='faultMon', declared_bytes=2560, free_bytes=1212, running=True)",
+          "TaskStack(name='cmdProc', declared_bytes=3072, free_bytes=2248, running=True)",
+          "TaskStack(name='wavegen', declared_bytes=2048, free_bytes=1172, running=True)",
+          "TaskStack(name='mainLoop', declared_bytes=5120, free_bytes=3132, running=True)",
+          "TaskStack(name='bbpCli', declared_bytes=5120, free_bytes=2912, running=True)"
+        ],
+        "schema": 1
+      }
+    },
+    "idac_cal": {
+      "ok": true,
+      "data": {
+        "present": true,
+        "channels": [
+          [
+            0,
+            3.2993838787078857,
+            0.0,
+            1.7000000476837158,
+            5.199999809265137,
+            true
+          ],
+          [
+            0,
+            5.0,
+            0.0,
+            3.0,
+            15.0,
+            true
+          ],
+          [
+            0,
+            4.895532131195068,
+            0.0,
+            3.0,
+            15.0,
+            true
+          ]
+        ]
+      }
+    },
+    "hat_rails": {
+      "ok": false,
+      "error": "DeviceError: Device error TIMEOUT (seq=25582)",
+      "critical": false
+    },
+    "hat_cal": {
+      "ok": false,
+      "error": "DeviceError: Device error INVALID_PARAM (seq=25583)",
+      "critical": false
+    },
+    "daq_stream": {
+      "ok": true,
+      "data": {
+        "sample_rate": 64000,
+        "overflow_count": 0,
+        "range": "hi",
+        "streaming": true,
+        "range_locked": false,
+        "source_enabled": false,
+        "vdut_set": 3.0,
+        "ilimit_set": 1.0,
+        "in_voltage": 0.0,
+        "in_current": 0.0,
+        "adaq_fine_ok": true,
+        "adaq_coarse_ok": true,
+        "adaq_voltage_ok": true,
+        "fine_err_pct": 0,
+        "drop_fine": 0,
+        "drop_coarse": 0,
+        "fine_diag_sticky": 128,
+        "frames_tx": 4,
+        "bytes_per_sec": 0,
+        "fifo_drop_frames": 0,
+        "ring_high_water": 352,
+        "wave_i_index_lo": 2131,
+        "wave_i_frames": 1,
+        "wave_v_frames": 1,
+        "wave_i_drops": 0,
+        "wave_v_drops": 0,
+        "filter": 4,
+        "adc_decimation": 2,
+        "stream_decimation": 1,
+        "odr_sps": 64000.0,
+        "board_temp_analog_c": 40.5,
+        "board_temp_power_c": 39.0,
+        "cal_have_hi": false,
+        "cal_have_mid": false,
+        "cal_have_lo": false
+      }
+    }
+  },
+  "cal_fingerprint": {
+    "daq_stream": {
+      "overflow_count": 0,
+      "cal_have_hi": false,
+      "cal_have_mid": false,
+      "cal_have_lo": false
+    }
+  }
+}

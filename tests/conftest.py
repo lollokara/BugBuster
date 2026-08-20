@@ -310,41 +310,82 @@ def _make_usb_device(config):
 _admin_token_cache: dict = {"resolved": False, "token": None}
 
 
-def _resolve_admin_token(config):
+@pytest.fixture(scope="session")
+def _session_admin_token(request):
     """
-    Resolve the admin token for HTTP authentication.
+    Session-scoped admin token resolution. Resolves the token ONCE before any
+    tests run, so HTTP fixtures never open a second USB connection.
 
     Priority:
       1. --admin-token CLI option (explicit override)
-      2. Fetch from device over USB if --device-usb is given
-      3. None (HTTP-only mode without auth — destructive endpoints will 401)
+      2. For --sim-full, use the fixed simulator token
+      3. Fetch from device over USB if --device-usb is given (opens temporary connection)
+      4. None (HTTP-only mode without auth — destructive endpoints will 401)
+
+    JIG-2 fix: This fixture ensures token fetch happens BEFORE any device
+    fixtures open their connections, so we never have two COM6 handles open
+    simultaneously.
     """
     if _admin_token_cache["resolved"]:
         return _admin_token_cache["token"]
 
+    config = request.config
     token = config.getoption("--admin-token", default=None)
-    if not token:
+
+    if not token and config.getoption("--sim-full", default=False):
+        # Simulator uses fixed token
+        token = _SIM_FULL_ADMIN_TOKEN
+
+    if not token and not config.getoption("--sim", default=False) and not config.getoption("--sim-full", default=False):
         port = config.getoption("--device-usb", default=None)
         if port:
             try:
+                # Open temporary connection BEFORE any fixtures
                 tmp = bb.connect_usb(port)
                 try:
                     token = tmp.get_admin_token()
                 finally:
                     tmp.disconnect()
             except Exception as e:
-                # Don't fail collection — HTTP tests requiring auth will surface
-                # the issue with their own 401, while unauth HTTP tests still run.
-                print(f"[conftest] USB admin-token fetch failed: {e}")
-                token = None
+                # FAIL LOUDLY if HTTP is requested but token fetch failed
+                if config.getoption("--device-http", default=None):
+                    pytest.exit(
+                        f"FATAL: USB admin-token fetch failed with {type(e).__name__}: {e}\n"
+                        f"HTTP tests need the admin token but cannot fetch it from {port}.\n"
+                        f"Either:\n"
+                        f"  1. Fix the USB connection and retry, OR\n"
+                        f"  2. Pass --admin-token <token> explicitly, OR\n"
+                        f"  3. Run only USB tests (omit --device-http).\n\n"
+                        f"Refusing to proceed with token=None because every HTTP test "
+                        f"requiring auth would fail with misleading 401 errors."
+                    )
+                else:
+                    # USB-only run, token not needed - soft-fail
+                    print(f"[conftest] USB admin-token fetch failed: {e}")
+                    token = None
 
     _admin_token_cache["resolved"] = True
     _admin_token_cache["token"] = token
     return token
 
 
-def _make_http_device(config, request=None):
-    """Open an HTTP BugBuster connection or skip if not configured."""
+def _resolve_admin_token(config):
+    """
+    DEPRECATED: Use _session_admin_token fixture instead.
+    Kept for backward compatibility with code that calls it directly.
+    """
+    if _admin_token_cache["resolved"]:
+        return _admin_token_cache["token"]
+    # Should not reach here if _session_admin_token ran, but provide fallback
+    return None
+
+
+def _make_http_device(config, request=None, session_token=None):
+    """Open an HTTP BugBuster connection or skip if not configured.
+
+    JIG-2 fix: Accepts session_token parameter to avoid opening a second
+    USB connection for token fetch.
+    """
     if config.getoption("--sim", default=False):
         from tests.mock import SimulatedDevice, SimulatedHTTPTransport
         hat = config.getoption("--hat", default=False)
@@ -378,7 +419,8 @@ def _make_http_device(config, request=None):
     if not host:
         pytest.skip("HTTP device not specified — pass --device-http <ip>")
     dev = bb.connect_http(host)
-    token = _resolve_admin_token(config)
+    # Use session token from fixture if provided, else fall back to cache
+    token = session_token if session_token is not None else _resolve_admin_token(config)
     if token:
         dev._admin_token = token  # noqa: SLF001 — public-by-convention
     return dev
@@ -655,29 +697,49 @@ class _BugBusterTrackingProxy:
         return _wrapped
 
 
-def _force_release_slot(dev, slot: int) -> None:
-    token = getattr(dev, "_admin_token", None)
-    if getattr(dev, "_usb", False):
-        if not token:
-            try:
-                token = dev.get_admin_token()
-            except Exception:
-                token = None
-        if token:
+def _force_release_slot(dev, slot: int, token: str | None = None) -> None:
+    """
+    Force-release a single IO ownership slot.
+
+    JIG-1 fix: Accepts token as parameter (from session fixture) and passes it
+    correctly for both USB and HTTP paths. Fail-soft: swallows errors when
+    slot is already free or token unavailable, so cleanup can continue.
+    """
+    if not token:
+        token = getattr(dev, "_admin_token", None)
+    if not token:
+        # No token available - skip this slot
+        return
+
+    try:
+        if getattr(dev, "_usb", False):
             dev.io_force_release(slot, token)
-    else:
-        dev._http_post("/io/owner/force", {"slot": slot})  # noqa: SLF001
+        else:
+            # HTTP path: token injection happens in _http_post via _admin_token
+            dev._http_post("/io/owner/force", {"slot": slot})  # noqa: SLF001
+    except Exception as exc:
+        # Slot already free or other transient error - acceptable
+        if "not currently owned" not in str(exc).lower():
+            # Unexpected error - log but don't fail cleanup
+            pass
 
 
-def _cleanup_touched_resources(dev, tracker: _MutationTracker, label: str) -> list[str]:
+def _cleanup_touched_resources(dev, tracker: _MutationTracker, label: str, token: str | None = None) -> list[str]:
+    """
+    Clean up only the resources touched by the test.
+
+    JIG-1 fix: Accepts session token for IO force-release. Continues cleanup
+    even when individual steps fail - never let one failed step abort the rest.
+    """
     errors: list[str] = []
 
     def _try(name: str, fn):
         try:
             fn()
-        except Exception as exc:  # noqa: BLE001 — cleanup is fail-soft
+        except Exception as exc:  # noqa: BLE001 — cleanup is fail-soft, MUST continue
             print(f"[conftest] {label} cleanup step {name} failed: {exc}")
             errors.append(name)
+            # CONTINUE to next step - do not return or raise
 
     if tracker.stream:
         _try("stop_adc_stream", dev.stop_adc_stream)
@@ -690,8 +752,9 @@ def _cleanup_touched_resources(dev, tracker: _MutationTracker, label: str) -> li
         else:
             _try("selftest_worker_off", lambda: dev._http_post("/selftest/worker", {"enabled": False}))  # noqa: SLF001
 
+    # JIG-1 fix: Pass session token to force-release
     for slot in sorted(slot for slot in tracker.slots if 0 <= slot < 16):
-        _try(f"io_force_release[{slot}]", lambda s=slot: _force_release_slot(dev, s))
+        _try(f"io_force_release[{slot}]", lambda s=slot: _force_release_slot(dev, s, token))
 
     if tracker.mux:
         _try("mux_all_open", lambda: dev.mux_set_all([0, 0, 0, 0]))
@@ -731,8 +794,9 @@ def _cleanup_touched_resources(dev, tracker: _MutationTracker, label: str) -> li
     if tracker.uart:
         _try("uart_bridge_off", lambda: dev.set_uart_config(enabled=False))
 
+    # Final force-release pass with session token
     for slot in sorted(slot for slot in tracker.slots if 0 <= slot < 16):
-        _try(f"io_force_release_final[{slot}]", lambda s=slot: _force_release_slot(dev, s))
+        _try(f"io_force_release_final[{slot}]", lambda s=slot: _force_release_slot(dev, s, token))
 
     return errors
 
@@ -752,35 +816,43 @@ def _needs_full_reset(request, tracker: _MutationTracker) -> bool:
     )
 
 
-def _cleanup_after_test(dev, tracker: _MutationTracker, request, label: str) -> None:
+def _cleanup_after_test(dev, tracker: _MutationTracker, request, label: str, token: str | None = None) -> None:
+    """
+    Clean up after a test.
+
+    JIG-1 fix: Accepts session token and passes it to cleanup helpers so
+    IO force-release always has auth.
+    """
     if not tracker.touched and not _needs_full_reset(request, tracker):
         return
     if _needs_full_reset(request, tracker):
         reason = "unknown mutation" if tracker.unknown else "marker/failure"
         print(f"[conftest] {label} using full reset fallback ({reason})")
-        _reset_inplace(dev, label)
+        _reset_inplace(dev, label, token)
         return
-    errors = _cleanup_touched_resources(dev, tracker, label)
+    errors = _cleanup_touched_resources(dev, tracker, label, token)
     if errors:
         print(f"[conftest] {label} targeted cleanup failed; running full reset fallback")
-        _reset_inplace(dev, f"{label}-fallback")
+        _reset_inplace(dev, f"{label}-fallback", token)
 
 
 # ---------------------------------------------------------------------------
 # Parametrized device fixture (USB + HTTP)
 # ---------------------------------------------------------------------------
 
-def _reset_inplace(dev, label):
-    """Call dev.reset_to_defaults() on an already-open connection. Fail-soft."""
+def _reset_inplace(dev, label, token: str | None = None):
+    """
+    Call dev.reset_to_defaults() on an already-open connection. Fail-soft.
+
+    JIG-1 fix: Accepts session token parameter so reset never tries to fetch
+    token from an already-open USB connection.
+    """
     if dev is None or getattr(dev, "_t", None) is None:
         return
     try:
-        token = getattr(dev, "_admin_token", None)
-        if getattr(dev, "_usb", False) and not token:
-            try:
-                token = dev.get_admin_token()
-            except Exception:
-                token = None
+        if not token:
+            token = getattr(dev, "_admin_token", None)
+        # Don't try to fetch token here - use what we have
         errors = dev.reset_to_defaults(admin_token=token)
         if errors:
             print(f"[conftest] {label} reset_to_defaults failed steps: {errors}")
@@ -789,7 +861,7 @@ def _reset_inplace(dev, label):
 
 
 @pytest.fixture(params=["usb", "http"])
-def device(request):
+def device(request, _session_admin_token):
     """
     Parametrized fixture yielding a connected BugBuster over USB or HTTP.
     Automatically skips if the CLI argument for that transport is not provided.
@@ -797,14 +869,42 @@ def device(request):
     Tracks hardware mutations during the test and cleans up only touched
     resources after yield. Broad reset is reserved for session bookends,
     explicit full_reset/destructive tests, failures, or unknown mutations.
+
+    JIG-2 fix: Depends on _session_admin_token fixture so token is resolved
+    before any connections open, avoiding second COM6 handle.
+
+    JIG-1 fix: Force-releases all slots after cleanup so the next
+    parametrization (different transport = different session ID) can claim
+    them. Without this, slots owned by [usb] remain unavailable to [http].
     """
     transport = request.param
     if transport == "usb":
         dev = _make_usb_device(request.config)
     else:
-        dev = _make_http_device(request.config, request=request)
+        dev = _make_http_device(request.config, request=request, session_token=_session_admin_token)
 
     _sim_mode = request.config.getoption("--sim", default=False) or request.config.getoption("--sim-full", default=False)
+
+    # Releasing only on teardown is not enough: a lease outlives the session
+    # that created it, and every fixture reconnect mints a new session id, so
+    # an orphaned claim from an aborted run or a crashed teardown blocks the
+    # very first test of the next run. Query first and release only what is
+    # actually held - blanket-releasing all 16 slots per fixture costs ~1000
+    # extra commands across the suite and blows the per-test timeout.
+    if not _sim_mode:
+        try:
+            held = [i for i, s in enumerate(dev.io_owner_status())
+                    if s and s.get("kind")]
+        except Exception:
+            held = []
+        for slot in held:
+            try:
+                _force_release_slot(dev, slot, _session_admin_token)
+            except Exception:
+                pass
+        if held:
+            print(f"[conftest] released orphaned IO slots at setup: {held}")
+
     skip_reset = "no_reset" in request.keywords or _sim_mode
     tracker = _MutationTracker()
     yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
@@ -812,7 +912,23 @@ def device(request):
     yield yielded
 
     if not skip_reset:
-        _cleanup_after_test(dev, tracker, request, "post-yield")
+        _cleanup_after_test(dev, tracker, request, "post-yield", _session_admin_token)
+
+    # Release on the way out too, so the next parametrisation (different
+    # transport = different session id) can claim. Query first for the same
+    # cost reason as the setup-side release above.
+    if not _sim_mode:
+        try:
+            held = [i for i, s in enumerate(dev.io_owner_status())
+                    if s and s.get("kind")]
+        except Exception:
+            held = []
+        for slot in held:
+            try:
+                _force_release_slot(dev, slot, _session_admin_token)
+            except Exception:
+                # Slot already free or no token - continue
+                pass
 
     try:
         dev.disconnect()
@@ -825,15 +941,19 @@ def device(request):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def usb_device(request):
-    """USB-only BugBuster fixture.  Skips if --device-usb not given."""
+def usb_device(request, _session_admin_token):
+    """
+    USB-only BugBuster fixture. Skips if --device-usb not given.
+
+    JIG-2 fix: Depends on _session_admin_token fixture.
+    """
     dev = _make_usb_device(request.config)
     skip_reset = "no_reset" in request.keywords or request.config.getoption("--sim", default=False)
     tracker = _MutationTracker()
     yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
     yield yielded
     if not skip_reset:
-        _cleanup_after_test(dev, tracker, request, "post-yield(usb)")
+        _cleanup_after_test(dev, tracker, request, "post-yield(usb)", _session_admin_token)
     try:
         dev.disconnect()
     except Exception:
@@ -845,16 +965,21 @@ def usb_device(request):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def http_device(request):
-    """HTTP-only BugBuster fixture.  Skips if --device-http not given."""
-    dev = _make_http_device(request.config, request=request)
+def http_device(request, _session_admin_token):
+    """
+    HTTP-only BugBuster fixture. Skips if --device-http not given.
+
+    JIG-2 fix: Depends on _session_admin_token fixture and passes it to
+    _make_http_device to avoid second USB connection.
+    """
+    dev = _make_http_device(request.config, request=request, session_token=_session_admin_token)
     _sim_mode = request.config.getoption("--sim", default=False) or request.config.getoption("--sim-full", default=False)
     skip_reset = "no_reset" in request.keywords or _sim_mode
     tracker = _MutationTracker()
     yielded = dev if skip_reset else _BugBusterTrackingProxy(dev, tracker)
     yield yielded
     if not skip_reset:
-        _cleanup_after_test(dev, tracker, request, "post-yield(http)")
+        _cleanup_after_test(dev, tracker, request, "post-yield(http)", _session_admin_token)
     try:
         dev.disconnect()
     except Exception:
@@ -915,35 +1040,42 @@ def device_info(request):
 # with `@pytest.mark.no_reset`.
 # ---------------------------------------------------------------------------
 
-def _open_reset_connection(config):
-    """Open a short-lived connection used solely for reset_to_defaults()."""
+def _open_reset_connection(config, token=None):
+    """
+    Open a short-lived connection used solely for reset_to_defaults().
+
+    JIG-2 fix: Accepts token parameter instead of calling _resolve_admin_token,
+    which would try to open a second USB connection.
+    """
     if config.getoption("--sim", default=False):
         return None  # simulator does not need physical reset
     port = config.getoption("--device-usb", default=None)
     host = config.getoption("--device-http", default=None)
     if port:
         dev = bb.connect_usb(port)
-        token = _resolve_admin_token(config)
         if token:
             dev._admin_token = token  # noqa: SLF001
         return dev
     if host:
         dev = bb.connect_http(host)
-        token = _resolve_admin_token(config)
         if token:
             dev._admin_token = token  # noqa: SLF001
         return dev
     return None
 
 
-def _perform_device_reset(config):
-    """Best-effort reset of the device to boot defaults."""
+def _perform_device_reset(config, token=None):
+    """
+    Best-effort reset of the device to boot defaults.
+
+    JIG-2 fix: Accepts token parameter to avoid fetching it from device.
+    """
     dev = None
     try:
-        dev = _open_reset_connection(config)
+        dev = _open_reset_connection(config, token)
         if dev is None:
             return
-        errors = dev.reset_to_defaults()
+        errors = dev.reset_to_defaults(admin_token=token)
         if errors:
             print(f"[conftest] reset_to_defaults reported failed steps: {errors}")
     except Exception as exc:  # noqa: BLE001 — fail-soft
@@ -957,15 +1089,84 @@ def _perform_device_reset(config):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _reset_device_session_bookends(request):
+def _session_io_safety_net(request, _session_admin_token):
+    """
+    Session-scoped autouse fixture. Force-releases all 16 IO ownership slots
+    at session START so a leak from a previous aborted run cannot poison this
+    run. Runs after _session_admin_token so token is available.
+
+    JIG-1 fix: This is the safety net that ensures a clean slate even when
+    previous run cleanup failed. Reports clearly when it actually had to
+    release something (indicating a real leak).
+    """
+    config = request.config
+    # Skip for simulator - no real device
+    if config.getoption("--sim", default=False) or config.getoption("--sim-full", default=False):
+        yield
+        return
+
+    # Only run if we have a device configured
+    port = config.getoption("--device-usb", default=None)
+    host = config.getoption("--device-http", default=None)
+    if not port and not host:
+        yield
+        return
+
+    released_any = False
+    dev = None
+    try:
+        # Open temporary connection for safety net
+        dev = _open_reset_connection(config, _session_admin_token)
+        if dev is None:
+            yield
+            return
+
+        # Try to force-release all slots
+        for slot in range(16):
+            try:
+                if getattr(dev, "_usb", False):
+                    if _session_admin_token:
+                        dev.io_force_release(slot, _session_admin_token)
+                        released_any = True
+                else:
+                    dev._http_post("/io/owner/force", {"slot": slot})  # noqa: SLF001
+                    released_any = True
+            except Exception as exc:
+                # Slot already free or other transient error - continue
+                if "not currently owned" not in str(exc).lower():
+                    # Unexpected error - but don't fail the session
+                    pass
+
+        if released_any:
+            print("[conftest] SESSION SAFETY NET: Force-released IO slots at session start. "
+                  "This indicates a leak from a previous run - investigate cleanup logic.")
+
+    except Exception as exc:  # noqa: BLE001 — fail-soft, never block session
+        print(f"[conftest] Session IO safety net failed: {exc}")
+    finally:
+        if dev:
+            try:
+                dev.disconnect()
+            except Exception:
+                pass
+
+    yield
+    # No teardown action needed - _reset_device_session_bookends handles end
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reset_device_session_bookends(request, _session_admin_token, _session_io_safety_net):
     """
     Session-scoped autouse fixture. Resets the device once at session start
-    so an inherited dirty state does not poison the first test, and once at
-    session end so the bench is left clean for the operator.
+    (after IO safety net) so an inherited dirty state does not poison the first
+    test, and once at session end so the bench is left clean for the operator.
+
+    JIG-2 fix: Depends on _session_admin_token to avoid opening second connection.
+    JIG-1 fix: Depends on _session_io_safety_net so slots are released first.
     """
-    _perform_device_reset(request.config)
+    _perform_device_reset(request.config, _session_admin_token)
     yield
-    _perform_device_reset(request.config)
+    _perform_device_reset(request.config, _session_admin_token)
 
 
 # ---------------------------------------------------------------------------

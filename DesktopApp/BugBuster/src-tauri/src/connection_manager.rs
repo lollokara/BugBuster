@@ -164,18 +164,25 @@ impl ConnectionManager {
         // Check firmware version compatibility
         if let Some(h) = transport.handshake_info() {
             if h.proto_version != bbp::PROTO_VERSION {
-                log::warn!(
-                    "Protocol version mismatch: device reports v{}, expected v{}. Allowing connection but features may not work correctly.",
+                // DESK-10 FIX: Protocol version mismatch is now a connection failure,
+                // not a warning. An incompatible version causes confusing downstream
+                // failures; fail fast and clearly instead.
+                let err_msg = format!(
+                    "Protocol version mismatch: device reports v{}, expected v{}. \
+                     Update firmware or desktop app to matching versions.",
                     h.proto_version,
                     bbp::PROTO_VERSION
                 );
+                log::error!("{}", err_msg);
                 let _ = app.emit(
                     "version-mismatch",
                     &serde_json::json!({
                         "device_version": h.proto_version,
                         "expected_version": bbp::PROTO_VERSION,
+                        "blocking": true,
                     }),
                 );
+                return Err(anyhow!(err_msg));
             }
         }
 
@@ -447,6 +454,36 @@ impl ConnectionManager {
     pub async fn disconnect(&self, app: &AppHandle) -> Result<()> {
         // Signal poll loop to exit immediately
         self.poll_shutdown.store(true, Ordering::Release);
+
+        // DESK-1 FIX: Send STOP commands to RP2040 LA and P4 DAQ before tearing down
+        // transports, best-effort so a dead link cannot block teardown.
+        let transport_for_stop = {
+            let t = self.transport.lock().await;
+            t.as_ref().map(|tr| tr.is_connected()).unwrap_or(false)
+        };
+
+        if transport_for_stop {
+            // Stop LA HAT capture (RP2040 via BBP relay)
+            if let Some(la) = app.try_state::<crate::la_commands::LaState>() {
+                if la.stream_running.load(Ordering::SeqCst) {
+                    log::info!("Disconnect: sending STOP to LA HAT");
+                    let _ = self.send_command(bbp::CMD_HAT_LA_STOP, &[]).await;
+                }
+            }
+
+            // Stop DAQ HAT acquisition (P4 USB-HS)
+            if let Some(daq) = app.try_state::<crate::daq_commands::DaqState>() {
+                if daq.running.load(Ordering::SeqCst) {
+                    log::info!("Disconnect: sending STOP to DAQ HAT");
+                    // DAQ uses direct USB transport, not BBP, so use daq_commands helper
+                    if let Ok(mut guard) = daq.transport.lock() {
+                        if let Some(t) = guard.as_mut() {
+                            let _ = t.send(crate::daq_proto::CMD_STOP, &[]);
+                        }
+                    }
+                }
+            }
+        }
 
         let transport = {
             let mut t = self.transport.lock().await;

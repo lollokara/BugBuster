@@ -106,14 +106,27 @@ class HTTPTransport:
     # Low-level HTTP helpers
     # ------------------------------------------------------------------
 
-    def get(self, path: str, params: Optional[dict] = None) -> Any:
+    def get(self, path: str, params: Optional[dict] = None,
+            headers: Optional[dict] = None) -> Any:
         """
         HTTP GET ``/api{path}``.
         Returns parsed JSON.  Raises on HTTP errors.
+
+        Injects the admin token header automatically if one has been set.
         """
         url = f"{self._base}{path}"
+        merged_headers: dict[str, str] = {}
+        if self._admin_token:
+            merged_headers[ADMIN_TOKEN_HEADER] = self._admin_token
+        if headers:
+            merged_headers.update(headers)
         log.debug("GET %s params=%s", url, params)
-        r = self._session.get(url, params=params, timeout=self._timeout)
+        r = self._session.get(
+            url,
+            params=params,
+            headers=merged_headers or None,
+            timeout=self._timeout,
+        )
         r.raise_for_status()
         return r.json()
 
@@ -134,6 +147,34 @@ class HTTPTransport:
         r = self._session.post(
             url,
             json=body or {},
+            headers=merged_headers or None,
+            timeout=self._timeout,
+        )
+        r.raise_for_status()
+        try:
+            return r.json()
+        except ValueError:
+            log.warning("Non-JSON response from %s: %s", url, r.text[:200])
+            return {}
+
+    def delete(self, path: str, params: Optional[dict] = None,
+               headers: Optional[dict] = None) -> Any:
+        """
+        HTTP DELETE ``/api{path}``.
+        Returns parsed JSON (or ``{}`` for empty responses).
+
+        Injects the admin token header automatically if one has been set.
+        """
+        url = f"{self._base}{path}"
+        merged_headers: dict[str, str] = {}
+        if self._admin_token:
+            merged_headers[ADMIN_TOKEN_HEADER] = self._admin_token
+        if headers:
+            merged_headers.update(headers)
+        log.debug("DELETE %s params=%s", url, params)
+        r = self._session.delete(
+            url,
+            params=params,
             headers=merged_headers or None,
             timeout=self._timeout,
         )

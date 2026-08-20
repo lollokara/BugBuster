@@ -93,6 +93,7 @@ export function ScopeCanvas() {
       usingFallback = true;
       const tick = async () => {
         if (!alive) return;
+        // WEB-5: Stop streaming when page is hidden to avoid wasting device resources
         if (
           scopeRunning.value &&
           typeof document !== "undefined" &&
@@ -121,7 +122,9 @@ export function ScopeCanvas() {
       try {
         es = new EventSource("/api/scope/stream");
         es.onmessage = (ev) => {
+          // WEB-5: Drop samples when page is hidden
           if (!alive || !scopeRunning.value) return;
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
           try {
             const data = JSON.parse(ev.data);
             const seq =
@@ -170,6 +173,11 @@ export function ScopeCanvas() {
   useEffect(() => {
     let raf = 0;
     const draw = () => {
+      // WEB-5: Pause rendering when page is hidden
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
       const canvas = canvasRef.current;
       if (!canvas) {
         raf = requestAnimationFrame(draw);

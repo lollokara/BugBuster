@@ -21,6 +21,7 @@ typedef enum {
     CMD_ERR_TIMEOUT      = 9,   // operation timed out
     CMD_ERR_FRAME_TOO_LARGE = 10, // response payload would exceed BBP_MAX_PAYLOAD
     CMD_ERR_IO_OWNERSHIP    = 11, // IO slot owned by another session
+    CMD_ERR_UNSUPPORTED_HAT = 12, // command needs a different HAT type, or none is attached
 } CmdError;
 
 /**
@@ -41,6 +42,7 @@ static inline const char *cmd_error_str(CmdError e)
         case CMD_ERR_TIMEOUT:         return "timeout";
         case CMD_ERR_FRAME_TOO_LARGE: return "frame too large";
         case CMD_ERR_IO_OWNERSHIP:    return "IO slot owned by another session";
+        case CMD_ERR_UNSUPPORTED_HAT: return "unsupported for the attached HAT";
         default:                      return "unknown error";
     }
 }
@@ -64,6 +66,7 @@ static inline int cmd_error_to_bbp(CmdError e)
         case CMD_ERR_TIMEOUT:         return 0x11; // BBP_ERR_TIMEOUT
         case CMD_ERR_FRAME_TOO_LARGE: return 0x09; // BBP_ERR_FRAME_TOO_LARGE
         case CMD_ERR_IO_OWNERSHIP:    return 0x12; // BBP_ERR_IO_OWNERSHIP_REQUIRED
+        case CMD_ERR_UNSUPPORTED_HAT: return 0x14; // BBP_ERR_UNSUPPORTED_HAT
         default:                      return 0x03;
     }
 }

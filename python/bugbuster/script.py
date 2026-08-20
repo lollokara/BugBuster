@@ -287,7 +287,9 @@ def _make_client(args):
     from bugbuster.client import BugBuster
     from bugbuster.transport.usb  import USBTransport
     from bugbuster.transport.http import HTTPTransport
+    from bugbuster.transport.protocol import Transport
 
+    t: Transport
     if args.host:
         t = HTTPTransport(args.host)
         bb = BugBuster(t)

@@ -116,19 +116,29 @@ struct DaqStatus {
     var voltAdcOK: Bool? { adaqOkBits.map { $0 & 0x04 != 0 } }
 
     // Extension v6 (@88-95): device-confirmed ADAQ7769 filter/decimation.
-    // Applies to the FINE/COARSE current ADCs only — the VOLTAGE ADAQ stays
+    // Applies to the FINE/COARSE current ADCs only - the VOLTAGE ADAQ stays
     // pinned at its own fixed rate (shared SPI bus + SYNC line with COARSE).
     // These are always what the DEVICE actually applied, never the client's
-    // request — the driver clamps combinations the part can't hit.
+    // request - the driver clamps combinations the part can't hit.
     let deviceFilter: DaqFilter?
     let deviceAdcDec: DaqAdcDecimation?
     /// Read-only: reported by the device but not driven by this client. The
-    /// ruling is that sample rate IS the ODR — there is no client-side
-    /// stream-decimation path — so nothing in the UI sets this value.
+    /// ruling is that sample rate IS the ODR - there is no client-side
+    /// stream-decimation path - so nothing in the UI sets this value.
     let deviceStreamDecim: UInt16?
     /// ODR in samples/sec, decoded from the wire's milli-SPS (`odr_mhz` =
     /// ODR * 1000).
     let deviceOdrHz: Double?
+
+    // Extension v7 (@96-99): board temperatures, 0.1 C.
+    let boardTempAnalogC: Float?
+    let boardTempPowerC: Float?
+
+    // Extension v8 (@100): per-range current calibration validity.
+    // bit0 = HI range calibrated, bit1 = MID, bit2 = LO.
+    let calHaveHi: Bool?
+    let calHaveMid: Bool?
+    let calHaveLo: Bool?
 }
 
 struct DaqMarker {
@@ -456,8 +466,15 @@ final class DaqStreamEngine: @unchecked Sendable {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         params.requiredInterfaceType = .wifi
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            let cb = self.onConnectionState
+            DispatchQueue.main.async {
+                cb?(.failed(NWError.posix(.EINVAL)))
+            }
+            return
+        }
         let conn = NWConnection(host: NWEndpoint.Host(host),
-                                port: NWEndpoint.Port(rawValue: port)!,
+                                port: nwPort,
                                 using: params)
         connection = conn
         conn.stateUpdateHandler = { [weak self] state in
@@ -814,12 +831,19 @@ final class DaqStreamEngine: @unchecked Sendable {
             let wiDrops  = payloadLen >= 84 ? pu32(80) : nil
             let wvDrops  = payloadLen >= 88 ? pu32(84) : nil
             // Extension v6 (@88-95). Guards use each field's END offset
-            // (>= 89, >= 90, >= 92, >= 96) — using start offsets would read
+            // (>= 89, >= 90, >= 92, >= 96) - using start offsets would read
             // out of bounds on a frame truncated mid-field.
             let filterCode  = payloadLen >= 89 ? pu8(88) : nil
             let adcDecCode  = payloadLen >= 90 ? pu8(89) : nil
             let streamDecim = payloadLen >= 92 ? pu16(90) : nil
             let odrMilliSps = payloadLen >= 96 ? pu32(92) : nil
+            // Extension v7 (@96-99): board temperatures, 0.1 C.
+            let t0 = payloadLen >= 98 ? Int16(bitPattern: pu16(96)) : nil
+            let t1 = payloadLen >= 100 ? Int16(bitPattern: pu16(98)) : nil
+            let tempAnalog = t0.flatMap { $0 == 0x7FFF ? nil : Float($0) / 10.0 }
+            let tempPower  = t1.flatMap { $0 == 0x7FFF ? nil : Float($0) / 10.0 }
+            // Extension v8 (@100): per-range calibration validity.
+            let calHave = payloadLen >= 101 ? pu8(100) : nil
             return .status(DaqStatus(
                 sampleRate: pu32(0),
                 overflowCount: pu32(4),
@@ -842,7 +866,12 @@ final class DaqStreamEngine: @unchecked Sendable {
                 deviceFilter: filterCode.flatMap { DaqFilter(rawValue: $0) },
                 deviceAdcDec: adcDecCode.flatMap { DaqAdcDecimation(rawValue: $0) },
                 deviceStreamDecim: streamDecim,
-                deviceOdrHz: odrMilliSps.map { Double($0) / 1000.0 }
+                deviceOdrHz: odrMilliSps.map { Double($0) / 1000.0 },
+                boardTempAnalogC: tempAnalog,
+                boardTempPowerC: tempPower,
+                calHaveHi: calHave.map { $0 & 0x01 != 0 },
+                calHaveMid: calHave.map { $0 & 0x02 != 0 },
+                calHaveLo: calHave.map { $0 & 0x04 != 0 }
             ))
 
         case .marker:

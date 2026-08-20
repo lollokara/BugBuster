@@ -549,10 +549,27 @@ struct OverviewTab: View {
     }
 
     private func toggleHatRailEnable(railId: Int, on: Bool) {
+        let originalRails = connectionManager.lastHatRails
         connectionManager.applyOptimisticHatRailEnable(railId: railId, enabled: on)
         Task {
-            _ = try? await connectionManager.postAction(path: "/api/hat/v2/rail/enable", json: ["railId": railId, "enable": on])
-            connectionManager.fetchHatRailsQuick()
+            do {
+                let success = try await connectionManager.postAction(path: "/api/hat/v2/rail/enable", json: ["railId": railId, "enable": on])
+                if success {
+                    connectionManager.fetchHatRailsQuick()
+                } else {
+                    // Rollback on failure
+                    DispatchQueue.main.async {
+                        self.connectionManager.lastHatRails = originalRails
+                        self.showToast("Failed to toggle rail", type: .error)
+                    }
+                }
+            } catch {
+                // Rollback on error
+                DispatchQueue.main.async {
+                    self.connectionManager.lastHatRails = originalRails
+                    self.showToast("Error: \(error.localizedDescription)", type: .error)
+                }
+            }
         }
     }
 
@@ -566,10 +583,27 @@ struct OverviewTab: View {
         case "usb":     key = "usbHub"
         default:        key = ctrl
         }
+        let originalOverview = connectionManager.lastOverview
         connectionManager.applyOptimisticEnable(key: key, value: on)
         Task {
-            _ = try? await connectionManager.postAction(path: "/api/ioexp/control", json: ["control": ctrl, "on": on])
-            connectionManager.fetchOverviewQuick()
+            do {
+                let success = try await connectionManager.postAction(path: "/api/ioexp/control", json: ["control": ctrl, "on": on])
+                if success {
+                    connectionManager.fetchOverviewQuick()
+                } else {
+                    // Rollback on failure
+                    DispatchQueue.main.async {
+                        self.connectionManager.lastOverview = originalOverview
+                        self.showToast("Failed to toggle \(ctrl)", type: .error)
+                    }
+                }
+            } catch {
+                // Rollback on error
+                DispatchQueue.main.async {
+                    self.connectionManager.lastOverview = originalOverview
+                    self.showToast("Error: \(error.localizedDescription)", type: .error)
+                }
+            }
         }
     }
 

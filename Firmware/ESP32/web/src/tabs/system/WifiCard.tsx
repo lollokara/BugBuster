@@ -30,6 +30,10 @@ export function WifiCard() {
 
   const connect = async () => {
     if (!mac || !ssid) return;
+    // WEB-9: Warn that WiFi reconfiguration will drop the current session
+    if (!confirm(`Connecting to "${ssid}" will disconnect this session. Continue?`)) {
+      return;
+    }
     setConnecting(true);
     setStatus(null);
     try {

@@ -369,9 +369,11 @@ struct DaqScopeCanvasView: View {
 
         for trace in frame.traces {
             let points = trace.points
-            guard points.count >= 2 else { continue }
-            let tStart = points.first!.t
-            let tSpan = points.last!.t - tStart
+            guard points.count >= 2,
+                  let first = points.first,
+                  let last = points.last else { continue }
+            let tStart = first.t
+            let tSpan = last.t - tStart
 
             for (idx, p) in points.enumerated() {
                 let pt = plotPoint(idx: idx, t: p.t, v: p.v, tStart: tStart, tSpan: tSpan,
@@ -391,10 +393,12 @@ struct DaqScopeCanvasView: View {
                                    colorForSource: (UInt8) -> Color,
                                    minVal: Double, maxVal: Double,
                                    at touch: CGPoint, in size: CGSize) -> TouchInfo? {
-        guard points.count >= 2 else { return nil }
+        guard points.count >= 2,
+              let first = points.first,
+              let last = points.last else { return nil }
         let rect = CGRect(origin: .zero, size: size)
-        let tStart = points.first!.t
-        let tSpan = points.last!.t - tStart
+        let tStart = first.t
+        let tSpan = last.t - tStart
         var closest: TouchInfo? = nil
         var minDistance: CGFloat = .infinity
         for (idx, p) in points.enumerated() {

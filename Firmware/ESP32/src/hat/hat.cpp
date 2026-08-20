@@ -89,6 +89,44 @@ static void hat_note_uart_timeout(void)
 }
 
 // -----------------------------------------------------------------------------
+// HAT Type Checking
+// -----------------------------------------------------------------------------
+
+// Check if the connected HAT type matches the required type for a command.
+// Returns true if the HAT is connected and has the correct type, or if no
+// specific type is required (required_type == HAT_TYPE_NONE).
+// Sets s_last_error to a specific value so BBP handlers can distinguish:
+//  - 0x00 (no error) if type matches
+//  - 0xFF if no HAT connected
+//  - 0xFE if wrong HAT type
+// This allows BBP handlers to return BBP_ERR_UNSUPPORTED_HAT instead of
+// BBP_ERR_TIMEOUT when a command requires a different HAT type.
+static bool hat_require_type(HatType required_type)
+{
+    if (!s_state.connected) {
+        s_last_error = 0xFF;  // No HAT connected
+        return false;
+    }
+    if (required_type != HAT_TYPE_NONE && s_state.type != required_type) {
+        s_last_error = 0xFE;  // Wrong HAT type
+        return false;
+    }
+    s_last_error = 0x00;  // OK
+    return true;
+}
+
+// Get the last HAT error code set by hat_require_type or HAT UART operations.
+// Returns:
+//  0x00 = no error
+//  0xFF = no HAT connected
+//  0xFE = wrong HAT type for command
+//  Other values = HAT UART protocol error codes (from HAT_RSP_ERROR payload)
+uint8_t hat_get_last_error(void)
+{
+    return s_last_error;
+}
+
+// -----------------------------------------------------------------------------
 // CRC-8 (polynomial 0x07, same as AD74416H SPI CRC)
 // -----------------------------------------------------------------------------
 static uint8_t crc8(const uint8_t *data, size_t len)
@@ -168,6 +206,13 @@ static bool hat_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t payload_
 //
 // The frame layout and CRC span are identical to the narrow sender — one P4
 // receiver parses both, so any divergence here shows up only as CRC failures.
+//
+// Retries short writes up to 3 times to handle UART flow control or buffer
+// congestion during large OTA transfers. Each retry attempts to write the FULL
+// frame from the start (not resume from the short-write offset), because the HAT
+// receiver has no way to know a frame was only partially transmitted and will
+// treat any arriving bytes as the start of a new frame. A short write leaves
+// the receiver in an undefined state, so we must retry the entire frame.
 static bool hat_send_frame_wide(uint8_t cmd, const uint8_t *payload, uint16_t payload_len)
 {
     if (payload_len > HAT_OTA_WIDE_MAX) return false;
@@ -187,8 +232,26 @@ static bool hat_send_frame_wide(uint8_t cmd, const uint8_t *payload, uint16_t pa
     frame[pos] = crc8(&frame[2], 1 + payload_len);
     pos++;
 
-    int written = uart_write_bytes(HAT_UART_NUM, frame, pos);
-    return written == (int)pos;
+    // Bounded retry on short writes (Task 4: HAT OTA partial-write fix)
+    const int max_attempts = 3;
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
+        int written = uart_write_bytes(HAT_UART_NUM, frame, pos);
+        if (written == (int)pos) {
+            if (attempt > 0) {
+                ESP_LOGD(TAG, "HAT OTA wide-frame send succeeded after %d retries", attempt);
+            }
+            return true;
+        }
+        // Short write — retry the full frame after a brief pause
+        ESP_LOGW(TAG, "HAT OTA wide-frame short write: %d/%d bytes (attempt %d/%d)",
+                 written, (int)pos, attempt + 1, max_attempts);
+        if (attempt + 1 < max_attempts) {
+            vTaskDelay(pdMS_TO_TICKS(10));  // 10ms backoff before retry
+        }
+    }
+
+    ESP_LOGE(TAG, "HAT OTA wide-frame send failed after %d attempts", max_attempts);
+    return false;
 }
 
 // Receive a response frame from the HAT.
@@ -416,15 +479,33 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     uint8_t rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
                                        pending_events, &pending_count);
 
-    // One retry with a connection reset if the first attempt failed (timeout or junk)
+    // Task 5: Split timeout vs CRC retry handling
+    // - CRC failure (s_last_error set by HAT_RSP_ERROR) means the frame was
+    //   received but corrupted -> retry promptly with minimal backoff
+    // - Timeout (rsp == 0 with s_last_error == 0) means the peer may be gone
+    //   or unresponsive -> retry with connection reset and longer backoff
     if (rsp == 0 && !s_commit_in_progress) {
-        ESP_LOGD(TAG, "HAT command 0x%02X first attempt failed, retrying after reset...", cmd);
-        hat_reset_connection();
-        rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
-                                   pending_events, &pending_count);
+        bool is_crc_error = (s_last_error != 0 && s_last_error != 0xFF && s_last_error != 0xFE);
+        
+        if (is_crc_error) {
+            // CRC/protocol error: link is alive, just corrupted. Retry promptly.
+            ESP_LOGD(TAG, "HAT command 0x%02X: CRC/protocol error (0x%02X), retrying...", cmd, s_last_error);
+            vTaskDelay(pdMS_TO_TICKS(5));  // Brief 5ms backoff for CRC retry
+            rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
+                                       pending_events, &pending_count);
+        } else {
+            // Timeout: peer may be gone. Reset connection and retry with backoff.
+            ESP_LOGD(TAG, "HAT command 0x%02X: timeout, retrying after reset and backoff...", cmd);
+            hat_reset_connection();
+            vTaskDelay(pdMS_TO_TICKS(50));  // 50ms backoff for timeout retry
+            rsp = hat_command_internal(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len,
+                                       pending_events, &pending_count);
+        }
+        
         if (rsp != 0) {
             s_state.connected = true; // Connection recovered
-            ESP_LOGD(TAG, "HAT connection recovered during command 0x%02X", cmd);
+            ESP_LOGD(TAG, "HAT connection recovered during command 0x%02X (%s retry)", 
+                     cmd, is_crc_error ? "CRC" : "timeout");
         }
     }
 
@@ -1190,6 +1271,9 @@ bool hat_get_power_status(void)
 
 bool hat_get_caps(HatCaps *caps)
 {
+    // Task 1: HAT_GET_CAPS is LA-HAT-only (returns type, hw_rev, routes, etc.)
+    // With a DAQ HAT attached, it times out -> now returns BBP_ERR_UNSUPPORTED_HAT
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
 
     uint8_t rsp[16] = {};
@@ -1220,6 +1304,7 @@ bool hat_get_caps(HatCaps *caps)
 bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_count)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
 
     uint8_t rsp[32] = {};
     uint8_t rsp_len = 0;
@@ -1259,6 +1344,7 @@ bool hat_get_rail_status(HatRailStatus rails[HAT_RAIL_COUNT], uint8_t *rail_coun
 bool hat_set_rail_enable(uint8_t rail_id, bool enable)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (rail_id >= HAT_RAIL_COUNT) return false;
 
     uint8_t payload[2] = { rail_id, (uint8_t)(enable ? 1 : 0) };
@@ -1295,6 +1381,7 @@ bool hat_set_rail_enable(uint8_t rail_id, bool enable)
 bool hat_set_led_state(uint8_t led_index, uint8_t color_code)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
 
     if (led_index < 9 && s_last_sent_color[led_index] == color_code) {
         return true;
@@ -1931,6 +2018,7 @@ void hat_daq_send_arm(bool armed, uint8_t trig_logic, uint32_t pre_samples)
 void hat_update_leds(void)
 {
     if (!s_state.connected) return;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return;
 
     // DAQ HAT: the 8 C6 neopixels show the 4 mainboard channel statuses in pairs
     // (front 4-connector), using the same colour scheme as the RP2040 HAT LEDs.
@@ -2031,6 +2119,7 @@ bool hat_set_io_voltage(uint16_t mv)
 
 bool hat_la_set_route(uint8_t route)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
 
     uint8_t payload[1] = { route };
@@ -2050,6 +2139,7 @@ bool hat_la_set_route(uint8_t route)
 bool hat_calibrate_start(uint8_t rail_id, uint8_t *status_out)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     uint8_t payload[1] = { rail_id };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2070,6 +2160,7 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
                           int32_t *max_error_mv, uint16_t *validation_flags)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     uint8_t rsp[32] = {};
     uint8_t rsp_len = 0;
     uint8_t cmd = hat_command(HAT_CMD_CALIBRATE_STATUS, NULL, 0,
@@ -2117,6 +2208,7 @@ bool hat_calibrate_status(uint8_t *state, uint8_t *progress, uint8_t *rail_id,
 bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (rail_id == HAT_RAIL_3V3_ADJ) {
         if (!hat_set_io_voltage(mv)) return false;
         s_state.rail[HAT_RAIL_3V3_ADJ].voltage_mv = s_state.io_voltage_mv;
@@ -2158,6 +2250,7 @@ bool hat_set_rail_voltage(uint8_t rail_id, uint16_t mv)
 bool hat_calibrate_import(uint8_t rail_id, uint8_t count, const uint8_t *points_data, size_t data_len)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (2 + data_len > 32) return false;
     uint8_t payload[32] = {};
     payload[0] = rail_id;
@@ -2177,6 +2270,7 @@ bool hat_calibrate_export(uint8_t rail_id, uint8_t start,
                           int8_t *codes_out, float *volts_out, uint8_t max_out)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     uint8_t payload[2] = { rail_id, start };
     uint8_t rsp[4 + 48 * 5] = {};
     uint8_t rsp_len = 0;
@@ -2210,6 +2304,7 @@ bool hat_calibrate_export(uint8_t rail_id, uint8_t start,
 bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     uint8_t payload[4] = { dirs, ups, dns, vals };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2221,6 +2316,7 @@ bool hat_set_io_bank(uint8_t dirs, uint8_t ups, uint8_t dns, uint8_t vals)
 bool hat_set_level_shift(bool oe, bool dir, bool *oe_out, bool *dir_out)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     uint8_t payload[2] = { (uint8_t)(oe ? 1 : 0), (uint8_t)(dir ? 1 : 0) };
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2305,14 +2401,10 @@ uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
 }
 
-uint8_t hat_get_last_error(void)
-{
-    return s_last_error;
-}
-
 bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
 
     ESP_LOGI(TAG, "SWD quick-setup: %umV on connector %c", target_voltage_mv, 'A' + connector);
 
@@ -2370,6 +2462,7 @@ bool hat_get_dap_status(void)
 bool hat_detect_target(void)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
 
     // HAT_CMD_GET_TARGET_INFO actively performs the SWD line-reset + DPIDR read
     // on the RP2040 and replies HAT_RSP_OK with [target_detected(1), dpidr(4)].
@@ -2389,6 +2482,7 @@ bool hat_detect_target(void)
 bool hat_set_swd_clock(uint16_t khz)
 {
     if (!s_state.connected) return false;
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
 
     uint8_t payload[2] = { (uint8_t)(khz & 0xFF), (uint8_t)(khz >> 8) };
     uint8_t rsp[4] = {};
@@ -2404,6 +2498,8 @@ bool hat_set_swd_clock(uint16_t khz)
 
 bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
 {
+    // Task 1: All LA functions require LA HAT (HAT_TYPE_SWD_GPIO)
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
 
     // Best effort stop before reconfiguring
@@ -2421,6 +2517,7 @@ bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
 
 bool hat_la_set_trigger(uint8_t type, uint8_t channel)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t payload[2] = { type, channel };
     uint8_t rsp[4] = {};
@@ -2430,6 +2527,7 @@ bool hat_la_set_trigger(uint8_t type, uint8_t channel)
 
 bool hat_la_arm(void)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2438,6 +2536,7 @@ bool hat_la_arm(void)
 
 bool hat_la_force(void)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2446,6 +2545,7 @@ bool hat_la_force(void)
 
 bool hat_la_stop(void)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2454,6 +2554,7 @@ bool hat_la_stop(void)
 
 bool hat_la_stream_start(void)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
@@ -2462,6 +2563,7 @@ bool hat_la_stream_start(void)
 
 bool hat_la_usb_reset(void)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     
     // 1. Flush UART RX to discard bootloader noise or stale data
@@ -2475,6 +2577,7 @@ bool hat_la_usb_reset(void)
 
 bool hat_la_log_enable(bool enable)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected) return false;
     uint8_t payload[1] = { static_cast<uint8_t>(enable ? 1u : 0u) };
     uint8_t rsp[4] = {};
@@ -2484,6 +2587,7 @@ bool hat_la_log_enable(bool enable)
 
 bool hat_la_get_status(HatLaStatus *status)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
     if (!s_state.connected || !status) return false;
     uint8_t rsp[28] = {};
     uint8_t rsp_len = 0;
@@ -2523,6 +2627,7 @@ bool hat_la_get_status(HatLaStatus *status)
 
 uint8_t hat_la_read_data(uint32_t offset, uint8_t *buf, uint8_t len)
 {
+    if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return 0;
     if (!s_state.connected) return 0;
     if (len > 28) len = 28;
 

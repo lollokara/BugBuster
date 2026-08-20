@@ -3151,7 +3151,8 @@ static esp_err_t handle_get_mux(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
     uint8_t states[ADGS_API_MAIN_DEVICES] = {};
-    adgs_get_all_states(states);
+    // Do NOT call adgs_get_all_states() here: it copies ADGS_NUM_DEVICES (5)
+    // bytes and this buffer holds ADGS_API_MAIN_DEVICES (4).
     adgs_get_api_states(states);
     cJSON *arr = cJSON_AddArrayToObject(root, "states");
     for (int i = 0; i < ADGS_API_MAIN_DEVICES; i++) {
@@ -3206,7 +3207,14 @@ static esp_err_t handle_post_mux_all(httpd_req_t *req)
         states[i] = (uint8_t)cJSON_GetArrayItem(arr, i)->valueint;
     }
     cJSON_Delete(body);
-    adgs_set_api_all_safe(states);
+    if (!adgs_set_api_all_safe(states)) {
+        // The BBP path reports this as BUSY; HTTP ignored the return value and
+        // answered "ok", so a refused write looked like a write to the wrong
+        // device. 409 is the HTTP equivalent of a transient resource conflict.
+        return send_error(req, 409,
+                          "MUX write refused: U17 S3 and the U23 self-test are "
+                          "mutually exclusive. Retry once the self-test releases.");
+    }
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
         xSemaphoreGive(g_stateMutex);

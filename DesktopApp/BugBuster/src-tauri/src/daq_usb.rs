@@ -183,14 +183,14 @@ impl DaqTransport for DaqUsbConnection {
                 .queue
                 .as_mut()
                 .ok_or_else(|| anyhow!("DAQ USB not connected"))?;
-            // 400 ms: short enough that stop_workers()'s 1-second join can
-            // reliably collect the old ingest_loop before daq_stream_start
-            // resets running=true (a 5-second timeout left zombie loops that
-            // never exited, causing two loops to fight over the transport mutex
-            // and starving the new stream of data after the first batch).
+            // DESK-7 FIX: Increased from 400 ms to 1000 ms to reduce spurious timeouts.
+            // 400 ms was too tight and caused false failures that then triggered the
+            // over-eager re-enumeration path (DESK-8). 1000 ms matches the LA timeout
+            // pattern and gives the P4 adequate margin for normal acquisition pauses
+            // (range changes, calibration, etc.).
             let completion = rt
                 .block_on(tokio::time::timeout(
-                    std::time::Duration::from_millis(400),
+                    std::time::Duration::from_millis(1000),
                     queue.next_complete(),
                 ))
                 .map_err(|_| anyhow!("DAQ USB read timed out"))?;
@@ -212,7 +212,14 @@ impl DaqTransport for DaqUsbConnection {
         self.out_seq = self.out_seq.wrapping_add(1);
         let rt = tokio::runtime::Handle::current();
 
-        // First attempt — use the current interface handle.
+        // DESK-8 FIX: Escalate recovery instead of jumping straight to re-enumeration.
+        // Stages: 1) first attempt, 2) immediate retry, 3) full re-enumerate.
+        // Windows WinUsb_WritePipe returns ERROR_BAD_COMMAND (22) when the pipe handle
+        // is invalid; clear_halt fails with the same error in that state, so we skip
+        // straight to re-enumerate on that specific code. For other transient errors
+        // (e.g. BUSY, TIMEOUT), retry once before escalating.
+
+        // Stage 1: first attempt with current interface
         let first_err = {
             let iface = self
                 .interface
@@ -224,13 +231,40 @@ impl DaqTransport for DaqUsbConnection {
         };
 
         if let Some(e) = first_err {
-            // On Windows, WinUsb_WritePipe returns ERROR_BAD_COMMAND (22) when the
-            // WinUSB pipe handle itself is invalid — WinUsb_ResetPipe (clear_halt)
-            // fails with the same error in that state.  The only recovery is a full
-            // USB re-enumerate: drop the old interface, rediscover the P4 device and
-            // claim a fresh handle, then retry the write.
+            let err_str = e.to_string();
+            log::warn!("DAQ bulk OUT failed: {}", e);
+
+            // Stage 2: Immediate retry for non-fatal errors
+            // Skip retry for ERROR_BAD_COMMAND / ERROR_NO_SUCH_DEVICE - those need re-enum
+            let needs_re_enum = err_str.contains("ERROR_BAD_COMMAND")
+                || err_str.contains("ERROR_NO_SUCH_DEVICE")
+                || err_str.contains("LIBUSB_ERROR_NO_DEVICE");
+
+            if !needs_re_enum {
+                log::info!("DAQ bulk OUT: retrying before re-enumeration...");
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                let retry_result = {
+                    let iface = self.interface.as_ref()
+                        .ok_or_else(|| anyhow!("DAQ USB not connected during retry"))?
+                        .clone();
+                    let c = tokio::task::block_in_place(|| rt.block_on(iface.bulk_out(DAQ_EP_OUT, frame.clone())));
+                    c.into_result()
+                };
+
+                if retry_result.is_ok() {
+                    log::info!("DAQ bulk OUT: retry succeeded");
+                    return Ok(());
+                }
+
+                if let Err(retry_err) = retry_result {
+                    log::warn!("DAQ bulk OUT retry failed: {}", retry_err);
+                }
+            }
+
+            // Stage 3: Re-enumerate as last resort
             log::warn!(
-                "DAQ bulk OUT failed ({}), re-enumerating USB and retrying...",
+                "DAQ bulk OUT: re-enumerating USB (original error: {})...",
                 e
             );
             self.interface = None;
@@ -241,7 +275,7 @@ impl DaqTransport for DaqUsbConnection {
                 anyhow!("DAQ bulk OUT failed ({}) and USB re-enumerate failed: {}", e, re)
             })?;
 
-            // Retry with the fresh interface.
+            // Final attempt with fresh interface
             let iface2 = self
                 .interface
                 .as_ref()
@@ -540,6 +574,12 @@ impl MockDaqTransport {
             fifo_drop_frames: 0,
             ring_high_water: 0,
             wave_i_index_lo: (self.sample_idx & 0xFFFF_FFFF) as u32,
+            // Extension v7+v8: board temps and calibration status (mock values)
+            board_temp_analog_c: Some(25.0),
+            board_temp_power_c: Some(28.0),
+            cal_have_hi: true,
+            cal_have_mid: true,
+            cal_have_lo: true,
         }
     }
     /// Emit synthetic event markers for any 5 Hz burst edge that falls inside

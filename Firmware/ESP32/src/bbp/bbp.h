@@ -23,7 +23,7 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       10
+#define BBP_PROTO_VERSION       11
 
 #define BBP_FW_VERSION_MAJOR    5
 #define BBP_FW_VERSION_MINOR    1
@@ -327,6 +327,7 @@ extern "C" {
 #define BBP_ERR_TIMEOUT                0x11
 #define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot owned by another session
 #define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX mutual-exclusion rejected route
+#define BBP_ERR_UNSUPPORTED_HAT        0x14  // Command requires different HAT type (LA vs DAQ)
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)

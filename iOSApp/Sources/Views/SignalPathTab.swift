@@ -87,8 +87,7 @@ struct SignalPathTab: View {
             let accent = isChannelCGreyed ? Color.gray : ACCENTS[ch]
 
             let muxDev = MUX_DEVICE_BY_LOGICAL[ch]
-            let muxState = connectionManager.lastStatus?.muxStates.count ?? 0 > muxDev
-                ? connectionManager.lastStatus!.muxStates[muxDev] : 0
+            let muxState = connectionManager.lastStatus?.muxStates[muxDev] ?? 0
 
             let isPsuOn = ch < 2
                 ? (connectionManager.lastOverview?.ioexp.enables.vadj1 ?? false)

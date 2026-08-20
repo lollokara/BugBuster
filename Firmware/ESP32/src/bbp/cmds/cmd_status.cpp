@@ -620,7 +620,12 @@ static int handler_mux_set_all(const uint8_t *payload, size_t len,
 
     uint8_t states[ADGS_API_MAIN_DEVICES] = {};
     memcpy(states, payload, ADGS_API_MAIN_DEVICES);
-    adgs_set_api_all_safe(states);
+    if (!adgs_set_api_all_safe(states)) {
+        // Refused by the U17-S3 / U23 self-test mutual exclusion. The supply
+        // monitor owns U23 transiently, so this is a retry-later condition, not
+        // a permanently invalid request - BUSY says that, INVALID_STATE does not.
+        return -CMD_ERR_BUSY;
+    }
     adgs_get_api_states(states);
     memcpy(resp, states, ADGS_API_MAIN_DEVICES);
 

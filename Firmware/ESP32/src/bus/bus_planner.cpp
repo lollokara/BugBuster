@@ -25,6 +25,7 @@
 #include "ds4424.h"       // ds4424_set_voltage
 #include "adgs2414d.h"    // adgs_set_api_all_safe, ADGS_API_MAIN_DEVICES
 #include "ext_bus.h"      // ext_i2c_setup, ext_spi_setup
+#include "esp_log.h"
 
 // ---------------------------------------------------------------------------
 // Planner mutex — serialises plan+apply so a host BBP setup cannot interleave
@@ -220,7 +221,13 @@ static bool apply_power_and_mux(SemaphoreHandle_t mtx,
     compute_mux_state(routes, count, mux_states);
 
     if (mtx) xSemaphoreGive(mtx);
-    adgs_set_api_all_safe(mux_states);
+    if (!adgs_set_api_all_safe(mux_states)) {
+        // A refused write here means the routing plan did not apply, so signals
+        // are not where the caller believes. Propagating this out is follow-up
+        // work; make it visible in the meantime rather than silently continuing.
+        ESP_LOGE("bus_planner", "MUX programming refused by the U17-S3 / U23 "
+                                "interlock - routing plan NOT applied");
+    }
     if (mtx) {
         // Re-take with portMAX_DELAY: the only blocker is another top-level
         // bus_planner_apply_* call that grabbed the planner mutex during our

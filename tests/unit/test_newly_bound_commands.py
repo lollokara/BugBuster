@@ -222,27 +222,27 @@ def test_idac_calibrate_is_usb_only(http):
 
 def test_power_set_port_encodes_port_and_value(usb):
     client, _, rec = usb
-    client.power_set_port(1, 0xA5)
+    client.power_set_port(1, 0xA5, confirm=True)
     assert rec.payload_for(CmdId.PCA_SET_PORT) == b"\x01\xa5"
 
 
 def test_power_set_port_echoes_back(usb):
     client, _, _ = usb
-    assert client.power_set_port(0, 0x0F) == (0, 0x0F)
+    assert client.power_set_port(0, 0x8F, confirm=True) == (0, 0x8F)
 
 
 @pytest.mark.parametrize("port", [2, -1, 255])
 def test_power_set_port_rejects_an_invalid_port(usb, port):
     client, _, _ = usb
     with pytest.raises(ValueError, match="port must be 0 or 1"):
-        client.power_set_port(port, 0)
+        client.power_set_port(port, 0, confirm=True)
 
 
 def test_power_set_port_is_usb_only(http):
     """The firmware registers no /api/ioexp/port route."""
     client, _ = http
     with pytest.raises(NotImplementedError):
-        client.power_set_port(0, 0)
+        client.power_set_port(0, 0, confirm=True)
 
 
 # ---------------------------------------------------------------------------

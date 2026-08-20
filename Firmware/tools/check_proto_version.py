@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Check that BBP_PROTO_VERSION is in sync across all three source files.
+"""Check that every wire-protocol version constant is in sync across its copies.
+
+Three protocol families are gated:
+
+* **BBP** - 3 copies (ESP32 firmware, Python lib, desktop Rust).
+* **DAQ USB stream** - 4 copies. The P4 defines it and there are three
+  independent host decoders; this is exactly the shape that produced the 0x13
+  error-code collision, so it is gated rather than reviewed.
+* **DDP** (P4 <-> C6 display link) - one canonical definition in a shared
+  header, plus a scan for any shadow copy that could drift away from it.
 
 Usage:
     python Firmware/tools/check_proto_version.py
     python Firmware/tools/check_proto_version.py --verbose
 
-Exit 0 if all three files agree; exit 1 with a diff summary if any differ.
+Exit 0 if every family agrees; exit 1 with a diff summary otherwise.
 """
 from __future__ import annotations
 
@@ -15,22 +24,64 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# (label, file path, regex pattern)
-SOURCES: list[tuple[str, Path, str]] = [
+# family -> [(label, relative path, regex with one capturing group)]
+FAMILIES: dict[str, list[tuple[str, str, str]]] = {
+    "BBP_PROTO_VERSION": [
+        (
+            "Firmware/ESP32/src/bbp/bbp.h",
+            "Firmware/ESP32/src/bbp/bbp.h",
+            r"(?m)^#define\s+BBP_PROTO_VERSION\s+(\d+)",
+        ),
+        (
+            "python/bugbuster/protocol.py",
+            "python/bugbuster/protocol.py",
+            r"(?m)^BBP_PROTO_VERSION\s*=\s*(\d+)",
+        ),
+        (
+            "DesktopApp/BugBuster/src-tauri/src/bbp.rs",
+            "DesktopApp/BugBuster/src-tauri/src/bbp.rs",
+            r"(?m)^pub\s+const\s+PROTO_VERSION\s*:\s*u8\s*=\s*(\d+)\s*;",
+        ),
+    ],
+    "USB_PROTO_VERSION (DAQ stream)": [
+        (
+            "Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h",
+            "Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h",
+            r"(?m)^#define\s+USB_PROTO_VERSION\s+(\d+)u?",
+        ),
+        (
+            "python/bugbuster/daq_stream.py",
+            "python/bugbuster/daq_stream.py",
+            r"(?m)^PROTO_VERSION\s*=\s*(\d+)",
+        ),
+        (
+            "DesktopApp/BugBuster/src-tauri/src/daq_proto.rs",
+            "DesktopApp/BugBuster/src-tauri/src/daq_proto.rs",
+            r"(?m)^pub\s+const\s+PROTO_VERSION\s*:\s*u8\s*=\s*(\d+)\s*;",
+        ),
+        (
+            "tests/lib/daq_proto.py",
+            "tests/lib/daq_proto.py",
+            r"(?m)^PROTO_VERSION\s*=\s*(\d+)",
+        ),
+    ],
+    "DDP_PROTO_VERSION (P4 <-> C6)": [
+        (
+            "Firmware/DAQ_HAT/common/ddp_proto.h",
+            "Firmware/DAQ_HAT/common/ddp_proto.h",
+            r"(?m)^#define\s+DDP_PROTO_VERSION\s+(\d+)u?",
+        ),
+    ],
+}
+
+# Files that must NOT define their own copy of a gated constant. A shadow copy
+# is invisible to this gate until something imports it, by which point it has
+# already drifted. python/bugbuster/constants.py did exactly that with BBP.
+SHADOW_BANS: list[tuple[str, str, str]] = [
     (
-        "Firmware/ESP32/src/bbp/bbp.h",
-        ROOT / "Firmware" / "ESP32" / "src" / "bbp" / "bbp.h",
-        r"(?m)^#define\s+BBP_PROTO_VERSION\s+(\d+)",
-    ),
-    (
-        "python/bugbuster/protocol.py",
-        ROOT / "python" / "bugbuster" / "protocol.py",
-        r"(?m)^BBP_PROTO_VERSION\s*=\s*(\d+)",
-    ),
-    (
-        "DesktopApp/BugBuster/src-tauri/src/bbp.rs",
-        ROOT / "DesktopApp" / "BugBuster" / "src-tauri" / "src" / "bbp.rs",
-        r"(?m)^pub\s+const\s+PROTO_VERSION\s*:\s*u8\s*=\s*(\d+)\s*;",
+        "python/bugbuster/constants.py",
+        r"(?m)^BBP_PROTO_VERSION\s*=\s*\d+",
+        "the canonical copy is python/bugbuster/protocol.py; import it from there",
     ),
 ]
 
@@ -42,66 +93,58 @@ def extract_version(label: str, path: Path, pattern: str) -> int:
     text = path.read_text(encoding="utf-8")
     match = re.search(pattern, text)
     if match is None:
-        print(f"ERROR: could not find PROTO_VERSION constant in {label}", file=sys.stderr)
+        print(f"ERROR: could not find the version constant in {label}", file=sys.stderr)
         sys.exit(2)
     return int(match.group(1))
 
 
 def check_no_shadow_copies() -> int:
-    """Fail if a second BBP_PROTO_VERSION literal reappears outside SOURCES.
-
-    python/bugbuster/constants.py used to carry its own copy. Nothing imported
-    it, so it drifted to 9 unnoticed while the three checked files moved to 10
-    -- this gate never saw it. A shadow copy that disagrees with the wire is a
-    latent regression waiting for its first importer.
-    See docs/superpowers/reviews/2026-08-03-design-sweep.md finding S2-14.
-    """
-    shadow = ROOT / "python" / "bugbuster" / "constants.py"
-    if not shadow.exists():
-        return 0
-    text = shadow.read_text(encoding="utf-8")
-    if re.search(r"(?m)^BBP_PROTO_VERSION\s*=\s*\d+", text):
-        print(
-            "FAIL  python/bugbuster/constants.py defines its own "
-            "BBP_PROTO_VERSION literal.",
-            file=sys.stderr,
-        )
-        print(
-            "      The canonical copy is python/bugbuster/protocol.py; import "
-            "it from there.",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    failures = 0
+    for rel, pattern, advice in SHADOW_BANS:
+        path = ROOT / rel
+        if not path.exists():
+            continue
+        if re.search(pattern, path.read_text(encoding="utf-8")):
+            print(f"FAIL  {rel} defines its own copy of a gated constant.", file=sys.stderr)
+            print(f"      {advice}", file=sys.stderr)
+            failures += 1
+    return failures
 
 
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
 
-    if check_no_shadow_copies() != 0:
-        return 1
+    failures = check_no_shadow_copies()
 
-    versions: list[tuple[str, int]] = []
-    for label, path, pattern in SOURCES:
-        v = extract_version(label, path, pattern)
-        versions.append((label, v))
+    for family, sources in FAMILIES.items():
+        versions = [
+            (label, extract_version(label, ROOT / rel, pattern))
+            for label, rel, pattern in sources
+        ]
         if verbose:
-            print(f"  {label}: {v}")
+            for label, v in versions:
+                print(f"  {family}: {label} = {v}")
 
-    values = {v for _, v in versions}
-    if len(values) == 1:
-        ver = next(iter(values))
-        print(f"OK  BBP_PROTO_VERSION = {ver}  (all 3 files agree)")
-        return 0
+        values = {v for _, v in versions}
+        if len(values) == 1:
+            ver = next(iter(values))
+            n = len(versions)
+            agree = "1 definition" if n == 1 else f"all {n} files agree"
+            print(f"OK  {family} = {ver}  ({agree})")
+            continue
 
-    print("FAIL  BBP_PROTO_VERSION mismatch across files:", file=sys.stderr)
-    for label, v in versions:
-        print(f"  {v}  {label}", file=sys.stderr)
-    print(
-        "\nFix: update all three files to the same integer before committing.",
-        file=sys.stderr,
-    )
-    return 1
+        failures += 1
+        print(f"FAIL  {family} mismatch across files:", file=sys.stderr)
+        for label, v in versions:
+            print(f"  {v}  {label}", file=sys.stderr)
+
+    if failures:
+        print(
+            "\nFix: update every listed file to the same integer before committing.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -399,15 +399,17 @@ void adgs_set_all_raw(const uint8_t states[ADGS_MAIN_DEVICES])
     adgs_write_states(s_mux_state);
 }
 
-void adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
+bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
 {
-    if (!s_mux_initialized) return;
+    if (!s_mux_initialized) return false;
 
 #if ADGS_HAS_SELFTEST
     // Interlock: if caller tries to set U17 S3 while U23 is active, block it.
+    // Report the refusal - a silent return here answered the host with the
+    // stale read-back and looked like a successful write to the wrong device.
     if ((states[U17_DEVICE_IDX] & U17_S3_MASK) && adgs_selftest_active()) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
-        return;
+        return false;
     }
 #endif
 
@@ -426,6 +428,7 @@ void adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
     adgs_write_states(s_mux_state);
     sync_api_main_from_physical();
+    return true;
 }
 
 void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
@@ -520,16 +523,29 @@ void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES])
     memcpy(out, s_api_main_state, ADGS_API_MAIN_DEVICES);
 }
 
-void adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES])
+bool adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES])
 {
+    // FEAT-9: a refused write must leave no trace. The API shadow is committed
+    // before the hardware call, and sync_api_main_from_physical() can only undo
+    // the devices that have a physical device behind them - any API device at
+    // index >= ADGS_MAIN_DEVICES would keep the rejected value and read back as
+    // though the write had succeeded. Snapshot, then roll back on refusal.
+    uint8_t prev_api[ADGS_API_MAIN_DEVICES];
+    memcpy(prev_api, s_api_main_state, ADGS_API_MAIN_DEVICES);
+
     memcpy(s_api_main_state, states, ADGS_API_MAIN_DEVICES);
 
     uint8_t physical[ADGS_MAIN_DEVICES];
     for (uint8_t i = 0; i < ADGS_MAIN_DEVICES; i++) {
         physical[i] = states[i];
     }
-    adgs_set_all_safe(physical);
+    bool ok = adgs_set_all_safe(physical);
+    if (!ok) {
+        memcpy(s_api_main_state, prev_api, ADGS_API_MAIN_DEVICES);
+        return false;
+    }
     sync_api_main_from_physical();
+    return true;
 }
 
 bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed)

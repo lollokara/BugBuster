@@ -79,11 +79,74 @@ void settings_init(void)
     err = nvs_get_blob(h, NVS_KEY, &blob, &len);
     nvs_close(h);
 
-    if (err == ESP_OK && len == sizeof(blob) && blob.version == SETTINGS_VERSION) {
-        g_settings = blob.s;
-        ESP_LOGI(TAG, "settings loaded from NVS");
+    if (err == ESP_OK && len == sizeof(blob)) {
+        if (blob.version == SETTINGS_VERSION) {
+            g_settings = blob.s;
+            ESP_LOGI(TAG, "settings loaded from NVS");
+        } else if (blob.version == 5) {
+            // Migrate v5 to v6: WiFi fields (ssid/password) added in v6.
+            // Copy all fields that existed in v5, set new v6 fields to defaults.
+            typedef struct {
+                bool     autoranging;
+                uint8_t  range_idx;
+                uint8_t  sample_rate_idx;
+                uint16_t dut_current_ma;
+                uint16_t dut_voltage_mv;
+                uint8_t  filter_idx;
+                uint8_t  decim_idx;
+                bool     reject_5060;
+                bool     sr_mode;
+                bool     fft_enable;
+                uint8_t  fft_length_idx;
+                uint8_t  fft_window_idx;
+                uint8_t  fft_source_idx;
+                uint8_t  brightness_pct;
+                bool     dark_mode;
+                uint8_t  npx_mode;
+                uint8_t  npx_brightness;
+                uint32_t npx_color;
+                bool     wifi_enable;
+                uint8_t  wifi_mode;
+                uint8_t  wifi_status;
+            } settings_v5_t;
+            if (len >= sizeof(uint32_t) + sizeof(settings_v5_t)) {
+                settings_v5_t *old = (settings_v5_t *)&blob.s;
+                g_settings.autoranging     = old->autoranging;
+                g_settings.range_idx       = old->range_idx;
+                g_settings.sample_rate_idx = old->sample_rate_idx;
+                g_settings.dut_current_ma  = old->dut_current_ma;
+                g_settings.dut_voltage_mv  = old->dut_voltage_mv;
+                g_settings.filter_idx      = old->filter_idx;
+                g_settings.decim_idx       = old->decim_idx;
+                g_settings.reject_5060     = old->reject_5060;
+                g_settings.sr_mode         = old->sr_mode;
+                g_settings.fft_enable      = old->fft_enable;
+                g_settings.fft_length_idx  = old->fft_length_idx;
+                g_settings.fft_window_idx  = old->fft_window_idx;
+                g_settings.fft_source_idx  = old->fft_source_idx;
+                g_settings.brightness_pct  = old->brightness_pct;
+                g_settings.dark_mode       = old->dark_mode;
+                g_settings.npx_mode        = old->npx_mode;
+                g_settings.npx_brightness  = old->npx_brightness;
+                g_settings.npx_color       = old->npx_color;
+                g_settings.wifi_enable     = old->wifi_enable;
+                g_settings.wifi_mode       = old->wifi_mode;
+                g_settings.wifi_status     = old->wifi_status;
+                // New v6 fields: set defaults.
+                g_settings.ssid[0]         = '\0';
+                g_settings.password[0]     = '\0';
+                settings_save();  // Persist as v6.
+                ESP_LOGI(TAG, "settings migrated v5 -> v6");
+            } else {
+                ESP_LOGI(TAG, "settings v5 blob too short; using defaults");
+            }
+        } else {
+            ESP_LOGI(TAG, "settings version %lu unsupported; using defaults", (unsigned long)blob.version);
+        }
     } else {
-        ESP_LOGI(TAG, "settings invalid/old; using defaults");
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "settings blob size mismatch; using defaults");
+        }
     }
 }
 

@@ -278,9 +278,11 @@ struct ScopeCanvasView: View {
 
         for channel in series.channels {
             let displayPoints = ScopeGeom.displayPoints(for: channel.points, scale: activeScale, windowSeconds: windowSeconds, endOverride: endOverride, columnBudget: columnBudget)
-            guard displayPoints.count >= 2 else { continue }
-            let tStart = displayPoints.first!.t
-            let tSpan = displayPoints.last!.t - tStart
+            guard displayPoints.count >= 2,
+                  let first = displayPoints.first,
+                  let last = displayPoints.last else { continue }
+            let tStart = first.t
+            let tSpan = last.t - tStart
 
             for (idx, p) in displayPoints.enumerated() {
                 let pt = plotPoint(idx: idx, t: p.t, v: p.v, tStart: tStart, tSpan: tSpan, count: displayPoints.count, rect: rect, minVal: minVal, maxVal: maxVal)
@@ -295,10 +297,12 @@ struct ScopeCanvasView: View {
     }
 
     private func closestSampleInfo(at touch: CGPoint, in size: CGSize, points: [ScopeSeriesPoint], label: String, color: Color, minVal: Double, maxVal: Double) -> TouchInfo? {
-        guard points.count >= 2 else { return nil }
+        guard points.count >= 2,
+              let first = points.first,
+              let last = points.last else { return nil }
         let rect = CGRect(origin: .zero, size: size)
-        let tStart = points.first!.t
-        let tSpan = points.last!.t - tStart
+        let tStart = first.t
+        let tSpan = last.t - tStart
         var closest: TouchInfo? = nil
         var minDistance: CGFloat = .infinity
         for (idx, p) in points.enumerated() {

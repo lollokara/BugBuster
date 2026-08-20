@@ -14,6 +14,7 @@ import {
   scopeSeq,
   scopeTimeBase,
   scopeTriggerLevel,
+  scopeDroppedSamples, // WEB-7
 } from "../../state/signals";
 import {
   api,
@@ -254,6 +255,12 @@ export function ScopePanel() {
               onInput={(e) => (scopeTriggerLevel.value = parseFloat((e.currentTarget as HTMLInputElement).value) || 0)}
             />
           </label>
+
+          {scopeDroppedSamples.value > 0 && (
+            <span class="text-dim" style="color: #f59e0b; margin-left: auto;">
+              ⚠ {scopeDroppedSamples.value.toLocaleString()} samples dropped
+            </span>
+          )}
         </div>
 
         <ScopeCanvas />

@@ -114,8 +114,11 @@ def register(mcp) -> None:
         sha256: Optional[str] = None,
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Device reboots immediately on success, breaking USB and requiring reconnection.
+
         Upload a firmware image to the device. The device verifies SHA-256
         before switching the boot partition and reboots on success.
 
@@ -125,12 +128,19 @@ def register(mcp) -> None:
         - sha256: optional 64-char hex digest. If omitted, computed from the
           file on the host. Pass an explicit value to force a mismatch test.
         - host, admin_token: as in ota_get_info.
+        - confirm: Must be True to proceed.
 
         Returns: success, bytes_written, partition, sha256_verified.
 
-        WARNING: On success the device reboots immediately. Subsequent calls
-        to other tools will fail until the device is back up (~5–10 s).
+        On success the device reboots immediately (~5-10 s downtime). Subsequent
+        calls to other tools will fail until the device is back up.
         """
+        if not confirm:
+            raise ValueError(
+                "ota_upload_firmware requires confirm=True. "
+                "The device reboots immediately on successful upload, breaking the USB link "
+                "and forcing reconnection. Pass confirm=True to proceed."
+            )
         if not os.path.isfile(path):
             raise ValueError(f"Firmware not found: {path}")
         ota = _make_ota(host, admin_token)
@@ -213,19 +223,30 @@ def register(mcp) -> None:
     def ota_rollback(
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Marks running image INVALID and reboots to the previous firmware.
+
         Roll back to the previous OTA slot. The device reboots ~500 ms after
         the response. Fails (HTTP 409) if no rollback target exists — call
         ``ota_get_info`` first and check ``can_rollback``.
 
-        Parameters: host, admin_token (as in ota_get_info).
+        Parameters:
+        - host, admin_token: as in ota_get_info.
+        - confirm: Must be True to proceed.
 
         Returns: success, message.
 
-        WARNING: This is destructive — the running image will be marked
-        INVALID and the device will boot the previously-valid slot.
+        This is destructive - the running image will be marked INVALID and
+        the device will boot the previously-valid slot.
         """
+        if not confirm:
+            raise ValueError(
+                "ota_rollback requires confirm=True. "
+                "This operation marks the running firmware image INVALID and reboots to the previous slot. "
+                "Pass confirm=True to proceed."
+            )
         ota = _make_ota(host, admin_token)
         try:
             return ota.rollback()
@@ -257,15 +278,31 @@ def register(mcp) -> None:
         c6: Optional[bool] = None,
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Fetches firmware from GitHub and reboots device if ESP32 updates.
+
         Apply newer GitHub firmware. Applied in C6 -> P4 -> ESP32 order.
 
         Naming any target selects the set from scratch, so leaving an argument
         unset omits it. With no targets the device defaults to RP2040 + ESP32.
         P4/C6 require a DAQ HAT. If the ESP32 updates, it reboots after the
         response is sent.
+
+        Parameters:
+        - rp2040, esp32, p4, c6: Select which firmware images to update.
+        - host, admin_token: as in ota_get_info.
+        - confirm: Must be True to proceed.
+
+        Returns: update status.
         """
+        if not confirm:
+            raise ValueError(
+                "ota_apply_update requires confirm=True. "
+                "This fetches firmware from GitHub without explicit consent and reboots the device "
+                "if the ESP32 is updated. Pass confirm=True to proceed."
+            )
         ota = _make_ota(host, admin_token)
         try:
             return ota.apply_update(rp2040=rp2040, esp32=esp32, p4=p4, c6=c6)

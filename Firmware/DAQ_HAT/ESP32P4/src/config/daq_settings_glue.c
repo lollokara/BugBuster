@@ -158,6 +158,12 @@ static void apply_sample_rate(daq_board_t *b)
     }
     power_dsp_set_rate(&b->dsp, achieved);
     power_dsp_reset_energy(&b->dsp);
+    // Task 6 fix: recompute autorange dwell sample countdown from the new ODR.
+    // Without this, the dwell silently rescales - a 10 ms dwell becomes 0.1 ms
+    // after a 10k -> 1M SPS jump, causing range flapping exactly when the signal
+    // is most dynamic. The dwell is held as a SAMPLE count for per-sample hot-path
+    // efficiency; time units are the config surface (down_dwell_us).
+    range_manager_set_odr(&b->range, (uint32_t)achieved);
     if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
     sync_filter_keys_from_hw(b);
 }

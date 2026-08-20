@@ -241,6 +241,11 @@ def _parse_status(p: bytes) -> Dict[str, Any]:
         t0, t1 = struct.unpack_from("<hh", p, 96)
         out["board_temp_analog_c"] = None if t0 == TEMP_NA else t0 / 10.0
         out["board_temp_power_c"] = None if t1 == TEMP_NA else t1 / 10.0
+    if len(p) >= 101:
+        cal_have = struct.unpack_from("<B", p, 100)[0]
+        out["cal_have_hi"] = bool(cal_have & 0x01)
+        out["cal_have_mid"] = bool(cal_have & 0x02)
+        out["cal_have_lo"] = bool(cal_have & 0x04)
     return out
 
 

@@ -1105,11 +1105,19 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 float voltage = cmd.dacVoltage.voltage;
                 uint8_t physical_ch = tasks_logical_to_physical(cmd.channel);
                 float present_voltage = 0.0f;
+                bool range_change_needed = true;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                     present_voltage = g_deviceState.channels[cmd.channel].dacValue;
+                    range_change_needed =
+                        (g_deviceState.channels[cmd.channel].dacBipolar != bipolar);
                     xSemaphoreGive(g_stateMutex);
                 }
-                if (!setVoutRangePreservingOutput(cmd.channel, present_voltage, bipolar)) {
+                // setVoutRangePreservingOutput() parks the output and waits out
+                // the range settle. Running it when the range already matches is
+                // what left DAC_ACTIVE reading 0 for ~1 s after the command had
+                // already been acknowledged.
+                if (range_change_needed &&
+                    !setVoutRangePreservingOutput(cmd.channel, present_voltage, bipolar)) {
                     break;
                 }
                 s_device->setDacVoltage(physical_ch, voltage, bipolar);

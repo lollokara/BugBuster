@@ -192,6 +192,12 @@ def decode_status(p: bytes) -> dict:
         t0, t1 = struct.unpack_from("<hh", p, 96)
         d["t_board0_c"] = None if t0 == 0x7FFF else t0 / 10.0
         d["t_board1_c"] = None if t1 == 0x7FFF else t1 / 10.0
+    if len(p) >= 101:
+        # Extension v8: per-range current calibration validity.
+        cal_have = struct.unpack_from("<B", p, 100)[0]
+        d["cal_have_hi"] = bool(cal_have & 0x01)
+        d["cal_have_mid"] = bool(cal_have & 0x02)
+        d["cal_have_lo"] = bool(cal_have & 0x04)
     return d
 
 

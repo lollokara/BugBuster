@@ -173,3 +173,78 @@ def test_get_mac_address_returns_none_when_missing(transport):
     transport._session.get.return_value = _mock_response(200, {"siliconRev": 1})
 
     assert transport.get_mac_address() is None
+
+
+# ---------------------------------------------------------------------------
+# DELETE method (Fix 1)
+# ---------------------------------------------------------------------------
+
+
+def test_delete_method_exists_and_injects_admin_token(transport):
+    """Verify that HTTPTransport.delete() exists and injects admin token."""
+    transport._session.delete.return_value = _mock_response(200, {"ok": True})
+
+    result = transport.delete("/scripts/files?name=test.py")
+
+    assert result["ok"] is True
+    args, kwargs = transport._session.delete.call_args
+    headers = kwargs.get("headers") or {}
+    assert headers[ADMIN_TOKEN_HEADER] == "a" * 64
+
+
+def test_delete_without_admin_token_omits_header():
+    """DELETE without admin token should not inject the header."""
+    t = HTTPTransport("192.168.1.42")
+    t._session = MagicMock()
+    t._session.delete.return_value = _mock_response(200, {"ok": True})
+
+    t.delete("/scripts/files?name=test.py")
+
+    _, kwargs = t._session.delete.call_args
+    headers = kwargs.get("headers")
+    if headers:
+        assert ADMIN_TOKEN_HEADER not in headers
+
+
+# ---------------------------------------------------------------------------
+# GET method admin token injection (Fix 2)
+# ---------------------------------------------------------------------------
+
+
+def test_get_injects_admin_token(transport):
+    """Verify that HTTPTransport.get() now injects admin token."""
+    transport._session.get.return_value = _mock_response(200, {"status": "ok"})
+
+    result = transport.get("/scripts/status")
+
+    assert result["status"] == "ok"
+    args, kwargs = transport._session.get.call_args
+    headers = kwargs.get("headers") or {}
+    assert headers[ADMIN_TOKEN_HEADER] == "a" * 64
+
+
+def test_get_without_admin_token_omits_header():
+    """GET without admin token should not inject the header."""
+    t = HTTPTransport("192.168.1.42")
+    t._session = MagicMock()
+    t._session.get.return_value = _mock_response(200, {"status": "ok"})
+
+    t.get("/device/info")
+
+    _, kwargs = t._session.get.call_args
+    headers = kwargs.get("headers")
+    if headers:
+        assert ADMIN_TOKEN_HEADER not in headers
+
+
+def test_get_with_custom_headers_merges_admin_token(transport):
+    """GET with custom headers should merge admin token."""
+    transport._session.get.return_value = _mock_response(200, {"status": "ok"})
+
+    result = transport.get("/scripts/status", headers={"X-Custom": "value"})
+
+    assert result["status"] == "ok"
+    args, kwargs = transport._session.get.call_args
+    headers = kwargs.get("headers") or {}
+    assert headers[ADMIN_TOKEN_HEADER] == "a" * 64
+    assert headers["X-Custom"] == "value"

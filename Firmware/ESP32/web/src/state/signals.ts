@@ -144,6 +144,7 @@ export const scopeChannelInvert = signal<[boolean, boolean, boolean, boolean]>([
 ]);
 export const scopeTriggerLevel = signal<number>(0);
 export const scopeTimeBase = signal<number>(1); /* seconds of window */
+export const scopeDroppedSamples = signal<number>(0); // WEB-7: track buffer overflow
 
 /* Ring-buffer size; drop oldest samples beyond this. */
 export const SCOPE_RING_CAPACITY = 8192;
@@ -161,8 +162,11 @@ export function pushScopeSamples(seq: number, samples: number[][]): void {
       v: [s[1] ?? 0, s[2] ?? 0, s[3] ?? 0, s[4] ?? 0],
     });
   }
-  if (buf.length > SCOPE_RING_CAPACITY) {
-    buf.splice(0, buf.length - SCOPE_RING_CAPACITY);
+  // WEB-7: Track how many samples were dropped when ring buffer overflows
+  const overflow = Math.max(0, buf.length - SCOPE_RING_CAPACITY);
+  if (overflow > 0) {
+    buf.splice(0, overflow);
+    scopeDroppedSamples.value += overflow;
   }
   scopeBuffer.value = buf;
   scopeSeq.value = seq;

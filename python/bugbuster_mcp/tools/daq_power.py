@@ -545,7 +545,10 @@ def register(mcp) -> None:
         Computes, host-side:
         - totals: energy (J / mWh / uWh) and charge (C / mAh / uAh) as a
           trapezoidal integral of v*i, plus mean/RMS/min/max/std current, mean
-          and peak power, crest factor, and the measured DUT voltage.
+          and peak power, crest factor, and the measured DUT voltage. If any
+          active shunt range lacks factory calibration, totals will include
+          "uncalibrated": true and "uncalibrated_ranges": ["hi"|"mid"|"lo"]
+          to flag that energy/charge/current values carry systematic offsets.
         - states: the DUT's discrete power modes, found by clustering
           log10(current) - sleep / idle / active / peak - each with mean and
           peak current, occurrence count, total and mean duration, and the

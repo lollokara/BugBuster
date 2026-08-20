@@ -11,7 +11,12 @@ from typing import Optional
 import pytest
 
 from bugbuster.client import _parse_status, _parse_faults, BugBuster
-from bugbuster.protocol import cobs_encode, cobs_decode, crc16_ccitt, build_frame, parse_frame
+from bugbuster.protocol import (
+    cobs_encode, cobs_decode, crc16_ccitt, build_frame, parse_frame,
+    ProtocolError, BBP_MAX_PAYLOAD
+)
+from bugbuster.transport.usb import DeviceError
+from bugbuster.constants import ErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +65,65 @@ class TestCobsProtocol:
         assert seq == 0x1234
         assert cmd_id == 0x42
         assert parsed_payload == payload
+
+    def test_parse_frame_rejects_oversized_payload(self):
+        """A decoded frame exceeding BBP_MAX_PAYLOAD is rejected before
+        allocating. This guards against a malicious or corrupted frame
+        consuming unbounded memory."""
+        # Build a payload that would decode to BBP_MAX_PAYLOAD + 7 bytes
+        # (header=4, payload=BBP_MAX_PAYLOAD+1, crc=2).
+        oversized_payload = b'\xFF' * (BBP_MAX_PAYLOAD + 1)
+        msg_type = 0x02  # RSP
+        seq = 0x1234
+        cmd_id = 0x01
+        
+        # Build the decoded frame manually (header + payload + crc)
+        decoded = struct.pack('<BHB', msg_type, seq, cmd_id)
+        decoded += oversized_payload
+        crc = crc16_ccitt(decoded)
+        decoded += struct.pack('<H', crc)
+        
+        # COBS-encode it
+        encoded = cobs_encode(decoded)
+        
+        # parse_frame should reject it with a clear message
+        with pytest.raises(ProtocolError, match=r"Frame too large.*after COBS decode"):
+            parse_frame(encoded)
+
+    def test_parse_frame_accepts_max_sized_payload(self):
+        """A frame at exactly BBP_MAX_PAYLOAD is valid and should parse."""
+        # Build a payload at exactly BBP_MAX_PAYLOAD bytes
+        max_payload = b'\xAA' * BBP_MAX_PAYLOAD
+        seq = 0x5678
+        cmd_id = 0x42
+        
+        # Build and encode normally
+        frame = build_frame(seq=seq, cmd_id=cmd_id, payload=max_payload)
+        
+        # Should parse without error
+        parsed_type, parsed_seq, parsed_cmd, parsed_payload = parse_frame(frame[:-1])
+        assert parsed_seq == seq
+        assert parsed_cmd == cmd_id
+        assert len(parsed_payload) == BBP_MAX_PAYLOAD
+        assert parsed_payload == max_payload
+
+    def test_device_error_with_unknown_code_has_clear_message(self):
+        """An unknown error code should surface as a DeviceError with the hex
+        code in the message, not as a KeyError or bare exception."""
+        # Use a code that doesn't exist in ErrorCode
+        unknown_code = 0xFF
+        assert unknown_code not in ErrorCode._value2member_map_
+        
+        err = DeviceError(code=unknown_code, seq=12345)
+        # The message should contain the hex code
+        assert "0xFF" in str(err) or "0xff" in str(err).lower()
+        assert "seq=12345" in str(err)
+
+    def test_device_error_with_known_code_has_name(self):
+        """A known error code should surface with its symbolic name."""
+        err = DeviceError(code=ErrorCode.TIMEOUT, seq=9999)
+        assert "TIMEOUT" in str(err)
+        assert "seq=9999" in str(err)
 
     def test_get_admin_token_id(self):
         from bugbuster.constants import CmdId

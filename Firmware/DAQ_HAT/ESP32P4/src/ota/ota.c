@@ -69,7 +69,9 @@ esp_err_t ota_begin(const ota_meta_t *meta)
         ota_abort();
     }
 
-    // Product-id guard: reject an image built for a different target.
+    // Product-id guard: reject an image built for a different target BEFORE
+    // touching the partition. A wrong-target image rejected after esp_ota_begin()
+    // leaves the staging partition polluted with arbitrary bytes.
     if (strncmp(meta->product_id, FW_PRODUCT_ID, sizeof(meta->product_id)) != 0) {
         ESP_LOGE(TAG, "product-id mismatch: '%.*s' != '%s'",
                  (int)sizeof(meta->product_id), meta->product_id, FW_PRODUCT_ID);

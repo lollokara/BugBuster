@@ -24,10 +24,11 @@ import warnings
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
-import serial  # pyserial — needed for SerialException in drain-loop guard
+import serial  # pyserial - needed for SerialException in drain-loop guard
 
 from .transport.usb  import USBTransport, DeviceError
 from .transport.http import HTTPTransport
+from .transport.protocol import Transport
 
 if TYPE_CHECKING:
     # Imported lazily: bugbuster.script imports this module, so a runtime
@@ -103,11 +104,8 @@ def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
     """Raise ProtocolError if *resp* is shorter than *min_len* bytes."""
     if len(resp) < min_len:
         raise ProtocolError(
-            f"{cmd_name}: response too short — got {len(resp)} bytes, expected >= {min_len}"
+            f"{cmd_name}: response too short - got {len(resp)} bytes, expected >= {min_len}"
         )
-
-# Type alias for either transport
-_Transport = Union[USBTransport, HTTPTransport]
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +355,7 @@ class BugBuster:
         of calling this directly.
     """
 
-    def __init__(self, transport: _Transport):
+    def __init__(self, transport: Transport):
         self._t         = transport
         self._usb       = isinstance(transport, USBTransport)
         self._connected = False
@@ -801,10 +799,7 @@ class BugBuster:
         else:
             import urllib.parse
             qs = urllib.parse.urlencode({"name": name})
-            headers = {}
-            if self._admin_token:
-                headers["X-BugBuster-Admin-Token"] = self._admin_token
-            result = self._t.delete(f"/scripts/files?{qs}", headers=headers)
+            result = self._t.delete(f"/scripts/files?{qs}")
             if not result.get("ok"):
                 raise RuntimeError(f"script_delete failed: {result.get('err', 'unknown')}")
 
@@ -2458,22 +2453,83 @@ class BugBuster:
             data = self._http_get("/ioexp/faults")
             return data.get("faults", [])
 
-    def power_set_port(self, port: int, value: int) -> tuple[int, int]:
+    def power_set_port(self, port: int, value: int, *, confirm: bool = False) -> tuple[int, int]:
         """
         Write a raw PCA9535 output port byte. **USB only.**
 
         Bypasses the named-control mapping in :meth:`power_set` and drives all
-        eight pins of *port* at once. Prefer :meth:`power_set` unless you need
-        to change several rails in one I2C transaction — a raw write can turn
-        on rails the named API would have interlocked.
+        eight pins of *port* at once. **This is dangerous** - incorrect values
+        can drop USB or brick the logic rail, requiring a physical reset.
+        
+        **Use :meth:`power_set` instead** unless you need to change several
+        rails in one I2C transaction. The named API validates each control
+        and prevents dangerous combinations.
+        
+        **PCA9535 Port 0 bit layout** (from ``.mex/context/hardware-pinout.md``):
+        
+        - Bit 0: LOGIC_EN (main logic enable) - **CRITICAL**, must be 1
+        - Bit 1: VADJ1_PG (input, power good)
+        - Bit 2: VADJ1_EN (VADJ1 enable)
+        - Bit 3: VADJ2_EN (VADJ2 enable)
+        - Bit 4: VADJ2_PG (input, power good)
+        - Bit 5: EN_15V_A (±15V analog enable)
+        - Bit 6: EN_MUX (legacy, unused)
+        - Bit 7: EN_USB_HUB (USB hub enable) - **CRITICAL**, must be 1
+        
+        **PCA9535 Port 1 bit layout:**
+        
+        - Bit 0: EFUSE_EN_1 (output)
+        - Bit 1: EFUSE_FLT_1 (input, active low)
+        - Bit 2: EFUSE_EN_2 (output)
+        - Bit 3: EFUSE_FLT_2 (input, active low)
+        - Bit 4: EFUSE_EN_3 (output, maps to logical port 4)
+        - Bit 5: EFUSE_FLT_3 (input, logical port 4 fault)
+        - Bit 6: EFUSE_EN_4 (output, maps to logical port 3)
+        - Bit 7: EFUSE_FLT_4 (input, logical port 3 fault)
+        
+        **Safety:** Port 0 bits 0 (LOGIC_EN) and 7 (EN_USB_HUB) must never be
+        cleared. Clearing bit 0 disables the logic rail; clearing bit 7 drops
+        the USB connection. This method refuses to write such values even with
+        ``confirm=True`` - a physical reset would be required to recover.
 
         :param port: 0 or 1.
         :param value: 8-bit output latch value.
+        :param confirm: Must be True to bypass the safety check. Use this when
+                        you understand the exact bit consequences.
         :return: ``(port, value)`` echoed by the device.
+        :raises ValueError: If port is out of range, or if dangerous bits would
+                            be cleared on port 0.
         """
         self._require_usb("power_set_port")
         if port not in (0, 1):
             raise ValueError(f"port must be 0 or 1, got {port}")
+        
+        if not confirm:
+            raise ValueError(
+                "power_set_port() requires confirm=True. This bypasses all "
+                "safety checks and can drop USB or brick the logic rail. "
+                "Use power_set() instead for normal rail control."
+            )
+        
+        # Port 0 bit 0 (LOGIC_EN) and bit 7 (EN_USB_HUB) must NEVER be cleared.
+        if port == 0:
+            LOGIC_EN_BIT = 0x01   # bit 0
+            USB_HUB_BIT = 0x80    # bit 7
+            CRITICAL_BITS = LOGIC_EN_BIT | USB_HUB_BIT
+            
+            if (value & CRITICAL_BITS) != CRITICAL_BITS:
+                missing = []
+                if not (value & LOGIC_EN_BIT):
+                    missing.append("bit 0 (LOGIC_EN)")
+                if not (value & USB_HUB_BIT):
+                    missing.append("bit 7 (EN_USB_HUB)")
+                raise ValueError(
+                    f"Port 0 {', '.join(missing)} must be set. Clearing these "
+                    f"bits drops USB or disables the logic rail, requiring a "
+                    f"physical reset. Requested value: 0x{value:02X}. "
+                    f"Use power_set() for safe rail control."
+                )
+        
         resp = self._usb_cmd(CmdId.PCA_SET_PORT,
                              struct.pack('<BB', port, value & 0xFF))
         _require_resp_len(resp, 2, "PCA_SET_PORT")
@@ -2907,13 +2963,19 @@ class BugBuster:
         :param channels: Number of channels (1, 2, or 4)
         :param rate_hz:  Sample rate in Hz (max ~100MHz for 1ch, ~25MHz for 4ch)
         :param depth:    Total samples to capture
-        :param rle_enabled: Enable run-length encoding for memory/stream modes
+        :param rle_enabled: Enable run-length encoding of the on-HAT capture
+            buffer. Note this is the 32-bit memory-mode format
+            (``[value:4][count:28]``, see ``Firmware/RP2040/src/bb_la_rle.h``),
+            which is NOT the 8-bit per-segment compression the USB stream
+            applies on its own. Decode it with :meth:`hat_la_decode_rle`, not
+            :meth:`hat_la_decode`.
         :raises HatNotPresentError: If no HAT is detected on this device.
         """
         self._require_hat_present()
         payload = struct.pack('<BIIB', channels, rate_hz, depth, 1 if rle_enabled else 0)
         if self._usb:
             self._usb_cmd(CmdId.HAT_LA_CONFIG, payload)
+            self._la_rle_enabled = bool(rle_enabled)
             return True
         else:
             raise NotImplementedError("LA control is USB-only")
@@ -3352,6 +3414,21 @@ class BugBuster:
         if status["state"] not in (3,):  # LA_STATE_DONE
             raise RuntimeError(f"LA not in DONE state (state={status['state_name']})")
 
+        # An RLE capture stores a variable number of 32-bit words, and
+        # HAT_LA_STATUS reports samples, not entries - so there is no way to
+        # know how many bytes to read. Reading the raw-packed length instead
+        # returns a truncated word stream that hat_la_decode() will happily turn
+        # into plausible, wrong waveforms. Fail instead of guessing.
+        if getattr(self, "_la_rle_enabled", False):
+            raise NotImplementedError(
+                "hat_la_read_all() cannot read an RLE capture: HAT_LA_STATUS "
+                "reports sample count, not RLE entry count, so the transfer "
+                "length is unknown. Configure with rle_enabled=False for "
+                "memory-mode capture, or use the USB stream "
+                "(hat_la_stream_usb_cycle), which compresses per segment and "
+                "carries its own lengths."
+            )
+
         channels = status["channels"]
         samples = status["samples_captured"]
         samples_per_word = 32 // channels
@@ -3391,6 +3468,53 @@ class BugBuster:
                 for ch in range(channels):
                     result[ch].append((byte_val >> (bit_pos + ch)) & 1)
 
+        return result
+
+    @staticmethod
+    def hat_la_decode_rle(raw: bytes, channels: int = 4, max_samples: int = 1 << 24) -> list:
+        """
+        Decode a 32-bit memory-mode RLE capture into per-channel sample arrays.
+
+        Wire format, from ``Firmware/RP2040/src/bb_la_rle.h``::
+
+            word = (value << 28) | (count & 0x0FFFFFFF)   # little-endian u32
+
+        ``value`` holds one sample for every channel packed into its low
+        ``channels`` bits. A run longer than 0x0FFFFFFF is emitted by the
+        firmware as several consecutive words with the same value, so a decoder
+        that simply concatenates runs is correct and needs no special case.
+
+        This is a different format from the 8-bit ``[value][count-1]`` pairs the
+        USB stream uses per segment - do not cross the two.
+
+        :param raw: Raw bytes from the HAT capture buffer, a whole number of
+            32-bit words.
+        :param channels: Number of channels (1, 2, or 4)
+        :param max_samples: Refuse to expand beyond this many samples per
+            channel. The count field is 28 bits, so one corrupt word can ask for
+            268 million samples and exhaust host memory; the HAT's own buffer is
+            76 KB, so anything near the cap is corruption rather than data.
+        :return: List of channels, each a list of 0/1 values
+        :raises ValueError: If ``raw`` is not a whole number of 32-bit words, or
+            the run lengths sum past ``max_samples``.
+        """
+        if len(raw) % 4 != 0:
+            raise ValueError(
+                f"RLE capture must be a whole number of 32-bit words, got {len(raw)} bytes"
+            )
+        result: list[list[int]] = [[] for _ in range(channels)]
+        total = 0
+        for (word,) in struct.iter_unpack("<I", raw):
+            value = (word >> 28) & 0x0F
+            count = word & 0x0FFFFFFF
+            total += count
+            if total > max_samples:
+                raise ValueError(
+                    f"RLE run lengths exceed max_samples ({max_samples}); "
+                    f"the capture is corrupt or truncated"
+                )
+            for ch in range(channels):
+                result[ch].extend([(value >> ch) & 1] * count)
         return result
 
     # ------------------------------------------------------------------

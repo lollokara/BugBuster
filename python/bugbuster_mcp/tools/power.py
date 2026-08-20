@@ -74,13 +74,19 @@ def register(mcp) -> None:
     def power_control(
         control: str,
         enable:  bool,
+        i_understand_the_risk: bool = False,
     ) -> dict:
         """
+        WARNING: Incorrect power control can kill USB connectivity requiring physical reset.
+
         Enable or disable a BugBuster power rail or protection device.
 
         Use this to manually control power supplies and e-fuses. In normal
         use, the HAL handles power sequencing automatically via configure_io
         and set_supply_voltage. Use this tool for manual control or recovery.
+
+        Writing raw PCA9535 port masks can disable the USB rail, short-circuit
+        supplies, or brick device connectivity. You MUST pass i_understand_the_risk=True.
 
         Parameters:
         - control: Power control name. One of:
@@ -94,9 +100,17 @@ def register(mcp) -> None:
             "efuse3"  — E-fuse protection for IO_Block 3 (IOs 7-9)
             "efuse4"  — E-fuse protection for IO_Block 4 (IOs 10-12)
         - enable: True to enable, False to disable.
+        - i_understand_the_risk: Must be True.
 
         Returns: control, enable, success.
         """
+        if not i_understand_the_risk:
+            raise ValueError(
+                "power_control requires i_understand_the_risk=True. "
+                "Direct power rail control can disable USB connectivity (requiring physical reset), "
+                "short-circuit supplies, or damage connected devices. "
+                "Use set_supply_voltage and configure_io for normal operation."
+            )
         key = control.lower().strip()
         if key not in _POWER_CONTROL_MAP:
             raise ValueError(
@@ -131,19 +145,28 @@ def register(mcp) -> None:
         return bb.wifi_get_status()
 
     @mcp.tool()
-    def wifi_set_ap_password(password: str) -> dict:
+    def wifi_set_ap_password(password: str, confirm: bool = False) -> dict:
         """
+        WARNING: Disconnects all AP clients immediately, potentially locking you out.
+
         Set the BugBuster SoftAP password.
 
-        Persists the new password to NVS and applies it live — no reboot
+        Persists the new password to NVS and applies it live - no reboot
         required. Current AP clients will be disconnected immediately when
         the password changes.
 
         Parameters:
-        - password: New WPA2-PSK password. Must be 8–63 characters.
+        - password: New WPA2-PSK password. Must be 8-63 characters.
+        - confirm: Must be True to proceed.
 
         Returns: success, message.
         """
+        if not confirm:
+            raise ValueError(
+                "wifi_set_ap_password requires confirm=True. "
+                "Changing the AP password disconnects all clients immediately and may lock you out "
+                "if you lose the new password. Pass confirm=True to proceed."
+            )
         if len(password) < 8 or len(password) > 63:
             raise ValueError(
                 f"AP password must be 8-63 characters (WPA2 requirement), got {len(password)}"

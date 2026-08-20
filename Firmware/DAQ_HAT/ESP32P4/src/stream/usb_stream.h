@@ -101,6 +101,17 @@ _Static_assert(sizeof(usb_wave_hdr_t) + (size_t)USB_WAVE_V_BATCH * sizeof(float)
 // This shipped: CONFIG_TINYUSB_VENDOR_TX_BUFSIZE was 8192 while WAVE_I framed
 // at 16038 B, so the PC stream carried only 10 Hz summaries and never a single
 // waveform sample.
+// Task 3 fix: add #error for the common stale-sdkconfig failure case (the
+// _Static_assert already catches under-size at compile-time IF the define exists,
+// but a stale sdkconfig after \"idf.py fullclean\" can inherit 8192 from an old
+// build and silently disable the FIFO checks by leaving the define absent).
+#if defined(CONFIG_TINYUSB_VENDOR_TX_BUFSIZE) && \
+    (CONFIG_TINYUSB_VENDOR_TX_BUFSIZE < 32768)
+#error "CONFIG_TINYUSB_VENDOR_TX_BUFSIZE must be >= 32768 (sdkconfig.defaults \
+requests 32768; if you see this, the generated sdkconfig did not pick it up - \
+delete build/sdkconfig and rebuild)"
+#endif
+
 #ifdef CONFIG_TINYUSB_VENDOR_TX_BUFSIZE
 _Static_assert(USB_FRAME_OVERHEAD + sizeof(usb_wave_hdr_t)
                + (size_t)USB_WAVE_I_BATCH * (sizeof(float) + sizeof(uint8_t))

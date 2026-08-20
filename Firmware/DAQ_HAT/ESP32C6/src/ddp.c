@@ -54,8 +54,6 @@ static volatile uint8_t s_btn_events = 0;
 // WiFi streaming mode, set/cleared by DDP_CMD_WIFI_STREAM_MODE from the P4.
 static volatile bool s_wifi_stream_mode = false;
 
-static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
-
 static void send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
     uint8_t buf[4 + DDP_MAX_PAYLOAD];
@@ -102,8 +100,12 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
         }
         break;
     case DDP_CMD_SET_BACKLIGHT:
-        if (len >= 1) display_set_backlight(payload[0]);
-        send_frame(DDP_RSP_OK, NULL, 0);
+        if (len >= 1) {
+            display_set_backlight(payload[0]);
+            send_frame(DDP_RSP_OK, NULL, 0);
+        } else {
+            uint8_t e = 1; send_frame(DDP_RSP_ERR, &e, 1);
+        }
         break;
     case DDP_CMD_SET_DIAGNOSTICS:
         if (len >= sizeof(ddp_diag_t)) {
@@ -130,8 +132,10 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
             taskENTER_CRITICAL(&s_mux);
             s_btn_events |= payload[0];
             taskEXIT_CRITICAL(&s_mux);
+            send_frame(DDP_RSP_OK, NULL, 0);
+        } else {
+            uint8_t e = 1; send_frame(DDP_RSP_ERR, &e, 1);
         }
-        send_frame(DDP_RSP_OK, NULL, 0);
         break;
     case DDP_CMD_CONFIG_PUSH:
         // The P4 pushes settings changed elsewhere (S3/desktop/web). Fold them
@@ -142,8 +146,12 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
     case DDP_CMD_SET_CH_LEDS:
         // 4 channel-status colour codes from the S3 (relayed by the P4): drive
         // the neopixels in pairs (DAQ_NPX_CHANNEL mode).
-        if (len >= 4) npx_set_channel_codes(payload);
-        send_frame(DDP_RSP_OK, NULL, 0);
+        if (len >= 4) {
+            npx_set_channel_codes(payload);
+            send_frame(DDP_RSP_OK, NULL, 0);
+        } else {
+            uint8_t e = 1; send_frame(DDP_RSP_ERR, &e, 1);
+        }
         break;
     case DDP_CMD_MB_RESPONSE:
         // Result of a Main Board Settings request. Power reads/writes carry a

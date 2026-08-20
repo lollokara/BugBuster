@@ -20,6 +20,7 @@
 #include "c6_config.h"
 #include "wifi_hosted.h"
 #include "version.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "daq_hat";
 
@@ -88,6 +89,10 @@ void app_main(void)
     // not carry a C6 build ID, so the S3 never sees it (see include/version.h).
     ESP_LOGI(TAG, "DAQ HAT (C6) display firmware starting... (%s)", FW_VERSION_STRING);
 
+    // Register this task with the task watchdog so a hung main loop triggers a
+    // reboot rather than needing a physical power cycle. 10 s timeout.
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+
     theme_init();
     settings_init();
     theme_set_dark(g_settings.dark_mode);   // apply persisted theme
@@ -116,6 +121,9 @@ void app_main(void)
     uint32_t last_hello = 0;
 
     while (1) {
+        // Feed the watchdog once per loop iteration.
+        esp_task_wdt_reset();
+
         uint32_t t = now_ms();
 
         // WiFi streaming handoff: the P4 has (or is about to) hand the shared
@@ -177,8 +185,16 @@ void app_main(void)
             if (ddp_get_latest(&v, &i, &flags, &age) && age < 1000) {
                 ui_set_data(v, i, flags, DDP_STATE_LIVE);
             } else {
+                // C6-9 fix: when the P4 link is stale (age >= 2 s), show a
+                // "LINK LOST" banner instead of silently falling back to demo
+                // mode, which would show fabricated data that looks live.
                 sim_data(t, &v, &i, &flags);
-                ui_set_data(v, i, flags, DDP_STATE_SIM);
+                if (age >= 2000) {
+                    ui_set_data(v, i, flags, DDP_STATE_FAULT);
+                    ui_show_warning("P4 link lost");
+                } else {
+                    ui_set_data(v, i, flags, DDP_STATE_SIM);
+                }
             }
             ui_render(t);
             display_flush();

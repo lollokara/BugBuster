@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 10;
+pub const PROTO_VERSION: u8 = 11;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;
@@ -184,6 +184,7 @@ pub const CMD_WIFI_CONNECT: u8 = 0xE2;
 pub const CMD_SET_SPI_CLOCK: u8 = 0xE3;
 pub const CMD_WIFI_SCAN: u8 = 0xE4;
 pub const CMD_WIFI_FORGET: u8 = 0x0A;
+pub const CMD_WIFI_SET_AP_PASSWORD: u8 = 0xEF; // DESK-9: WiFi AP password change
 
 /// DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
 /// payload[0] selects the op (0=get,1=set,2=get_all,3=schema,4=action).
@@ -270,6 +271,30 @@ pub const ERR_FRAME_TOO_LARGE: u8 = 0x09;
 pub const ERR_STREAM_ACTIVE: u8 = 0x0A;
 pub const ERR_TIMEOUT: u8 = 0x11;
 pub const ERR_IO_OWNERSHIP_REQUIRED: u8 = 0x12;
+pub const ERR_ADGS_ROUTE_REJECTED: u8 = 0x13;
+pub const ERR_UNSUPPORTED_HAT: u8 = 0x14;
+
+/// Convert error code to human-readable string. Handles unknown future codes
+/// gracefully by returning "Unknown error 0xXX" instead of panicking.
+pub fn error_to_string(code: u8) -> String {
+    match code {
+        ERR_INVALID_CMD => "Invalid command".to_string(),
+        ERR_INVALID_CH => "Invalid channel".to_string(),
+        ERR_INVALID_PARAM => "Invalid parameter".to_string(),
+        ERR_SPI_FAIL => "SPI communication failure".to_string(),
+        ERR_QUEUE_FULL => "Command queue full".to_string(),
+        ERR_BUSY => "Device busy".to_string(),
+        ERR_INVALID_STATE => "Invalid state".to_string(),
+        ERR_CRC_FAIL => "CRC check failed".to_string(),
+        ERR_FRAME_TOO_LARGE => "Frame too large".to_string(),
+        ERR_STREAM_ACTIVE => "Stream already active".to_string(),
+        ERR_TIMEOUT => "Command timeout".to_string(),
+        ERR_IO_OWNERSHIP_REQUIRED => "IO slot ownership required".to_string(),
+        ERR_ADGS_ROUTE_REJECTED => "MUX routing rejected (self-test interlock)".to_string(),
+        ERR_UNSUPPORTED_HAT => "Command requires different HAT type".to_string(),
+        _ => format!("Unknown error 0x{:02X}", code),
+    }
+}
 
 // -----------------------------------------------------------------------------
 // COBS Codec

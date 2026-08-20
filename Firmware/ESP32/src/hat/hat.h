@@ -679,6 +679,22 @@ int hat_log_ring_drain(char *out_buf, size_t buf_sz);
 bool hat_init(void);
 
 /**
+ * @brief Get the last HAT error code from a failed operation.
+ *
+ * This helps BBP command handlers distinguish different failure modes:
+ *  - 0x00: No error (operation succeeded)
+ *  - 0xFF: No HAT connected
+ *  - 0xFE: Wrong HAT type for the requested command
+ *  - Other: HAT UART protocol error code (from HAT_RSP_ERROR payload)
+ *
+ * Check this after a hat_*() function returns false to determine whether
+ * to return BBP_ERR_UNSUPPORTED_HAT (0x14) vs BBP_ERR_TIMEOUT (0x11).
+ *
+ * @return Error code as described above.
+ */
+uint8_t hat_get_last_error(void);
+
+/**
  * @brief Check if a HAT is physically present (based on ADC detect).
  */
 bool hat_detected(void);

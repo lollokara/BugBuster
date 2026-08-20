@@ -4,6 +4,71 @@
 
 ### Added
 
+- **Three consistency gates, because every audited surface had drifted again
+  within two weeks.** The 2026-08-07 documentation reset corrected all known
+  count drift; by 2026-08-20 all nine surfaces had drifted back, because only
+  `BBP_PROTO_VERSION` was gated. Three scripts in `Firmware/tools/` now derive
+  facts from source and fail when anything disagrees, run by the new
+  `.github/workflows/consistency-gates.yml` and by
+  `tests/synthetic/test_consistency_gates.py` so they also fail locally:
+
+  | Script | Guards |
+  |---|---|
+  | `check_proto_version.py` | BBP (3 copies), DAQ USB stream (4 decoders), DDP |
+  | `check_doc_counts.py` | 25 documented counts across 17 claim sites |
+  | `check_sdkconfig_effective.py` | `sdkconfig.defaults` keys that never applied |
+
+  **They found four real defects on their first run, two of them introduced by
+  the audit that was meant to remove drift.** `grep -c` counts *lines*, not
+  items, so "20 desktop tabs" reached three READMEs when the real number is
+  **22** - three tabs share one line in `app.rs`. The derivation command printed
+  in `AGENTS.md` was itself the buggy one and is replaced by
+  `check_doc_counts.py --print`, now the only sanctioned way to obtain a count.
+
+  Design decisions that make the gates hold: a claim whose regex stops matching
+  is a **failure**, not a skip, because a silently skipped claim is
+  indistinguishable from a passing one; waivers live in a dict whose value is a
+  written reason; and `test_doc_counts_derives_every_metric_it_claims` fails if
+  a claim names a metric the deriver does not produce, so a typo cannot create a
+  claim that is structurally incapable of failing. Method and traps in
+  `.mex/patterns/add-consistency-gate.md`.
+
+- **MCP `onboarding` tool group - an agent can now get a board onto a network.**
+  The library had `wifi_scan`, `wifi_connect` and the whole Quick Setup API, but
+  none of it was exposed, so an agent could not reach any HTTP-only capability.
+  That included **P4 and C6 firmware upload, which have no USB route at all** -
+  an agent could not update a HAT unaided. Seven tools: `wifi_scan`,
+  `wifi_connect`, `quicksetup_list`, `quicksetup_get`, and
+  `quicksetup_save` / `_apply` / `_delete` behind `i_understand_the_risk`, each
+  stating its consequence in the first line of the docstring.
+  **MCP tools 112 -> 119 across 18 groups.**
+
+- **`BugBuster.hat_la_decode_rle()` - the 32-bit LA RLE format had no host
+  decoder at all.** `hat_la_configure(rle_enabled=True)` was accepted and
+  `hat_la_decode()` then turned the resulting word stream into plausible, wrong
+  waveforms. There are in fact **two** RLE formats and only one was ever
+  decoded:
+
+  | Producer | Format | Host decoder before |
+  |---|---|---|
+  | `bb_la_rle.c` (memory-mode capture) | 32-bit `[value:4][count:28]`, long runs split across words | **none** |
+  | `bb_la_usb.c` (USB stream, per segment) | 8-bit `[value][count-1]` | `tests/mock/la_usb_host.py`, agrees |
+
+  The new decoder is pinned by 11 unit tests written against a port of the
+  firmware encoder, including the split-run case a naive decoder gets wrong, and
+  is bounded by `max_samples` because one corrupt word can ask for 268 M samples
+  when the HAT's whole buffer is 76 KB.
+
+- **Calibration standing is now a three-state fact: `calibrated`,
+  `uncalibrated`, or `unknown`.** `power_analysis.py` previously defaulted a
+  missing calibration flag to "calibrated" on the reasoning that it avoided
+  false positives. On a measurement instrument that is the wrong default - it
+  prints an authoritative absolute energy for a channel whose standing nobody
+  checked. On the dev unit an uncalibrated HI range carries about -653 uA of
+  offset, so the distinction is not academic. `analyze()` returns a top-level
+  `calibration` block naming the ranges actually used, and the `unknown` case
+  gets its own warning telling the caller to treat the figures as relative.
+
 - **`USB_META_SETTLING` now reports the FUSION's real state, not the range
   manager's control lock (ESP32-P4 2.4.1).** The flag is what every consumer
   uses to decide whether a sample is trustworthy, but it was driven by
@@ -145,6 +210,114 @@
   back to the bundled backend, which removes the Zadig step entirely.
 
 ### Fixed
+
+- **The wrong-HAT guard covered 2 of 15 entry points, after being "verified
+  live".** Returning a named `BBP_ERR_UNSUPPORTED_HAT` instead of a timeout was
+  confirmed on hardware against `hat_get_caps` and declared done. Probing a
+  second command immediately broke that conclusion: `hat_get_rail_status` still
+  returned `TIMEOUT`. Only `hat_get_caps` and `hat_la_set_route` carried
+  `hat_require_type()` outside the LA block; rails (status/enable/voltage),
+  LEDs, all four calibration entry points, IO bank, level shift, SWD setup,
+  target detect and SWD clock did not.
+
+  A second defect sat behind it. Handlers split across two error mappers, and
+  only `hat_fail_code()` knew the wrong-HAT sentinels `0xFE`/`0xFF`;
+  `hat_err_to_cmd_err()` fell through to `BAD_ARG`, so a wrong-HAT calibration
+  command was reported as a *malformed request*. Both fixed, and the mapping now
+  lives in one place. Verified live on the three distinct handler paths:
+
+  | Command | Before | After |
+  |---|---|---|
+  | `hat_get_caps` | UNSUPPORTED_HAT | UNSUPPORTED_HAT |
+  | `hat_get_rail_status` | **TIMEOUT** | **UNSUPPORTED_HAT** |
+  | `hat_calibrate_status` | **INVALID_PARAM** | **UNSUPPORTED_HAT** |
+
+  Verifying one instance of a systemic fix proves only that instance.
+
+- **An aborted self-test could lock an IO slot until reboot.**
+  `selftest_claim_ch_slot()` claimed slot 14 as `IO_OWNER_INTERNAL` with
+  `lease_ms = 0`, meaning infinite - and `IO_OWNER_INTERNAL` is precisely the
+  kind `io_owner_release_all_except()` deliberately preserves, so no client
+  reconnect could clear it and every later claim on that slot was refused. Lease
+  expiry itself was never missing: `io_owner_tick()` has always expired leases,
+  and a USB re-handshake already releases the prior session. The defect was the
+  one lease that opted out of both mechanisms. `io_owner_acquire()` now caps
+  INTERNAL leases at `IO_OWNER_INTERNAL_MAX_LEASE_MS`, and the self-test claims
+  for `IO_OWNER_SELFTEST_LEASE_MS` (5 s), which is generous for a single ADC
+  read.
+
+- **A refused MUX write left the hardware half-configured.**
+  `adgs_set_api_all_safe()` committed the API shadow `s_api_main_state` *before*
+  calling the hardware, and `sync_api_main_from_physical()` only covers
+  `i < ADGS_MAIN_DEVICES`. An API device with no physical device behind it
+  therefore kept the value the interlock had just rejected and read back as
+  though the write had succeeded. Observed on the bench as a persistent
+  `[0,0,0,4]`. It now snapshots and restores on refusal, so a refusal changes
+  nothing.
+
+  `adgs_set_all_safe()`'s declaration was also corrected from `ADGS_NUM_DEVICES`
+  to `ADGS_MAIN_DEVICES` to match its definition. Array parameters decay to
+  pointers so the compiler never objected, and a caller that sized its buffer
+  from the header overflowed the stack by one byte on every `GET /api/mux`.
+
+- **The on-device web UI did not compile.** It had been recorded as complete on
+  the strength of the source changes alone. `App.tsx` had structurally mangled
+  JSX - the `voltages` and `daq` tab blocks interleaved mid-expression - plus
+  five TypeScript errors across `ErrorBoundary.tsx` and the new DAQ tab. Fixed;
+  `npm run build` now succeeds. The bundle measures **1,545,395 B** against the
+  **4,194,304 B** `spiffs` partition at `0x810000`, which settles a
+  long-outstanding question about whether it fits: 63% headroom.
+
+- **LA USB timeout recovery desynchronised the stream it was meant to
+  preserve.** The recovery path kept the buffer only when it already held a
+  full 4-byte header, and cleared it otherwise - so a timeout arriving 1 to 3
+  bytes into a frame discarded valid bytes and left every subsequent frame
+  misaligned. The buffer is frame-aligned by construction, since only whole
+  frames are drained, so the correct action is to keep it. `resync_stream_buffer()`
+  now only discards when the leading bytes cannot begin a frame, and then hunts
+  forward for the next plausible header.
+
+- **C6 text rendering: a clipping "fix" that broke multi-line text, over a
+  bounds problem that did not exist.** `gfx_fill_rect()` already clips every
+  pixel including negative coordinates, so the framebuffer could never overflow
+  through `gfx_text()`. The added guard used `break`, so a single long line
+  stopped every later `\n` line from rendering at all. The genuine
+  out-of-bounds read is the font table: it holds 255 glyphs, so byte `0xFF` -
+  reachable from any non-ASCII SSID - indexes past the end. Off-screen glyphs
+  now `continue` instead of breaking, and the glyph index is bounded against an
+  exported `gfx_font5x7_glyphs` rather than an assumed 256.
+
+- **`check_faults` reported a short circuit that was not there.** It flagged
+  "VADJ1/VADJ2 power-good lost - supply overloaded or shorted" while both rails
+  were **disabled**. Power-good reads low simply because the rail is off. The
+  tool exists to tell a user what is wrong and was sending them to hunt a fault
+  that did not exist; power-good is now only evaluated for an enabled rail.
+
+- **Three `sdkconfig.defaults` keys that had never taken effect.** Found by the
+  new gate on its first run:
+
+  - `CONFIG_SPIRAM_ALLOW_BSS_SEG` **is not a symbol this ESP-IDF defines** - the
+    real name is `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`. The setting
+    survived only inside the generated `sdkconfig`, which means **a clean CI
+    build had BSS-in-PSRAM off while local incremental builds had it on**, and
+    `EXT_RAM_BSS_ATTR` placement differed between them.
+  - `CONFIG_MDNS_MEMORY_ALLOC_*` is a Kconfig *choice*. Clearing `_INTERNAL`
+    selected nothing, so the choice fell back to its default, which is
+    `_INTERNAL` - the mDNS PSRAM spill the comment describes had never happened.
+    `_SPIRAM` is now selected positively.
+  - `CONFIG_ESP_WIFI_RX_BA_WIN=32` is unsatisfiable: Kconfig caps it at
+    `2 * ESP_WIFI_STATIC_RX_BUFFER_NUM`, which is 16 here. It was being silently
+    clamped, so the file now states the value actually obtained.
+
+  `custom_sdkconfig` in `platformio.ini` was tried first and does not help:
+  it cannot make Kconfig accept a value it refuses.
+
+- **`hat_la_read_all()` no longer returns a truncated RLE capture.**
+  `HAT_LA_STATUS` reports sample count, not RLE entry count, so for an
+  RLE-configured capture the transfer length is genuinely unknowable. It used to
+  compute the raw-packed length and read that, yielding a truncated word stream
+  that decoded into something plausible. It now refuses outright and names the
+  two working alternatives.
 
 - **Commands that do real device work no longer time out as if the link were
   dead.** The transport applied one 5 s timeout to every command, but some do
@@ -366,6 +539,30 @@
   compile-time setting.)
 
 ### Changed
+
+- **ESP32-C6 DAQ HAT display firmware 2.2.0 -> 2.3.0.** The settings blob moved
+  to NVS version 6 with a v5 migration path, but the firmware version had not
+  been bumped - so the migration would never have been exercised by an upgrade,
+  which is the only thing that can prove it.
+
+- **`.github/workflows/proto-version-check.yml` is replaced by
+  `consistency-gates.yml`.** Its single step is now step one of the new
+  workflow, alongside the doc-count and sdkconfig gates. `AGENTS.md`
+  non-negotiable #5 points at the new file.
+
+- **Documented counts corrected against source, and now gated.** Desktop tabs
+  20 -> **22** in `README.md` (twice) and `DesktopApp/BugBuster/README.md`; MCP
+  tools 112 -> **119** and groups 17 -> **18** across `README.md`,
+  `python/bugbuster_mcp/README.md`, `Docs/io-ownership.md` (which still said 59)
+  and four `.mex/` files. All 25 of these claims are now checked by
+  `check_doc_counts.py`, so the next drift fails CI instead of surviving until
+  the following audit.
+
+- **`.mex/manifests/rp2040-hat.manifest.md` no longer claims GPIO28 is
+  LA_DONE.** There is no dedicated LA_DONE pin on this PCB - `BB_LA_DONE_PIN`
+  and `PIN_HAT_LA_DONE_IRQ` are both `-1`, LA-done rides the shared HAT IRQ on
+  GPIO8, and GPIO28/29 are analog rail senses. `AGENTS.md` was corrected in
+  2026-08-07 and this manifest had not been brought along.
 
 - **C6 screen: firmware-update progress bar.** The "Firmware" screen used to
   show only a static "UPDATING" state pill for the whole duration of an

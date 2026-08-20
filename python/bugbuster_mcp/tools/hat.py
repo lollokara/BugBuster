@@ -9,6 +9,7 @@ Tools: hat_get_caps, hat_get_rail_status, hat_health_summary,
 from __future__ import annotations
 from .. import session
 from ..safety import require_hat
+from ..tool_wrappers import with_error_context, require_hat_type
 
 
 HAT_RAIL_NAMES = {
@@ -173,9 +174,13 @@ def build_hat_rail_preflight(
 def register(mcp) -> None:
 
     @mcp.tool()
+    @with_error_context("hat_get_caps")
+    @require_hat_type("RP2040 LA HAT", expected_type_code=0x02)
     def hat_get_caps() -> dict:
         """
         Get HAT v2 hardware capabilities.
+
+        Requires RP2040 LA HAT (type 0x02). Will not work with DAQ HAT (type 0x10).
 
         Returns capability metadata including hardware revision, rail count,
         LED count, logical shifted IO count, and logic analyzer routes.
@@ -277,6 +282,7 @@ def register(mcp) -> None:
     def hat_set_rail_enable(
         rail_id: int,
         enable: bool,
+        confirm: bool = False,
     ) -> dict:
         """
         Enable or disable a HAT v2 power rail.
@@ -284,6 +290,7 @@ def register(mcp) -> None:
         Parameters:
         - rail_id: Rail ID (0 = 3V3_ADJ, 1 = VADJ3, 2 = VADJ4).
         - enable: True to enable, False to disable.
+        - confirm: Must be True if preflight warnings are present.
 
         Returns: refreshed status of all HAT rails.
         """
@@ -299,7 +306,20 @@ def register(mcp) -> None:
         )
         if not preflight["ok"]:
             raise RuntimeError("HAT rail preflight failed: " + "; ".join(preflight["reasons"]))
-        return bb.hat_set_rail_enable(rail_id, enable)
+        
+        # Check for warnings that need confirmation
+        warnings = preflight.get("warnings", [])
+        if warnings and not confirm:
+            warnings_str = "; ".join(warnings)
+            raise ValueError(
+                f"HAT rail operation has warnings: {warnings_str}. "
+                "Pass confirm=True to proceed despite these warnings."
+            )
+        
+        result = bb.hat_set_rail_enable(rail_id, enable)
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     @mcp.tool()
     def hat_set_rail_voltage(

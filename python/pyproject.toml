@@ -7,7 +7,7 @@ name = "bugbuster"
 version = "0.1.0"
 description = "Python control library for the BugBuster AD74416H industrial I/O device"
 requires-python = ">=3.11"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 dependencies = [
     "pyserial>=3.5",
     "requests>=2.28",

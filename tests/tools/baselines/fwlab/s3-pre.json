@@ -1,0 +1,310 @@
+{
+  "tag": "s3-pre",
+  "captured_at": 1787235066.5205338,
+  "probes": {
+    "device_info": {
+      "ok": true,
+      "data": [
+        true,
+        3,
+        40,
+        1349
+      ]
+    },
+    "ping": {
+      "ok": false,
+      "error": "NotImplementedError: ping is only available over USB",
+      "critical": false
+    },
+    "status": {
+      "ok": true,
+      "data": {
+        "spi_ok": true,
+        "die_temp_c": 45.13966369628906,
+        "alert_status": 0,
+        "alert_mask": 0,
+        "supply_alert_status": 0,
+        "supply_alert_mask": 0,
+        "live_status": 2,
+        "channels": [
+          {
+            "id": 0,
+            "function": 0,
+            "function_name": "HIGH_IMP",
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 1,
+            "function": 0,
+            "function_name": "HIGH_IMP",
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 2,
+            "function": 0,
+            "function_name": "HIGH_IMP",
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          },
+          {
+            "id": 3,
+            "function": 0,
+            "function_name": "HIGH_IMP",
+            "adc_raw": 0,
+            "adc_value": 0.0,
+            "adc_range": 0,
+            "adc_rate": 1,
+            "adc_mux": 0,
+            "dac_code": 0,
+            "dac_value": 0.0,
+            "din_state": false,
+            "din_counter": 0,
+            "do_state": false,
+            "channel_alert": 0,
+            "channel_alert_mask": 0,
+            "rtd_excitation_ua": 0
+          }
+        ],
+        "diagnostics": [
+          {
+            "source": 1,
+            "raw_code": 2796,
+            "value": 45.13966369628906
+          },
+          {
+            "source": 5,
+            "raw_code": 20577,
+            "value": 15.095197677612305
+          },
+          {
+            "source": 2,
+            "raw_code": 26248,
+            "value": 3.3376057147979736
+          },
+          {
+            "source": 3,
+            "raw_code": 19589,
+            "value": 5.23082733154297
+          }
+        ],
+        "mux_states": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "memory": {
+      "ok": true,
+      "data": {
+        "internal": "HeapPool(free_bytes=55179, min_ever_bytes=45079, largest_block_bytes=36864, total_bytes=255667)",
+        "psram": "HeapPool(free_bytes=7150196, min_ever_bytes=7136252, largest_block_bytes=7077888, total_bytes=8322040)",
+        "uptime_ms": 1174858,
+        "tasks": [
+          "TaskStack(name='adcPoll', declared_bytes=2560, free_bytes=1272, running=True)",
+          "TaskStack(name='faultMon', declared_bytes=2560, free_bytes=1212, running=True)",
+          "TaskStack(name='cmdProc', declared_bytes=3072, free_bytes=1800, running=True)",
+          "TaskStack(name='wavegen', declared_bytes=2048, free_bytes=1172, running=True)",
+          "TaskStack(name='mainLoop', declared_bytes=5120, free_bytes=2940, running=True)",
+          "TaskStack(name='bbpCli', declared_bytes=5120, free_bytes=2912, running=True)"
+        ],
+        "schema": 1
+      }
+    },
+    "idac_cal": {
+      "ok": true,
+      "data": {
+        "present": true,
+        "channels": [
+          {
+            "id": 0,
+            "code": 0,
+            "targetV": 3.2993838787078857,
+            "midpointV": 3.299999952316284,
+            "vMin": 1.7000000476837158,
+            "vMax": 5.199999809265137,
+            "stepMv": 98.031494140625,
+            "calibrated": true,
+            "name": "LevelShift",
+            "polyValid": true,
+            "calPoly": [
+              3.3006069660186768,
+              -1.8242766857147217,
+              0.005746979266405106,
+              -0.0018363965209573507
+            ]
+          },
+          {
+            "id": 1,
+            "code": -99,
+            "targetV": 3.043236255645752,
+            "midpointV": 5,
+            "vMin": 3,
+            "vMax": 15,
+            "stepMv": 98.031494140625,
+            "calibrated": true,
+            "name": "V_ADJ1",
+            "polyValid": true,
+            "calPoly": [
+              1.4478839635849,
+              -3.6598939895629883,
+              -14.585722923278809,
+              -14.073430061340332
+            ]
+          },
+          {
+            "id": 2,
+            "code": 0,
+            "targetV": 4.895532131195068,
+            "midpointV": 5,
+            "vMin": 3,
+            "vMax": 15,
+            "stepMv": 98.031494140625,
+            "calibrated": true,
+            "name": "V_ADJ2",
+            "polyValid": true,
+            "calPoly": [
+              4.907496452331543,
+              -12.392778396606445,
+              0.3716631531715393,
+              0.2729986011981964
+            ]
+          }
+        ]
+      }
+    },
+    "hat_rails": {
+      "ok": true,
+      "data": {
+        "count": 0,
+        "rails": []
+      }
+    },
+    "hat_cal": {
+      "ok": false,
+      "error": "HTTPError: 503 Server Error: Service Unavailable for url: http://192.168.3.89:80/api/hat/v2/calibrate/status",
+      "critical": false
+    },
+    "daq_stream": {
+      "ok": true,
+      "data": {
+        "sample_rate": 256000,
+        "overflow_count": 0,
+        "range": "hi",
+        "streaming": true,
+        "range_locked": false,
+        "source_enabled": false,
+        "vdut_set": 3.299999952316284,
+        "ilimit_set": 1.0,
+        "in_voltage": 0.0,
+        "in_current": 0.0,
+        "adaq_fine_ok": true,
+        "adaq_coarse_ok": true,
+        "adaq_voltage_ok": true,
+        "fine_err_pct": 23,
+        "drop_fine": 0,
+        "drop_coarse": 0,
+        "fine_diag_sticky": 255,
+        "frames_tx": 5,
+        "bytes_per_sec": 0,
+        "fifo_drop_frames": 0,
+        "ring_high_water": 24021,
+        "wave_i_index_lo": 6124,
+        "wave_i_frames": 2,
+        "wave_v_frames": 1,
+        "wave_i_drops": 0,
+        "wave_v_drops": 0,
+        "filter": 0,
+        "adc_decimation": 0,
+        "stream_decimation": 1,
+        "odr_sps": 256000.0,
+        "board_temp_analog_c": 41.8,
+        "board_temp_power_c": 40.0,
+        "cal_have_hi": false,
+        "cal_have_mid": false,
+        "cal_have_lo": false
+      }
+    }
+  },
+  "cal_fingerprint": {
+    "idac_cal": {
+      "channels": [
+        {
+          "midpointV": 3.299999952316284,
+          "calibrated": true,
+          "polyValid": true,
+          "calPoly": [
+            3.3006069660186768,
+            -1.8242766857147217,
+            0.005746979266405106,
+            -0.0018363965209573507
+          ]
+        },
+        {
+          "midpointV": 5,
+          "calibrated": true,
+          "polyValid": true,
+          "calPoly": [
+            1.4478839635849,
+            -3.6598939895629883,
+            -14.585722923278809,
+            -14.073430061340332
+          ]
+        },
+        {
+          "midpointV": 5,
+          "calibrated": true,
+          "polyValid": true,
+          "calPoly": [
+            4.907496452331543,
+            -12.392778396606445,
+            0.3716631531715393,
+            0.2729986011981964
+          ]
+        }
+      ]
+    },
+    "daq_stream": {
+      "overflow_count": 0,
+      "cal_have_hi": false,
+      "cal_have_mid": false,
+      "cal_have_lo": false
+    }
+  }
+}

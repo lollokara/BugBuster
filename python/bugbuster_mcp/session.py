@@ -75,6 +75,14 @@ def _transport_obj():
 
 def link_healthy() -> Optional[bool]:
     """True/False for a USB link, None when not applicable or not yet opened."""
+    # Force connection if not yet established so we can determine actual transport
+    if _bb is None:
+        try:
+            get_client()
+        except Exception:
+            # If connection fails, we can't determine health
+            return None
+    
     if _bb is None or _transport != "usb":
         return None
     checker = getattr(_transport_obj(), "is_healthy", None)

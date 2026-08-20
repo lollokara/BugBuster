@@ -10,6 +10,7 @@ damage connected devices or put the BugBuster in an inconsistent state.
 from __future__ import annotations
 from typing import Optional
 from .. import session
+from ..tool_wrappers import require_usb_transport, with_error_context
 
 
 def register(mcp) -> None:
@@ -81,6 +82,8 @@ def register(mcp) -> None:
             raise ValueError(f"Unknown action {action!r}. Use 'get', 'set_switch', or 'set_all'.")
 
     @mcp.tool()
+    @require_usb_transport()
+    @with_error_context("register_access")
     def register_access(
         action:                str,
         register_address:      int,
@@ -88,11 +91,12 @@ def register(mcp) -> None:
         i_understand_the_risk: bool = False,
     ) -> dict:
         """
+        WARNING: Writing incorrect register values can damage the AD74416H or connected devices.
+
         Read or write raw AD74416H SPI registers. USB transport only.
 
-        WARNING: Writing incorrect register values can damage the AD74416H
-        or connected devices. Only use this for low-level debugging or
-        accessing registers not covered by other tools.
+        Only use this for low-level debugging or accessing registers not covered
+        by other tools.
 
         You MUST pass i_understand_the_risk=True to use this tool.
 
@@ -109,8 +113,6 @@ def register(mcp) -> None:
                 "register_access requires i_understand_the_risk=True. "
                 "Raw register writes can damage the AD74416H or connected devices."
             )
-        if not session.is_usb():
-            raise RuntimeError("register_access is only available over USB transport.")
 
         bb = session.get_client()
         action_lower = action.lower()
@@ -130,15 +132,20 @@ def register(mcp) -> None:
         channel: int   = 0,
         voltage: Optional[float] = None,
         code:    Optional[int]   = None,
+        i_understand_the_risk: bool = False,
     ) -> dict:
         """
+        WARNING: Raw IDAC writes can retrim VADJ1, VADJ2, and VLOGIC, drifting supply voltages unpredictably.
+
         Direct control of the DS4424 IDAC (current DAC) that adjusts power supply voltages.
 
         The DS4424 has 4 channels that inject current into the LTM8063 feedback
         networks to adjust VADJ1, VADJ2, and VLOGIC output voltages.
 
-        In normal use, call set_supply_voltage instead. Use this tool for
-        diagnostics or fine-grained voltage trimming.
+        In normal use, call set_supply_voltage instead. Use this tool only for
+        diagnostics or fine-grained voltage trimming when you understand the implications.
+
+        You MUST pass i_understand_the_risk=True for set_voltage and set_code actions.
 
         Parameters:
         - action: "status" to read state, "set_voltage" to set by voltage,
@@ -146,6 +153,7 @@ def register(mcp) -> None:
         - channel: IDAC channel (0=VLOGIC, 1=VADJ1, 2=VADJ2, 3=unused).
         - voltage: Target voltage for set_voltage action.
         - code: Raw DAC code (0-127) for set_code action.
+        - i_understand_the_risk: Must be True for set_voltage/set_code.
 
         Returns: action, channel, status/result.
         """
@@ -156,11 +164,23 @@ def register(mcp) -> None:
             st = bb.idac_get_status()
             return {"action": "status", "idac": st}
         elif action_lower == "set_voltage":
+            if not i_understand_the_risk:
+                raise ValueError(
+                    "idac_control set_voltage requires i_understand_the_risk=True. "
+                    "Raw IDAC voltage writes retrim the power supply feedback networks and can "
+                    "drift VADJ1, VADJ2, or VLOGIC unpredictably. Use set_supply_voltage for normal operation."
+                )
             if voltage is None:
                 raise ValueError("set_voltage requires voltage parameter.")
             bb.idac_set_voltage(channel, voltage)
             return {"action": "set_voltage", "channel": channel, "voltage": voltage, "success": True}
         elif action_lower == "set_code":
+            if not i_understand_the_risk:
+                raise ValueError(
+                    "idac_control set_code requires i_understand_the_risk=True. "
+                    "Raw IDAC code writes retrim the power supply feedback networks and can "
+                    "drift VADJ1, VADJ2, or VLOGIC unpredictably. Use set_supply_voltage for normal operation."
+                )
             if code is None:
                 raise ValueError("set_code requires code parameter (0-127).")
             if not (0 <= code <= 127):

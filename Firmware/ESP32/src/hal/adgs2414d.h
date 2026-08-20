@@ -91,14 +91,22 @@ bool adgs_init(void);
  * @param states  Array of 4 bytes, one per device (bit 0=SW1 ... bit 7=SW8)
  */
 void adgs_set_all_raw(const uint8_t states[ADGS_NUM_DEVICES]);
-
 /**
- * @brief Set all 4 devices' switch states with safety dead time.
+ * @brief Set the main devices' switch states with safety dead time.
  *        Opens all switches first, waits ADGS_DEAD_TIME_MS, then sets new state.
  *
- * @param states  Array of 4 bytes
+ * The parameter is ADGS_MAIN_DEVICES wide, NOT ADGS_NUM_DEVICES - the self-test
+ * device is preserved, not written. This declaration used to say NUM_DEVICES
+ * while the definition said MAIN_DEVICES; array parameters decay to pointers so
+ * the compiler never objected, and a caller sized its buffer from the header and
+ * overflowed the stack by one byte (MUX-2).
+ *
+ * @param states  Array of ADGS_MAIN_DEVICES bytes
+ * @return false when the U17-S3 self-test interlock refused the write, so the
+ *         caller can report the refusal instead of answering with stale state.
+ *         A refused write changes nothing.
  */
-void adgs_set_all_safe(const uint8_t states[ADGS_NUM_DEVICES]);
+bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES]);
 
 /**
  * @brief Set a single switch with dead time protection.
@@ -133,8 +141,9 @@ void adgs_get_api_states(uint8_t out[ADGS_API_MAIN_DEVICES]);
 /**
  * @brief Set the 4-byte public MUX API state with safety dead time.
  *        Only physically populated devices are driven in hardware.
+ * @return false when the self-test interlock refused the write.
  */
-void adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES]);
+bool adgs_set_api_all_safe(const uint8_t states[ADGS_API_MAIN_DEVICES]);
 
 /**
  * @brief Set a single switch in the 4-byte public MUX API state.

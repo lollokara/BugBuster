@@ -52,7 +52,11 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Enable the .ext_ram.bss linker section so that EXT_RAM_BSS_ATTR on
 # file-scope variables actually places them in PSRAM (without this, the
 # section size stays 0 even when the attribute is applied correctly).
-CONFIG_SPIRAM_ALLOW_BSS_SEG=y
+# The symbol is ..._EXTERNAL_MEMORY on this IDF; a bare CONFIG_SPIRAM_ALLOW_BSS_SEG
+# sat here for a while and matched nothing, so the setting survived only in the
+# generated sdkconfig - meaning a clean CI build had it OFF while local
+# incremental builds had it ON.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # Internal-heap budgeting (root-cause fix for `mainLoopTask creation failed`
 # / `Failed to start HTTP server: ESP_ERR_HTTPD_TASK` crashes seen 2026-05-07):
 # the previous 16384 threshold meant every cJSON node, http buffer, and
@@ -80,7 +84,11 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152
 # memory (receive(176))` noise after httpd init drained internal heap.
 # httpd's task stack stays internal via httpd_config_t.task_caps; WiFi/DMA
 # allocations stay internal via explicit MALLOC_CAP_DMA|INTERNAL flags.
-# CONFIG_MDNS_MEMORY_ALLOC_INTERNAL is not set
+# MDNS_MEMORY_ALLOC_* is a Kconfig *choice*, so clearing INTERNAL on its own
+# does nothing - the choice just falls back to its default, which is INTERNAL.
+# That is why the PSRAM spill described above never actually happened. Select
+# SPIRAM positively instead. (Found by Firmware/tools/check_sdkconfig_effective.py.)
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
 
 # WiFi buffer tuning — BugBuster is a bench instrument, not a media server.
 # Static TX/RX buffers live in internal DMA RAM regardless of SPIRAM_USE_MALLOC.
@@ -96,7 +104,12 @@ CONFIG_ESP_WIFI_ENABLE_WIFI6=y
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
 # Improve RX aggregation window for better efficiency
-CONFIG_ESP_WIFI_RX_BA_WIN=32
+# Kconfig caps ESP_WIFI_RX_BA_WIN at 2 * ESP_WIFI_STATIC_RX_BUFFER_NUM, which is
+# 16 here, so the 32 this line used to request was silently clamped to 16 and had
+# no effect. Raising it for real would mean more internal DMA RAM for static RX
+# buffers, which this build does not have spare - so state the value we actually
+# get. (Found by Firmware/tools/check_sdkconfig_effective.py.)
+CONFIG_ESP_WIFI_RX_BA_WIN=16
 
 # Cache: bump with octal PSRAM (default 16 KB/32 KB is too small for external RAM workloads)
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y

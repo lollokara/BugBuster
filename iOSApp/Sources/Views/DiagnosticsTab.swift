@@ -98,6 +98,11 @@ struct DiagnosticsTab: View {
     // AD74416H Internal Diagnostics
     @State private var internalSupplies: [InternalSupplyEntry]? = nil
     @State private var isLoadingInternalSupplies = false
+    
+    // Confirmation dialogs
+    @State private var showResetConfirmation = false
+    @State private var showRollbackConfirmation = false
+    @State private var showOtaConfirmation = false
 
     var hatPresent: Bool { connectionManager.lastHatStatus?.isPresent ?? false }
     /// Gates the DAQ HAT's ESP32-P4 / ESP32-C6 OTA targets. `kind == "daq"`
@@ -152,6 +157,36 @@ struct DiagnosticsTab: View {
         .sheet(isPresented: $showWifiSheet) { wifiConnectionSheet }
         .sheet(isPresented: $showingCalData) {
             CalibrationDataView(supplyName: calSupplies.first(where: { $0.id == selectedCalSupply })?.name ?? "Unknown", points: loadedCalPoints, hatCal: loadedHatCal)
+        }
+        .confirmationDialog("Reset all channels to High-Z?", isPresented: $showResetConfirmation, titleVisibility: .visible) {
+            Button("Reset All Channels", role: .destructive) {
+                resetAllChannels()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will reset all analog front-end channels to high-impedance mode and disconnect all supplies.")
+        }
+        .confirmationDialog("Rollback to previous firmware?", isPresented: $showRollbackConfirmation, titleVisibility: .visible) {
+            Button("Rollback and Reboot", role: .destructive) {
+                performRollback()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The device will immediately reboot into the previous firmware version. Only available if a previous valid image exists.")
+        }
+        .confirmationDialog("Apply firmware update?", isPresented: $showOtaConfirmation, titleVisibility: .visible) {
+            Button("Apply Update", role: .destructive) {
+                applyOtaUpdate()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let targets = [
+                updateEsp32 ? "ESP32-S3" : nil,
+                updateHat ? "RP2040 HAT" : nil,
+                updateP4 && daqHatPresent ? "ESP32-P4" : nil,
+                updateC6 && daqHatPresent ? "ESP32-C6" : nil
+            ].compactMap { $0 }.joined(separator: ", ")
+            return Text("Updating: \(targets). The device will reboot when complete.")
         }
         .onAppear {
             fetchGitReleases()
@@ -394,7 +429,7 @@ struct DiagnosticsTab: View {
 
             Divider().background(Color.white.opacity(0.1))
 
-            Button(action: { resetAllChannels() }) {
+            Button(action: { showResetConfirmation = true }) {
                 HStack {
                     Image(systemName: "arrow.counterclockwise.circle.fill")
                     Text("Reset All Channels to High-Z")
@@ -902,7 +937,7 @@ struct DiagnosticsTab: View {
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    Button(action: applyOtaUpdate) {
+                    Button(action: { showOtaConfirmation = true }) {
                         HStack {
                             Image(systemName: "arrow.down.circle.fill")
                             Text("Apply Selected Firmware")
@@ -921,7 +956,7 @@ struct DiagnosticsTab: View {
 
                 Divider().background(Color.white.opacity(0.1))
 
-                Button(action: { performRollback() }) {
+                Button(action: { showRollbackConfirmation = true }) {
                     HStack {
                         Image(systemName: "arrow.uturn.backward.circle.fill")
                         Text("Rollback to Previous Firmware")

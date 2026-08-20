@@ -496,7 +496,10 @@ QuickSetupStatus quicksetup_apply(uint8_t slot, QuickSetupApplyReport *report)
         cJSON *item = devices ? cJSON_GetArrayItem(devices, i) : NULL;
         states[i] = (item && cJSON_IsNumber(item)) ? (uint8_t)item->valueint : 0;
     }
-    adgs_set_api_all_safe(states);
+    if (!adgs_set_api_all_safe(states)) {
+        ESP_LOGE(TAG, "MUX programming refused by the U17-S3 / U23 interlock - "
+                      "quick setup MUX state NOT applied");
+    }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);

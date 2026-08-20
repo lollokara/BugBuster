@@ -8,6 +8,8 @@
 
 // Ported 5x7 font table (Adafruit/ER glcdfont), column-major, 5 bytes/glyph.
 extern const unsigned char gfx_font5x7[];
+extern const unsigned int gfx_font5x7_glyphs;
+#define GFX_FONT_GLYPHS gfx_font5x7_glyphs
 
 static uint16_t *s_fb = NULL;
 static int s_w = 0, s_h = 0;
@@ -518,10 +520,20 @@ void gfx_round_rect_border(int x, int y, int w, int h, int r, uint16_t color)
 // ---- Text ------------------------------------------------------------------
 void gfx_text(int x, int y, const char *s, uint8_t size, uint16_t color)
 {
+    // gfx_fill_rect already clips every pixel, so the framebuffer cannot overflow
+    // here. What can is the font table: it holds GFX_FONT_GLYPHS glyphs, and a
+    // non-ASCII byte (a UTF-8 SSID, say) indexes past the end. Skip those, and
+    // skip off-screen glyphs without breaking out - a later '\n' may bring the
+    // cursor back on-screen.
     int cx = x;
     for (; *s; s++) {
         unsigned char ch = (unsigned char)*s;
         if (ch == '\n') { cx = x; y += GFX_SMALL_H(size) + size; continue; }
+        if (ch >= GFX_FONT_GLYPHS) { cx += 6 * size; continue; }
+        if (cx >= s_w || y >= s_h || cx + 5 * size <= 0 || y + 7 * size <= 0) {
+            cx += 6 * size;
+            continue;
+        }
         const unsigned char *g = &gfx_font5x7[ch * 5];
         for (int col = 0; col < 5; col++) {
             uint8_t bits = g[col];

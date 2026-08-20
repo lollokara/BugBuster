@@ -11,6 +11,7 @@ import {
   deviceFailureStreak,
 } from "./state/signals";
 import { PairingModal } from "./components/PairingModal";
+import { ErrorBoundary } from "./components/ErrorBoundary"; // WEB-8
 import { Overview } from "./tabs/overview/Overview";
 
 // Tabs other than Overview are dynamically imported so their JS only ships
@@ -25,6 +26,7 @@ const SignalPath = lazy(() => import("./tabs/signal/SignalPath").then((m) => ({ 
 const System = lazy(() => import("./tabs/system/System").then((m) => ({ default: m.System })));
 const Scripts = lazy(() => import("./tabs/scripts/Scripts").then((m) => ({ default: m.Scripts })));
 const Voltages = lazy(() => import("./tabs/voltages/Voltages").then((m) => ({ default: m.Voltages })));
+const DAQ = lazy(() => import("./tabs/daq/DAQ").then((m) => ({ default: m.DAQ }))); // WEB-1
 
 type TabId =
   | "overview"
@@ -32,9 +34,10 @@ type TabId =
   | "analog"
   | "digital"
   | "signal"
+  | "voltages"
+  | "daq"
   | "system"
-  | "scripts"
-  | "voltages";
+  | "scripts";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -43,6 +46,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "digital", label: "Digital" },
   { id: "signal", label: "Signal Path" },
   { id: "voltages", label: "Voltages" },
+  { id: "daq", label: "DAQ" }, // WEB-1
   { id: "system", label: "System" },
   { id: "scripts", label: "Scripts" },
 ];
@@ -82,12 +86,18 @@ export function App() {
   // On consecutive failures, back off so a disconnected device doesn't burn
   // 1200 doomed requests per 10-min idle window. The cadence resets to the
   // hot 500 ms loop on the next successful response.
+  // WEB-6: Also back off to 30s when page is hidden.
   useEffect(() => {
     let alive = true;
     let consecutiveFailures = 0;
     const HOT_MS = 500;
+    const HIDDEN_MS = 30000;  // WEB-6: slow poll when hidden
     const BACKOFF_STAGES = [1000, 2500, 5000, 10000, 30000] as const;
     const nextDelay = () => {
+      // WEB-6: Always use slow poll when page is hidden
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return HIDDEN_MS;
+      }
       if (consecutiveFailures === 0) return HOT_MS;
       const idx = Math.min(consecutiveFailures - 1, BACKOFF_STAGES.length - 1);
       return BACKOFF_STAGES[idx]!;
@@ -154,15 +164,52 @@ export function App() {
       </nav>
 
       <main class="content">
-        {activeTab.value === "overview" && <Overview />}
+        {activeTab.value === "overview" && (
+          <ErrorBoundary key="overview">
+            <Overview />
+          </ErrorBoundary>
+        )}
         <Suspense fallback={<div class="text-dim" style="padding:1rem">Loading…</div>}>
-          {activeTab.value === "scope" && <ScopePanel />}
-          {activeTab.value === "analog" && <Analog />}
-          {activeTab.value === "digital" && <Digital />}
-          {activeTab.value === "signal" && <SignalPath />}
-          {activeTab.value === "voltages" && <Voltages />}
-          {activeTab.value === "system" && <System />}
-          {activeTab.value === "scripts" && <Scripts />}
+          {activeTab.value === "scope" && (
+            <ErrorBoundary key="scope">
+              <ScopePanel />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "analog" && (
+            <ErrorBoundary key="analog">
+              <Analog />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "digital" && (
+            <ErrorBoundary key="digital">
+              <Digital />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "signal" && (
+            <ErrorBoundary key="signal">
+              <SignalPath />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "voltages" && (
+            <ErrorBoundary key="voltages">
+              <Voltages />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "daq" && (
+            <ErrorBoundary key="daq">
+              <DAQ />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "system" && (
+            <ErrorBoundary key="system">
+              <System />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "scripts" && (
+            <ErrorBoundary key="scripts">
+              <Scripts />
+            </ErrorBoundary>
+          )}
         </Suspense>
       </main>
 

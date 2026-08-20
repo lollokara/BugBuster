@@ -701,6 +701,52 @@ export const api = {
       onEvent?: (e: DaqUploadEvent) => void,
     ) => uploadDaqImage(mac, target, file, onEvent),
   },
+
+  /* ---- DAQ HAT routes (WEB-1, WEB-2) ---- */
+  daq: {
+    status: () => request<any>("/api/daq"),
+    vdutStatus: () => request<any>("/api/daq/vdut/status"),
+    vdutEnable: (mac: string, enabled: boolean) =>
+      request<any>("/api/daq/vdut/enable", {
+        method: "POST",
+        body: { enabled },
+        mac,
+        admin: true,
+      }),
+    vdutSetpoint: (mac: string, voltageV: number, currentLimitMa: number) =>
+      request<any>("/api/daq/vdut/setpoint", {
+        method: "POST",
+        body: { voltageV, currentLimitMa },
+        mac,
+        admin: true,
+      }),
+    acqConfig: (mac: string, filter: number, adc_dec: number) =>
+      request<any>("/api/daq/acq_config", {
+        method: "POST",
+        body: { filter, adc_dec },
+        mac,
+        admin: true,
+      }),
+    wifiStreamStart: (mac: string) =>
+      request<any>("/api/daq/wifi_stream/start", {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    wifiStreamStop: (mac: string) =>
+      request<any>("/api/daq/wifi_stream/stop", {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    wifiStreamRecycle: (mac: string) =>
+      request<any>("/api/daq/wifi_stream/recycle", {
+        method: "POST",
+        mac,
+        admin: true,
+      }),
+    wifiStreamStatus: () => request<any>("/api/daq/wifi_stream/status"),
+  },
 };
 
 async function sha256Hex(file: Blob): Promise<string> {

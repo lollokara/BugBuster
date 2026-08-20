@@ -24,7 +24,7 @@
 #include <stdint.h>
 
 #define FW_VERSION_MAJOR   2
-#define FW_VERSION_MINOR   2
+#define FW_VERSION_MINOR   3
 #define FW_VERSION_PATCH   0
 
 // Packed 32-bit version: 0x00MMmmpp (major/minor/patch), easy to compare.

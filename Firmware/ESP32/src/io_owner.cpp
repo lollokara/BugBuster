@@ -66,6 +66,13 @@ bool io_owner_acquire(uint8_t slot_idx, io_owner_kind_t kind,
 {
     if (slot_idx >= IO_OWNER_NUM_SLOTS) return false;
 
+    // An INTERNAL claim is immune to io_owner_release_all_except(), so an
+    // infinite one can only be cleared by a reboot. Cap it.
+    if (kind == IO_OWNER_INTERNAL &&
+        (lease_ms == 0 || lease_ms > IO_OWNER_INTERNAL_MAX_LEASE_MS)) {
+        lease_ms = IO_OWNER_INTERNAL_MAX_LEASE_MS;
+    }
+
     bool ok = false;
     portENTER_CRITICAL(&s_mux);
     io_owner_slot_t *sl = &s_slots[slot_idx];

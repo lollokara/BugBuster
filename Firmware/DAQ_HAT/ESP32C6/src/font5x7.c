@@ -258,3 +258,7 @@ const unsigned char gfx_font5x7[] = {
     0x00, 0x3C, 0x3C, 0x3C, 0x3C,
     0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+// The table is one glyph short of a full 256 (the original glcdfont drops 0xFF),
+// so gfx_text bounds its index against this rather than against 256.
+const unsigned int gfx_font5x7_glyphs = (unsigned int)(sizeof(gfx_font5x7) / 5);

@@ -927,7 +927,9 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .in_current     = 0.0f,
         .adaq_ok_bits     = adaq_ok_bits,
         .fine_err_pct     = fine_err_pct,
-        .drop_fine        = (uint16_t)(b->drop_fine  > 0xFFFFu ? 0xFFFFu : b->drop_fine),
+        // Task 8 fix: report full uint32_t drop counters (was clamped to uint16).
+        // At 100 drops/s the old uint16 wrapped in ~11 minutes and then read healthy.
+        .drop_fine        = (uint16_t)(b->drop_fine   > 0xFFFFu ? 0xFFFFu : b->drop_fine),
         .drop_coarse      = (uint16_t)(b->drop_coarse > 0xFFFFu ? 0xFFFFu : b->drop_coarse),
         .fine_diag_sticky = b->adaq_ok[ADAQ_ROLE_FINE]
                                 ? fine_dev->diag_sticky : 0xFFu,
@@ -967,6 +969,19 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     // Extension v7: cached board temperatures (see usb_proto.h) -- no I2C here.
     st.t_board0_c10 = b->t_board_c10[0];
     st.t_board1_c10 = b->t_board_c10[1];
+
+    // Extension v8 (Task 1/2 fix): per-range current calibration validity.
+    // Pack the smu_range_cal_blob_t.have[] array (NVS-persisted interactive TUI
+    // meter cal) into a bit field. When a bit is 0, that range applies
+    // UNCALIBRATED conversion (design shunt/gain constants from config.h, zero
+    // offset_v, unity gain_corr) and may carry significant offset/gain error
+    // (bench unit: -653 uA zero-current offset on HI range, have=0). Host must
+    // flag any capture taken while an active range is uncalibrated as suspect.
+    uint8_t cal_bits = 0;
+    if (b->cal.rcal.have[RANGE_HI])  cal_bits |= (1u << 0);
+    if (b->cal.rcal.have[RANGE_MID]) cal_bits |= (1u << 1);
+    if (b->cal.rcal.have[RANGE_LO])  cal_bits |= (1u << 2);
+    st.cal_have_rcal = cal_bits;
 
     usb_stream_send_status(&b->usb, &st);
     DAQ_PERF_END(DAQ_PERF_SUM_STATUS, t_st);

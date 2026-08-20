@@ -1105,6 +1105,12 @@ static void handle_fw_event(uint32_t ev)
     case FW_STAGE_CONFIRM:
         if (ev & BTN_EV_BACK) { s_fw_stage = FW_STAGE_PICK; return; }
         if (ev & BTN_EV_OK) {
+            // C6-2 fix: bounds-check s_fw_rel before sending to P4.
+            if (s_fw_rel < 0 || s_fw_rel >= s_fwi.rel_count) {
+                ui_show_warning("No releases available");
+                s_fw_stage = FW_STAGE_TABLE;
+                return;
+            }
             uint8_t args[2] = { (uint8_t)s_fw_rel, FW_DEV_BIT[s_fw_dev] };
             ddp_send_mb_request(DDP_MB_FW_APPLY, args, sizeof(args));
             s_fw_last_req = 0;              // show the new state promptly
@@ -1579,8 +1585,12 @@ static void render_fw(void)
     if (s_fw_stage == FW_STAGE_CONFIRM) {
         gfx_text(6, 5, "Confirm Update", 1, g_theme.dim);
         char line[64];
+        // rel_count can drop to 0 under us when a fresh release list arrives, so
+        // the index is re-checked here and not only on the OK press.
+        const char *rel = (s_fw_rel >= 0 && s_fw_rel < s_fwi.rel_count)
+                              ? s_fwi.rel[s_fw_rel] : "--";
         snprintf(line, sizeof(line), "Update %s to %s?",
-                 FW_DEV_NAME[s_fw_dev], s_fwi.rel[s_fw_rel]);
+                 FW_DEV_NAME[s_fw_dev], rel);
         gfx_text(8, TITLE_H + 12, line, 1, g_theme.text);
         gfx_text(8, TITLE_H + 26, "Do not power off during the update.", 1, g_theme.amber);
         gfx_text(8, TITLE_H + 42, "OK = update      BACK = cancel", 1, g_theme.muted);

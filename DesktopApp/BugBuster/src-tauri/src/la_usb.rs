@@ -66,6 +66,31 @@ pub enum LaStreamPacketError {
     TruncatedPayload { announced: usize, actual: usize },
 }
 
+/// True if `buf` could be the start of a stream frame (valid type + payload length).
+/// Fewer than 4 bytes is "not yet decidable", which counts as plausible.
+fn is_plausible_frame_start(buf: &[u8]) -> bool {
+    match buf.first() {
+        None => true,
+        Some(&STREAM_PKT_START | &STREAM_PKT_DATA | &STREAM_PKT_STOP | &STREAM_PKT_ERROR) => {
+            buf.len() < 3 || (buf[2] as usize) <= STREAM_MAX_PAYLOAD
+        }
+        Some(_) => false,
+    }
+}
+
+/// Drop leading bytes until the buffer starts on a plausible frame header.
+/// Returns how many bytes were discarded (0 means the buffer was already aligned).
+fn resync_stream_buffer(buf: &mut Vec<u8>) -> usize {
+    let mut offset = 0usize;
+    while offset < buf.len() && !is_plausible_frame_start(&buf[offset..]) {
+        offset += 1;
+    }
+    if offset > 0 {
+        buf.drain(..offset);
+    }
+    offset
+}
+
 pub fn parse_stream_packet(buf: &[u8]) -> Result<LaStreamPacket, LaStreamPacketError> {
     if buf.len() < 4 {
         return Err(LaStreamPacketError::ShortHeader(buf.len()));
@@ -343,7 +368,23 @@ impl LaUsbConnection {
             let completion = match timeout_result {
                 Ok(c) => c,
                 Err(_) => {
-                    self.stream_buffer.clear();
+                    // DESK-2: keep the partial frame. The buffer is frame-aligned by
+                    // construction (only whole frames are drained), so a timeout mid-frame
+                    // leaves a valid frame start at offset 0 and clearing it would desync
+                    // every subsequent frame. Only a header that cannot be a frame means
+                    // the stream is genuinely corrupt, and then we hunt for the next one.
+                    let dropped = resync_stream_buffer(&mut self.stream_buffer);
+                    if dropped > 0 {
+                        log::warn!(
+                            "LA USB timeout: corrupt header, resynced by dropping {dropped} byte(s), {} buffered",
+                            self.stream_buffer.len()
+                        );
+                    } else {
+                        log::warn!(
+                            "LA USB timeout with {} buffered byte(s) - partial frame preserved",
+                            self.stream_buffer.len()
+                        );
+                    }
                     return Err(anyhow!(
                         "USB stream read timed out (5 s) — device may be stuck"
                     ));

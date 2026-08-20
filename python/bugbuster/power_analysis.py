@@ -50,10 +50,28 @@ def integrate(
     figures a battery-life estimate needs. NaN samples (index gaps) are skipped
     and counted, so a lossy capture reports honest coverage instead of a
     silently low integral.
+    
+    **Duration reporting:** Two duration fields are returned:
+    
+    - ``duration_valid_s``: time span of valid samples only (excludes dropped samples)
+    - ``duration_total_s``: true elapsed time including gaps (n / sample_rate)
+    - ``sample_coverage``: fraction of samples that were valid (0.0 to 1.0)
+    
+    Use ``duration_total_s`` when computing average power/current from energy/charge
+    integrals to avoid inflated averages when samples are dropped. The integrals
+    themselves are correct (trapezoid over valid pairs only), but dividing by
+    valid-sample time would overstate the average.
+    
+    **Averages in the return dict** (current_mean_a, power_mean_w, etc.) are
+    computed per-sample (sum / valid_samples), not per-time, so they are
+    unaffected by dropped samples. For time-based averages, divide the energy
+    or charge by ``duration_total_s``.
     """
     n = min(len(current), len(voltage))
     if n == 0 or sample_rate <= 0:
-        return {"valid_samples": 0, "energy_j": 0.0, "charge_c": 0.0}
+        return {"valid_samples": 0, "energy_j": 0.0, "charge_c": 0.0,
+                "skipped_samples": 0, "duration_valid_s": 0.0,
+                "duration_total_s": 0.0, "sample_coverage": 0.0}
 
     dt = 1.0 / sample_rate
     energy_j = 0.0
@@ -109,14 +127,19 @@ def integrate(
 
     if valid == 0:
         return {"valid_samples": 0, "energy_j": 0.0, "charge_c": 0.0,
-                "skipped_samples": skipped}
+                "skipped_samples": skipped, "duration_valid_s": 0.0,
+                "duration_total_s": n * dt, "sample_coverage": 0.0}
 
-    duration_s = valid * dt
+    duration_valid_s = valid * dt
+    duration_total_s = n * dt
+    sample_coverage = valid / n if n > 0 else 0.0
     i_mean = i_sum / valid
     i_rms = math.sqrt(i_sq / valid)
     p_mean = p_sum / valid
     return {
-        "duration_s": duration_s,
+        "duration_valid_s": duration_valid_s,
+        "duration_total_s": duration_total_s,
+        "sample_coverage": sample_coverage,
         "valid_samples": valid,
         "skipped_samples": skipped,
         "energy_j": energy_j,
@@ -143,7 +166,12 @@ def integrate(
 def battery_life(charge_mah: float, duration_s: float,
                  capacity_mah: float) -> Dict[str, Any]:
     """Project runtime from an average draw. Ignores self-discharge and the
-    cell's own capacity-vs-load curve, so treat it as an upper bound."""
+    cell's own capacity-vs-load curve, so treat it as an upper bound.
+    
+    Uses total elapsed duration (not just valid-sample duration) to compute
+    average current, so lossy captures do not inflate the battery-life
+    estimate.
+    """
     if duration_s <= 0 or capacity_mah <= 0:
         return {}
     avg_ma = charge_mah / (duration_s / 3600.0)
@@ -457,7 +485,9 @@ def segment_by_markers(
             "from_marker": a,
             "to_marker": b,
             "start_s": a["t_s"],
-            "duration_s": res.get("duration_s", 0.0),
+            "duration_valid_s": res.get("duration_valid_s", 0.0),
+            "duration_total_s": res.get("duration_total_s", 0.0),
+            "sample_coverage": res.get("sample_coverage", 0.0),
             "energy_j": res.get("energy_j", 0.0),
             "energy_uwh": res.get("energy_uwh", 0.0),
             "charge_uah": res.get("charge_uah", 0.0),
@@ -545,6 +575,66 @@ def preview(current: Sequence[float], voltage: Sequence[float],
 # ---------------------------------------------------------------------------
 # Top-level report
 # ---------------------------------------------------------------------------
+def _calibration_status(capture: PowerCapture) -> Dict[str, Any]:
+    """Report the calibration standing of every current range the capture used.
+
+    Three outcomes, and the third matters:
+
+    * ``calibrated``   - every range used reports valid calibration.
+    * ``uncalibrated`` - at least one range used does not.
+    * ``unknown``      - the firmware did not report calibration flags at all
+      (it predates USB_PROTO_VERSION 3), or no STATUS frame arrived.
+
+    ``unknown`` used to be folded into ``calibrated`` on the grounds of "no
+    false positives". On a measurement instrument that is the wrong default: it
+    prints an authoritative number for a channel whose standing nobody checked.
+    On this bench an uncalibrated HI range carries about -653 uA of offset, so
+    the difference is not academic. Report the uncertainty instead of hiding it.
+    """
+    META_RANGE_MASK = 0x03
+    RANGE_NAMES = {0: "hi", 1: "mid", 2: "lo"}
+
+    used = sorted({m & META_RANGE_MASK for m in capture.meta})
+    ranges_used = [RANGE_NAMES[c] for c in used if c in RANGE_NAMES]
+
+    status = capture.device_status
+    keys = ("cal_have_hi", "cal_have_mid", "cal_have_lo")
+    if not status or not any(k in status for k in keys):
+        return {
+            "state": "unknown",
+            "ranges_used": ranges_used,
+            "uncalibrated_ranges": [],
+            "reason": "firmware reported no per-range calibration flags",
+        }
+
+    flags = {0: status.get("cal_have_hi"), 1: status.get("cal_have_mid"),
+             2: status.get("cal_have_lo")}
+
+    uncalibrated = [RANGE_NAMES[c] for c in used
+                    if c in RANGE_NAMES and flags.get(c) is False]
+    unknown = [RANGE_NAMES[c] for c in used
+               if c in RANGE_NAMES and flags.get(c) is None]
+
+    if uncalibrated:
+        state = "uncalibrated"
+    elif unknown:
+        state = "unknown"
+    else:
+        state = "calibrated"
+
+    return {
+        "state": state,
+        "ranges_used": ranges_used,
+        "uncalibrated_ranges": uncalibrated,
+        "unknown_ranges": unknown,
+    }
+
+
+def _check_uncalibrated_ranges(capture: PowerCapture) -> List[str]:
+    """Names of the ranges the capture used that are known to be uncalibrated."""
+    return _calibration_status(capture)["uncalibrated_ranges"]
+
+
 def analyze(
     capture: PowerCapture,
     max_states: int = 6,
@@ -561,6 +651,17 @@ def analyze(
     """
     sr = capture.sample_rate
     totals = integrate(capture.current, capture.voltage, sr)
+    
+    # Per-range calibration standing. Absolute energy, charge and mean current
+    # are only as trustworthy as the range that produced them, so the standing
+    # travels with the numbers rather than sitting in a separate doc.
+    calibration = _calibration_status(capture)
+    if calibration["state"] == "uncalibrated":
+        totals["uncalibrated"] = True
+        totals["uncalibrated_ranges"] = calibration["uncalibrated_ranges"]
+    elif calibration["state"] == "unknown":
+        totals["calibration_unknown"] = True
+
     st = detect_states(capture.current, capture.voltage, sr,
                        max_states=max_states,
                        min_duration_s=min_state_duration_s)
@@ -578,6 +679,7 @@ def analyze(
             "markers": len(capture.markers),
         },
         "totals": totals,
+        "calibration": calibration,
         "states": st["states"],
         "transitions": st["transitions"],
         "segment_count": len(segments),
@@ -591,7 +693,7 @@ def analyze(
         report["segments_truncated"] = True
     if battery_capacity_mah:
         report["battery"] = battery_life(
-            totals.get("charge_mah", 0.0), totals.get("duration_s", 0.0),
+            totals.get("charge_mah", 0.0), totals.get("duration_total_s", 0.0),
             battery_capacity_mah)
     marker_windows = segment_by_markers(capture)
     if marker_windows:
@@ -631,4 +733,16 @@ def _warnings(report: Dict[str, Any]) -> List[str]:
     if tot.get("valid_samples", 0) == 0:
         w.append("No valid samples in this capture - is the source enabled and "
                  "the DUT connected?")
+    if tot.get("uncalibrated"):
+        ranges = ", ".join(tot.get("uncalibrated_ranges", []))
+        w.append(
+            f"Uncalibrated current measurement: the {ranges} shunt range(s) lack "
+            f"factory calibration. Energy, charge, and current values derived from "
+            f"these ranges carry systematic offsets. Run DAQ calibration to correct.")
+    elif tot.get("calibration_unknown"):
+        w.append(
+            "Calibration standing unknown: this firmware did not report per-range "
+            "calibration flags, so absolute energy, charge and mean current cannot "
+            "be confirmed as calibrated. Treat them as relative, or update the DAQ "
+            "HAT firmware to a build that reports them.")
     return w

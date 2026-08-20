@@ -209,12 +209,19 @@ def register(mcp) -> None:
                         f"E-fuse {i + 1} tripped (IO_Block {i + 1} overcurrent). "
                         f"Output disabled. Reduce load or check wiring."
                     )
-            if not ps.get("vadj1_pg", True):
-                out["has_faults"] = True
-                out["faults"].append("VADJ1 power-good lost — supply 1 overloaded or shorted.")
-            if not ps.get("vadj2_pg", True):
-                out["has_faults"] = True
-                out["faults"].append("VADJ2 power-good lost — supply 2 overloaded or shorted.")
+            # Power-good is meaningless while a rail is disabled - it reads low
+            # simply because the rail is off. Reporting that as "overloaded or
+            # shorted" sends the user hunting a short that does not exist, which
+            # is exactly the false alarm this tool exists to avoid.
+            for idx, (en_key, pg_key) in enumerate(
+                (("vadj1_en", "vadj1_pg"), ("vadj2_en", "vadj2_pg")), start=1
+            ):
+                if ps.get(en_key, False) and not ps.get(pg_key, True):
+                    out["has_faults"] = True
+                    out["faults"].append(
+                        f"VADJ{idx} is enabled but power-good is lost - "
+                        f"supply {idx} overloaded or shorted."
+                    )
         except Exception as e:
             out["faults"].append(f"Could not read power status: {e}")
 

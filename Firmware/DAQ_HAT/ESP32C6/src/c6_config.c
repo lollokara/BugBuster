@@ -90,6 +90,20 @@ static void str_apply(uint16_t key, const uint8_t *val, uint8_t vlen)
 }
 
 // Scalar keys the C6 sends upstream on a menu commit.
+//
+// This list is INTENTIONALLY INCOMPLETE vs. the full registry. Keys excluded:
+//   - P4-local keys with no C6 menu entry: DAQ_K_STREAMING, _USB_DECIMATION,
+//     _MULTIRES_TIERS, _STATS_WINDOW_MS, _RANGE_DWELL_US, _RANGE_LOCK_US,
+//     _RANGE_FLAP (range stability tunables are MCP/desktop-only; the C6 has
+//     no UI for microsecond-precision tuning on a 3-button 284 px panel).
+//   - DAQ_K_SOURCE_ENABLE: sent separately via c6_config_send_source_enable()
+//     (see :122) because it requires USB-PD guard logic.
+//   - String keys (WIFI_SSID, WIFI_PASSWORD): sent via str_apply() on a
+//     CONFIG_PUSH from the P4, never originated by the C6.
+//
+// Before adding a key here, confirm: (1) the C6 menu exposes it (see menu.c
+// m_hat_items / m_screen_items), (2) g_settings has the field, and (3)
+// field_get_i32 / field_apply_i32 handle it.
 static const uint16_t SEND_KEYS[] = {
     DAQ_K_AUTORANGING, DAQ_K_RANGE_IDX, DAQ_K_SAMPLE_RATE_IDX,
     DAQ_K_DUT_ILIMIT_MA, DAQ_K_DUT_VOLTAGE_MV,

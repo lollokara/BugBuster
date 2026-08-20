@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**112 tools in 17 groups, 6 resources, 4 prompt workflows.**
+**119 tools in 18 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 

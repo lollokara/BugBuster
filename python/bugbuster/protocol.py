@@ -1,5 +1,5 @@
 """
-BugBuster Binary Protocol (BBP) — framing layer.
+BugBuster Binary Protocol (BBP) - framing layer.
 
 Implements:
   - COBS encoding / decoding
@@ -17,8 +17,12 @@ from .constants import MsgType
 # The 4-byte magic sequence sent by the host to enter binary mode.
 # 0xBB is non-printable so it cannot appear in normal CLI typing.
 HANDSHAKE_MAGIC = bytes([0xBB, 0x42, 0x55, 0x47])
-BBP_PROTO_VERSION = 10
+BBP_PROTO_VERSION = 11
 ESP32_FW_VERSION = (3, 4, 0)
+
+# Maximum payload size the device will accept (see Firmware/ESP32/src/bbp/bbp.h).
+# A decoded frame exceeding this is rejected as malformed before allocating.
+BBP_MAX_PAYLOAD = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +145,21 @@ def parse_frame(raw: bytes) -> tuple[int, int, int, bytes]:
     Parse a raw frame received from the device (0x00 delimiter already removed).
 
     Returns ``(msg_type, seq, cmd_id, payload)`` on success.
-    Raises :class:`ProtocolError` on short frames or CRC mismatch.
+    Raises :class:`ProtocolError` on short frames, oversized frames, or CRC mismatch.
     """
     decoded = cobs_decode(raw)
 
     if len(decoded) < 6:
         raise ProtocolError(f"Frame too short: {len(decoded)} bytes after COBS decode")
+    
+    # Reject frames that exceed BBP_MAX_PAYLOAD before allocating memory.
+    # A decoded frame is header(4) + payload(N) + crc(2), so max decoded size is
+    # BBP_MAX_PAYLOAD + 6. The device enforces this limit - a larger frame is malformed.
+    if len(decoded) > BBP_MAX_PAYLOAD + 6:
+        raise ProtocolError(
+            f"Frame too large: {len(decoded)} bytes after COBS decode "
+            f"(max {BBP_MAX_PAYLOAD + 6})"
+        )
 
     msg_type, seq, cmd_id = struct.unpack_from('<BHB', decoded, 0)
     payload               = decoded[4:-2]

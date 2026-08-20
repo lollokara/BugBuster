@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
-  <img src="https://img.shields.io/badge/MCP-93%20tools%20%C2%B7%2016%20groups-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP tools"/>
+  <img src="https://img.shields.io/badge/MCP-119%20tools%20%C2%B7%2018%20groups-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP tools"/>
   <img src="https://img.shields.io/badge/protocol-BBP%20v10-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
@@ -23,7 +23,7 @@
 ## What this is
 
 BugBuster is a **bench instrument you can hand to an AI**. One USB-C cable, one
-board, and a Model Context Protocol server that exposes **112 tools** - so Claude
+board, and a Model Context Protocol server that exposes **119 tools** - so Claude
 (or any MCP client) can read voltages, drive outputs, capture logic traces, scan
 an I²C bus, profile power draw, and single-step a target over SWD without a
 human in the measurement loop.
@@ -426,7 +426,7 @@ BugBuster/
 │
 ├── python/
 │   ├── bugbuster/             Control library (USB + HTTP)
-│   ├── bugbuster_mcp/         MCP server (112 tools, 17 groups)
+│   ├── bugbuster_mcp/         MCP server (119 tools, 18 groups)
 │   └── examples/              Annotated example scripts
 │
 ├── tests/                     pytest - unit, simulator, hardware-in-the-loop

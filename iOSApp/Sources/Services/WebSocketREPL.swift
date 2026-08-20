@@ -70,7 +70,8 @@ public class WebSocketREPL: ObservableObject {
     }
     
     public func disconnect() {
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        // Send proper close frame before cancelling
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         DispatchQueue.main.async {
             self.connectionState = .disconnected

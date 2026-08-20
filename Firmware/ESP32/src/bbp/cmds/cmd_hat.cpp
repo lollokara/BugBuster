@@ -37,12 +37,32 @@
 
 static const char *TAG = "cmd_hat";
 
+// A failed HAT call is not always a timeout. hat_require_type() records why it
+// refused, so map that to a distinct wire code instead of blaming the link -
+// a real timeout and a wrong-HAT command are different user problems.
+static inline int hat_fail_code(void)
+{
+    const int timeout_code = -(int)CMD_ERR_TIMEOUT;
+    switch (hat_get_last_error()) {
+        case 0xFE:  // wrong HAT type for this command
+        case 0xFF:  // no HAT attached
+            return -(int)CMD_ERR_UNSUPPORTED_HAT;
+        default:
+            return timeout_code;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper: translate HAT error code to CMD error code.
 // ---------------------------------------------------------------------------
 static int hat_err_to_cmd_err(uint8_t hat_err)
 {
     switch (hat_err) {
+        // Set by hat_require_type(), not by the HAT itself. Without these two
+        // the wrong-HAT case fell through to BAD_ARG, so an LA-HAT command sent
+        // to a DAQ HAT was reported as a malformed request.
+        case 0xFE:                           return -(int)CMD_ERR_UNSUPPORTED_HAT;
+        case 0xFF:                           return -(int)CMD_ERR_UNSUPPORTED_HAT;
         case HAT_ERR_UNSUPPORTED:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_CAL_INVALID:            return -CMD_ERR_INVALID_STATE;
         case HAT_ERR_BUSY:                   return -CMD_ERR_BUSY;
@@ -263,7 +283,7 @@ static int handler_hat_get_caps(const uint8_t *payload, size_t len,
     (void)payload; (void)len;
 
     HatCaps caps = {};
-    if (!hat_get_caps(&caps)) return -CMD_ERR_TIMEOUT;
+    if (!hat_get_caps(&caps)) return hat_fail_code();
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, caps.hw_revision);
@@ -285,7 +305,7 @@ static int handler_hat_get_rail_status(const uint8_t *payload, size_t len,
 
     HatRailStatus rails[HAT_RAIL_COUNT] = {};
     uint8_t count = 0;
-    if (!hat_get_rail_status(rails, &count)) return -CMD_ERR_TIMEOUT;
+    if (!hat_get_rail_status(rails, &count)) return hat_fail_code();
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, count);
@@ -544,7 +564,7 @@ static int handler_hat_detect_target(const uint8_t *payload, size_t len,
 {
     (void)payload; (void)len;
 
-    if (!hat_detect_target()) return -CMD_ERR_TIMEOUT;
+    if (!hat_detect_target()) return hat_fail_code();
 
     const HatState *hs = hat_get_state();
     size_t pos = 0;
@@ -570,7 +590,7 @@ static int handler_hat_la_config(const uint8_t *payload, size_t len,
 
     if (!hat_la_configure(channels, rate_hz, depth)) {
         uint8_t hat_err = hat_get_last_error();
-        return (hat_err == HAT_ERR_BUSY) ? -CMD_ERR_BUSY : -CMD_ERR_TIMEOUT;
+        return (hat_err == HAT_ERR_BUSY) ? -(int)CMD_ERR_BUSY : hat_fail_code();
     }
 
     size_t pos = 0;
@@ -592,7 +612,7 @@ static int handler_hat_la_trigger(const uint8_t *payload, size_t len,
     (void)resp;
     if (!hat_la_set_trigger(payload[0], payload[1])) {
         uint8_t hat_err = hat_get_last_error();
-        return (hat_err == HAT_ERR_BUSY) ? -CMD_ERR_BUSY : -CMD_ERR_TIMEOUT;
+        return (hat_err == HAT_ERR_BUSY) ? -(int)CMD_ERR_BUSY : hat_fail_code();
     }
     *resp_len = 0;
     return 0;
@@ -608,7 +628,7 @@ static int handler_hat_la_arm(const uint8_t *payload, size_t len,
     (void)payload; (void)len; (void)resp;
     if (!hat_la_arm()) {
         uint8_t hat_err = hat_get_last_error();
-        return (hat_err == HAT_ERR_BUSY) ? -CMD_ERR_BUSY : -CMD_ERR_TIMEOUT;
+        return (hat_err == HAT_ERR_BUSY) ? -(int)CMD_ERR_BUSY : hat_fail_code();
     }
     *resp_len = 0;
     return 0;
@@ -624,7 +644,7 @@ static int handler_hat_la_force(const uint8_t *payload, size_t len,
     (void)payload; (void)len; (void)resp;
     if (!hat_la_force()) {
         uint8_t hat_err = hat_get_last_error();
-        return (hat_err == HAT_ERR_BUSY) ? -CMD_ERR_BUSY : -CMD_ERR_TIMEOUT;
+        return (hat_err == HAT_ERR_BUSY) ? -(int)CMD_ERR_BUSY : hat_fail_code();
     }
     *resp_len = 0;
     return 0;
@@ -638,7 +658,7 @@ static int handler_hat_la_stop(const uint8_t *payload, size_t len,
                                uint8_t *resp, size_t *resp_len)
 {
     (void)payload; (void)len; (void)resp;
-    if (!hat_la_stop()) return -CMD_ERR_TIMEOUT;
+    if (!hat_la_stop()) return hat_fail_code();
     *resp_len = 0;
     return 0;
 }
@@ -658,7 +678,7 @@ static int handler_hat_la_status(const uint8_t *payload, size_t len,
     (void)payload; (void)len;
 
     HatLaStatus st = {};
-    if (!hat_la_get_status(&st)) return -CMD_ERR_TIMEOUT;
+    if (!hat_la_get_status(&st)) return hat_fail_code();
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, st.state);
@@ -697,7 +717,7 @@ static int handler_hat_la_read(const uint8_t *payload, size_t len,
     // Clamp to 28 bytes per chunk matching legacy bbp.cpp:1959
     uint8_t actual = hat_la_read_data(offset, chunk, (uint8_t)(read_len > 28 ? 28 : read_len));
 
-    if (read_len > 0 && actual == 0) return -CMD_ERR_TIMEOUT;
+    if (read_len > 0 && actual == 0) return hat_fail_code();
 
     size_t pos = 0;
     bbp_put_u32(resp, &pos, offset);
@@ -717,7 +737,7 @@ static int handler_hat_la_log_enable(const uint8_t *payload, size_t len,
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;
     (void)resp;
-    if (!hat_la_log_enable(payload[0] != 0)) return -CMD_ERR_TIMEOUT;
+    if (!hat_la_log_enable(payload[0] != 0)) return hat_fail_code();
     *resp_len = 0;
     return 0;
 }
@@ -730,7 +750,7 @@ static int handler_hat_la_usb_reset(const uint8_t *payload, size_t len,
                                     uint8_t *resp, size_t *resp_len)
 {
     (void)payload; (void)len; (void)resp;
-    if (!hat_la_usb_reset()) return -CMD_ERR_TIMEOUT;
+    if (!hat_la_usb_reset()) return hat_fail_code();
     *resp_len = 0;
     return 0;
 }
@@ -743,7 +763,7 @@ static int handler_hat_la_stream_start(const uint8_t *payload, size_t len,
                                        uint8_t *resp, size_t *resp_len)
 {
     (void)payload; (void)len; (void)resp;
-    if (!hat_la_stream_start()) return -CMD_ERR_TIMEOUT;
+    if (!hat_la_stream_start()) return hat_fail_code();
     *resp_len = 0;
     return 0;
 }

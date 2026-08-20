@@ -404,7 +404,11 @@ static bool selftest_claim_ch_slot(io_owner_slot_t *prev_out)
 
     io_owner_force_release(SELFTEST_CH_SLOT);
     uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
-    io_owner_acquire(SELFTEST_CH_SLOT, IO_OWNER_INTERNAL, 0xFF, 0, 0, now_ms);
+    // Bounded, not infinite: if this function's caller bails before
+    // selftest_restore_ch_slot() runs, the slot has to free itself or it stays
+    // locked until reboot and every later claim on it is refused (JIG-1).
+    io_owner_acquire(SELFTEST_CH_SLOT, IO_OWNER_INTERNAL, 0xFF, 0,
+                     IO_OWNER_SELFTEST_LEASE_MS, now_ms);
     if (prev_out) *prev_out = prev;
     return true;
 }

@@ -151,27 +151,35 @@ pub struct StatusRecord {
     /// Extension v1 (bytes 20-27): SMU input-rail sense. 0 when not reported.
     pub in_voltage: f32,
     pub in_current: f32,
-    /// Extension v2 (bytes 28-35): FINE ADC health.
+    /// Extension v2 (bytes 28-39): FINE ADC health.
     /// `adaq_ok_bits`: bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok. 0 = old firmware.
     pub adaq_ok_bits: u8,
     /// Percentage of FINE samples that carried a STATUS_ERR bit (0-100).
     /// 100 means the fused stream is running on COARSE only.
     pub fine_err_pct: u8,
-    /// FINE pairing-resync drop counter (saturates at 65535).
-    pub drop_fine: u16,
-    /// COARSE pairing-resync drop counter (saturates at 65535).
-    pub drop_coarse: u16,
+    /// FINE pairing-resync drop counter (widened v3: uint32, was uint16).
+    pub drop_fine: u32,
+    /// COARSE pairing-resync drop counter (widened v3: uint32, was uint16).
+    pub drop_coarse: u32,
     /// OR of all MASTER_STATUS (0x2D) bytes seen on the FINE ADAQ since boot.
     /// 0xFF = FINE ADAQ did not initialise. Bit map: 7=MASTER_ERR 6=ADC_ERR
     /// 5=DIG_ERR 4=CLK_QUAL 3=FILT_SAT 2=FILT_UNSETTLED 1=SPI_ERR 0=POR.
     pub fine_diag_sticky: u8,
-    /// Extension v3 (bytes 36-55): USB streaming performance counters.
-    /// 0 when not reported (payload < 56 bytes).
+    /// Extension v3 (bytes 40-59): USB streaming performance counters.
+    /// 0 when not reported (payload < 60 bytes).
     pub frames_tx: u32,
     pub bytes_per_sec: u32,
     pub fifo_drop_frames: u32,
     pub ring_high_water: u32,
     pub wave_i_index_lo: u32,
+    /// Extension v7 (bytes 100-103): board temperatures, 0.1 C. None when sensor absent.
+    pub board_temp_analog_c: Option<f32>,
+    pub board_temp_power_c: Option<f32>,
+    /// Extension v8 (byte 104): per-range current calibration validity.
+    /// bit0=HI calibrated, bit1=MID calibrated, bit2=LO calibrated.
+    pub cal_have_hi: bool,
+    pub cal_have_mid: bool,
+    pub cal_have_lo: bool,
 }
 
 /// One digital event marker (flag or trigger), decoded from the 16-byte wire
@@ -431,27 +439,46 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 fifo_drop_frames: 0,
                 ring_high_water: 0,
                 wave_i_index_lo: 0,
+                board_temp_analog_c: None,
+                board_temp_power_c: None,
+                cal_have_hi: false,
+                cal_have_mid: false,
+                cal_have_lo: false,
             };
             // Extension v1 (bytes 20-27): input-rail sense.
             if p.len() >= 28 {
                 s.in_voltage = rd_f32(p, 20);
                 s.in_current = rd_f32(p, 24);
             }
-            // Extension v2 (bytes 28-35): FINE ADC health.
-            if p.len() >= 36 {
+            // Extension v2 (bytes 28-39): FINE ADC health, widened drop counters (v3).
+            if p.len() >= 40 {
                 s.adaq_ok_bits     = p[28];
                 s.fine_err_pct     = p[29];
-                s.drop_fine        = rd_u16(p, 30);
-                s.drop_coarse      = rd_u16(p, 32);
-                s.fine_diag_sticky = p[34];
+                s.drop_fine        = rd_u32(p, 30);
+                s.drop_coarse      = rd_u32(p, 34);
+                s.fine_diag_sticky = p[38];
             }
-            // Extension v3 (bytes 36-55): USB streaming performance counters.
-            if p.len() >= 56 {
-                s.frames_tx = rd_u32(p, 36);
-                s.bytes_per_sec = rd_u32(p, 40);
-                s.fifo_drop_frames = rd_u32(p, 44);
-                s.ring_high_water = rd_u32(p, 48);
-                s.wave_i_index_lo = rd_u32(p, 52);
+            // Extension v3 (bytes 40-59): USB streaming performance counters.
+            if p.len() >= 60 {
+                s.frames_tx = rd_u32(p, 40);
+                s.bytes_per_sec = rd_u32(p, 44);
+                s.fifo_drop_frames = rd_u32(p, 48);
+                s.ring_high_water = rd_u32(p, 52);
+                s.wave_i_index_lo = rd_u32(p, 56);
+            }
+            // Extension v7 (bytes 100-103): board temperatures, 0.1 C.
+            if p.len() >= 104 {
+                let t0 = rd_u16(p, 100) as i16;
+                let t1 = rd_u16(p, 102) as i16;
+                s.board_temp_analog_c = if t0 == 0x7FFF { None } else { Some(t0 as f32 / 10.0) };
+                s.board_temp_power_c  = if t1 == 0x7FFF { None } else { Some(t1 as f32 / 10.0) };
+            }
+            // Extension v8 (byte 104): per-range calibration validity.
+            if p.len() >= 105 {
+                let cal_have = p[104];
+                s.cal_have_hi  = (cal_have & 0x01) != 0;
+                s.cal_have_mid = (cal_have & 0x02) != 0;
+                s.cal_have_lo  = (cal_have & 0x04) != 0;
             }
             DaqRecord::Status(s)
         }

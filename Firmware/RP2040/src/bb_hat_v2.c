@@ -1495,8 +1495,11 @@ void handle_set_level_shift(const uint8_t *payload, uint8_t len)
         return;
     }
 
-    gpio_put(BB_LEVEL_SHIFT_OE_PIN, oe ? 1 : 0);
+    // Assert OE inactive first to prevent bus contention while changing DIR.
+    // Sequence: disable output → change direction → re-enable if requested.
+    gpio_put(BB_LEVEL_SHIFT_OE_PIN, 0);
     gpio_put(BB_LEVEL_SHIFT_DIR_PIN, dir ? 1 : 0);
+    gpio_put(BB_LEVEL_SHIFT_OE_PIN, oe ? 1 : 0);
 
     uint8_t rsp[2] = { oe ? 1 : 0, dir ? 1 : 0 };
     send_ok(rsp, sizeof(rsp));
