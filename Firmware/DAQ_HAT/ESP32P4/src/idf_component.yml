@@ -13,8 +13,23 @@ dependencies:
   # 14-17/RST54), so no pin remap is expected. pre_release required: no
   # stable esp_hosted release supports the P4 host yet. See
   # .mex/patterns/daq-hat-ios-wifi-streaming.md.
+  #
+  # PINNED, and it must stay pinned. `dependencies.lock` is gitignored, so CI
+  # re-resolves on every build - with `version: "*"` plus pre_release that means
+  # a component release can break the build with no commit to this repo, which
+  # is exactly what happened on 2026-08-20. A newer esp_hosted propagates
+  # `-include eh_host_port_master_config.h` to its dependents, and PlatformIO's
+  # ESP-IDF builder runs the CMake compile fragments through SCons ParseFlags +
+  # AppendUnique, which reorders them and separates `-include` from its
+  # argument. The filename then lands on the gcc command line as a second input
+  # file: "cannot specify '-o' with '-c' ... with multiple files", on every
+  # src/ file. 2.12.12 scopes its `-include` PRIVATE to the lwip target, so it
+  # never reaches our sources.
+  #
+  # Before bumping either pin, build the P4 on Linux - this failure does not
+  # reproduce on Windows.
   espressif/esp_wifi_remote:
-    version: "*"
+    version: "==1.6.3"
   espressif/esp_hosted:
-    version: "*"
+    version: "==2.12.12"
     pre_release: true
