@@ -52,6 +52,50 @@ def test_doc_counts_derives_every_metric_it_claims() -> None:
     assert not missing, f"CLAIMS reference metrics that derive() does not produce: {missing}"
 
 
+def _load_doc_counts():
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import check_doc_counts  # type: ignore[import-not-found]
+
+        return check_doc_counts
+    finally:
+        sys.path.pop(0)
+
+
+def test_claim_under_an_absent_tree_is_skipped_not_failed(monkeypatch) -> None:
+    """`.mex/` is gitignored, so CI has no such tree while developers do.
+
+    Skipping is only acceptable because the skip is printed; see the companion
+    test below, which proves a missing file inside a tree that DOES exist is
+    still a hard failure.
+    """
+    mod = _load_doc_counts()
+    monkeypatch.setattr(
+        mod, "CLAIMS", [("no_such_tree/doc.md", r"(\d+) tools", ["mcp_tools"])]
+    )
+    monkeypatch.setattr(sys, "argv", ["check_doc_counts.py"])
+    assert mod.main() == 0
+
+
+def test_missing_file_inside_an_existing_tree_still_fails(monkeypatch) -> None:
+    mod = _load_doc_counts()
+    monkeypatch.setattr(
+        mod, "CLAIMS", [("Docs/no_such_doc.md", r"(\d+) tools", ["mcp_tools"])]
+    )
+    monkeypatch.setattr(sys, "argv", ["check_doc_counts.py"])
+    assert mod.main() == 1
+
+
+def test_absent_tree_skip_is_announced(monkeypatch, capsys) -> None:
+    mod = _load_doc_counts()
+    monkeypatch.setattr(
+        mod, "CLAIMS", [("no_such_tree/doc.md", r"(\d+) tools", ["mcp_tools"])]
+    )
+    monkeypatch.setattr(sys, "argv", ["check_doc_counts.py"])
+    mod.main()
+    assert "SKIP" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # FEAT-8: no IO_OWNER_INTERNAL claim may be infinite.
 #

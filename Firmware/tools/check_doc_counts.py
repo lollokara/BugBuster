@@ -13,12 +13,17 @@ A derivation lives here and nowhere else. If you need a count, run:
 Adding a claim to a doc? Add it to CLAIMS below, or the gate will not see it.
 Removing one? Remove it here too - a claim that no longer matches its file is a
 hard failure, because a silently skipped claim is how drift returns.
+
+One exception, and it is narrow: if the claim's whole top-level directory is
+absent from the checkout, the claim is skipped and the skip is printed. `.mex/`
+is gitignored, so a developer always has it and CI never does. A file missing
+from a tree that *does* exist is still a hard failure.
 """
 from __future__ import annotations
 
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -136,13 +141,24 @@ def main() -> int:
         return 0
 
     failures: list[str] = []
+    skipped: list[str] = []
     checked = 0
+    sites = 0
 
     for rel, pattern, metrics in CLAIMS:
         path = ROOT / rel
         if not path.exists():
+            # A whole tree that is absent from this checkout is not drift.
+            # `.mex/` is gitignored, so CI never sees it while a developer
+            # always does. Distinguish that from a single file that vanished,
+            # which IS drift and must fail.
+            root = ROOT / PurePosixPath(rel).parts[0]
+            if not root.exists():
+                skipped.append(rel)
+                continue
             failures.append(f"{rel}: file not found (claim registered in CLAIMS)")
             continue
+        sites += 1
         match = re.search(pattern, path.read_text(encoding="utf-8", errors="ignore"))
         if match is None:
             failures.append(
@@ -169,7 +185,11 @@ def main() -> int:
         )
         return 1
 
-    print(f"OK  {checked} documented count(s) match source across {len(CLAIMS)} claim site(s)")
+    # Never let a skip be invisible - an unnoticed skip is how drift returns.
+    for rel in sorted(set(skipped)):
+        print(f"SKIP  {rel} is not present in this checkout (tree is untracked)")
+
+    print(f"OK  {checked} documented count(s) match source across {sites} claim site(s)")
     return 0
 
 

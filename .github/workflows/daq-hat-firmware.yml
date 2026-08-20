@@ -73,11 +73,22 @@ jobs:
       # Built separately, never with a single `pio run` over both projects:
       # this repo's notes warn that concurrent pio invocations corrupt
       # .pio/build/, and these are two independent PlatformIO projects anyway.
+      #
+      # On failure the build is re-run with -v so the log carries the exact
+      # compiler invocation. A "cannot specify '-o' with '-c' ... with multiple
+      # files" failure here reproduces on Linux but not on a Windows dev box,
+      # and without the command line there is nothing to diagnose. The retry
+      # fails at the same first file, so it costs seconds, and the step still
+      # reports failure because the second command's exit status is the step's.
       - name: Build ESP32-P4 firmware
-        run: pio run -d Firmware/DAQ_HAT/ESP32P4 -e esp32p4
+        run: |
+          pio run -d Firmware/DAQ_HAT/ESP32P4 -e esp32p4 \
+            || pio run -d Firmware/DAQ_HAT/ESP32P4 -e esp32p4 -v
 
       - name: Build ESP32-C6 firmware
-        run: pio run -d Firmware/DAQ_HAT/ESP32C6 -e esp32c6
+        run: |
+          pio run -d Firmware/DAQ_HAT/ESP32C6 -e esp32c6 \
+            || pio run -d Firmware/DAQ_HAT/ESP32C6 -e esp32c6 -v
 
       # The two chips take DIFFERENT image formats and getting this backwards is
       # the most damaging mistake available here. See Firmware/tools/esp_image_tool.py.
