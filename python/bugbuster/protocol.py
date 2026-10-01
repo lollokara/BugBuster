@@ -17,7 +17,7 @@ from .constants import MsgType
 # The 4-byte magic sequence sent by the host to enter binary mode.
 # 0xBB is non-printable so it cannot appear in normal CLI typing.
 HANDSHAKE_MAGIC = bytes([0xBB, 0x42, 0x55, 0x47])
-BBP_PROTO_VERSION = 11
+BBP_PROTO_VERSION = 12
 # Mirrors BBP_FW_VERSION_* in bbp.h (the simulator reports it). Bumped with
 # bbp.h by Notebooks/release_version_bump.ipynb; test_protocol_constants gates it.
 ESP32_FW_VERSION = (5, 1, 0)
