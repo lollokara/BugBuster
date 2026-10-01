@@ -120,20 +120,23 @@ def _usbpd_get_status(device):
 
 # ---------------------------------------------------------------------------
 # USBPD_SELECT_PDO (0xC1)
-# client sends: struct.pack('<B', code)
+# client sends: struct.pack('<B', code) -> resp: u8 code
+# Firmware (cmd_husb.cpp) only writes the HUSB238 PDO_SELECT register; the
+# source is not renegotiated until USBPD_GO 0x01 (SELECT_PDO).
 # ---------------------------------------------------------------------------
 
 def _usbpd_select_pdo(device):
     def handler(payload: bytes) -> bytes:
-        if payload:
-            device.usbpd_voltage = payload[0]
-        return b''
+        if not payload:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.usbpd_staged = payload[0]
+        return bytes([payload[0]])
     return handler
 
 
 # ---------------------------------------------------------------------------
 # USBPD_GO (0xC2)
-# payload: u8 cmd -> resp: u8 cmd
+# payload: u8 cmd -> resp: u8 cmd. 0x01 commits the staged PDO.
 # ---------------------------------------------------------------------------
 
 def _usbpd_go(device):
@@ -141,6 +144,9 @@ def _usbpd_go(device):
         if not payload:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
         device.usbpd_last_go = payload[0]
+        staged = getattr(device, "usbpd_staged", None)
+        if payload[0] == 0x01 and staged is not None:
+            device.usbpd_voltage = staged
         return bytes([payload[0]])
     return handler
 
