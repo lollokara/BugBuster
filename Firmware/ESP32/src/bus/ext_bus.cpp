@@ -9,6 +9,7 @@
 #include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -35,8 +36,10 @@ static bool s_i2c_internal_pullups = false;
 static SemaphoreHandle_t s_spi_mutex = nullptr;
 static bool s_spi_bus_ready = false;
 static spi_device_handle_t s_spi_dev = nullptr;
-static uint8_t s_spi_tx[EXT_SPI_MAX_TRANSFER] = {};
-static uint8_t s_spi_rx[EXT_SPI_MAX_TRANSFER] = {};
+// BUS-003: DMA-capable (internal, word-aligned) bounce buffers. Without DMA the
+// SPI master caps a transaction at 64 bytes.
+DMA_ATTR static uint8_t s_spi_tx[EXT_SPI_MAX_TRANSFER] = {};
+DMA_ATTR static uint8_t s_spi_rx[EXT_SPI_MAX_TRANSFER] = {};
 static uint8_t s_spi_sck_gpio = 0xFF;
 static uint8_t s_spi_mosi_gpio = 0xFF;
 static uint8_t s_spi_miso_gpio = 0xFF;
@@ -307,7 +310,7 @@ bool ext_spi_setup(uint8_t sck_gpio, uint8_t mosi_gpio, uint8_t miso_gpio, uint8
     bus_cfg.quadhd_io_num = -1;
     bus_cfg.max_transfer_sz = EXT_SPI_MAX_TRANSFER;
 
-    esp_err_t err = spi_bus_initialize(EXT_SPI_HOST, &bus_cfg, SPI_DMA_DISABLED);
+    esp_err_t err = spi_bus_initialize(EXT_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     if (err == ESP_OK) {
         s_spi_bus_ready = true;
         spi_device_interface_config_t dev_cfg = {};
