@@ -1004,6 +1004,94 @@ impl DaqStore {
     }
 }
 
+/// DESK-25: binary view encoding shipped over Tauri IPC instead of JSON.
+/// Mirrored by `DaqViewData::from_view_bytes` in the frontend `tauri_bridge.rs`.
+pub const DAQ_VIEW_BIN_MAGIC: [u8; 4] = *b"DVB1";
+
+impl DaqViewData {
+    pub fn to_view_bytes(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod view_bin_tests {
+    use super::*;
+
+    struct Rd<'a>(&'a [u8]);
+    impl Rd<'_> {
+        fn take(&mut self, n: usize) -> &[u8] {
+            let (a, b) = self.0.split_at(n);
+            self.0 = b;
+            a
+        }
+        fn u8(&mut self) -> u8 { self.take(1)[0] }
+        fn u32(&mut self) -> u32 { u32::from_le_bytes(self.take(4).try_into().unwrap()) }
+        fn u64(&mut self) -> u64 { u64::from_le_bytes(self.take(8).try_into().unwrap()) }
+        fn f64(&mut self) -> f64 { f64::from_le_bytes(self.take(8).try_into().unwrap()) }
+        fn f32s(&mut self) -> Vec<f32> {
+            let n = self.u32() as usize;
+            (0..n).map(|_| f32::from_le_bytes(self.take(4).try_into().unwrap())).collect()
+        }
+        fn u8s(&mut self) -> Vec<u8> {
+            let n = self.u32() as usize;
+            self.take(n).to_vec()
+        }
+    }
+
+    /// Reference decoder; the frontend copy must match it field for field.
+    fn decode(b: &[u8]) -> DaqViewData {
+        let mut r = Rd(b);
+        assert_eq!(r.take(4), &DAQ_VIEW_BIN_MAGIC);
+        let sample_rate_hz = r.u32();
+        let total_samples = r.u64();
+        let view_start = r.u64();
+        let view_end = r.u64();
+        let flags = r.u8();
+        let actual_rate_hz = r.f64();
+        let mut v = DaqViewData {
+            sample_rate_hz, total_samples, view_start, view_end,
+            decimated: flags & 1 != 0, overflow: flags & 2 != 0, actual_rate_hz,
+            ..Default::default()
+        };
+        v.i_min = r.f32s(); v.i_max = r.f32s();
+        v.v_min = r.f32s(); v.v_max = r.f32s();
+        v.p_min = r.f32s(); v.p_max = r.f32s();
+        v.didt = r.f32s();
+        v.source = r.u8s(); v.gap = r.u8s();
+        let n = r.u32();
+        for _ in 0..n {
+            v.markers.push(DaqMarker {
+                sample_index: r.u64(), timestamp_us: r.u64(),
+                channel: r.u8(), edge: r.u8(), kind: r.u8(),
+            });
+        }
+        assert!(r.0.is_empty(), "trailing bytes");
+        v
+    }
+
+    /// DESK-25: the DAQ view shipped ~14k floats as JSON at up to 30 Hz.
+    #[test]
+    #[ignore = "DESK-25"]
+    fn view_bytes_roundtrip_and_smaller_than_json() {
+        let n = 1800;
+        let f = |k: f32| (0..n).map(|i| i as f32 * k + 0.123_456_7).collect::<Vec<f32>>();
+        let v = DaqViewData {
+            sample_rate_hz: 256_000, total_samples: 1 << 33, view_start: 7, view_end: 1 << 32,
+            decimated: true, overflow: false, actual_rate_hz: 255_998.5,
+            i_min: f(1.0), i_max: f(2.0), v_min: f(3.0), v_max: f(4.0),
+            p_min: f(5.0), p_max: f(6.0), didt: f(7.0),
+            source: vec![2; n], gap: vec![0; n],
+            markers: vec![DaqMarker { sample_index: 99, timestamp_us: 1234, channel: 3, edge: 1, kind: 1 }],
+        };
+        let bytes = v.to_view_bytes();
+        let back = decode(&bytes);
+        assert_eq!(serde_json::to_string(&back).unwrap(), serde_json::to_string(&v).unwrap());
+        let json = serde_json::to_vec(&v).unwrap().len();
+        assert!(bytes.len() * 2 < json, "bin {} json {}", bytes.len(), json);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
