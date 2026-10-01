@@ -6,6 +6,8 @@ Tools: device_status, device_info, check_faults, selftest
 
 from __future__ import annotations
 import logging
+from typing import Any
+
 from .. import session
 
 log = logging.getLogger(__name__)
@@ -178,27 +180,29 @@ def register(mcp) -> None:
         Returns: has_faults (bool), faults (list of strings), fault_log (list).
         """
         bb  = session.get_client()
-        out = {"has_faults": False, "faults": [], "fault_log": []}
+        out: dict[str, Any] = {"has_faults": False, "faults": [], "fault_log": []}
 
         # AD74416H fault/alert registers
         try:
             f = bb.get_faults()
             alert = f.get("alert_status", 0)
             supply_alert = f.get("supply_alert_status", 0)
-            ch_faults = f.get("channel_alerts", [])
-            if alert or supply_alert or any(ch_faults):
+            ch_faults = [(ch.get("id", i), ch.get("alert", 0))
+                         for i, ch in enumerate(f.get("channels", []))]
+            if alert or supply_alert or any(ca for _, ca in ch_faults):
                 out["has_faults"] = True
                 if alert:
                     out["faults"].append(f"AD74416H global alert: 0x{alert:04X}")
                 if supply_alert:
                     out["faults"].append(f"AD74416H supply alert: 0x{supply_alert:04X}")
-                for i, ca in enumerate(ch_faults):
+                for ch_id, ca in ch_faults:
                     if ca:
-                        out["faults"].append(f"Channel {i} alert: 0x{ca:04X}")
+                        out["faults"].append(f"Channel {ch_id} alert: 0x{ca:04X}")
         except Exception as e:
             out["faults"].append(f"Could not read AD74416H faults: {e}")
 
         # PCA9535 e-fuse / power status
+        ps: dict = {}
         try:
             ps = bb.power_get_status()
             efuse_faults = ps.get("efuse_faults", [])
@@ -228,6 +232,21 @@ def register(mcp) -> None:
         # PCA9535 fault event log
         try:
             out["fault_log"] = bb.power_get_fault_log()
+            # The firmware switches a tripped e-fuse off, which also clears its
+            # FLT input, so efuse_faults above reads False again. The trip only
+            # survives in the log: report a logged trip whose fuse is still off.
+            enables = ps.get("efuse_enables", [])
+            tripped = sorted({int(ev.get("channel", -1)) for ev in out["fault_log"]
+                              if ev.get("type") == 0})
+            for ch in tripped:
+                if 0 <= ch < len(enables) and not enables[ch] and not (
+                        ps.get("efuse_faults") or [False] * 4)[ch]:
+                    out["has_faults"] = True
+                    out["faults"].append(
+                        f"E-fuse {ch + 1} tripped and was auto-disabled "
+                        f"(IO_Block {ch + 1} overcurrent). Remove the overload, "
+                        f"then re-enable it."
+                    )
         except Exception as e:
             log.warning("Fault log fetch failed: %s", e)
             out["fault_log"] = []
@@ -243,22 +262,24 @@ def register(mcp) -> None:
         """
         Run the BugBuster built-in self-test suite.
 
-        Checks: boot test status, internal supply voltages (±15 V, VADJ1,
-        VADJ2, VLOGIC, 3.3 V), and cached supply rail voltages from the
-        self-test worker.
+        Checks: boot test status (VADJ1, VADJ2, VLOGIC), AD74416H internal
+        supplies (AVDD_HI, DVCC, AVCC, AVSS), and cached supply rail voltages
+        from the self-test worker.
 
-        Returns a dict with: boot_ok, supplies (voltages),
+        Returns a dict with: boot_test (boot.ran / boot.passed), supplies,
         supply_voltages_cached, all_pass (bool), warnings (list).
         """
         bb  = session.get_client()
-        from typing import Any
         out: dict[str, Any] = {"all_pass": True, "warnings": []}
 
         # Boot test status
         try:
             st = bb.selftest_status()
             out["boot_test"] = st
-            if not st.get("boot_ok", True):
+            boot = st.get("boot") or {}
+            if not boot.get("ran", False):
+                out["warnings"].append("Boot self-test has not run.")
+            elif not boot.get("passed", False):
                 out["all_pass"] = False
                 out["warnings"].append("Boot self-test failed.")
         except Exception as e:
@@ -269,16 +290,22 @@ def register(mcp) -> None:
         try:
             supplies = bb.selftest_internal_supplies()
             out["supplies"] = supplies
-            # Check for significant deviations
-            nominal = {"3v3": 3.3, "vadj1": None, "vadj2": None, "vlogic": None}
-            for k, nom in nominal.items():
-                if nom and k in supplies:
-                    v = supplies[k]
-                    if abs(v - nom) / nom > 0.05:  # 5% tolerance
-                        out["all_pass"] = False
-                        out["warnings"].append(
-                            f"Supply {k} reads {v:.3f} V (expected ~{nom:.1f} V)."
-                        )
+            # USB returns snake_case, HTTP /api/selftest/supplies camelCase.
+            valid = supplies.get("valid", False)
+            ok = supplies.get("supplies_ok", supplies.get("suppliesOk", False))
+            if not valid:
+                out["all_pass"] = False
+                out["warnings"].append("Internal supply measurement is not valid.")
+            elif not ok:
+                out["all_pass"] = False
+                out["warnings"].append(
+                    "AD74416H internal supplies out of range: " + ", ".join(
+                        f"{k}={supplies[k]:.2f}" for k in
+                        ("avdd_hi_v", "dvcc_v", "avcc_v", "avss_v",
+                         "avddHiV", "dvccV", "avccV", "avssV")
+                        if isinstance(supplies.get(k), (int, float))
+                    )
+                )
         except Exception as e:
             out["supplies"] = {"error": str(e)}
             out["warnings"].append(f"Could not measure supplies: {e}")

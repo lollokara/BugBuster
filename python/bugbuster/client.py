@@ -4705,6 +4705,11 @@ def _normalize_http_pca_status(raw: dict) -> dict:
     out.setdefault("vadj1_pg", bool(pg.get("vadj1", False)))
     out.setdefault("vadj2_pg", bool(pg.get("vadj2", False)))
     out.setdefault("efuse_faults", [bool(e.get("fault", False)) for e in efuses] or [False] * 4)
+    out.setdefault("efuse_enables", [bool(e.get("enabled", False)) for e in efuses] or [False] * 4)
+    en = raw.get("enables") or {}
+    for key, src in (("vadj1_en", "vadj1"), ("vadj2_en", "vadj2"), ("en_15v", "analog15v"),
+                     ("en_mux", "mux"), ("en_usb_hub", "usbHub")):
+        out.setdefault(key, bool(en.get(src, False)))
     return out
 
 

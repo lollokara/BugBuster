@@ -16,8 +16,6 @@ from bugbuster_mcp import session
 from bugbuster_mcp.tools.discovery import register
 from tests.mock import SimulatedDevice, SimulatedUSBTransport
 
-_MCP21 = pytest.mark.xfail(strict=True, reason="MCP-21")
-
 
 class _DummyMCP:
     def __init__(self):
@@ -44,7 +42,6 @@ def _run(tools, name, dev):
         return tools[name]()
 
 
-@_MCP21
 def test_selftest_reports_failed_boot_test(tools):
     dev = SimulatedDevice()
     dev.selftest_boot_passed = False
@@ -58,7 +55,6 @@ def test_selftest_passes_on_healthy_device(tools):
     assert res["all_pass"] is True, res["warnings"]
 
 
-@_MCP21
 def test_check_faults_reports_channel_alert(tools):
     dev = SimulatedDevice()
     dev.channels[2]["channel_alert"] = 0x0010
@@ -67,7 +63,6 @@ def test_check_faults_reports_channel_alert(tools):
     assert any("Channel 2" in f for f in res["faults"])
 
 
-@_MCP21
 def test_check_faults_reports_auto_disabled_efuse(tools):
     dev = SimulatedDevice()
     # EFUSE3 tripped (0 = efuse_trip, channel 2 = EFUSE3), firmware auto-disabled
