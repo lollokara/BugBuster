@@ -171,6 +171,7 @@ typedef struct {
     uint64_t wi_start_index;
     uint64_t wi_timestamp_us;   // esp_timer at slot 0
     uint32_t wi_rate;
+    uint32_t push_rate;         // DAQ-03: rate of push_sample calls (marker back-off)
     uint8_t  wi_decim;
     uint64_t sample_seq;        // widened u32 -> u64, running fused-sample index
 
@@ -272,9 +273,10 @@ void usb_stream_reset_session(usb_stream_t *s);
 void usb_stream_request_flush(usb_stream_t *s);
 
 /** @brief (S3-link task only: single producer) Queue a marker for the
- *         producer to emit. Returns false when the queue is full. */
+ *         producer to emit, @p age_us after the edge was seen (DAQ-03).
+ *         Returns false when the queue is full. */
 bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
-                             uint8_t kind);
+                             uint8_t kind, uint32_t age_us);
 
 /** @brief (producer only) Apply pending flush/marker requests. Called at the
  *         top of usb_stream_push_sample(). */

@@ -1732,13 +1732,15 @@ void hat_daq_poll_mb(void)
 }
 
 
-void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind)
+void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind, int64_t event_us)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return;
     hat_daq_mark_t m = {};
     m.channel = io;
     m.edge    = edge ? 1u : 0u;
     m.kind    = kind;
+    int64_t age = esp_timer_get_time() - event_us;
+    m.age_us  = (age <= 0) ? 0u : (age > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)age);
     uint8_t rsp[4]; uint8_t rsp_len = 0;
     // Fire-and-forget: short timeout, marker latency dominated by UART.
     hat_command(HAT_CMD_DAQ_MARK, (const uint8_t *)&m, sizeof(m),

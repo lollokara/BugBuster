@@ -346,6 +346,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  edge;           // 0 = falling, 1 = rising
     uint8_t  kind;           // S3LINK_MARK_KIND_*
     uint8_t  _pad;
+    // DAQ-03 (appended; an old S3 sends 4 bytes -> age 0): microseconds from
+    // edge detection on the S3 to send. Mirrors hat_daq_mark_t.
+    uint32_t age_us;
 } s3link_daq_mark_t;
 
 // OTA_DATA payload: a firmware chunk at a given byte offset (for ordered,

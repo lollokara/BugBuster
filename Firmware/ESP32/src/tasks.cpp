@@ -421,8 +421,9 @@ static void taskAdcPoll(void* /*pvParameters*/)
             // ---- DAQ trigger/flag: digital edge detection -------------------
             // Sample the ESP32 GPIO levels for all 12 IOs and emit flag/trigger
             // markers on matching edges. Runs every poll iteration so digital
-            // detection tracks the ADC poll rate (the P4 stamps the precise
-            // sample index when the marker arrives).
+            // detection tracks the ADC poll rate. daq_trigger stamps the poll
+            // time and sends the edge age, so the P4 backs the marker off to
+            // the poll instead of UART arrival (DAQ-03).
             dio_poll_inputs();
             daq_trigger_poll_digital(dio_get_all());
         }

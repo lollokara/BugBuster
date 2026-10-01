@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "daq_board.h"
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
@@ -1783,14 +1784,18 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             return -1;
 
         case HATP_CMD_DAQ_MARK:
-            // A digital event fired on an S3 IO. Emit a MARKER aligned to the
-            // live sample index (sub-sample HW timestamping refines this via the
-            // shared IRQ line; here we use the UART-arrival sample index).
-            if (len >= sizeof(s3link_daq_mark_t)) {
+            // A digital event fired on an S3 IO. Emit a MARKER at the sample
+            // index the edge was seen at: the arrival index backed off by the
+            // S3-reported age (DAQ-03). Residual error: the S3 poll interval
+            // and the UART frame time.
+            if (len >= offsetof(s3link_daq_mark_t, age_us)) {
                 const s3link_daq_mark_t *m = (const s3link_daq_mark_t *)payload;
+                // DAQ-03: an S3 that predates the age field sends 4 bytes.
+                uint32_t age_us = (len >= offsetof(s3link_daq_mark_t, age_us) + 4u)
+                                      ? m->age_us : 0u;
                 // DAQ-04: queue for daq_fast (the frame_buf owner) when it runs.
                 if (b->fast_running) {
-                    usb_stream_queue_marker(&b->usb, m->channel, m->edge, m->kind);
+                    usb_stream_queue_marker(&b->usb, m->channel, m->edge, m->kind, age_us);
                 } else {
                     usb_stream_send_marker(&b->usb, m->channel, m->edge, m->kind,
                                            UINT64_MAX);

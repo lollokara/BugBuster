@@ -14,10 +14,19 @@
 #define USB_MARK_Q_LEN 16u   // power of two
 
 typedef struct {
-    uint8_t channel;
-    uint8_t edge;
-    uint8_t kind;
+    uint8_t  channel;
+    uint8_t  edge;
+    uint8_t  kind;
+    uint32_t age_us;   // DAQ-03: S3 edge-to-send age
+    int64_t  rx_us;    // DAQ-03: P4 arrival time (esp_timer)
 } usb_mark_req_t;
+
+/** DAQ-03: sample index @p age_us ago at @p rate_hz, clamped at 0. */
+static inline uint64_t usb_mark_back_index(uint64_t seq, uint32_t age_us, uint32_t rate_hz)
+{
+    uint64_t back = ((uint64_t)age_us * rate_hz + 500000u) / 1000000u;
+    return back >= seq ? 0 : seq - back;
+}
 
 typedef struct {
     usb_mark_req_t q[USB_MARK_Q_LEN];

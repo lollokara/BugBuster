@@ -28,7 +28,6 @@ def _struct(src: str, name: str) -> str:
     return re.sub(r"//[^\n]*", "", src[start:end.start()])
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-03")
 @pytest.mark.parametrize("src,name", [(P4_LINK, "s3link_daq_mark_t"), (S3_HAT, "hat_daq_mark_t")],
                          ids=["p4", "s3"])
 def test_mark_payload_carries_age_after_the_v1_bytes(src, name):
@@ -52,7 +51,6 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-03")
 def test_back_index_arithmetic():
     out = compile_and_run(MAIN, cxx=False, include_dirs=[STREAM]).split()
     assert out == ["100000", "99980", "99744", "0"]

@@ -112,9 +112,9 @@ void usb_stream_request_flush(usb_stream_t *s)
 }
 
 bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
-                             uint8_t kind)
+                             uint8_t kind, uint32_t age_us)
 {
-    usb_mark_req_t r = { channel, edge, kind };
+    usb_mark_req_t r = { channel, edge, kind, age_us, esp_timer_get_time() };
     return usb_mark_q_push(&s->mark_q, r);
 }
 
@@ -122,7 +122,13 @@ void usb_stream_service_requests(usb_stream_t *s)
 {
     usb_mark_req_t r;
     while (usb_mark_q_pop(&s->mark_q, &r)) {
-        usb_stream_send_marker(s, r.channel, r.edge, r.kind, UINT64_MAX);
+        // DAQ-03: back off by the S3 edge-to-send age plus our own queue time.
+        int64_t q_us = esp_timer_get_time() - r.rx_us;
+        uint64_t age = (uint64_t)r.age_us + (q_us > 0 ? (uint64_t)q_us : 0u);
+        if (age > UINT32_MAX) age = UINT32_MAX;
+        usb_stream_send_marker(s, r.channel, r.edge, r.kind,
+                               usb_mark_back_index(s->sample_seq, (uint32_t)age,
+                                                   s->push_rate));
     }
     if (__atomic_exchange_n(&s->flush_pending, false, __ATOMIC_ACQ_REL)) {
         usb_stream_flush_wave_i(s);
@@ -368,6 +374,7 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
         usb_stream_reset_apply(s);   // consumed on the sole producer task
     }
     usb_stream_service_requests(s);  // DAQ-04: markers + STOP flush
+    s->push_rate = sample_rate;
     uint64_t idx = s->sample_seq++;
     if (!s->streaming) {
         return;

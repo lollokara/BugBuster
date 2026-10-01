@@ -744,9 +744,11 @@ def register(mcp) -> None:
         between consecutive markers.
 
         Markers come from the ESP32-S3 IOs tagged with daq_set_io_role(...,
-        role="flag"), timestamped in the epoch shared with the P4, so each one
-        maps to an exact sample index. A firmware GPIO toggle around a code
-        region therefore brackets that region's energy precisely.
+        role="flag"). The S3 polls the IOs and reports how long ago it saw the
+        edge; the P4 backs the marker off by that age. A marker therefore lands
+        within about one S3 IO poll interval plus a UART frame (sub-ms) of the
+        real edge - not on an exact sample. Good for bracketing code regions
+        that last milliseconds; too coarse for microsecond events.
 
         Parameters:
         - channel: restrict to one mainboard IO (1..12). None = all.

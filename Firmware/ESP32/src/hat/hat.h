@@ -141,6 +141,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  edge;           // 0 = falling, 1 = rising
     uint8_t  kind;           // HAT_DAQ_MARK_KIND_*
     uint8_t  _pad;
+    // DAQ-03 (appended; an old P4 reads only the first 4 bytes): microseconds
+    // from edge detection to send, so the P4 can back the marker off by that
+    // many samples instead of stamping UART arrival.
+    uint32_t age_us;
 } hat_daq_mark_t;
 
 // -----------------------------------------------------------------------------
@@ -840,7 +844,7 @@ void hat_daq_poll_mb(void);
  * @param edge  0 = falling, 1 = rising.
  * @param kind  HAT_DAQ_MARK_KIND_FLAG or HAT_DAQ_MARK_KIND_TRIGGER.
  */
-void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind);
+void hat_daq_send_mark(uint8_t io, uint8_t edge, uint8_t kind, int64_t event_us);
 /**
  * @brief Trigger the DAQ HAT (P4) to bring up its WiFi softAP for direct
  *        streaming to a client (e.g. the iOS app). No-op unless a DAQ HAT is
