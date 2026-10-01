@@ -17,9 +17,6 @@ from bugbuster_mcp.tools.target import register
 from tests.mock import SimulatedDevice, SimulatedHTTPTransport, SimulatedUSBTransport
 from tests.unit._mock_client import make_client_mock
 
-_MCP22 = pytest.mark.xfail(strict=True, reason="MCP-22")
-
-
 class _DummyMCP:
     def __init__(self):
         self.tools = {}
@@ -47,8 +44,8 @@ def _enabled_efuses(bb):
 
 
 @pytest.mark.parametrize("rail,expected", [
-    pytest.param(1, {PowerControl.EFUSE1, PowerControl.EFUSE2}, marks=_MCP22),
-    pytest.param(2, {PowerControl.EFUSE3, PowerControl.EFUSE4}, marks=_MCP22),
+    (1, {PowerControl.EFUSE1, PowerControl.EFUSE2}),
+    (2, {PowerControl.EFUSE3, PowerControl.EFUSE4}),
 ])
 def test_power_up_enables_both_efuses_of_the_rail(tools, rail, expected):
     bb = make_client_mock()
@@ -59,7 +56,6 @@ def test_power_up_enables_both_efuses_of_the_rail(tools, rail, expected):
     assert _enabled_efuses(bb) == expected
 
 
-@_MCP22
 def test_tripped_efuse_reports_failure(tools):
     dev = SimulatedDevice()
     dev.efuse_faults = [False, False, True, False]   # EFUSE3 = rail 2
@@ -70,7 +66,6 @@ def test_tripped_efuse_reports_failure(tools):
     assert any("EFUSE3" in w.upper() or "eFuse3" in w for w in res["warnings"])
 
 
-@_MCP22
 def test_over_12v_needs_confirm(tools):
     bb = make_client_mock()
     with patch("bugbuster_mcp.session.get_client", return_value=bb):
@@ -79,7 +74,6 @@ def test_over_12v_needs_confirm(tools):
     bb.power_set.assert_not_called()
 
 
-@_MCP22
 def test_http_power_status_has_documented_keys():
     dev = SimulatedDevice()
     dev.efuse_faults = [False, True, False, False]

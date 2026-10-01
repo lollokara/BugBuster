@@ -11,6 +11,34 @@ occurs when the rail and eFuse are enabled back-to-back.
 from __future__ import annotations
 import time
 from .. import session
+from ..safety import validate_vadj_voltage
+
+
+def _rail_controls(rail: int):
+    """(e-fuse controls, VADJ control, IDAC channel) for a VADJ rail.
+
+    VADJ1 feeds EFUSE1 + EFUSE2 (IO 1-6), VADJ2 feeds EFUSE3 + EFUSE4 (IO 7-12),
+    per the firmware route table in bus_planner.cpp.
+    """
+    from bugbuster.constants import PowerControl as P
+    if rail == 1:
+        return (P.EFUSE1, P.EFUSE2), P.VADJ1, 1
+    if rail == 2:
+        return (P.EFUSE3, P.EFUSE4), P.VADJ2, 2
+    raise ValueError(f"rail must be 1 or 2, got {rail!r}")
+
+
+def _rail_warnings(bb, rail: int) -> list[str]:
+    """E-fuse trips and missing power-good for one rail, from the PCA9535 status."""
+    st = bb.power_get_status()
+    faults = st.get("efuse_faults") or [False] * 4
+    warnings = []
+    for idx in ((0, 1) if rail == 1 else (2, 3)):
+        if idx < len(faults) and faults[idx]:
+            warnings.append(f"eFuse{idx + 1} tripped - possible overcurrent. Check wiring.")
+    if not st.get(f"vadj{rail}_pg", True):
+        warnings.append(f"VADJ{rail} power-good signal not asserted - check load.")
+    return warnings
 
 
 def register(mcp) -> None:
@@ -20,67 +48,50 @@ def register(mcp) -> None:
         supply_voltage: float = 5.0,
         rail:           int   = 1,
         settle_ms:      int   = 500,
+        confirm:        bool  = False,
     ) -> dict:
         """
         Safely power up the target device on VADJ1 or VADJ2.
 
         Sequence:
-        1. Disable eFuse for the rail (clears any previous trip).
+        1. Disable both eFuses of the rail (clears any previous trip).
         2. Enable VADJ rail and set voltage.
         3. Wait settle_ms milliseconds for the rail to stabilise.
-        4. Enable eFuse.
+        4. Enable both eFuses of the rail.
+        5. Read e-fuse trips and power-good back from the PCA9535.
 
         This avoids the capacitive-inrush eFuse trip that happens when the
         rail and eFuse are enabled simultaneously.
 
         Parameters:
-        - supply_voltage: Target rail voltage in volts (3.0 – 15.0). Default 5.0.
-        - rail: 1 = VADJ1 (IOs 1-6), 2 = VADJ2 (IOs 7-12). Default 1.
+        - supply_voltage: Target rail voltage in volts (3.0 - 15.0). Default 5.0.
+        - rail: 1 = VADJ1 (IOs 1-6, EFUSE1+2), 2 = VADJ2 (IOs 7-12, EFUSE3+4). Default 1.
         - settle_ms: Milliseconds to wait between rail enable and eFuse enable.
                      Increase for targets with large input capacitance. Default 500.
+        - confirm: Required for supply_voltage above 12 V.
 
-        Returns: rail, voltage, efuse, success, warnings.
+        Returns: rail, voltage, efuses, success, warnings. success is False
+        when an e-fuse tripped or power-good is missing.
         """
-        from bugbuster.constants import PowerControl
+        efuses, vadj_ctrl, idac_ch = _rail_controls(rail)
+        validate_vadj_voltage(supply_voltage, rail, confirm)
         bb = session.get_client()
 
-        efuse_ctrl = PowerControl.EFUSE1 if rail == 1 else PowerControl.EFUSE2
-        vadj_ctrl  = PowerControl.VADJ1  if rail == 1 else PowerControl.VADJ2
-        idac_ch    = 1                   if rail == 1 else 2
-
-        # Step 1 — disable eFuse (clears any latched trip)
-        bb.power_set(efuse_ctrl, on=False)
-
-        # Step 2 — enable rail and set voltage
+        for ef in efuses:
+            bb.power_set(ef, on=False)
         bb.power_set(vadj_ctrl, on=True)
         bb.idac_set_voltage(idac_ch, supply_voltage)
-
-        # Step 3 — wait for rail to settle
         time.sleep(settle_ms / 1000.0)
+        for ef in efuses:
+            bb.power_set(ef, on=True)
 
-        # Step 4 — enable eFuse
-        bb.power_set(efuse_ctrl, on=True)
-
-        # Brief check
         time.sleep(0.1)
-        status = bb.get_status()
-        power  = status.get("power", {})
-
-        pg_key = "vadj1_pg" if rail == 1 else "vadj2_pg"
-        ef_faults = power.get("efuse_faults", [False, False, False, False])
-        ef_tripped = ef_faults[0] if rail == 1 else ef_faults[1]
-
-        warnings = []
-        if not power.get(pg_key, True):
-            warnings.append(f"VADJ{rail} power-good signal not asserted — check load.")
-        if ef_tripped:
-            warnings.append(f"eFuse{rail} tripped — possible overcurrent. Check wiring.")
-
+        warnings = _rail_warnings(bb, rail)
         return {
             "rail":     f"VADJ{rail}",
             "voltage":  supply_voltage,
-            "efuse":    f"EFUSE{rail}",
-            "success":  not ef_tripped,
+            "efuses":   [ef.name for ef in efuses],
+            "success":  not warnings,
             "warnings": warnings,
         }
 
@@ -93,6 +104,7 @@ def register(mcp) -> None:
         supply_voltage: float = 5.0,
         rail:           int   = 1,
         settle_ms:      int   = 500,
+        confirm:        bool  = False,
     ) -> dict:
         """
         Enter the ESP32-C6 (or any ROM UART bootloader) download mode.
@@ -118,18 +130,16 @@ def register(mcp) -> None:
         - supply_voltage: Target supply voltage (V). Default 5.0.
         - rail:           VADJ rail (1 or 2). Default 1.
         - settle_ms:      Rail settle delay in ms. Default 500.
+        - confirm:        Required for supply_voltage above 12 V.
 
         Returns: success, uart_bridge, boot_io, warnings.
         """
-        from bugbuster.constants import PowerControl
         from bugbuster.hal import DEFAULT_ROUTING
 
+        efuses, vadj_ctrl, idac_ch = _rail_controls(rail)
+        validate_vadj_voltage(supply_voltage, rail, confirm)
         bb  = session.get_client()
         hal = session.get_hal()
-
-        efuse_ctrl = PowerControl.EFUSE1 if rail == 1 else PowerControl.EFUSE2
-        vadj_ctrl  = PowerControl.VADJ1  if rail == 1 else PowerControl.VADJ2
-        idac_ch    = 1                   if rail == 1 else 2
 
         # IO -> GPIO mapping (firmware UART_IO_GPIO_MAP)
         _ROUTING = {1: 4, 2: 2, 3: 1, 4: 7, 5: 6, 6: 5,
@@ -183,26 +193,23 @@ def register(mcp) -> None:
 
         # 4 — Full power cycle: turn everything off first, then bring up cleanly.
         #     This ensures the target resets even if it was already powered.
-        bb.power_set(efuse_ctrl, on=False)
+        for ef in efuses:
+            bb.power_set(ef, on=False)
         bb.power_set(vadj_ctrl,  on=False)
         time.sleep(0.2)   # let target fully discharge
 
         bb.power_set(vadj_ctrl, on=True)
         bb.idac_set_voltage(idac_ch, supply_voltage)
         time.sleep(settle_ms / 1000.0)
-        bb.power_set(efuse_ctrl, on=True)
+        for ef in efuses:
+            bb.power_set(ef, on=True)
 
         # 5 — Leave BOOT low; esptool will connect while it's held low.
         # Call release_bootloader() after flashing to reboot into the app.
         # (Do NOT release here.)
 
-        # Check faults
-        warnings = []
-        status = bb.get_status()
-        power  = status.get("power", {})
-        ef_faults = power.get("efuse_faults", [False, False, False, False])
-        if ef_faults[0] if rail == 1 else ef_faults[1]:
-            warnings.append(f"eFuse{rail} tripped after bootloader entry — check wiring.")
+        time.sleep(0.1)
+        warnings = _rail_warnings(bb, rail)
 
         return {
             "success": not warnings,
@@ -232,28 +239,30 @@ def register(mcp) -> None:
         - boot_io: BugBuster IO connected to the target BOOT/GPIO0 pin. Default 2.
         - rail:    VADJ rail (1 or 2). Default 1.
 
-        Returns: success, boot_io.
+        Returns: success, boot_io, warnings.
         """
-        from bugbuster.constants import PowerControl
         from bugbuster.hal import PortMode
 
+        efuses, _vadj, _ch = _rail_controls(rail)
         bb  = session.get_client()
         hal = session.get_hal()
-
-        efuse_ctrl = PowerControl.EFUSE1 if rail == 1 else PowerControl.EFUSE2
 
         hal.configure(boot_io, PortMode.DIGITAL_OUT)
         hal.write_digital(boot_io, True)
         time.sleep(0.1)
 
-        bb.power_set(efuse_ctrl, on=False)
+        for ef in efuses:
+            bb.power_set(ef, on=False)
         time.sleep(0.3)
-        bb.power_set(efuse_ctrl, on=True)
+        for ef in efuses:
+            bb.power_set(ef, on=True)
         time.sleep(0.5)
 
+        warnings = _rail_warnings(bb, rail)
         return {
-            "success":  True,
+            "success":  not warnings,
             "boot_io":  boot_io,
             "boot_pin": "HIGH",
             "note":     "Target power-cycled into normal boot mode.",
+            "warnings": warnings,
         }

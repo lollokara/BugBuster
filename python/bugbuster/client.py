@@ -2430,7 +2430,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.PCA_GET_STATUS)
             return _parse_pca_status(resp)
         else:
-            return self._http_get("/ioexp")
+            return _normalize_http_pca_status(self._http_get("/ioexp"))
 
     def power_set(self, control: PowerControl, on: bool) -> None:
         """
@@ -4694,6 +4694,18 @@ def _parse_faults(resp: bytes) -> dict:
         "supply_alert_status": supply, "supply_alert_mask": supply_mask,
         "channels": channels,
     }
+
+
+def _normalize_http_pca_status(raw: dict) -> dict:
+    """Add the documented keys to the firmware's /api/ioexp JSON (raw keys kept)."""
+    out = dict(raw)
+    pg = raw.get("powerGood") or {}
+    efuses = sorted(raw.get("efuses") or [], key=lambda e: e.get("id", 0))
+    out.setdefault("logic_pg", bool(pg.get("logic", False)))
+    out.setdefault("vadj1_pg", bool(pg.get("vadj1", False)))
+    out.setdefault("vadj2_pg", bool(pg.get("vadj2", False)))
+    out.setdefault("efuse_faults", [bool(e.get("fault", False)) for e in efuses] or [False] * 4)
+    return out
 
 
 def _parse_pca_status(resp: bytes) -> dict:
