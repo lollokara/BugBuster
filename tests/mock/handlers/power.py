@@ -2,7 +2,7 @@
 Power management handlers for SimulatedDevice.
 
 Handles: PCA_GET_STATUS, PCA_SET_CONTROL, PCA_SET_PORT, PCA_SET_FAULT_CFG,
-         PCA_GET_FAULT_LOG.
+         PCA_GET_FAULT_LOG, EFUSE_IMON_SET, EFUSE_IMON_GET.
 """
 
 import struct
@@ -16,6 +16,8 @@ def register(device) -> None:
     device.register_handler(CmdId.PCA_SET_PORT,      _pca_set_port(device))
     device.register_handler(CmdId.PCA_SET_FAULT_CFG, _pca_set_fault_cfg(device))
     device.register_handler(CmdId.PCA_GET_FAULT_LOG, _pca_get_fault_log(device))
+    device.register_handler(CmdId.EFUSE_IMON_SET,    _efuse_imon_set(device))
+    device.register_handler(CmdId.EFUSE_IMON_GET,    _efuse_imon_get(device))
 
 
 # ---------------------------------------------------------------------------
@@ -113,4 +115,52 @@ def _pca_set_fault_cfg(device):
 def _pca_get_fault_log(device):
     def handler(payload: bytes) -> bytes:
         return struct.pack('<B', 0)  # count = 0
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# EFUSE_IMON_SET (0x0D) / EFUSE_IMON_GET (0x0E)
+# SET payload: u8 efuse (0=off, 1..4), u8 flags (bit0 confirm power-cycle)
+# SET resp:    u8 result, status block.  GET resp: status block.
+# status block: u8 efuse, u8 flags (b0 valid, b1 saturated, b2 efuse_on),
+#               f32 imon_v, f32 current_ma
+# E-fuse n is PCA control id 4+n (EFUSE1_EN = 5).
+# ---------------------------------------------------------------------------
+
+_IMON_OK, _IMON_NEEDS_CONFIRM, _IMON_INVALID = 0, 1, 3
+
+
+def _efuse_is_on(device, efuse: int) -> bool:
+    return efuse != 0 and bool(device.pca_control.get(4 + efuse, False))
+
+
+def _efuse_imon_block(device) -> bytes:
+    efuse = getattr(device, "efuse_imon", 0)
+    on = _efuse_is_on(device, efuse)
+    flags = (0x01 if efuse else 0) | (0x04 if on else 0)
+    return struct.pack('<BBff', efuse, flags, 0.0, 0.0)
+
+
+def _efuse_imon_set(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 1:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        efuse = payload[0]
+        confirm = len(payload) >= 2 and bool(payload[1] & 0x01)
+        if efuse > 4:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        old = getattr(device, "efuse_imon", 0)
+        rc = _IMON_OK
+        if efuse != old:
+            if (_efuse_is_on(device, old) or _efuse_is_on(device, efuse)) and not confirm:
+                rc = _IMON_NEEDS_CONFIRM
+            else:
+                device.efuse_imon = efuse
+        return bytes([rc]) + _efuse_imon_block(device)
+    return handler
+
+
+def _efuse_imon_get(device):
+    def handler(payload: bytes) -> bytes:
+        return _efuse_imon_block(device)
     return handler

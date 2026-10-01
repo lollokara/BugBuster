@@ -49,18 +49,15 @@ Canonical BBP command-ID registry: `.mex/manifests/bbp-protocol.manifest.md`, ve
 The knowledge base is a map, not a contract. Always confirm the specific fact in code before reporting it:
 
 ```bash
-# MCP tool count (waveform.py registers via mcp.tool()(fn), a plain "@mcp.tool" grep under-counts by 10)
-python - <<'PY'
-import pathlib, re
-print(sum(len(re.findall(r'@mcp\.tool|mcp\.tool\(\)\(', p.read_text()))
-          for p in pathlib.Path('python/bugbuster_mcp/tools').glob('*.py')))
-PY
+# All documented counts (MCP tools/groups, BBP commands/errors, desktop tabs, Tauri commands, HTTP routes)
+python Firmware/tools/check_doc_counts.py --print
 
 python Firmware/tools/firmware_version.py {esp32|rp2040|p4|c6}
 python DesktopApp/BugBuster/scripts/desktop_version.py --check
-python Firmware/tools/check_proto_version.py                  # BBP lockstep across 3 files
-grep -c '("[a-z_0-9]*", "' DesktopApp/BugBuster/src/app.rs     # desktop tab count
+python Firmware/tools/check_proto_version.py                  # BBP + DAQ USB stream + DDP lockstep
 ```
+
+Never count with `grep -c` - it counts lines, not items (three desktop tabs share one line in `app.rs`).
 
 BBP `PROTO_VERSION` lives in `Firmware/ESP32/src/bbp/bbp.h`, `python/bugbuster/protocol.py`, `DesktopApp/BugBuster/src-tauri/src/bbp.rs`. RP2040 version lives in both `CMakeLists.txt:PROBE_VERSION` and `bb_main.c:BB_HAT_FW_MAJOR/MINOR`.
 

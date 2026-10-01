@@ -58,6 +58,7 @@
 #include "pca9535.h"
 #include "husb238.h"
 #include "selftest.h"
+#include "efuse_imon.h"
 #include "update_manager.h"
 #include "ad74416h_spi.h"
 #include "ad74416h_regs.h"
@@ -891,6 +892,54 @@ static char *api_gpio_set(int pin, const cJSON *body)
 // Note: live supply-rail measurement is NOT run from the BLE host task (it would
 // block the NimBLE stack on the ADC), so rail voltages are reported as -1/ok:false
 // ("not measured over BLE"). IDAC and IOExp state are live.
+static const char *efuse_imon_result_str(efuse_imon_result_t rc)
+{
+    switch (rc) {
+        case EFUSE_IMON_OK:            return "ok";
+        case EFUSE_IMON_NEEDS_CONFIRM: return "needs_confirm";
+        case EFUSE_IMON_BUSY:          return "busy";
+        case EFUSE_IMON_INVALID:       return "invalid";
+        case EFUSE_IMON_SLOT_HELD:     return "slot_held";
+        case EFUSE_IMON_HW_FAIL:       return "hw_fail";
+        default:                       return "unsupported";
+    }
+}
+
+static void add_efuse_imon_fields(cJSON *o)
+{
+    efuse_imon_status_t st;
+    efuse_imon_get(&st);
+    cJSON_AddNumberToObject(o, "efuse", st.efuse);
+    cJSON_AddBoolToObject(o, "valid", st.valid);
+    cJSON_AddBoolToObject(o, "saturated", st.saturated);
+    cJSON_AddBoolToObject(o, "efuseOn", st.efuse_on);
+    cJSON_AddNumberToObject(o, "imonV", st.imon_v);
+    cJSON_AddNumberToObject(o, "currentMa", st.current_ma);
+}
+
+// GET/POST /api/selftest/efuse_imon. POST {"efuse":0..4,"confirm":bool}.
+// "result" != "ok" is not an HTTP error: needs_confirm is the UI's cue to prompt.
+static char *api_efuse_imon(bool is_post, const cJSON *body)
+{
+    cJSON *r = cJSON_CreateObject();
+    if (is_post) {
+        cJSON *je = body_get(body, "efuse");
+        if (!cJSON_IsNumber(je) || je->valueint < 0 || je->valueint > 4) {
+            cJSON_Delete(r);
+            return api_error("efuse (0-4) required");
+        }
+        efuse_imon_result_t rc = efuse_imon_select((uint8_t)je->valueint,
+                                                   cJSON_IsTrue(body_get(body, "confirm")));
+        cJSON_AddBoolToObject(r, "ok", rc == EFUSE_IMON_OK);
+        cJSON_AddStringToObject(r, "result", efuse_imon_result_str(rc));
+    } else {
+        cJSON_AddBoolToObject(r, "ok", true);
+        cJSON_AddStringToObject(r, "result", "ok");
+    }
+    add_efuse_imon_fields(r);
+    return json_take(r);
+}
+
 static char *api_overview(void)
 {
     cJSON *root = cJSON_CreateObject();
@@ -961,6 +1010,7 @@ static char *api_overview(void)
         cJSON_AddBoolToObject(o, "ok", voltage >= 0);
         cJSON_AddItemToArray(rails, o);
     }
+    add_efuse_imon_fields(cJSON_AddObjectToObject(root, "efuseImon"));
     return json_take(root);
 }
 
@@ -1216,9 +1266,10 @@ static char *ota_query_blocking(bool releases, const char *empty_msg)
     ctx.done = xSemaphoreCreateBinary();
     if (!ctx.done) return api_error("out of memory");
 
+    // Pinned: vTaskDeleteWithCaps(NULL) asserts if an unpinned task migrates cores mid-delete (IDF 5.3).
     BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
         ota_query_task, "ota_query", 16384, &ctx, 5, NULL,
-        tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ok != pdPASS) {
         vSemaphoreDelete(ctx.done);
         return api_error("failed to start update query task");
@@ -1364,7 +1415,7 @@ void api_core_fw_refresh_async(void)
     s_fw_busy = true;
     if (xTaskCreatePinnedToCoreWithCaps(
             fw_refresh_task, "fw_snap", 6144, NULL, 4, NULL,
-            tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         s_fw_busy = false;
     }
 }
@@ -1380,7 +1431,7 @@ esp_err_t api_core_fw_apply_async(uint8_t index, uint32_t targets)
     // read-vs-write rule), so it must not sit in SPIRAM.
     if (xTaskCreatePinnedToCoreWithCaps(
             fw_apply_task, "fw_apply", 12288, NULL, 4, NULL,
-            tskNO_AFFINITY, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+            0, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         s_fw_busy = false;
         return ESP_ERR_NO_MEM;
     }
@@ -1449,7 +1500,8 @@ static char *api_selftest_calibrate(const cJSON *body)
     cJSON *jc = body_get(body, "channel");
     if (!cJSON_IsNumber(jc)) return api_error("channel (number) required");
     if (!selftest_start_auto_calibrate((uint8_t)jc->valueint)) {
-        return api_error("calibration blocked (busy or interlock)");
+        const char *why = selftest_cal_block_reason();
+        return api_error(why[0] ? why : "calibration blocked (busy or interlock)");
     }
     const SelftestCalResult *cal = selftest_get_cal_result();
     cJSON *r = cJSON_CreateObject();
@@ -1738,6 +1790,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/ota/status") == 0)  return api_ota_status();
     if (strcmp(path, "/api/ota/releases") == 0) return api_ota_releases();
     if (strcmp(path, "/api/selftest") == 0)    return api_selftest_get();
+    if (strcmp(path, "/api/selftest/efuse_imon") == 0) return api_efuse_imon(is_post, body);
     if (strncmp(path, "/api/idac/cal/points", 20) == 0) {
         // Match the query key precisely. A bare strstr(path, "ch=") also
         // matches the tail of any other parameter -- "?xch=5" or "?arch=2"

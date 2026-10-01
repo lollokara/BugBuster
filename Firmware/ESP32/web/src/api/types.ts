@@ -22,6 +22,27 @@ export interface SelftestSuppliesCached {
   rails: Array<{ rail: number; name: string; voltageV: number }>;
 }
 
+export type EfuseImonResult =
+  | "ok"
+  | "needs_confirm"
+  | "busy"
+  | "invalid"
+  | "slot_held"
+  | "hw_fail"
+  | "unsupported";
+
+export interface EfuseImon {
+  ok: boolean;
+  result?: EfuseImonResult;
+  error?: string;
+  efuse: number;
+  valid: boolean;
+  saturated: boolean;
+  efuseOn: boolean;
+  imonV: number;
+  currentMa: number;
+}
+
 export interface ScriptStatus {
   running?: boolean;
   currentScriptId?: number;

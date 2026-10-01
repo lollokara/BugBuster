@@ -176,11 +176,23 @@ public struct OverviewRail: Codable, Identifiable, Equatable {
     public let ok: Bool
 }
 
+// MARK: - E-Fuse Current Monitor
+public struct EFuseImonStatus: Codable, Equatable {
+    public let efuse: Int
+    public let valid: Bool
+    public let saturated: Bool
+    public let efuseOn: Bool
+    public let imonV: Double
+    public let currentMa: Double
+    public let result: String?
+}
+
 // MARK: - Overview Snapshot
 public struct OverviewSnapshot: Codable, Equatable {
     public let idac: IDACState
     public let ioexp: IOExpState
     public let rails: [OverviewRail]
+    public var efuseImon: EFuseImonStatus? = nil
 }
 
 // MARK: - Self-Test / Calibration

@@ -171,6 +171,12 @@ void selftest_monitor_step(void);
 bool selftest_start_auto_calibrate(uint8_t idac_channel);
 
 /**
+ * @brief  Why the last selftest_start_auto_calibrate() was refused ("" if it
+ *         was not, or the reason was generic busy/interlock).
+ */
+const char *selftest_cal_block_reason(void);
+
+/**
  * @brief  Get the current calibration status / result.
  */
 const SelftestCalResult* selftest_get_cal_result(void);
@@ -182,6 +188,14 @@ void selftest_clear_cal_trace(void);
  *         When true, U17 S3 must not be closed.
  */
 bool selftest_is_busy(void);
+
+/**
+ * @brief  Exclusive ownership of U23 for a whole measure/route sequence.
+ *         Held by every self-test measurement and by efuse_imon while it
+ *         attaches or detaches. PCB builds only.
+ */
+bool selftest_u23_lock(uint32_t timeout_ms);
+void selftest_u23_unlock(void);
 
 // ── Internal ADC supply monitoring ──────────────────────────────────────────
 // Uses the AD74416H's built-in diagnostic slots to measure internal supplies.

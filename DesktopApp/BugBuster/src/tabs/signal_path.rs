@@ -254,7 +254,7 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             if !alive_draw.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            let Some(cv) = cr.get() else { continue };
+            let Some(cv) = cr.get_untracked() else { continue };
             let cv: HtmlCanvasElement = cv;
             let dp = web_sys::window().unwrap().device_pixel_ratio();
             let rc = cv.get_bounding_client_rect();
@@ -268,10 +268,10 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 cv.get_context("2d").unwrap().unwrap().dyn_into().unwrap();
             c.scale(dp, dp).unwrap();
 
-            let ms = mux.get();
-            let ps = psu.get();
-            let es = ef.get();
-            let oe_on = oe.get();
+            let ms = mux.get_untracked();
+            let ps = psu.get_untracked();
+            let es = ef.get_untracked();
+            let oe_on = oe.get_untracked();
 
             c.set_fill_style_str(C_BG);
             c.fill_rect(0.0, 0.0, w, h);

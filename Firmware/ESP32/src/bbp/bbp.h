@@ -76,6 +76,18 @@ extern "C" {
 #define BBP_CMD_SELFTEST_WORKER        0x0B  // Enable/disable/query supply monitor worker
 #define BBP_CMD_WIFI_FORGET            0x0A  // Erase saved STA credentials from NVS and disconnect
 #define BBP_CMD_MEM_STATUS             0x0C  // Heap + per-task stack telemetry (see MEM_STATUS_SCHEMA)
+#define BBP_CMD_EFUSE_IMON_SET         0x0D  // Select monitored e-fuse (0=off,1..4) via U23 IMON path
+#define BBP_CMD_EFUSE_IMON_GET         0x0E  // Read monitored e-fuse current
+
+// EFUSE_IMON status block (both commands), little-endian:
+//   u8 efuse (0=none,1..4), u8 flags (bit0 valid, bit1 saturated, bit2 efuse_on),
+//   f32 imon_v, f32 current_ma
+// EFUSE_IMON_SET  payload: u8 efuse, u8 flags (bit0 confirm power-cycle)
+//                 resp:    u8 result (efuse_imon_result_t), then the status block
+#define BBP_EFUSE_IMON_F_VALID      0x01
+#define BBP_EFUSE_IMON_F_SATURATED  0x02
+#define BBP_EFUSE_IMON_F_EFUSE_ON   0x04
+#define BBP_EFUSE_IMON_SET_F_CONFIRM 0x01
 
 // MEM_STATUS response layout (little-endian, schema-versioned so the desktop
 // and Python client can grow the tail without a PROTO_VERSION bump):

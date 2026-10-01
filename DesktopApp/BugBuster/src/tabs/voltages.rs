@@ -1,3 +1,4 @@
+use crate::tabs::daq_cal::CalibrationWizard;
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -8,6 +9,7 @@ use wasm_bindgen::JsValue;
 pub const SLOTS: &[u8] = &[];
 
 const CAL_TOTAL_POINTS: u32 = 100;
+const HAT_TYPE_DAQ: u8 = 0x10;
 
 #[derive(Clone, Copy, PartialEq)]
 enum IdacCalState {
@@ -51,20 +53,35 @@ fn start_idac_cal(
     spawn_local(async move {
         let args = serde_wasm_bindgen::to_value(&serde_json::json!({"channel": ch})).unwrap();
         let result = try_invoke("selftest_auto_calibrate", args).await;
-        if let Some(r) =
-            result.and_then(|r| serde_wasm_bindgen::from_value::<serde_json::Value>(r).ok())
+        let rejected = match result
+            .and_then(|r| serde_wasm_bindgen::from_value::<serde_json::Value>(r).ok())
         {
-            let status = r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) as u8;
-            if status == 3 {
-                set_log.update(|l| l.push("Rejected (busy / interlock / error).".into()));
-                set_state.set(IdacCalState::Failed);
-            } else {
-                set_log.update(|l| l.push("Started — polling…".into()));
+            Some(r) => r.get("status").and_then(|v| v.as_u64()).unwrap_or(3) == 3,
+            None => true,
+        };
+        if !rejected {
+            set_log.update(|l| l.push("Started — polling…".into()));
+            return;
+        }
+        // VADJ sweeps reach 15 V, so the firmware refuses without a 20 V PD contract.
+        let pd_msg = if ch != 0 {
+            match fetch_usbpd_status().await {
+                Some(pd) if !pd.attached => Some("No USB-PD source: VADJ calibration needs a 20 V PD supply.".to_string()),
+                Some(pd) if pd.voltage_v < 17.5 => Some(format!(
+                    "USB-PD is {:.1} V: VADJ calibration needs a 20 V PD supply (the firmware tries to negotiate it).",
+                    pd.voltage_v
+                )),
+                _ => None,
             }
         } else {
-            set_log.update(|l| l.push("Error: failed to start calibration.".into()));
-            set_state.set(IdacCalState::Failed);
-        }
+            None
+        };
+        set_log.update(|l| {
+            l.push(pd_msg.unwrap_or_else(|| {
+                "Rejected (busy, interlock, e-fuse monitor active, or error).".into()
+            }))
+        });
+        set_state.set(IdacCalState::Failed);
     });
 }
 
@@ -96,6 +113,11 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // HAT rails
     let (hat, set_hat) = signal(HatStatus::default());
+    let is_daq = move || {
+        let h = hat.get();
+        h.detected && h.hat_type == HAT_TYPE_DAQ
+    };
+    let daq_cal_open = RwSignal::new(false);
     let (rails, set_rails) = signal(Vec::<HatRailStatus>::new());
     let (v3v3_target_mv, set_v3v3_target_mv) = signal(3300u16);
     let (vadj3_target_mv, set_vadj3_target_mv) = signal(3300u16);
@@ -143,7 +165,8 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     set_hat.set(st);
                 }
             }
-            if let Some(rl) = hat_get_rail_status().await {
+            let la_hat = hat.try_get_untracked().is_some_and(|h| h.detected && h.hat_type != HAT_TYPE_DAQ);
+            if let Some(rl) = if la_hat { hat_get_rail_status().await } else { None } {
                 if alive.load(std::sync::atomic::Ordering::Relaxed) {
                     set_rails.set(rl);
                 }
@@ -164,7 +187,8 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             set_hat.set(st);
                         }
                     }
-                    if let Some(rl) = hat_get_rail_status().await {
+                    let la_hat = hat.try_get_untracked().is_some_and(|h| h.detected && h.hat_type != HAT_TYPE_DAQ);
+                    if let Some(rl) = if la_hat { hat_get_rail_status().await } else { None } {
                         if alive.load(std::sync::atomic::Ordering::Relaxed) {
                             set_rails.set(rl);
                         }
@@ -226,6 +250,9 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                         ))
                                     });
                                     set_idac_last_points.set(points);
+                                }
+                                if idac_cal_state.get_untracked() != IdacCalState::Running {
+                                    return;
                                 }
                                 if status == 2 {
                                     set_idac_cal_log.update(|l| {
@@ -516,8 +543,13 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 }.into_any()
             }}
 
+            // ── SECTION: DAQ HAT DUT supply (replaces the LA-HAT rails) ──────────
+            <Show when=is_daq>
+                <DaqSupplyPanel/>
+            </Show>
+
             // ── SECTION: HAT Voltage Rails ─────────────────────────────────────
-            <Show when=move || hat.get().detected>
+            <Show when=move || hat.get().detected && !is_daq()>
                 <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 10px">
                     "HAT Voltage Rails"
                 </div>
@@ -894,8 +926,26 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     }
                 }}
 
-                // ── HAT rail calibration (only when HAT detected) ──────────────
-                <Show when=move || hat.get().detected>
+                // ── DAQ HAT DUT supply calibration ────────────────────────────
+                <Show when=is_daq>
+                    <div style="border-top: 1px solid rgba(255,255,255,0.07); padding-top: 16px; margin-top: 16px">
+                        <div style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px">
+                            "DAQ HAT Calibration  ·  DUT Supply Voltage / Current"
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+                            <button class="btn btn-primary" style="font-size: 11px; padding: 5px 16px"
+                                on:click=move |_| daq_cal_open.set(true)
+                            >"Open Calibration Wizard"</button>
+                            <span style="font-size: 10px; color: var(--text-dim)">
+                                "Guided voltage and current-range calibration on the P4. Needs a reference meter."
+                            </span>
+                        </div>
+                    </div>
+                    <CalibrationWizard open=daq_cal_open/>
+                </Show>
+
+                // ── HAT rail calibration (LA HAT only) ─────────────────────────
+                <Show when=move || hat.get().detected && !is_daq()>
                     <div style="border-top: 1px solid rgba(255,255,255,0.07); padding-top: 16px; margin-top: 16px">
                         <div style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px">
                             "HAT Rail Calibration Sweep  ·  RP2040 DAC Sweep"
@@ -1019,6 +1069,182 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 </Show>
 
             </div>
+        </div>
+    }
+}
+
+// ── DAQ HAT DUT supply card ───────────────────────────────────────────────────
+async fn slp(ms: u32) {
+    let p = js_sys::Promise::new(&mut |r, _| {
+        if let Some(w) = web_sys::window() {
+            w.set_timeout_with_callback_and_timeout_and_arguments_0(&r, ms as i32)
+                .ok();
+        }
+    });
+    wasm_bindgen_futures::JsFuture::from(p).await.ok();
+}
+
+// Uses daq_vdut_* commands: BBP (0xB6/0xBF) over USB, /api/daq/vdut/* over HTTP,
+// so it works without the HS DAQ tab's USB-HS stream being connected.
+#[component]
+fn DaqSupplyPanel() -> impl IntoView {
+    let color = "#f59e0b";
+    let set_v = RwSignal::new(5.0f64);
+    let set_ma = RwSignal::new(500u32);
+    let loaded = RwSignal::new(false);
+    let live = RwSignal::new(Option::<VdutStatus>::None);
+    let busy = RwSignal::new(false);
+    let pd_warn = RwSignal::new(String::new());
+
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let a = alive.clone();
+        on_cleanup(move || a.store(false, std::sync::atomic::Ordering::Relaxed));
+    }
+    {
+        let alive = alive.clone();
+        spawn_local(async move {
+            while alive.load(std::sync::atomic::Ordering::Relaxed) {
+                let st = daq_vdut_status().await;
+                // The panel may have been unmounted during the await.
+                if !alive.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if let Some(s) = st {
+                    if loaded.try_get_untracked() == Some(false) {
+                        set_v.try_set(s.setpoint_mv as f64 / 1000.0);
+                        set_ma.try_set(s.ilimit_ma);
+                        loaded.try_set(true);
+                    }
+                    live.try_set(Some(s));
+                }
+                slp(1000).await;
+            }
+        });
+    }
+
+    let on = move || live.get().map(|m| m.enabled).unwrap_or(false);
+
+    let apply_setpoint = move |_| {
+        let mv = (set_v.get_untracked() * 1000.0).round().clamp(1800.0, 20000.0) as u16;
+        let ma = set_ma.get_untracked().clamp(100, 2500) as u16;
+        busy.set(true);
+        spawn_local(async move {
+            let ok = daq_vdut_set_setpoint(mv, ma).await;
+            busy.try_set(false);
+            if ok {
+                show_toast(&format!("DUT setpoint {:.2} V / {} mA", mv as f32 / 1000.0, ma), "ok");
+            } else {
+                show_toast("Failed to set DUT setpoint", "err");
+            }
+        });
+    };
+
+    let toggle = move |_| {
+        let want = !live.get_untracked().map(|m| m.enabled).unwrap_or(false);
+        busy.set(true);
+        spawn_local(async move {
+            if want {
+                // The P4 enforces the same guard; this only gives a clearer message.
+                if let Some(pd) = fetch_usbpd_status().await {
+                    if !(pd.attached && pd.voltage_v >= 9.0 && pd.current_a >= 3.0) {
+                        pd_warn.try_set(if !pd.attached {
+                            "Blocked: no USB-PD source (need \u{2265} 9 V / 3 A)".to_string()
+                        } else {
+                            format!("Blocked: USB-PD {:.1} V / {:.1} A, need \u{2265} 9 V / 3 A", pd.voltage_v, pd.current_a)
+                        });
+                        busy.try_set(false);
+                        return;
+                    }
+                }
+            }
+            pd_warn.try_set(String::new());
+            if !daq_vdut_set_enable(want).await {
+                show_toast("Failed to switch the DUT supply", "err");
+            }
+            if let Some(s) = daq_vdut_status().await {
+                live.try_set(Some(s));
+            }
+            busy.try_set(false);
+        });
+    };
+
+    view! {
+        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 10px">
+            "DAQ HAT DUT Supply"
+        </div>
+        <div style=format!("{} margin-bottom: 28px; animation: vt-slide-in 0.3s cubic-bezier(0.4,0,0.2,1)", glass(color))>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px">
+                <div>
+                    <div style=format!("font-size: 12px; font-weight: 700; color: {color}; text-transform: uppercase; letter-spacing: 0.06em")>"V_DUT"</div>
+                    <div style="font-size: 9px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace">"1.8 – 20 V  ·  100 – 2500 mA limit  ·  needs USB-PD \u{2265} 9 V / 3 A"</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px">
+                    <label class="toggle-wrap">
+                        <div class="toggle" class:active=on
+                            on:click=move |e| { if !busy.get_untracked() { toggle(e) } }
+                        ><div class="toggle-thumb"></div></div>
+                    </label>
+                    <span style="font-size: 10px; color: var(--text-dim)">{move || if on() { "On" } else { "Off" }}</span>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px">
+                <div style="text-align: center">
+                    <div style="font-size: 9px; color: var(--text-dim); text-transform: uppercase">"Setpoint"</div>
+                    <div style="font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: var(--text-dim)">
+                        {move || format!("{:.2}V", set_v.get())}
+                    </div>
+                </div>
+                <div style="text-align: center">
+                    <div style="font-size: 9px; color: var(--text-dim); text-transform: uppercase">"Voltage"</div>
+                    <div style=format!("font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {color}")>
+                        {move || live.get().map(|m| format!("{:.3}V", m.voltage_v)).unwrap_or_else(|| "—".into())}
+                    </div>
+                </div>
+                <div style="text-align: center">
+                    <div style="font-size: 9px; color: var(--text-dim); text-transform: uppercase">"Current"</div>
+                    <div style=format!("font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {color}")>
+                        {move || match live.get() {
+                            Some(m) if m.enabled => {
+                                let ma = m.current_a * 1000.0;
+                                if ma.abs() < 1.0 { format!("{:.0}\u{b5}A", ma * 1000.0) } else { format!("{:.1}mA", ma) }
+                            }
+                            Some(_) => "OFF".into(),
+                            None => "—".into(),
+                        }}
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+                <input type="number" class="number-input" style="width: 90px; font-size: 12px"
+                    min="1.8" max="20" step="0.1"
+                    prop:value=move || format!("{:.2}", set_v.get())
+                    on:change=move |e| { if let Ok(v) = event_target_value(&e).parse::<f64>() { set_v.set(v.clamp(1.8, 20.0)); } }
+                />
+                <span style="font-size: 11px; color: var(--text-dim)">"V"</span>
+                <input type="number" class="number-input" style="width: 90px; font-size: 12px"
+                    min="100" max="2500" step="10"
+                    prop:value=move || set_ma.get().to_string()
+                    on:change=move |e| { if let Ok(v) = event_target_value(&e).parse::<u32>() { set_ma.set(v.clamp(100, 2500)); } }
+                />
+                <span style="font-size: 11px; color: var(--text-dim)">"mA limit"</span>
+                <button
+                    style=format!(
+                        "margin-left: auto; padding: 7px 18px; border-radius: 8px; border: 1px solid {color}40; \
+                         background: {color}18; color: {color}; font-weight: 700; font-size: 11px; cursor: pointer; letter-spacing: 0.05em"
+                    )
+                    disabled=move || busy.get() || !loaded.get()
+                    on:click=apply_setpoint
+                >"CONFIRM"</button>
+            </div>
+            <Show when=move || !pd_warn.get().is_empty()>
+                <div class="mode-warning" style="margin-top: 10px">
+                    <span class="mode-warning-icon">"\u{26a0}"</span>
+                    <span>{move || pd_warn.get()}</span>
+                </div>
+            </Show>
         </div>
     }
 }

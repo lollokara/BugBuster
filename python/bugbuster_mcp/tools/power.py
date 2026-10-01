@@ -1,10 +1,15 @@
 """
 BugBuster MCP — Power management tools.
 
-Tools: usb_pd_status, usb_pd_select, pd_ensure_for_voltage, power_control, wifi_status
+Tools: usb_pd_status, usb_pd_select, pd_ensure_for_voltage, power_control, wifi_status,
+       efuse_current_monitor, efuse_current_get
 """
 
 from __future__ import annotations
+from dataclasses import asdict
+
+from bugbuster.client import EfuseImonConfirmRequired
+
 from .. import session
 from ..safety import check_faults_post
 from ..config import USBPD_ALLOWED_VOLTAGES
@@ -129,6 +134,66 @@ def register(mcp) -> None:
         }
         if warnings:
             res["warnings"] = warnings
+        return res
+
+    @mcp.tool()
+    def efuse_current_monitor(efuse: int, i_understand_power_cycle: bool = False) -> dict:
+        """
+        Route one e-fuse's current monitor (TPS1641 IMON) to the ADC and start reading it.
+
+        Only ONE e-fuse can be monitored at a time; selecting another one moves
+        the monitor. If the e-fuse being attached, or the one being detached,
+        is currently ON, it is power-cycled (off, 200 ms, on) and the DUT on that
+        port loses power briefly. In that case this tool does nothing and returns
+        needs_power_cycle_confirmation=True; call again with
+        i_understand_power_cycle=True to proceed.
+
+        While a monitor is active the firmware refuses supply measurement
+        (selftest_measure_supply), IDAC auto-calibration and raw U23 MUX changes,
+        and holds logical channel C (IO9 analog). Call with efuse=0 to stop.
+        Readings are valid after ~300 ms settling; saturated=True means
+        IMON >= 2.45 V (about 4.5 A) and the current is a lower bound.
+
+        Parameters:
+        - efuse: 0 = stop monitoring, 1..4 = EFUSE1..4 (same numbering as power_control).
+        - i_understand_power_cycle: Set True to allow the power-cycle of an ON e-fuse.
+
+        Returns: success, efuse, valid, saturated, efuse_on, imon_v, current_ma
+                 (or success=False with needs_power_cycle_confirmation and message).
+        """
+        if not 0 <= efuse <= 4:
+            raise ValueError(f"efuse must be 0 (stop) or 1..4, got {efuse}")
+        bb = session.get_client()
+        try:
+            st = bb.efuse_imon_set(efuse, confirm_power_cycle=i_understand_power_cycle)
+        except EfuseImonConfirmRequired:
+            return {
+                "success": False,
+                "needs_power_cycle_confirmation": True,
+                "message": (
+                    "This change will turn an ON e-fuse off and back on (about 200 ms "
+                    "outage on its port). Call again with i_understand_power_cycle=True "
+                    "to proceed."
+                ),
+            }
+        res = {"success": True, **asdict(st)}
+        res.pop("result", None)
+        return res
+
+    @mcp.tool()
+    def efuse_current_get() -> dict:
+        """
+        Read the monitored e-fuse current set up by efuse_current_monitor.
+
+        Read-only. efuse=0 means no monitor is attached. valid=False while the
+        reading is settling (~300 ms after attach) or after an AD74416H reset.
+        saturated=True means IMON >= 2.45 V (about 4.5 A): the true current is higher.
+
+        Returns: efuse, valid, saturated, efuse_on, imon_v, current_ma.
+        """
+        bb = session.get_client()
+        res = asdict(bb.efuse_imon_get())
+        res.pop("result", None)
         return res
 
     @mcp.tool()

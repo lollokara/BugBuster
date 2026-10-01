@@ -31,6 +31,9 @@ static portMUX_TYPE s_adgs_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Cached switch states for all devices
 static uint8_t s_mux_state[ADGS_NUM_DEVICES] = {};
+#if ADGS_HAS_SELFTEST
+static volatile bool s_selftest_locked = false;   // U23 held by efuse_imon
+#endif
 
 // Public 4-byte API shadow. On PCB builds this mirrors the 4 populated main
 // devices; on breadboard builds only byte 0 is backed by hardware.
@@ -571,8 +574,14 @@ bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed)
 
 void adgs_reset_all(void)
 {
+#if ADGS_HAS_SELFTEST
+    uint8_t keep_u23 = s_selftest_locked ? s_mux_state[ADGS_SELFTEST_DEV] : 0;
+#endif
     memset(s_mux_state, 0, sizeof(s_mux_state));
     memset(s_api_main_state, 0, sizeof(s_api_main_state));
+#if ADGS_HAS_SELFTEST
+    s_mux_state[ADGS_SELFTEST_DEV] = keep_u23;
+#endif
     if (s_mux_initialized) {
 #if ADGS_NUM_DEVICES > 1
         adgs_daisy_chain_write(s_mux_state);
@@ -689,9 +698,19 @@ void adgs_soft_reset(void)
 
 #if ADGS_HAS_SELFTEST
 
+void adgs_selftest_set_locked(bool locked)
+{
+    s_selftest_locked = locked;
+}
+
 bool adgs_set_selftest(uint8_t sw_byte)
 {
     if (!s_mux_initialized) return false;
+
+    if (s_selftest_locked && sw_byte != s_mux_state[ADGS_SELFTEST_DEV]) {
+        ESP_LOGW(TAG, "U23 write 0x%02X rejected: route held by e-fuse current monitor", sw_byte);
+        return false;
+    }
 
     // Safety interlock: U17 S3 must be open before ANY U23 switch can close.
     if (sw_byte != 0 && adgs_u17_s3_active()) {

@@ -119,6 +119,9 @@ void app_main(void)
     bool in_menu = false;
     bool wifi_stream_prev = false;
     uint32_t last_hello = 0;
+    bool lost_announced = false;       // link-lost banner shown for this outage
+    bool link_logged = false;
+    const uint32_t boot_ms = now_ms();
 
     while (1) {
         // Feed the watchdog once per loop iteration.
@@ -157,6 +160,9 @@ void app_main(void)
 
         uint32_t ev = buttons_poll(t) | ddp_take_buttons();
 
+        // The PD guard warning is moot once the S3 reports a valid contract.
+        if (home_pd_ok(9000, 3000)) ui_clear_warning_if(UI_WARN_NEED_PD);
+
         if (!in_menu) {
             // --- Main readout screen ---
             // OK long-press (BACK) on the main screen TOGGLES the DUT supply:
@@ -165,12 +171,13 @@ void app_main(void)
             // so it does not also open the menu. (Inside a menu, BACK still
             // navigates back — handled by menu_update().)
             if (ev & BTN_EV_BACK) {
-                bool want_on = !ui_source_on();
+                bool want_on = !ddp_source_on();
                 // Guard (no override): the DUT may only be enabled with a USB-PD
                 // contract of at least 9 V / 3 A. The P4 enforces this too.
                 if (want_on && !home_pd_ok(9000, 3000)) {
-                    ui_show_warning("Need USB-PD 9V/3A");
+                    ui_show_warning(UI_WARN_NEED_PD);
                 } else {
+                    ui_clear_warning_if(UI_WARN_NEED_PD);
                     c6_config_send_source_enable(want_on);
                 }
                 ev &= ~BTN_EV_BACK;
@@ -182,16 +189,29 @@ void app_main(void)
             }
 
             float v, i; uint8_t flags; uint32_t age;
-            if (ddp_get_latest(&v, &i, &flags, &age) && age < 1000) {
+            bool have = ddp_get_latest(&v, &i, &flags, &age);
+            if (have && age < 1000) {
+                if (!link_logged) {
+                    link_logged = true;
+                    ESP_LOGI(TAG, "first P4 measurement %u ms after boot",
+                             (unsigned)(t - boot_ms));
+                }
                 ui_set_data(v, i, flags, DDP_STATE_LIVE);
+                ui_clear_warning_if(UI_WARN_LINK_LOST);
+                lost_announced = false;
+            } else if (!have && (t - boot_ms) < 15000) {
+                // P4 still booting: not a fault, and no fabricated data.
+                ui_set_data(0.0f, 0.0f, 0, DDP_STATE_BOOT);
             } else {
-                // C6-9 fix: when the P4 link is stale (age >= 2 s), show a
-                // "LINK LOST" banner instead of silently falling back to demo
-                // mode, which would show fabricated data that looks live.
+                // C6-9: a stale link shows FAULT rather than demo data that
+                // looks live. The banner fires once per outage, not every frame.
                 sim_data(t, &v, &i, &flags);
                 if (age >= 2000) {
                     ui_set_data(v, i, flags, DDP_STATE_FAULT);
-                    ui_show_warning("P4 link lost");
+                    if (!lost_announced) {
+                        lost_announced = true;
+                        ui_show_warning(UI_WARN_LINK_LOST);
+                    }
                 } else {
                     ui_set_data(v, i, flags, DDP_STATE_SIM);
                 }

@@ -28,6 +28,8 @@ export type {
   DeviceInfo,
   PairingInfo,
   SelftestSuppliesCached,
+  EfuseImon,
+  EfuseImonResult,
   ScriptStatus,
   ScriptStorageStatus,
   AutorunStatus,
@@ -64,6 +66,7 @@ import type {
   BoardState,
   SelftestStatus,
   SelftestSuppliesCached,
+  EfuseImon,
   ScriptStatus,
   ScriptStorageStatus,
   AutorunStatus,
@@ -597,6 +600,15 @@ export const api = {
         admin: true,
       }),
   }),
+
+  efuseImon: () => request<EfuseImon>("/api/selftest/efuse_imon"),
+  setEfuseImon: (mac: string, efuse: number, confirm: boolean) =>
+    request<EfuseImon>("/api/selftest/efuse_imon", {
+      method: "POST",
+      body: { efuse, confirm },
+      mac,
+      admin: true,
+    }),
 
   lshift: {
     setOe: (mac: string, enabled: boolean) =>

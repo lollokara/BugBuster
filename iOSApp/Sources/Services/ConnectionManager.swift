@@ -113,6 +113,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var lastStatus: DeviceStatus? = nil
     @Published public var channelHistory: [Int: [Double]] = [:]
     @Published public var lastOverview: OverviewSnapshot? = nil
+    @Published public var efuseImon: EFuseImonStatus? = nil
     @Published public var lastIoExp: IOExpState? = nil
     @Published public var lastSelftest: SelftestStatus? = nil
     @Published public var lastHatStatus: HatStatus? = nil
@@ -718,6 +719,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             self.connectionState = .disconnected
             self.updateStatus(nil)
             self.lastOverview = nil
+            self.efuseImon = nil
             self.lastIoExp = nil
             self.lastSelftest = nil
             self.lastHatStatus = nil
@@ -1334,6 +1336,47 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return (200...299).contains(httpResponse.statusCode)
     }
     
+    /// POST JSON and decode the response body (firmware returns HTTP 200 for non-ok results).
+    private func postDecoded<T: Decodable>(_ type: T.Type, path: String, json: [String: Any]) async -> T? {
+        guard let device = activeDevice else { return nil }
+        if transport == .ble {
+            return await bleDecoded(type, path: path, body: json)
+        }
+
+        var urlStr = device.ip
+        if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
+            urlStr = "http://\(urlStr)"
+        }
+        guard let url = URL(string: "\(urlStr)\(path)") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !adminToken.isEmpty {
+            request.setValue(adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: json)
+
+        guard let (data, response) = try? await gatedData(for: request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    /// Select the monitored e-fuse (0 = off, 1...4). Returns the parsed response, nil on transport failure.
+    public func setEfuseImon(_ efuse: Int, confirm: Bool) async -> EFuseImonStatus? {
+        let res: EFuseImonStatus? = await postDecoded(
+            EFuseImonStatus.self,
+            path: "/api/selftest/efuse_imon",
+            json: ["efuse": efuse, "confirm": confirm]
+        )
+        if let res = res, res.result == "ok" {
+            await MainActor.run { self.efuseImon = res }
+        }
+        fetchOverviewQuick()
+        return res
+    }
+
     public func getRequest<T: Decodable>(path: String) async throws -> T {
         guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
         return try await performRequest(ip: device.ip, path: path, token: adminToken)
@@ -1492,6 +1535,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             ioexp: newIoExp,
             rails: ov.rails
         )
+        if let imon = ov.efuseImon { self.efuseImon = imon }
         self.lastIoExp = newIoExp
     }
 

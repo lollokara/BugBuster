@@ -27,6 +27,9 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
+    let imon = RwSignal::new(EfuseImonStatus::default());
+    start_efuse_imon_poll(imon);
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">"PCA9535 16-bit GPIO expander status and control. Manages power supply enables (V_ADJ1, V_ADJ2, +/-15V, LOGIC_EN), E-Fuse output protection per connector (P1-P4), and monitors power-good signals."</div>
@@ -117,7 +120,10 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
                         // E-Fuse Output Protection
                         <div style="margin-bottom: 16px">
-                            <div style="font-size: 10px; font-weight: 600; color: var(--text-dim); margin-bottom: 8px; letter-spacing: 1px; text-transform: uppercase">"E-Fuse Output Protection (TPS1641 x 4)"</div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px">
+                                <div style="font-size: 10px; font-weight: 600; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase">"E-Fuse Output Protection (TPS1641 x 4)"</div>
+                                <span style="font-size: 10px; color: var(--text-dim)">"Current monitor: Overview tab"</span>
+                            </div>
                             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px">
                                 {efuses.into_iter().enumerate().map(|(i, ef)| {
                                     let color = CH_COLORS[i];
@@ -125,6 +131,7 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     let rail = if ef.id <= 2 { "VADJ1" } else { "VADJ2" };
                                     let enabled = ef.enabled;
                                     let fault = ef.fault;
+                                    let ef_id = ef.id;
 
                                     view! {
                                         <div style=format!("padding: 16px; border-radius: 8px; {}",
@@ -177,6 +184,29 @@ pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                     {if enabled { "ON" } else { "OFF" }}
                                                 </button>
                                             </div>
+
+                                            // Current row (monitored e-fuse only)
+                                            {move || {
+                                                let st = imon.get();
+                                                if st.efuse != ef_id {
+                                                    return ().into_any();
+                                                }
+                                                let (text, kind) = efuse_imon_display(&st);
+                                                let color = match kind {
+                                                    "sat" => "#ef4444",
+                                                    "settling" => "var(--text-dim)",
+                                                    _ => "#10b981",
+                                                };
+                                                view! {
+                                                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 6px; margin-bottom: 8px; background: var(--bg-secondary, #0f0f23)">
+                                                        <div>
+                                                            <div style="font-size: 11px; font-weight: 700; color: var(--text-dim)">"Current"</div>
+                                                            <div style="font-size: 10px; color: var(--text-dim)">"IMON via channel D"</div>
+                                                        </div>
+                                                        <span style=format!("font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: {}", color)>{text}</span>
+                                                    </div>
+                                                }.into_any()
+                                            }}
 
                                             // Fault row
                                             <div style=format!("display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 6px; {}",

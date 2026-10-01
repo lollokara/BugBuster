@@ -8,6 +8,8 @@
 #include "theme.h"
 #include "settings.h"
 
+#include "esp_timer.h"
+
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -50,9 +52,12 @@ static float   s_v = 0.0f, s_i = 0.0f;
 static uint8_t s_flags = 0;
 static uint8_t s_state = DDP_STATE_BOOT;
 
-// Transient warning banner (e.g. USB-PD guard). Shown for a few render frames.
+// Transient warning banner (e.g. USB-PD guard). Wall-clock expiry so it decays
+// the same on the home screen and in the menu.
+#define WARN_SHOW_MS 3000u
 static char     s_warn[40] = {0};
-static uint16_t s_warn_ttl = 0;
+static bool     s_warn_on = false;
+static uint32_t s_warn_until_ms = 0;
 
 // ---- Cached header sprites (rasterized once) -------------------------------
 // Pac-Man geometry inside its sprite cell.
@@ -125,7 +130,34 @@ void ui_show_warning(const char *msg)
     if (!msg) return;
     strncpy(s_warn, msg, sizeof(s_warn) - 1);
     s_warn[sizeof(s_warn) - 1] = '\0';
-    s_warn_ttl = 180;   // ~ a few seconds of render frames
+    s_warn_until_ms = (uint32_t)(esp_timer_get_time() / 1000) + WARN_SHOW_MS;
+    s_warn_on = true;
+}
+
+void ui_clear_warning(void)
+{
+    s_warn_on = false;
+}
+
+void ui_clear_warning_if(const char *msg)
+{
+    if (s_warn_on && msg && strcmp(s_warn, msg) == 0) s_warn_on = false;
+}
+
+bool ui_warning_active(uint32_t t_ms)
+{
+    if (s_warn_on && (int32_t)(t_ms - s_warn_until_ms) >= 0) s_warn_on = false;
+    return s_warn_on;
+}
+
+void ui_draw_warning(uint32_t t_ms)
+{
+    if (!ui_warning_active(t_ms)) return;
+    int bh = 22, by = (DISP_HEIGHT - bh) / 2 + 6;
+    gfx_round_rect(6, by, DISP_WIDTH - 12, bh, 5, C_ROSE);
+    gfx_round_rect_border(6, by, DISP_WIDTH - 12, bh, 5, C_TEXT);
+    int tw = gfx_text_w(s_warn, 1);
+    gfx_text((DISP_WIDTH - tw) / 2, by + (bh - 7) / 2, s_warn, 1, C_BG0);
 }
 
 // Blit the pre-rendered status dot centered at (cx,cy) in `color`. Cheap alpha
@@ -163,6 +195,7 @@ static void draw_header(uint32_t t_ms)
         case DDP_STATE_LIVE: sc = C_GREEN; st = "LIVE"; break;
         case DDP_STATE_SIM:  sc = C_AMBER; st = "SIM";  break;
         case DDP_STATE_FAULT:sc = C_ROSE;  st = "FLT";  break;
+        case DDP_STATE_BOOT: sc = C_MUTED; st = "WAIT"; break;
         default:             sc = C_MUTED; st = "...";  break;
     }
     int tw = gfx_text_w(st, 1);
@@ -268,10 +301,13 @@ static void draw_header(uint32_t t_ms)
 // ---- A single hero value card ----------------------------------------------
 // glow: draw a soft accent ring outside the tile (supply on).
 // show_off: render "OFF" instead of the value (supply off).
+// set_val: if non-NULL, render a greyed "SET <set_val>" line over the live value
+// in the small font (the baked digits are too tall for two rows).
 // range_badge: optional short current-range label (triangle + text) in the top row.
 static void draw_card(int x, int y, int w, int h, const char *label,
                       uint16_t accent, float value, char base_unit, bool over,
-                      bool glow, bool show_off, const char *range_badge)
+                      bool glow, bool show_off, const char *set_val,
+                      const char *range_badge)
 {
     if (over) accent = C_ROSE;
 
@@ -287,6 +323,7 @@ static void draw_card(int x, int y, int w, int h, const char *label,
     gfx_round_rect_border(x, y, w, h, 8, C_BORDER);
 
     char num[14];
+    char live[20] = {0};
     const char *us;
     uint16_t num_color;
     if (show_off) {
@@ -301,6 +338,10 @@ static void draw_card(int x, int y, int w, int h, const char *label,
         else             snprintf(num, sizeof(num), "%s", fv.mantissa);
         us = over ? "OVER" : fv.unit;
         num_color = over ? C_ROSE : C_TEXT;
+        if (set_val) {
+            snprintf(live, sizeof(live), "%s%s", num, fv.unit);
+            us = over ? "OVER" : "";
+        }
     }
 
     // Top row: label on the left, unit on the right — keeps them clear of the
@@ -331,6 +372,21 @@ static void draw_card(int x, int y, int w, int h, const char *label,
         int ox = x + (w - tw) / 2;
         int oy = band_top + ((band_bot - band_top) - th) / 2;
         gfx_text(ox, oy, "OFF", sz, num_color);
+    } else if (set_val) {
+        // Two 14 px rows + 2 px gap fit the 32 px band: SET (grey), live (white).
+        const int sz = 2;
+        int lab_w = gfx_text_w("SET", 1);
+        int set_w = lab_w + 4 + gfx_text_w(set_val, sz);
+        int row1 = band_top + 1;
+        int row2 = row1 + GFX_SMALL_H(sz) + 2;
+        int sx = x + (w - set_w) / 2;
+        if (sx < x + 3) sx = x + 3;
+        gfx_text(sx, row1 + GFX_SMALL_H(sz) - GFX_SMALL_H(1), "SET", 1, C_MUTED);
+        gfx_text(sx + lab_w + 4, row1, set_val, sz, C_MUTED);
+        int lw = gfx_text_w(live, sz);
+        int lx = x + (w - lw) / 2;
+        if (lx < x + 3) lx = x + 3;
+        gfx_text(lx, row2, live, sz, num_color);
     } else {
         // Big baked-font number fills the band below the divider, centered.
         int numw = gfx_jbtext_w(num);
@@ -375,23 +431,25 @@ void ui_render(uint32_t t_ms)
         }
     }
 
+    // Supply off on live data: show the setpoint the next enable will apply.
+    char set_s[24];
+    const char *set_val = NULL;
+    if (cur_off) {
+        int mv = g_settings.dut_voltage_mv;
+        snprintf(set_s, sizeof(set_s), "%d.%02dV", mv / 1000, (mv % 1000) / 10);
+        set_val = set_s;
+    }
+
     draw_card(x0, top, cardw, cardh, "VOLTAGE", C_BLUE,
               s_v, 'V', (s_flags & DDP_FLAG_V_OVERRANGE) != 0,
-              src_on, false, NULL);
+              src_on, false, set_val, NULL);
     PERF_MARK("cardV");
 
     draw_card(x1, top, cardw, cardh, "CURRENT", C_GREEN,
               s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0,
-              src_on, cur_off, rbadge);
+              src_on, cur_off, NULL, rbadge);
     PERF_MARK("cardI");
 
     // Transient warning banner over the tiles (drawn last, on top).
-    if (s_warn_ttl > 0) {
-        s_warn_ttl--;
-        int bh = 22, by = (DISP_HEIGHT - bh) / 2 + 6;
-        gfx_round_rect(6, by, DISP_WIDTH - 12, bh, 5, C_ROSE);
-        gfx_round_rect_border(6, by, DISP_WIDTH - 12, bh, 5, C_TEXT);
-        int tw = gfx_text_w(s_warn, 1);
-        gfx_text((DISP_WIDTH - tw) / 2, by + (bh - 7) / 2, s_warn, 1, C_BG0);
-    }
+    ui_draw_warning(t_ms);
 }

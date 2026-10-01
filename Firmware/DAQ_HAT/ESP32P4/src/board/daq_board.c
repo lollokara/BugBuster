@@ -1875,8 +1875,9 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         // ---- VDUT (programmable DUT power supply, smu.{c,h}) ----
         case HATP_CMD_DAQ_VDUT_STATUS: {
             bool present = (b->smu.idac && b->smu.idac->present);
-            float meas_i;
-            esp_err_t ierr = smu_read_output_current(&b->smu, &meas_i);
+            // Report the calibrated ADAQ measurement (same value as the C6 and
+            // DAQ_MEASURE), not the SMU's own uncalibrated current sense, which
+            // reads tens of mA of noise with no load.
             s3link_vdut_status_t st = {
                 .present      = present ? 1 : 0,
                 .enabled      = b->smu.enabled ? 1 : 0,
@@ -1885,7 +1886,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 .vdut_set_v   = b->smu.vdut_set,
                 .ilimit_set_a = b->smu.ilimit_set,
                 .meas_v       = power_dsp_last_v(&b->dsp),
-                .meas_i       = (ierr == ESP_OK) ? meas_i : power_dsp_last_i(&b->dsp),
+                .meas_i       = power_dsp_last_i(&b->dsp),
             };
             memcpy(resp, &st, sizeof(st));
             return (int)sizeof(st);

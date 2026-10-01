@@ -400,6 +400,13 @@ bool ddp_get_latest(float *v, float *i, uint8_t *flags, uint32_t *age_ms)
     return have;
 }
 
+bool ddp_source_on(void)
+{
+    uint8_t flags; uint32_t age;
+    if (!ddp_get_latest(NULL, NULL, &flags, &age) || age >= 1000) return false;
+    return (flags & DDP_FLAG_SRC_ON) != 0;
+}
+
 bool ddp_get_diag(ddp_diag_t *out, uint32_t *age_ms)
 {
     bool have;

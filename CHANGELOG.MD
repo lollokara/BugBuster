@@ -4,6 +4,31 @@
 
 ### Added
 
+- **E-fuse current monitor (one e-fuse at a time).** The TPS1641 IMON pin of a
+  selected e-fuse is routed through the U23 self-test mux to AD74416H channel D
+  (±2.5 V range, 50 µA/A into 11 kΩ ∥ 1 MΩ, saturation flagged at ≥ 2.45 V).
+  Attaching, detaching or switching the mux disturbs the IMON node, so an ON
+  e-fuse is power-cycled around every mux change (off, 200 ms, mux, on) and
+  only after explicit confirmation. While active, U23 is locked: supply
+  measurement, IDAC auto-calibration and raw U23 writes are refused.
+  New firmware module `diag/efuse_imon.cpp`.
+
+  | Surface | Entry point |
+  |---|---|
+  | BBP | `EFUSE_IMON_SET` 0x0D, `EFUSE_IMON_GET` 0x0E (additive, PROTO_VERSION unchanged) |
+  | HTTP / BLE | `GET`/`POST /api/selftest/efuse_imon`, `efuseImon` in `/api/overview` |
+  | Python | `efuse_imon_get()`, `efuse_imon_set(efuse, confirm_power_cycle=)`, `EfuseImonConfirmRequired` |
+  | MCP | `efuse_current_monitor`, `efuse_current_get` |
+  | Desktop | Overview "E-Fuse Outputs & Current" strip (per-connector power, Monitor button, live mA; CH C marked reserved), Board tab e-fuse card reading |
+  | Web UI | IOExp Power & EFuse card selector + reading |
+  | iOS | Signal Path tab "E-Fuse Current Monitor" card |
+
+- **DAQ C6 home screen shows the DUT setpoint while the supply is off.** The
+  voltage card shows a grey `SET x.xxV` line with the live voltage in white
+  beneath it. The P4 now pushes its DUT voltage/current-limit setpoints to the
+  C6 whenever the C6 (re)appears on the link, so the shown setpoint matches the
+  P4 even after a C6 settings reset.
+
 - **Three consistency gates, because every audited surface had drifted again
   within two weeks.** The 2026-08-07 documentation reset corrected all known
   count drift; by 2026-08-20 all nine surfaces had drifted back, because only
@@ -210,6 +235,55 @@
   back to the bundled backend, which removes the Zadig step entirely.
 
 ### Fixed
+
+- **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
+  the S3 measures the three supply rails through U23 every second for C6
+  telemetry. Once U23 was serialised, those reads queued ahead of the
+  calibration sweep and its measurement timed out (`Cal point code=-2:
+  measurement failed`); before that, they had silently interleaved with the
+  sweep and could corrupt the curve. During a sweep, U23 now belongs to the
+  calibration task only.
+- **VADJ auto-calibration now requires the 20 V USB-PD profile.** The sweep
+  drives VADJ up to 15 V, which the buck can only reach from >= 17.5 V in. The
+  firmware negotiates 20 V before starting, refuses with
+  `USB-PD 20 V required for VADJ calibration (have X V)` if it cannot, and
+  drops the demand back afterwards. The desktop shows that reason instead of a
+  generic "Rejected".
+- **Desktop Overview showed "DS4424 not detected" for the first 8 s** of every
+  connection (the poll's start-up grace period) and an uncalibrated rail as
+  `--- V`. It now shows a loading state, and uncalibrated rails use the nominal
+  formula, labelled `est.`.
+- **Desktop Voltages tab showed RP2040 LA-HAT rails with a DAQ HAT attached.**
+  It now shows a DAQ HAT DUT supply card (setpoint, current limit, output,
+  live V/I) and opens the DAQ calibration wizard. New Tauri commands
+  `daq_vdut_status`, `daq_vdut_set_enable`, `daq_vdut_set_setpoint` work over
+  both USB (BBP) and HTTP (`/api/daq/vdut/*`). A setpoint SET that outlives the
+  S3's 300 ms HAT timeout during the P4 V_DUT ramp (P4-9) is confirmed by
+  read-back instead of reported as failed. The tab no longer polls LA-HAT rail
+  status against a DAQ HAT (`0x14` every 2 s), and the Signal Path canvas loop
+  no longer floods the console with untracked-read warnings.
+- **S3 panic `assert failed: vTaskDeleteWithCaps idf_additions.c:190`.** The
+  `ota_query`, `fw_snap` and `fw_apply` workers in `api_core.cpp` were created
+  with `tskNO_AFFINITY` and delete themselves with `vTaskDeleteWithCaps(NULL)`.
+  In IDF 5.3 the cleanup helper is pinned to the caller's core, so an unpinned
+  task that migrates between its two state checks trips the assert. `fw_snap`
+  is re-spawned by the C6 Firmware screen whenever the release cache is empty.
+  All three are now pinned to core 0.
+- **C6 firmware update no longer wipes the C6 NVS.** The merged C6 image is
+  0xFF-padded over `nvs` + `phy_init` (0x9000-0x10000) and the P4 flashed it as
+  one region from 0x0, erasing the settings on every update (HTTP upload, relay
+  and bench `c6flash --full`). The P4 flasher now writes two segments around
+  that range. `tests/unit/test_c6_partition_hole.py` pins the skipped range to
+  the C6 partition tables. Takes effect once the P4 carries the fix.
+- **C6 "P4 link lost" banner at boot.** Before the first P4 measurement the
+  screen now shows `WAIT` with no banner; the banner fires once per real outage
+  and clears as soon as the link is live again.
+- **C6 Settings > DUT Supply showed a stale OFF.** The menu read the home
+  screen's copy of the supply flag, which freezes while the menu is open, so the
+  value never updated and a second OK re-sent ON. It now reads the live state.
+- **C6 "Need USB-PD 9V/3A" warning lingered.** Warnings now expire on wall-clock
+  time (also inside the menu, where they are now drawn), clear on a successful
+  supply toggle, and clear automatically once a valid PD contract appears.
 
 - **The wrong-HAT guard covered 2 of 15 entry points, after being "verified
   live".** Returning a named `BBP_ERR_UNSUPPORTED_HAT` instead of a timeout was

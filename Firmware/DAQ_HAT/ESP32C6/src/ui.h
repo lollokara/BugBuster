@@ -26,6 +26,14 @@ bool ui_source_on(void);
 // status bubbles.
 void ui_draw_dot(int cx, int cy, uint16_t color);
 
-// Show a transient warning banner on the home screen for a few seconds (e.g.
-// the USB-PD guard blocking DUT enable).
+// Show a transient warning banner for a few seconds (e.g. the USB-PD guard
+// blocking DUT enable). Drawn by ui_render() and by menu_render().
 void ui_show_warning(const char *msg);
+void ui_clear_warning(void);
+// Clear only if the banner currently shows exactly `msg`.
+void ui_clear_warning_if(const char *msg);
+bool ui_warning_active(uint32_t t_ms);
+void ui_draw_warning(uint32_t t_ms);
+
+#define UI_WARN_NEED_PD    "Need USB-PD 9V/3A"
+#define UI_WARN_LINK_LOST  "P4 link lost"

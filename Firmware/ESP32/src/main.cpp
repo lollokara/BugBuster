@@ -30,6 +30,7 @@
 #include "dio.h"
 #include "daq_trigger.h"
 #include "selftest.h"
+#include "efuse_imon.h"
 #include "diag/clkgen.h"
 #include "status_led.h"
 #include "i2c_bus.h"
@@ -210,6 +211,7 @@ static void mainLoopTask(void* pvParam)
             if (selftest_worker_enabled()) {
                 selftest_monitor_step();
             }
+            efuse_imon_tick(now);
         }
 
         // HAT background polling for unsolicited messages (e.g. LA done)

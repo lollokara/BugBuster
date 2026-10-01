@@ -24,6 +24,11 @@ void ddp_init(void);
 // (in ms) the most recent one arrived.
 bool ddp_get_latest(float *v, float *i, uint8_t *flags, uint32_t *age_ms);
 
+// DUT supply state from the latest fresh (<1 s) measurement; false if stale.
+// Use this, not ui_source_on(), outside the home screen: ui.c's copy freezes
+// while the menu is open.
+bool ddp_source_on(void);
+
 // Latest diagnostics snapshot pushed by the P4. Returns true if one has ever
 // been received; *age_ms = ms since the most recent (0xFFFFFFFF if never).
 bool ddp_get_diag(ddp_diag_t *out, uint32_t *age_ms);

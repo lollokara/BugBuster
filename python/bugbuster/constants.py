@@ -300,6 +300,8 @@ class CmdId(IntEnum):
     SELFTEST_INT_SUPPLIES   = 0x09
     SELFTEST_WORKER         = 0x0B  # enable/disable/query supply-monitor worker
     MEM_STATUS              = 0x0C  # heap + per-task stack telemetry
+    EFUSE_IMON_SET          = 0x0D  # select monitored e-fuse (0=off, 1..4)
+    EFUSE_IMON_GET          = 0x0E  # read monitored e-fuse current
 
     # Channel configuration
     SET_CHANNEL_FUNC = 0x10

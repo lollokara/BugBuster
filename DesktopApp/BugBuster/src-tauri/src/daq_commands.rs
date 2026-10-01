@@ -742,3 +742,143 @@ pub async fn daq_measure(mgr: State<'_, ConnectionManager>) -> CmdResult<DaqMeas
         energy_mwh: f32le(16),
     })
 }
+
+// ---- DUT supply (V_DUT) control that works over USB *and* HTTP --------------
+// The settings registry and DAQ_MEASURE are BBP-only, so over HTTP these use
+// the firmware's /api/daq/vdut/* routes instead.
+
+const DAQ_K_SOURCE_ENABLE: u16 = 0x0201;
+const DAQ_K_DUT_VOLTAGE_MV: u16 = 0x0202;
+const DAQ_K_DUT_ILIMIT_MA: u16 = 0x0203;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VdutStatus {
+    pub enabled: bool,
+    pub setpoint_mv: u32,
+    pub ilimit_ma: u32,
+    pub voltage_v: f32,
+    pub current_a: f32,
+    pub fault: bool,
+}
+
+async fn vdut_http(mgr: &ConnectionManager) -> Option<(String, reqwest::Client)> {
+    let url = mgr.get_base_url().await?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = mgr.get_connection_status().admin_token {
+        if let Ok(v) = reqwest::header::HeaderValue::from_str(&token) {
+            headers.insert("X-BugBuster-Admin-Token", v);
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .default_headers(headers)
+        .build()
+        .ok()?;
+    Some((url, client))
+}
+
+async fn http_json(req: reqwest::RequestBuilder, what: &str) -> CmdResult<serde_json::Value> {
+    let resp = req.send().await.map_err(map_err)?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} from {}", resp.status(), what));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(map_err)?;
+    if json.get("ok").and_then(|v| v.as_bool()) == Some(false) {
+        return Err(json.get("error").and_then(|v| v.as_str()).unwrap_or(what).to_string());
+    }
+    Ok(json)
+}
+
+async fn cfg_get_u32(mgr: &ConnectionManager, key: u16) -> CmdResult<u32> {
+    let mut payload = vec![DAQ_CFG_GET];
+    payload.extend_from_slice(&key.to_le_bytes());
+    let raw = mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload).await.map_err(map_err)?;
+    // One TLV: key u16, type u8, len u8, value.
+    let vlen = *raw.get(3).ok_or("short DAQ config reply")? as usize;
+    let val = raw.get(4..4 + vlen).ok_or("truncated DAQ config reply")?;
+    let mut b = [0u8; 4];
+    b[..vlen.min(4)].copy_from_slice(&val[..vlen.min(4)]);
+    Ok(u32::from_le_bytes(b))
+}
+
+async fn cfg_set(mgr: &ConnectionManager, key: u16, type_tag: u8, value: &[u8]) -> CmdResult<()> {
+    let mut payload = vec![DAQ_CFG_SET];
+    payload.extend_from_slice(&key.to_le_bytes());
+    payload.push(type_tag);
+    payload.push(value.len() as u8);
+    payload.extend_from_slice(value);
+    mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload).await.map(|_| ()).map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn daq_vdut_status(mgr: State<'_, ConnectionManager>) -> CmdResult<VdutStatus> {
+    if let Some((url, client)) = vdut_http(&mgr).await {
+        let j = http_json(client.get(format!("{url}/api/daq/vdut/status")), "/api/daq/vdut/status").await?;
+        let f = |k: &str| j.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b = |k: &str| j.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        return Ok(VdutStatus {
+            enabled: b("enabled"),
+            setpoint_mv: (f("voltageSetpointV") * 1000.0).round() as u32,
+            ilimit_ma: f("currentLimitMa").round() as u32,
+            voltage_v: f("measuredVoltageV") as f32,
+            current_a: (f("measuredCurrentMa") / 1000.0) as f32,
+            fault: b("fault"),
+        });
+    }
+    let m = daq_measure(mgr.clone()).await?;
+    Ok(VdutStatus {
+        enabled: m.source_enabled,
+        setpoint_mv: cfg_get_u32(&mgr, DAQ_K_DUT_VOLTAGE_MV).await?,
+        ilimit_ma: cfg_get_u32(&mgr, DAQ_K_DUT_ILIMIT_MA).await?,
+        voltage_v: m.voltage_v,
+        current_a: m.current_a,
+        fault: false,
+    })
+}
+
+#[tauri::command]
+pub async fn daq_vdut_set_enable(enabled: bool, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
+    if let Some((url, client)) = vdut_http(&mgr).await {
+        let req = client
+            .post(format!("{url}/api/daq/vdut/enable"))
+            .json(&serde_json::json!({ "enabled": enabled }));
+        return http_json(req, "/api/daq/vdut/enable").await.map(|_| ());
+    }
+    cfg_set(&mgr, DAQ_K_SOURCE_ENABLE, 1, &[enabled as u8]).await
+}
+
+#[tauri::command]
+pub async fn daq_vdut_set_setpoint(
+    voltage_mv: u16,
+    ilimit_ma: u16,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<()> {
+    if let Some((url, client)) = vdut_http(&mgr).await {
+        let req = client.post(format!("{url}/api/daq/vdut/setpoint")).json(&serde_json::json!({
+            "voltageV": voltage_mv as f64 / 1000.0,
+            "currentLimitMa": ilimit_ma,
+        }));
+        return http_json(req, "/api/daq/vdut/setpoint").await.map(|_| ());
+    }
+    // The P4 ramps V_DUT one code per 10 ms inside the SET (TODO P4-9), so a big
+    // step outlives the S3's 300 ms HAT timeout and returns 0x11 although it
+    // applies. Confirm by reading the key back instead of failing.
+    if let Err(e) = cfg_set(&mgr, DAQ_K_DUT_VOLTAGE_MV, 4, &voltage_mv.to_le_bytes()).await {
+        if !e.contains("0x11") {
+            return Err(e);
+        }
+        let mut confirmed = false;
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if cfg_get_u32(&mgr, DAQ_K_DUT_VOLTAGE_MV).await.ok() == Some(voltage_mv as u32) {
+                confirmed = true;
+                break;
+            }
+        }
+        if !confirmed {
+            return Err(e);
+        }
+    }
+    cfg_set(&mgr, DAQ_K_DUT_ILIMIT_MA, 4, &ilimit_ma.to_le_bytes()).await
+}

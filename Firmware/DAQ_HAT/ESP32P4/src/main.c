@@ -58,6 +58,8 @@ void app_main(void)
     // relays button presses to the C6 menu and pushes live measurements.
     if (daq_board_c6_start(&s_board) == ESP_OK) {
         ESP_LOGI(TAG, "C6 display link ready");
+    } else {
+        ESP_LOGE(TAG, "C6 display link start failed - C6 will show WAIT/link lost");
     }
 
     // Internal die-temperature sensor for the Diagnostics menu. Optional — a

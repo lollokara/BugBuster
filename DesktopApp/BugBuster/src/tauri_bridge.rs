@@ -692,6 +692,98 @@ pub async fn fetch_pca_status() -> Option<IoExpState> {
 }
 
 // -----------------------------------------------------------------------------
+// E-fuse current monitor (TPS1641 IMON -> AD74416H channel D)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EfuseImonStatus {
+    #[serde(default)]
+    pub result: String,
+    /// 0 = monitor off, 1..4 = logical EFUSE1..4.
+    pub efuse: u8,
+    pub valid: bool,
+    pub saturated: bool,
+    pub efuse_on: bool,
+    pub imon_v: f32,
+    pub current_ma: f32,
+}
+
+pub async fn fetch_efuse_imon() -> Option<EfuseImonStatus> {
+    let result = try_invoke("efuse_imon_get", JsValue::NULL).await?;
+    serde_wasm_bindgen::from_value(result).ok()
+}
+
+pub async fn send_efuse_imon_set(efuse: u8, confirm: bool) -> Option<EfuseImonStatus> {
+    #[derive(Serialize)]
+    struct Args {
+        efuse: u8,
+        confirm: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args { efuse, confirm }).unwrap();
+    let st = try_invoke("efuse_imon_set", args)
+        .await
+        .and_then(|r| serde_wasm_bindgen::from_value::<EfuseImonStatus>(r).ok());
+    if st.is_none() {
+        show_toast("E-fuse current monitor command failed", "err");
+    }
+    st
+}
+
+pub fn efuse_imon_error_text(result: &str) -> &'static str {
+    match result {
+        "busy" => "Busy: self-test or calibration running, or IO9 analog in use",
+        "slot_held" => "Channel C is owned by another client",
+        "invalid" => "Invalid e-fuse selection",
+        "hw_fail" => "Current monitor hardware routing failed",
+        "unsupported" => "Current monitor not supported by this hardware",
+        _ => "Current monitor request failed",
+    }
+}
+
+/// Display text and kind ("settling" | "sat" | "ok") for a monitor reading.
+pub fn efuse_imon_display(st: &EfuseImonStatus) -> (String, &'static str) {
+    if !st.valid {
+        ("settling".to_string(), "settling")
+    } else if st.saturated {
+        (">4.5 A".to_string(), "sat")
+    } else {
+        (format!("{:.1} mA", st.current_ma), "ok")
+    }
+}
+
+/// Poll the monitor ~1 s while active, ~3 s while idle (so a monitor started from
+/// another client still appears); call from a component body.
+pub fn start_efuse_imon_poll(imon: leptos::prelude::RwSignal<EfuseImonStatus>) {
+    use leptos::prelude::{on_cleanup, GetUntracked, Set};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let alive = std::sync::Arc::new(AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, Ordering::Relaxed));
+    leptos::task::spawn_local(async move {
+        let mut tick: u32 = 0;
+        while alive.load(Ordering::Relaxed) {
+            if tick % 3 == 0 || imon.get_untracked().efuse != 0 {
+                if let Some(st) = fetch_efuse_imon().await {
+                    if !alive.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    imon.set(st);
+                }
+            }
+            tick = tick.wrapping_add(1);
+            let promise = js_sys::Promise::new(&mut |resolve, _| {
+                web_sys::window()
+                    .unwrap()
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1000)
+                    .ok();
+            });
+            wasm_bindgen_futures::JsFuture::from(promise).await.ok();
+        }
+    });
+}
+
+// -----------------------------------------------------------------------------
 // HAT Expansion Board types & helpers
 // -----------------------------------------------------------------------------
 
@@ -2282,6 +2374,39 @@ pub async fn daq_cfg_set_bool(key: u16, on: bool) -> bool {
     })
     .unwrap();
     try_invoke("daq_cfg_set", args).await.is_some()
+}
+
+/// DUT supply status (mirror daq_commands::VdutStatus); works over USB and HTTP.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VdutStatus {
+    pub enabled: bool,
+    pub setpoint_mv: u32,
+    pub ilimit_ma: u32,
+    pub voltage_v: f32,
+    pub current_a: f32,
+    pub fault: bool,
+}
+
+pub async fn daq_vdut_status() -> Option<VdutStatus> {
+    try_invoke("daq_vdut_status", JsValue::NULL)
+        .await
+        .and_then(|v| serde_wasm_bindgen::from_value(v).ok())
+}
+
+pub async fn daq_vdut_set_enable(enabled: bool) -> bool {
+    #[derive(Serialize)]
+    struct Args { enabled: bool }
+    let args = serde_wasm_bindgen::to_value(&Args { enabled }).unwrap();
+    try_invoke("daq_vdut_set_enable", args).await.is_some()
+}
+
+pub async fn daq_vdut_set_setpoint(voltage_mv: u16, ilimit_ma: u16) -> bool {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { voltage_mv: u16, ilimit_ma: u16 }
+    let args = serde_wasm_bindgen::to_value(&Args { voltage_mv, ilimit_ma }).unwrap();
+    try_invoke("daq_vdut_set_setpoint", args).await.is_some()
 }
 
 pub async fn daq_set_source(vdut_mv: u32, ilimit_ma: u32, enable: bool) {

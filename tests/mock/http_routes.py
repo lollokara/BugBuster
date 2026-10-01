@@ -281,6 +281,10 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
             ],
         }
 
+    # E-fuse IMON monitor - shares the BBP handler state so transports cannot drift.
+    if key in (("GET", "/selftest/efuse_imon"), ("POST", "/selftest/efuse_imon")):
+        return _efuse_imon_dict(device, method, body)
+
     if key == ("GET", "/selftest/supplies"):
         return {
             "valid": True, "supplies_ok": True,
@@ -723,6 +727,11 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
 
     # IO expander control — POST /ioexp/control
     if key == ("POST", "/ioexp/control"):
+        ctrl_ids = {"vadj1": 0, "vadj2": 1, "15v": 2, "mux": 3, "usb": 4,
+                    "efuse1": 5, "efuse2": 6, "efuse3": 7, "efuse4": 8}
+        ctrl = ctrl_ids.get(str((body or {}).get("control", "")))
+        if ctrl is not None:
+            device.pca_control[ctrl] = bool((body or {}).get("on", False))
         return {"ok": True}
 
     # IO expander fault log — GET /ioexp/faults
@@ -916,6 +925,30 @@ def _faults_dict(device) -> dict:
         "supply_alert_status": device.supply_alert_status,
         "supply_alert_mask": device.supply_alert_mask,
         "channels": channels,
+    }
+
+
+def _efuse_imon_dict(device, method: str, body: dict) -> dict:
+    """Firmware-shaped JSON for /api/selftest/efuse_imon, decoded from the BBP handlers."""
+    import struct
+
+    result = "ok"
+    if method == "POST":
+        efuse = (body or {}).get("efuse")
+        if isinstance(efuse, bool) or not isinstance(efuse, int) or not 0 <= efuse <= 4:
+            return {"ok": False, "error": "efuse (0-4) required"}
+        flags = 1 if (body or {}).get("confirm") else 0
+        resp = device.dispatch(int(CmdId.EFUSE_IMON_SET), bytes([efuse, flags]))
+        result = ("ok", "needs_confirm", "busy", "invalid",
+                  "slot_held", "hw_fail", "unsupported")[resp[0]]
+        block = resp[1:]
+    else:
+        block = device.dispatch(int(CmdId.EFUSE_IMON_GET), b"")
+    efuse_id, fl, imon_v, current_ma = struct.unpack("<BBff", block)
+    return {
+        "ok": result == "ok", "result": result, "efuse": efuse_id,
+        "valid": bool(fl & 1), "saturated": bool(fl & 2), "efuseOn": bool(fl & 4),
+        "imonV": imon_v, "currentMa": current_ma,
     }
 
 

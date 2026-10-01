@@ -242,6 +242,8 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (config, set_config) = signal(BoardConfig::default());
     // Currently-selected pin for the inspector (defaults to IO 1).
     let selected_pin = RwSignal::new(0usize);
+    let imon = RwSignal::new(EfuseImonStatus::default());
+    start_efuse_imon_poll(imon);
 
     let export_json = move |_| {
         let cfg = config.get();
@@ -603,7 +605,19 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         <div class=format!("board-efuse-card board-efuse-{}", dom_cls)>
                             <div class="board-efuse-head">
                                 <span class="board-efuse-label">{format!("eFuse {}", label)}</span>
-                                <span class="board-efuse-current">"—mA"</span>
+                                <span class="board-efuse-current"
+                                    style=move || {
+                                        let st = imon.get();
+                                        if st.efuse as usize == e + 1 && st.valid && st.saturated { "color: #ef4444" } else { "" }
+                                    }
+                                >{move || {
+                                    let st = imon.get();
+                                    if st.efuse as usize == e + 1 {
+                                        efuse_imon_display(&st).0
+                                    } else {
+                                        "—mA".to_string()
+                                    }
+                                }}</span>
                                 <span class="board-efuse-fault"
                                     class:board-efuse-fault-ok=move || config.get().efuses[e].sw_limit_enabled
                                 ></span>

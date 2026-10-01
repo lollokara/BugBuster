@@ -22,6 +22,7 @@ import struct
 import logging
 import warnings
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import serial  # pyserial - needed for SerialException in drain-loop guard
@@ -143,6 +144,24 @@ ScriptStatusResult = namedtuple("ScriptStatusResult",
      "last_eval_at_ms", "idle_for_ms", "watermark_soft_hit"],
     defaults=(0, 0, 0, 0, 0, 0, False))
 AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", "io12_high", "last_run_ok", "last_run_id"])
+
+
+@dataclass(frozen=True)
+class EfuseImonStatus:
+    """E-fuse IMON monitor state. ``efuse`` 0 = monitor off, 1..4 = logical EFUSE1..4."""
+    result: str          # "ok" or the firmware result name
+    efuse: int
+    valid: bool          # False while settling or after an AD74416H reset
+    saturated: bool      # IMON >= 2.45 V (about 4.5 A)
+    efuse_on: bool
+    imon_v: float
+    current_ma: float
+
+
+_EFUSE_IMON_RESULTS = ("ok", "needs_confirm", "busy", "invalid",
+                       "slot_held", "hw_fail", "unsupported")
+_EFUSE_IMON_BLOCK_FMT = "<BBff"
+_EFUSE_IMON_BLOCK_LEN = struct.calcsize(_EFUSE_IMON_BLOCK_FMT)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +335,14 @@ class HatNotPresentError(RuntimeError):
     HAT, so they cannot work on a bare BugBuster board.  Connect the HAT
     and call :meth:`BugBuster.hat_detect` to refresh the cached presence
     state, then retry.
+    """
+
+
+class EfuseImonConfirmRequired(RuntimeError):
+    """
+    Raised by :meth:`BugBuster.efuse_imon_set` when attaching or detaching the
+    monitor would interrupt an e-fuse that is currently ON.  The e-fuse is
+    power-cycled (off, 200 ms, on); retry with ``confirm_power_cycle=True``.
     """
 
 
@@ -2426,6 +2453,70 @@ class BugBuster:
                 "control": _CONTROL_HTTP_NAMES[PowerControl(control)],
                 "on": on,
             })
+
+    @staticmethod
+    def _efuse_imon_from_http(raw: dict) -> EfuseImonStatus:
+        if "result" not in raw:
+            raise RuntimeError(f"efuse_imon: {raw.get('error', 'unexpected response')}")
+        return EfuseImonStatus(
+            result=str(raw["result"]),
+            efuse=int(raw.get("efuse", 0)),
+            valid=bool(raw.get("valid", False)),
+            saturated=bool(raw.get("saturated", False)),
+            efuse_on=bool(raw.get("efuseOn", False)),
+            imon_v=float(raw.get("imonV", 0.0)),
+            current_ma=float(raw.get("currentMa", 0.0)),
+        )
+
+    @staticmethod
+    def _efuse_imon_from_block(result: str, block: bytes, cmd_name: str) -> EfuseImonStatus:
+        _require_resp_len(block, _EFUSE_IMON_BLOCK_LEN, cmd_name)
+        efuse, flags, imon_v, current_ma = struct.unpack_from(_EFUSE_IMON_BLOCK_FMT, block)
+        return EfuseImonStatus(
+            result=result, efuse=efuse,
+            valid=bool(flags & 0x01), saturated=bool(flags & 0x02),
+            efuse_on=bool(flags & 0x04),
+            imon_v=imon_v, current_ma=current_ma,
+        )
+
+    def efuse_imon_get(self) -> EfuseImonStatus:
+        """Read the e-fuse current monitor (``efuse`` 0 means no monitor attached)."""
+        if self._usb:
+            resp = self._usb_cmd(CmdId.EFUSE_IMON_GET)
+            return self._efuse_imon_from_block("ok", resp, "EFUSE_IMON_GET")
+        return self._efuse_imon_from_http(self._http_get("/selftest/efuse_imon"))
+
+    def efuse_imon_set(self, efuse: int, confirm_power_cycle: bool = False) -> EfuseImonStatus:
+        """
+        Route one e-fuse's IMON to AD74416H channel D (0 = stop, 1..4 = EFUSE1..4).
+
+        Only one e-fuse can be monitored at a time.  If the e-fuse being attached,
+        or the one being detached, is ON it is power-cycled; without
+        ``confirm_power_cycle`` this raises :class:`EfuseImonConfirmRequired`.
+        While active, supply measurement, IDAC auto-calibration and raw U23 MUX
+        writes are refused and logical channel C (IO9 analog) is held.
+        """
+        if not 0 <= efuse <= 4:
+            raise ValueError(f"efuse must be 0..4, got {efuse}")
+        if self._usb:
+            resp = self._usb_cmd(CmdId.EFUSE_IMON_SET,
+                                 struct.pack('<BB', efuse, 1 if confirm_power_cycle else 0))
+            _require_resp_len(resp, 1, "EFUSE_IMON_SET")
+            code = resp[0]
+            result = _EFUSE_IMON_RESULTS[code] if code < len(_EFUSE_IMON_RESULTS) else f"code_{code}"
+            status = self._efuse_imon_from_block(result, resp[1:], "EFUSE_IMON_SET")
+        else:
+            status = self._efuse_imon_from_http(
+                self._http_post("/selftest/efuse_imon",
+                                {"efuse": efuse, "confirm": bool(confirm_power_cycle)}))
+        if status.result == "ok":
+            return status
+        if status.result == "needs_confirm":
+            raise EfuseImonConfirmRequired(
+                f"e-fuse monitor change for EFUSE{efuse} will power-cycle an e-fuse that is "
+                "currently ON (off, 200 ms, on); retry with confirm_power_cycle=True"
+            )
+        raise RuntimeError(f"efuse_imon_set({efuse}) failed: {status.result}")
 
     def power_get_fault_log(self) -> list:
         """

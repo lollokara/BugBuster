@@ -1382,6 +1382,132 @@ pub async fn selftest_worker_set(
     Ok(rsp.first().copied().unwrap_or(if enabled { 1 } else { 0 }) != 0)
 }
 
+/// E-fuse current monitor status (BBP 0x0D/0x0E, HTTP /api/selftest/efuse_imon).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EfuseImonStatus {
+    pub result: String,
+    pub efuse: u8,
+    pub valid: bool,
+    pub saturated: bool,
+    pub efuse_on: bool,
+    pub imon_v: f32,
+    pub current_ma: f32,
+}
+
+fn efuse_imon_result_name(code: u8) -> &'static str {
+    match code {
+        0 => "ok",
+        1 => "needs_confirm",
+        2 => "busy",
+        3 => "invalid",
+        4 => "slot_held",
+        5 => "hw_fail",
+        _ => "unsupported",
+    }
+}
+
+fn parse_efuse_imon_block(result: &str, r: &mut bbp::PayloadReader) -> EfuseImonStatus {
+    let efuse = r.get_u8().unwrap_or(0);
+    let flags = r.get_u8().unwrap_or(0);
+    let imon_v = r.get_f32().unwrap_or(0.0);
+    let current_ma = r.get_f32().unwrap_or(0.0);
+    EfuseImonStatus {
+        result: result.to_string(),
+        efuse,
+        valid: flags & 0x01 != 0,
+        saturated: flags & 0x02 != 0,
+        efuse_on: flags & 0x04 != 0,
+        imon_v,
+        current_ma,
+    }
+}
+
+fn parse_efuse_imon_json(json: &serde_json::Value) -> EfuseImonStatus {
+    let b = |k: &str| json.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let f = |k: &str| json.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    EfuseImonStatus {
+        result: json
+            .get("result")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ok")
+            .to_string(),
+        efuse: json.get("efuse").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+        valid: b("valid"),
+        saturated: b("saturated"),
+        efuse_on: b("efuseOn"),
+        imon_v: f("imonV"),
+        current_ma: f("currentMa"),
+    }
+}
+
+async fn efuse_imon_http(
+    mgr: &ConnectionManager,
+    url: &str,
+    body: Option<serde_json::Value>,
+) -> CmdResult<EfuseImonStatus> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = mgr.get_connection_status().admin_token {
+        headers.insert(
+            "X-BugBuster-Admin-Token",
+            reqwest::header::HeaderValue::from_str(&token).map_err(|e| e.to_string())?,
+        );
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .default_headers(headers)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let endpoint = format!("{}/api/selftest/efuse_imon", url);
+    let resp = match body {
+        Some(b) => client.post(&endpoint).json(&b).send().await,
+        None => client.get(&endpoint).send().await,
+    }
+    .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} from /api/selftest/efuse_imon", resp.status()));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parse_efuse_imon_json(&json))
+}
+
+#[tauri::command]
+pub async fn efuse_imon_get(mgr: State<'_, ConnectionManager>) -> CmdResult<EfuseImonStatus> {
+    if let Some(url) = mgr.get_base_url().await {
+        return efuse_imon_http(&mgr, &url, None).await;
+    }
+
+    let rsp = mgr
+        .send_command(bbp::CMD_EFUSE_IMON_GET, &[])
+        .await
+        .map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    Ok(parse_efuse_imon_block("ok", &mut r))
+}
+
+#[tauri::command]
+pub async fn efuse_imon_set(
+    efuse: u8,
+    confirm: bool,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<EfuseImonStatus> {
+    if efuse > 4 {
+        return Err("efuse must be 0 (stop) or 1..4".into());
+    }
+    if let Some(url) = mgr.get_base_url().await {
+        let body = serde_json::json!({ "efuse": efuse, "confirm": confirm });
+        return efuse_imon_http(&mgr, &url, Some(body)).await;
+    }
+
+    let rsp = mgr
+        .send_command(bbp::CMD_EFUSE_IMON_SET, &[efuse, confirm as u8])
+        .await
+        .map_err(map_err)?;
+    let mut r = bbp::PayloadReader::new(&rsp);
+    let result = efuse_imon_result_name(r.get_u8().unwrap_or(6));
+    Ok(parse_efuse_imon_block(result, &mut r))
+}
+
 #[tauri::command]
 pub async fn selftest_measure_supply(
     rail: u8,

@@ -6,6 +6,7 @@
 #include <string.h>
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "config.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
@@ -157,9 +158,24 @@ static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
             break;
         case DDP_RSP_INFO:
             if (len >= 4) {
+                // The C6 announces at 1 Hz, so a >3 s gap means it (re)booted:
+                // resync the P4-owned setpoints its home screen displays.
+                uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+                bool fresh = !m->c6_present || (now - m->c6_info_ms) > 3000;
                 m->c6_present  = true;
+                m->c6_info_ms  = now;
                 m->c6_fw_major = payload[1];
                 m->c6_fw_minor = payload[2];
+                if (fresh) {
+                    static const uint16_t keys[] = { DAQ_K_DUT_VOLTAGE_MV, DAQ_K_DUT_ILIMIT_MA };
+                    uint8_t tlv[2 * (DAQ_TLV_HDR_LEN + DAQ_TLV_MAX_VAL)];
+                    int n = 0;
+                    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+                        int used = daq_settings_encode_one(keys[k], tlv + n, sizeof(tlv) - (size_t)n);
+                        if (used > 0) n += used;
+                    }
+                    if (n > 0) ddp_master_config_push(m, tlv, (uint8_t)n);
+                }
             }
             break;
         case DDP_CMD_MB_REQUEST:

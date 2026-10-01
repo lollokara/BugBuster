@@ -26,8 +26,69 @@ static esp_loader_flash_cfg_t s_cfg;
 
 static uint8_t  s_buf[C6_FLASH_BLOCK];
 static size_t   s_fill;
-static uint32_t s_received;
+static uint32_t s_received;     // image bytes consumed, including skipped ones
 static bool     s_active;
+
+// The merged C6 image is 0xFF-padded over nvs + phy_init (partitions_c6.csv).
+// Never write that range: it would wipe the C6's settings on every update.
+// tests/unit/test_c6_partition_hole.py pins these to the partition table.
+#define C6_KEEP_START 0x9000u
+#define C6_KEEP_END   0x10000u
+
+static uint32_t s_abs;          // flash address of the next incoming byte
+static uint32_t s_end;          // flash address one past the image
+static bool     s_seg_open;
+
+static bool in_keep(uint32_t a) { return a >= C6_KEEP_START && a < C6_KEEP_END; }
+
+static esp_err_t seg_open(void)
+{
+    uint32_t seg_end = (s_abs < C6_KEEP_START && s_end > C6_KEEP_START) ? C6_KEEP_START : s_end;
+    s_cfg = (esp_loader_flash_cfg_t){
+        .offset      = s_abs,
+        .image_size  = seg_end - s_abs,
+        .block_size  = C6_FLASH_BLOCK,
+        .skip_verify = false,
+    };
+    if (esp_loader_flash_start(&s_loader, &s_cfg) != ESP_LOADER_SUCCESS) {
+        ESP_LOGE(TAG, "flash_start failed (offset=0x%x size=%u)",
+                 (unsigned)s_cfg.offset, (unsigned)s_cfg.image_size);
+        return ESP_FAIL;
+    }
+    s_fill = 0;
+    s_seg_open = true;
+    ESP_LOGI(TAG, "segment 0x%x..0x%x", (unsigned)s_cfg.offset,
+             (unsigned)(s_cfg.offset + s_cfg.image_size));
+    return ESP_OK;
+}
+
+static esp_err_t seg_close(void)
+{
+    s_seg_open = false;
+    if (s_fill) {
+        esp_loader_error_t e = esp_loader_flash_write(&s_loader, &s_cfg, s_buf, (uint32_t)s_fill);
+        s_fill = 0;
+        if (e != ESP_LOADER_SUCCESS) {
+            ESP_LOGE(TAG, "flash_write failed at 0x%x", (unsigned)s_abs);
+            return ESP_FAIL;
+        }
+    }
+    if (esp_loader_flash_finish(&s_loader, &s_cfg) != ESP_LOADER_SUCCESS) {
+        ESP_LOGE(TAG, "flash_finish/verify failed (segment @0x%x)", (unsigned)s_cfg.offset);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+// Called once the loader is connected: arm the first segment.
+static esp_err_t session_start(uint32_t image_size, uint32_t flash_offset)
+{
+    s_abs = flash_offset;
+    s_end = flash_offset + image_size;
+    s_seg_open = false;
+    if (in_keep(s_abs)) return ESP_OK;   // resumed inside the hole: open lazily
+    return seg_open();
+}
 
 // No-op enter_bootloader used when we manually control RST+BOOT timing.
 static void noop_enter_bootloader(esp_loader_port_t *p) { (void)p; }
@@ -110,15 +171,7 @@ esp_err_t c6_flasher_begin(uint32_t image_size, uint32_t flash_offset)
         return ESP_FAIL;
     }
 
-    s_cfg = (esp_loader_flash_cfg_t){
-        .offset      = flash_offset,
-        .image_size  = image_size,
-        .block_size  = C6_FLASH_BLOCK,
-        .skip_verify = false,
-    };
-    if (esp_loader_flash_start(&s_loader, &s_cfg) != ESP_LOADER_SUCCESS) {
-        ESP_LOGE(TAG, "flash_start failed (offset=0x%x size=%u)",
-                 (unsigned)flash_offset, (unsigned)image_size);
+    if (session_start(image_size, flash_offset) != ESP_OK) {
         port_deinit();
         return ESP_FAIL;
     }
@@ -242,15 +295,7 @@ esp_err_t c6_flasher_begin_sdio(uint32_t image_size, uint32_t flash_offset)
         ESP_LOGI(TAG, "Connected — chip: %s (id=%d)", name, (int)tgt);
     }
 
-    s_cfg = (esp_loader_flash_cfg_t){
-        .offset      = flash_offset,
-        .image_size  = image_size,
-        .block_size  = C6_FLASH_BLOCK,
-        .skip_verify = false,
-    };
-    if (esp_loader_flash_start(&s_loader, &s_cfg) != ESP_LOADER_SUCCESS) {
-        ESP_LOGE(TAG, "flash_start (SDIO) failed (offset=0x%x size=%u)",
-                 (unsigned)flash_offset, (unsigned)image_size);
+    if (session_start(image_size, flash_offset) != ESP_OK) {
         port_deinit();
         return ESP_FAIL;
     }
@@ -263,18 +308,33 @@ esp_err_t c6_flasher_write(const uint8_t *data, size_t len)
 {
     if (!s_active) return ESP_ERR_INVALID_STATE;
     while (len) {
+        if (!s_seg_open) {
+            if (in_keep(s_abs)) {
+                size_t skip = C6_KEEP_END - s_abs;
+                if (skip > len) skip = len;
+                s_abs += skip; s_received += skip; data += skip; len -= skip;
+                continue;
+            }
+            if (s_abs >= s_end) return ESP_ERR_INVALID_SIZE;
+            if (seg_open() != ESP_OK) return ESP_FAIL;
+        }
+        uint32_t seg_end = s_cfg.offset + s_cfg.image_size;
         size_t take = C6_FLASH_BLOCK - s_fill;
         if (take > len) take = len;
+        if (take > seg_end - s_abs) take = seg_end - s_abs;
         memcpy(s_buf + s_fill, data, take);
         s_fill += take;
+        s_abs  += take;
+        s_received += take;
         data   += take;
         len    -= take;
-        if (s_fill == C6_FLASH_BLOCK) {
+        if (s_abs == seg_end) {
+            if (seg_close() != ESP_OK) return ESP_FAIL;
+        } else if (s_fill == C6_FLASH_BLOCK) {
             if (esp_loader_flash_write(&s_loader, &s_cfg, s_buf, C6_FLASH_BLOCK) != ESP_LOADER_SUCCESS) {
-                ESP_LOGE(TAG, "flash_write failed at %u", (unsigned)s_received);
+                ESP_LOGE(TAG, "flash_write failed at 0x%x", (unsigned)s_abs);
                 return ESP_FAIL;
             }
-            s_received += C6_FLASH_BLOCK;
             s_fill = 0;
         }
     }
@@ -286,19 +346,10 @@ esp_err_t c6_flasher_finish(void)
     if (!s_active) return ESP_ERR_INVALID_STATE;
     esp_err_t rc = ESP_OK;
 
-    if (s_fill) {
-        if (esp_loader_flash_write(&s_loader, &s_cfg, s_buf, (uint32_t)s_fill) != ESP_LOADER_SUCCESS) {
-            ESP_LOGE(TAG, "final flash_write failed");
-            rc = ESP_FAIL;
-        } else {
-            s_received += s_fill;
-        }
-        s_fill = 0;
-    }
-
-    if (rc == ESP_OK && esp_loader_flash_finish(&s_loader, &s_cfg) != ESP_LOADER_SUCCESS) {
-        ESP_LOGE(TAG, "flash_finish/verify failed");
-        rc = ESP_FAIL;
+    if (s_seg_open) rc = seg_close();
+    if (rc == ESP_OK && s_abs < s_end) {
+        ESP_LOGE(TAG, "image truncated at 0x%x of 0x%x", (unsigned)s_abs, (unsigned)s_end);
+        rc = ESP_ERR_INVALID_SIZE;
     }
 
     esp_loader_reset_target(&s_loader);   // boot the freshly-flashed image

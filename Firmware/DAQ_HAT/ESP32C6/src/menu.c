@@ -490,15 +490,16 @@ static const menu_t m_root = { "Settings", root_items, 6 };
 // DUT supply. Also on the home screen (hold BACK), but that shortcut is
 // undiscoverable, so mirror it here. The 9 V / 3 A USB-PD guard matches
 // main.c's -- the P4 enforces it independently either way.
-static void val_source(char *b, int n) { v_onoff(b, n, ui_source_on()); }
-static bool alert_source(void)         { return ui_source_on(); }
+static void val_source(char *b, int n) { v_onoff(b, n, ddp_source_on()); }
+static bool alert_source(void)         { return ddp_source_on(); }
 static void ok_source(void)
 {
-    bool want_on = !ui_source_on();
+    bool want_on = !ddp_source_on();
     if (want_on && !(dvalid(DDP_DIAG_V_S3PD) && s_dg.pd_mv >= 9000 && s_dg.pd_ma >= 3000)) {
-        ui_show_warning("Need USB-PD 9V/3A");
+        ui_show_warning(UI_WARN_NEED_PD);
         return;
     }
+    ui_clear_warning_if(UI_WARN_NEED_PD);
     c6_config_send_source_enable(want_on);
 }
 
@@ -1235,6 +1236,11 @@ menu_status_t menu_update(uint32_t events, uint32_t now_ms, bool *need_render)
     // Low-rate heartbeat so live diagnostics / timeout stay fresh (cheap text).
     if (now_ms - s_last_paint >= 200) render = true;
 
+    // Repaint on warning banner show/expire so it never lingers over the menu.
+    static bool s_warn_prev = false;
+    bool warn = ui_warning_active(now_ms);
+    if (warn != s_warn_prev) { s_warn_prev = warn; render = true; }
+
     *need_render = render;
     return MENU_RUNNING;
 }
@@ -1731,4 +1737,5 @@ void menu_render(uint32_t now_ms)
     else if (s_in_scripts) render_scripts();
     else if (s_in_cal)    render_cal();
     else                  render_menu();
+    ui_draw_warning(now_ms);
 }

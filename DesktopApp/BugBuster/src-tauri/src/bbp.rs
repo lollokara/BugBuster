@@ -73,6 +73,8 @@ pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED;
 pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08;
 pub const CMD_SELFTEST_INT_SUPPLIES: u8 = 0x09;
 pub const CMD_SELFTEST_WORKER: u8 = 0x0B;
+pub const CMD_EFUSE_IMON_SET: u8 = 0x0D;
+pub const CMD_EFUSE_IMON_GET: u8 = 0x0E;
 
 // Diagnostics
 pub const CMD_SET_DIAG_CONFIG: u8 = 0x30;

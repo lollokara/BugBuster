@@ -17,7 +17,7 @@ Two transport modes are supported:
 
 ## Handler Coverage Map
 
-144 BBP commands are registered across 15 handler files.
+146 BBP commands are registered across 15 handler files.
 
 | File | Commands | Count |
 |------|----------|-------|
@@ -67,7 +67,7 @@ Two transport modes are supported:
 | `test_14_uart.py` | UART config, pin query |
 | `test_15_swd.py` | SWD/DAP setup (HAT-only) |
 | `test_sim_core.py` | round-trip ping/status on USB and HTTP transports |
-| `test_sim_completeness.py` | all 144 handlers registered, PROTO_VERSION match |
+| `test_sim_completeness.py` | all 146 handlers registered, PROTO_VERSION match |
 
 ---
 

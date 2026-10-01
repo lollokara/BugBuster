@@ -198,6 +198,12 @@ bool adgs_is_faulted(void);
 bool adgs_set_selftest(uint8_t sw_byte);
 
 /**
+ * @brief Lock U23 at its current state: adgs_set_selftest() then refuses any
+ *        change and adgs_reset_all() preserves U23. Owned by efuse_imon.
+ */
+void adgs_selftest_set_locked(bool locked);
+
+/**
  * @brief Get the cached U23 switch state.
  */
 uint8_t adgs_get_selftest(void);

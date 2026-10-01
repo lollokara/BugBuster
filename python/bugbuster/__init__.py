@@ -65,6 +65,8 @@ See the ``examples/`` directory:
 
 from .client    import (
     BugBuster,
+    EfuseImonConfirmRequired,
+    EfuseImonStatus,
     HatNotPresentError,
     HatPinFunctionError,
     connect_usb,
@@ -109,8 +111,10 @@ __all__ = [
 
     # Main client
     "BugBuster",
+    "EfuseImonStatus",
 
     # Errors
+    "EfuseImonConfirmRequired",
     "HatNotPresentError",
     "HatPinFunctionError",
 

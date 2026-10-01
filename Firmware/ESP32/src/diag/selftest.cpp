@@ -20,6 +20,10 @@
 #include "freertos/semphr.h"
 #include "io_owner.h"
 #include "bbp.h"
+#include "efuse_imon.h"
+#include "husb238.h"
+#include "power/pd_manager.h"
+#include <stdio.h>
 
 #include <string.h>
 #include <math.h>
@@ -50,6 +54,13 @@ static SemaphoreHandle_t     s_selftest_mutex = NULL;
 static constexpr uint32_t    CAL_TRACE_MAGIC = 0xC411B007u;
 static RTC_DATA_ATTR SelftestCalTrace s_cal_trace_rtc = {};
 static bool                  s_worker_enabled = false;
+static char                  s_cal_block_reason[96] = "";
+static constexpr float       CAL_VADJ_STOP_HIGH_V = 15.0f;
+
+const char *selftest_cal_block_reason(void)
+{
+    return s_cal_block_reason;
+}
 
 static constexpr uint8_t CAL_EXPECTED_POINTS = 100;
 static constexpr const char *SELFTEST_NVS_NAMESPACE = "selftest";
@@ -443,7 +454,7 @@ static void selftest_restore_ch_slot(const io_owner_slot_t *prev)
     }
 }
 
-static float measure_via_u23(uint8_t source_sw, uint8_t adc_range, bool fast)
+static float measure_via_u23_locked(uint8_t source_sw, uint8_t adc_range, bool fast)
 {
     // Claim the logical channel whose physical AD74416H register is D.
     // Phase 2 Lane A2: yield to active client claims — return early so the
@@ -526,6 +537,33 @@ static float measure_via_u23(uint8_t source_sw, uint8_t adc_range, bool fast)
 
 static void selftest_auto_cal_task(void *arg);
 static void selftest_run_auto_calibrate(uint8_t idac_channel);
+
+// Whole-sequence U23 ownership. s_selftest_mutex only covers read_channel_d(),
+// so it cannot keep efuse_imon from re-routing U23 mid-measurement.
+static SemaphoreHandle_t s_u23_mutex = NULL;
+
+bool selftest_u23_lock(uint32_t timeout_ms)
+{
+    if (!s_u23_mutex) s_u23_mutex = xSemaphoreCreateMutex();
+    return s_u23_mutex && xSemaphoreTake(s_u23_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void selftest_u23_unlock(void)
+{
+    if (s_u23_mutex) xSemaphoreGive(s_u23_mutex);
+}
+
+static float measure_via_u23(uint8_t source_sw, uint8_t adc_range, bool fast)
+{
+    // An auto-cal sweep owns U23 end to end; background readers (DAQ telemetry,
+    // supply monitor) must not queue on the lock and starve it past its timeout.
+    if (s_cal_task != NULL && xTaskGetCurrentTaskHandle() != s_cal_task) return -1.0f;
+    if (!selftest_u23_lock(3000)) return -1.0f;
+    // Re-check under the lock: the monitor may have attached while we waited.
+    float v = efuse_imon_active() ? -1.0f : measure_via_u23_locked(source_sw, adc_range, fast);
+    selftest_u23_unlock();
+    return v;
+}
 
 static void cal_trace_update(uint8_t stage, uint8_t ch, uint8_t point, int8_t code, float measured_v, bool active)
 {
@@ -736,8 +774,7 @@ const SelftestBootResult* selftest_get_boot_result(void)
 float selftest_measure_supply(uint8_t rail, bool fast)
 {
     if (rail >= SELFTEST_RAIL_COUNT) return -1.0f;
-
-    // selftest_debug_begin(rail, U23_SW_ADC_CH_D | RAIL_SW[rail]);
+    if (efuse_imon_active()) return -1.0f;   // U23 is locked to an IMON pin
     float raw_v = measure_via_u23(RAIL_SW[rail], ADC_RNG_0_12V, fast);
     if (raw_v < 0) return -1.0f;
 
@@ -869,6 +906,7 @@ void selftest_monitor_step(void)
 
 bool selftest_start_auto_calibrate(uint8_t idac_channel)
 {
+    s_cal_block_reason[0] = '\0';
     if (idac_channel > 2) {
         ESP_LOGE(TAG, "Invalid IDAC channel %d (must be 0, 1, or 2)", idac_channel);
         return false;
@@ -878,6 +916,33 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         ESP_LOGW(TAG, "Calibration already running");
         return false;
     }
+
+    if (efuse_imon_active()) {
+        ESP_LOGW(TAG, "Cannot calibrate: e-fuse current monitor holds U23");
+        snprintf(s_cal_block_reason, sizeof(s_cal_block_reason),
+                 "e-fuse current monitor is active");
+        return false;
+    }
+
+    if (idac_channel != 0) {
+        // The VADJ sweep climbs to 15 V; the buck needs >= 17.5 V in, i.e. the 20 V PDO.
+        const float need_v = CAL_VADJ_STOP_HIGH_V + PD_DCDC_HEADROOM_V;
+        PdConsumerId cid = (idac_channel == 1) ? PD_CONSUMER_VADJ1 : PD_CONSUMER_VADJ2;
+        char warn[96] = {0};
+        const float prev_demand_v = pd_manager_consumer_v(cid);
+        bool ok = pd_manager_ensure(cid, CAL_VADJ_STOP_HIGH_V, PD_TYPE_BUCK, warn, sizeof(warn));
+        husb238_update();
+        const Husb238State *pd = husb238_get_state();
+        float pd_v = (pd && pd->present && pd->attached) ? pd->voltage_v : 0.0f;
+        if (!ok || pd_v + 0.25f < need_v) {
+            pd_manager_ensure(cid, prev_demand_v, PD_TYPE_BUCK, warn, sizeof(warn));
+            snprintf(s_cal_block_reason, sizeof(s_cal_block_reason),
+                     "USB-PD 20 V required for VADJ calibration (have %.1f V)", pd_v);
+            ESP_LOGW(TAG, "Cannot calibrate IDAC ch%u: %s", idac_channel, s_cal_block_reason);
+            return false;
+        }
+    }
+    s_cal_block_reason[0] = '\0';
 
     if (adgs_u17_s3_active()) {
         ESP_LOGW(TAG, "U17 S3 active (IO 9 analog), attempting to open...");
@@ -1032,7 +1097,7 @@ static void selftest_run_auto_calibrate(uint8_t idac_channel)
     // Rail-specific clamp thresholds requested by user:
     // - VADJ rails: stop at 15V high / 3V low
     // - VLOGIC:     stop at 5V high / 1.8V low
-    float stop_high_v = 15.0f;
+    float stop_high_v = CAL_VADJ_STOP_HIGH_V;
     float stop_low_v  = 3.0f;
     if (rail == SELFTEST_RAIL_3V3_ADJ) {
         stop_high_v = 5.0f;
@@ -1142,6 +1207,14 @@ restore:
     }
     if (rail_toggled) {
         pca9535_set_control(rail_ctrl, false);
+    }
+    if (idac_channel != 0) {
+        // Drop the temporary 20 V demand back to what the rail now needs.
+        const DS4424State *ds = ds4424_get_state();
+        float keep_v = (!rail_toggled && ds) ? ds->state[idac_channel].target_v : 0.0f;
+        char warn[96] = {0};
+        pd_manager_ensure(idac_channel == 1 ? PD_CONSUMER_VADJ1 : PD_CONSUMER_VADJ2,
+                          keep_v, PD_TYPE_BUCK, warn, sizeof(warn));
     }
 
     // Leave the terminal SUCCESS/FAILED state in place — the desktop polls
@@ -1360,6 +1433,7 @@ bool selftest_worker_enabled(void) { return false; }
 bool selftest_set_worker_enabled(bool enabled) { (void)enabled; return false; }
 bool selftest_is_supply_monitor_active(void) { return false; }
 bool selftest_start_auto_calibrate(uint8_t ch) { return false; }
+const char *selftest_cal_block_reason(void) { return ""; }
 
 const SelftestCalResult* selftest_get_cal_result(void) {
     static SelftestCalResult dummy = {};

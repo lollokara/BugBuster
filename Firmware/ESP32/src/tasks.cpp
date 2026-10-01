@@ -14,6 +14,7 @@
 #include "hat.h"
 #include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
 #include "diag/selftest.h" // selftest_is_supply_monitor_active for ADC poll suppression
+#include "diag/efuse_imon.h"
 #include "serial_io.h"   // serial_println for fatal init diagnostics
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -664,6 +665,7 @@ void tasks_rebuild_adc_conv_ctrl(void)
 
     uint8_t chMask   = 0;
     uint8_t diagMask = scopeMode ? 0x00 : 0x0F;
+    const bool imon = efuse_imon_active();
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         for (uint8_t c = 0; c < AD74416H_NUM_CHANNELS; c++) {
@@ -673,7 +675,7 @@ void tasks_rebuild_adc_conv_ctrl(void)
             if (scopeMode) {
                 // Only include channels present in the scope logical mask.
                 bool inScopeMask = (scopeMask & (1u << c)) != 0;
-                if (!inScopeMask) continue;
+                if (!inScopeMask && !(imon && c == 2)) continue;
             }
             chMask |= (1u << tasks_logical_to_physical(c));
         }

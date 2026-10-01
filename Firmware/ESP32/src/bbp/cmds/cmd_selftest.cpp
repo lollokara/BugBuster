@@ -7,6 +7,8 @@
 //   BBP_CMD_SELFTEST_AUTO_CAL               (0x08)
 //   BBP_CMD_SELFTEST_INT_SUPPLIES           (0x09)
 //   BBP_CMD_SELFTEST_WORKER                 (0x0B)
+//   BBP_CMD_EFUSE_IMON_SET                  (0x0D)
+//   BBP_CMD_EFUSE_IMON_GET                  (0x0E)
 // =============================================================================
 #include "cmd_registry.h"
 #include "cmd_errors.h"
@@ -14,6 +16,7 @@
 #include "bbp.h"
 #include "tasks.h"
 #include "selftest.h"
+#include "efuse_imon.h"
 
 // ---------------------------------------------------------------------------
 // SELFTEST_STATUS  payload: (none)
@@ -165,6 +168,50 @@ static int handler_selftest_worker(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// EFUSE_IMON_SET / EFUSE_IMON_GET - see the layout comment in bbp.h.
+// NEEDS_CONFIRM/BUSY are reported in the result byte, not as BBP errors, so a
+// host can prompt the user and retry.
+// ---------------------------------------------------------------------------
+static void put_efuse_imon_status(uint8_t *resp, size_t *pos)
+{
+    efuse_imon_status_t st;
+    efuse_imon_get(&st);
+    uint8_t flags = (st.valid ? BBP_EFUSE_IMON_F_VALID : 0) |
+                    (st.saturated ? BBP_EFUSE_IMON_F_SATURATED : 0) |
+                    (st.efuse_on ? BBP_EFUSE_IMON_F_EFUSE_ON : 0);
+    bbp_put_u8(resp, pos, st.efuse);
+    bbp_put_u8(resp, pos, flags);
+    bbp_put_f32(resp, pos, st.imon_v);
+    bbp_put_f32(resp, pos, st.current_ma);
+}
+
+static int handler_efuse_imon_set(const uint8_t *payload, size_t len,
+                                  uint8_t *resp, size_t *resp_len)
+{
+    if (len < 1) return -CMD_ERR_BAD_ARG;
+    uint8_t efuse = payload[0];
+    bool confirm = len >= 2 && (payload[1] & BBP_EFUSE_IMON_SET_F_CONFIRM);
+    if (efuse > 4) return -CMD_ERR_BAD_ARG;
+
+    efuse_imon_result_t rc = efuse_imon_select(efuse, confirm);
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, (uint8_t)rc);
+    put_efuse_imon_status(resp, &pos);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int handler_efuse_imon_get(const uint8_t *payload, size_t len,
+                                  uint8_t *resp, size_t *resp_len)
+{
+    (void)payload; (void)len;
+    size_t pos = 0;
+    put_efuse_imon_status(resp, &pos);
+    *resp_len = pos;
+    return (int)pos;
+}
+
+// ---------------------------------------------------------------------------
 // ArgSpec tables
 // ---------------------------------------------------------------------------
 // selftest_status, selftest_supply_voltages_cached, selftest_int_supplies:
@@ -196,6 +243,24 @@ static const ArgSpec s_selftest_worker_rsp[] = {
     { "enabled", ARG_U8, true, 0, 0 },
 };
 
+static const ArgSpec s_efuse_imon_set_args[] = {
+    { "efuse", ARG_U8, true,  0, 4 },
+    { "flags", ARG_U8, false, 0, 1 },
+};
+static const ArgSpec s_efuse_imon_set_rsp[] = {
+    { "result",     ARG_U8,  true, 0, 0 },
+    { "efuse",      ARG_U8,  true, 0, 0 },
+    { "flags",      ARG_U8,  true, 0, 0 },
+    { "imon_v",     ARG_F32, true, 0, 0 },
+    { "current_ma", ARG_F32, true, 0, 0 },
+};
+static const ArgSpec s_efuse_imon_get_rsp[] = {
+    { "efuse",      ARG_U8,  true, 0, 0 },
+    { "flags",      ARG_U8,  true, 0, 0 },
+    { "imon_v",     ARG_F32, true, 0, 0 },
+    { "current_ma", ARG_F32, true, 0, 0 },
+};
+
 // ---------------------------------------------------------------------------
 // Descriptor table
 // ---------------------------------------------------------------------------
@@ -212,6 +277,10 @@ static const CmdDescriptor s_selftest_cmds[] = {
       NULL,                           0, NULL,                          0, handler_selftest_int_supplies,           0                   },
     { BBP_CMD_SELFTEST_WORKER,                 "selftest_worker",
       s_selftest_worker_args,         1, s_selftest_worker_rsp,         1, handler_selftest_worker,                 0                   },
+    { BBP_CMD_EFUSE_IMON_SET,                  "efuse_imon_set",
+      s_efuse_imon_set_args,          2, s_efuse_imon_set_rsp,          5, handler_efuse_imon_set,                  0                   },
+    { BBP_CMD_EFUSE_IMON_GET,                  "efuse_imon_get",
+      NULL,                           0, s_efuse_imon_get_rsp,          4, handler_efuse_imon_get,                  CMD_FLAG_READS_STATE },
 };
 
 extern "C" void register_cmds_selftest(void)

@@ -1911,6 +1911,29 @@ static esp_err_t handle_post_selftest_calibrate(httpd_req_t *req)
     return rc;
 }
 
+// GET /api/selftest/efuse_imon — monitored e-fuse current
+static esp_err_t handle_get_efuse_imon(httpd_req_t *req)
+{
+    char *resp = api_core_handle("GET", "/api/selftest/efuse_imon", NULL);
+    if (!resp) return send_error(req, 500, "efuse_imon failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// POST /api/selftest/efuse_imon body: {"efuse": 0..4, "confirm": bool}
+static esp_err_t handle_post_efuse_imon(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/selftest/efuse_imon", body);
+    if (body) cJSON_Delete(body);
+    if (!resp) return send_error(req, 500, "efuse_imon failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
 // GET /api/selftest/supplies — measure internal ADC supplies
 static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
 {
@@ -5200,6 +5223,16 @@ bool initWebServer(void)
         .uri = "/api/selftest/supplies", .method = HTTP_GET, .handler = handle_get_selftest_supplies, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_selftest_supplies);
+
+    httpd_uri_t uri_efuse_imon_get = {
+        .uri = "/api/selftest/efuse_imon", .method = HTTP_GET, .handler = handle_get_efuse_imon, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_efuse_imon_get);
+
+    httpd_uri_t uri_efuse_imon_post = {
+        .uri = "/api/selftest/efuse_imon", .method = HTTP_POST, .handler = handle_post_efuse_imon, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_efuse_imon_post);
 
     // ----- Quick Setup routes -----
 

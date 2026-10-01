@@ -7,6 +7,7 @@ pub mod daq_trigger_panel;
 pub mod diag;
 pub mod din;
 pub mod dout;
+pub mod efuse_monitor;
 pub mod faults;
 pub mod gpio;
 pub mod hat;

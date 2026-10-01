@@ -69,6 +69,10 @@ struct SignalPathTab: View {
                     }
                     .padding()
 
+                    EFuseImonCard()
+                        .padding(.horizontal)
+                        .padding(.bottom)
+
                     GPIOControlCard()
                         .padding(.horizontal)
                         .padding(.bottom)
@@ -460,6 +464,135 @@ struct ControlPill: View {
                     isActive ? .regular.tint(.cyan) : .regular,
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
+        }
+    }
+}
+
+// MARK: - E-Fuse Current Monitor
+
+struct EFuseImonCard: View {
+    @EnvironmentObject var connectionManager: ConnectionManager
+
+    @State private var selection: Int = 0
+    @State private var pendingTarget: Int? = nil
+    @State private var showConfirm = false
+    @State private var isBusy = false
+    @State private var errorText: String? = nil
+
+    private var deviceEfuse: Int { connectionManager.efuseImon?.efuse ?? 0 }
+
+    private var confirmLabel: String {
+        let t = pendingTarget ?? 0
+        return "EF\(t != 0 ? t : deviceEfuse)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("E-Fuse Current Monitor")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.blue)
+                Spacer()
+                if isBusy {
+                    ProgressView()
+                }
+            }
+
+            Picker("E-Fuse", selection: $selection) {
+                Text("Off").tag(0)
+                ForEach(1...4, id: \.self) { n in
+                    Text("EF\(n)").tag(n)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(isBusy)
+
+            if let st = connectionManager.efuseImon, st.efuse != 0 {
+                let r = readout(st)
+                Text(r.text)
+                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                    .foregroundColor(r.color)
+            }
+
+            if let err = errorText {
+                Text(err)
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+            }
+        }
+        .padding()
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onAppear { selection = deviceEfuse }
+        .onChange(of: selection) { newValue in
+            if newValue != deviceEfuse && !isBusy && !showConfirm {
+                apply(newValue, confirm: false)
+            }
+        }
+        .onChange(of: connectionManager.efuseImon?.efuse) { _ in
+            if !isBusy && !showConfirm { selection = deviceEfuse }
+        }
+        .onChange(of: showConfirm) { shown in
+            if !shown, pendingTarget != nil {
+                pendingTarget = nil
+                selection = deviceEfuse
+            }
+        }
+        .confirmationDialog("Power-cycle e-fuse?", isPresented: $showConfirm, titleVisibility: .visible) {
+            Button("Power-cycle \(confirmLabel)", role: .destructive) {
+                if let target = pendingTarget {
+                    pendingTarget = nil
+                    apply(target, confirm: true)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingTarget = nil
+                selection = deviceEfuse
+            }
+        } message: {
+            Text("Monitoring \(confirmLabel) current turns the e-fuse OFF, switches the monitor, then turns it back ON. The output drops for about 0.5 s.")
+        }
+    }
+
+    private func readout(_ st: EFuseImonStatus) -> (text: String, color: Color) {
+        if st.saturated {
+            return ("EF\(st.efuse): saturated (>4.5 A)", .orange)
+        }
+        if !st.valid {
+            return ("EF\(st.efuse): settling", .secondary)
+        }
+        return ("EF\(st.efuse): \(String(format: "%.1f", st.currentMa)) mA", .white)
+    }
+
+    private func apply(_ target: Int, confirm: Bool) {
+        isBusy = true
+        errorText = nil
+        Task {
+            let res = await connectionManager.setEfuseImon(target, confirm: confirm)
+            isBusy = false
+            guard let res = res else {
+                errorText = "No response from device"
+                selection = deviceEfuse
+                return
+            }
+            switch res.result ?? "" {
+            case "ok":
+                selection = deviceEfuse
+            case "needs_confirm":
+                pendingTarget = target
+                showConfirm = true
+            case "busy":
+                errorText = "Busy: self-test, calibration or IO9 analog in use"
+                selection = deviceEfuse
+            case "slot_held":
+                errorText = "Channel C is owned by another client"
+                selection = deviceEfuse
+            case "unsupported":
+                errorText = "Not supported by this hardware"
+                selection = deviceEfuse
+            default:
+                errorText = "E-fuse monitor failed (\(res.result ?? "unknown"))"
+                selection = deviceEfuse
+            }
         }
     }
 }

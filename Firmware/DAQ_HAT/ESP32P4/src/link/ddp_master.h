@@ -30,6 +30,7 @@ typedef struct {
     uint32_t          rx_frames;
     uint32_t          crc_errors;
     bool              c6_present;  // a GET_INFO reply was seen
+    uint32_t          c6_info_ms;  // when the last RSP_INFO arrived
     uint8_t           c6_fw_major;
     uint8_t           c6_fw_minor;
     // Pending C6 "Main Board Settings" request (DDP_CMD_MB_REQUEST). Cached here

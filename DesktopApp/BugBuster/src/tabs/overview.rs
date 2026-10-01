@@ -1,3 +1,4 @@
+use crate::tabs::efuse_monitor::EfuseMonitorStrip;
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -12,6 +13,9 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (selftest, set_selftest) = signal(SelftestStatus::default());
     let (supplies, set_supplies) = signal(SelftestSuppliesCached::default());
     let (idac, set_idac) = signal(IdacState::default());
+    let idac_loaded = RwSignal::new(false);
+    let imon = RwSignal::new(EfuseImonStatus::default());
+    start_efuse_imon_poll(imon);
     let (ioexp, set_ioexp) = signal(IoExpState::default());
     let (quicksetup_supported, set_quicksetup_supported) = signal(None::<bool>);
     let (quicksetup_slots, set_quicksetup_slots) = signal(Vec::<QuickSetupSlot>::new());
@@ -88,6 +92,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         break;
                     }
                     set_idac.set(st);
+                    idac_loaded.set(true);
                 }
                 if let Some(st) = fetch_pca_status().await {
                     if !alive_poll.load(std::sync::atomic::Ordering::Relaxed) {
@@ -206,7 +211,7 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         };
                         let pct = if range_max > 0.0 { (ch.adc_value.abs() as f64 / range_max * 100.0).min(100.0) } else { 0.0 };
                         let color = CH_COLORS[i];
-                        let ch_reserved = monitor_active && i == 2;
+                        let ch_reserved = (monitor_active || imon.get().efuse != 0) && i == 2;
 
                         view! {
                             <div class="card channel-card" class:ch-active=is_active style="position: relative; overflow: hidden">
@@ -299,6 +304,15 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 {move || {
                     let st = idac.get();
                     let pca = ioexp.get();
+                    if !idac_loaded.get() {
+                        return view! {
+                            <div class="card" style="grid-column: 1 / -1">
+                                <div class="card-body" style="color: var(--text-dim); font-size: 12px">
+                                    "Reading DS4424 supply state..."
+                                </div>
+                            </div>
+                        }.into_any();
+                    }
                     if !st.present {
                         return view! {
                             <div class="card" style="grid-column: 1 / -1">
@@ -326,8 +340,9 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             supply_codes[i].set(ch.code as i32);
                         }
                         let display_code = supply_codes[i].get() as i8;
-                        let display_v = idac_interpolate_voltage_opt(&ch, display_code)
-                            .map(|v| v.clamp(ch.v_min, ch.v_max));
+                        // Uncalibrated rails fall back to the nominal formula so the slider still tracks.
+                        let calibrated = idac_interpolate_voltage_opt(&ch, display_code).is_some();
+                        let display_v = Some(idac_interpolate_voltage(&ch, display_code).clamp(ch.v_min, ch.v_max));
                         let pct = display_v
                             .map(|v| if ch.v_max > ch.v_min { ((v - ch.v_min) / (ch.v_max - ch.v_min) * 100.0).clamp(0.0, 100.0) } else { 0.0 })
                             .unwrap_or(0.0);
@@ -350,7 +365,10 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 </div>
                                 <div class="card-body">
                                     <div style=format!("text-align: center; font-size: 26px; font-weight: 800; color: {}; font-family: 'JetBrains Mono', monospace", color)>
-                                        {display_v.map(|v| if enabled { format!("{:.3} V", v) } else { format!("{:.3} V (Preview)", v) }).unwrap_or_else(|| "--- V".to_string())}
+                                        {display_v.map(|v| {
+                                            let est = if calibrated { "" } else { " est." };
+                                            if enabled { format!("{:.3} V{}", v, est) } else { format!("{:.3} V (Preview{})", v, est) }
+                                        }).unwrap_or_else(|| "--- V".to_string())}
                                     </div>
                                     <input type="range" class="slider slider-colored"
                                         style=format!("--slider-color: {}; width: 100%", color)
@@ -381,6 +399,9 @@ pub fn OverviewTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     }).collect::<Vec<_>>().into_any()
                 }}
             </div>
+
+            <SectionTitle title="E-Fuse Outputs & Current" />
+            <EfuseMonitorStrip ioexp=ioexp imon=imon />
 
             <SectionTitle title="Quick Setups" />
             {move || match quicksetup_supported.get() {

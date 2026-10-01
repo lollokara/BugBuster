@@ -682,6 +682,45 @@ impl Transport for HttpTransport {
                 Ok(vec![if worker_enabled { 1 } else { 0 }])
             }
 
+            bbp::CMD_EFUSE_IMON_SET | bbp::CMD_EFUSE_IMON_GET => {
+                let is_set = cmd_id == bbp::CMD_EFUSE_IMON_SET;
+                let json = if is_set {
+                    if payload.is_empty() {
+                        return Err(anyhow!("Invalid payload"));
+                    }
+                    let confirm = payload.get(1).is_some_and(|f| f & 0x01 != 0);
+                    self.post_json(
+                        "/api/selftest/efuse_imon",
+                        &serde_json::json!({"efuse": payload[0], "confirm": confirm}),
+                    )
+                    .await?
+                } else {
+                    self.get_json("/api/selftest/efuse_imon").await?
+                };
+                let mut pw = bbp::PayloadWriter::new();
+                if is_set {
+                    pw.put_u8(
+                        match json.get("result").and_then(|v| v.as_str()).unwrap_or("ok") {
+                            "ok" => 0,
+                            "needs_confirm" => 1,
+                            "busy" => 2,
+                            "invalid" => 3,
+                            "slot_held" => 4,
+                            "hw_fail" => 5,
+                            _ => 6,
+                        },
+                    );
+                }
+                let flag = |k: &str| json.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+                pw.put_u8(json.get("efuse").and_then(|v| v.as_u64()).unwrap_or(0) as u8);
+                pw.put_u8(
+                    flag("valid") as u8 | (flag("saturated") as u8) << 1 | (flag("efuseOn") as u8) << 2,
+                );
+                pw.put_f32(json.get("imonV").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                pw.put_f32(json.get("currentMa").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+                Ok(pw.buf)
+            }
+
             bbp::CMD_SELFTEST_MEASURE_SUPPLY => {
                 if payload.is_empty() {
                     return Err(anyhow!("Invalid payload"));
