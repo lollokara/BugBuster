@@ -12,10 +12,9 @@ FILES = [
     "python/bugbuster_mcp/tools/waveform.py",
     "python/examples/04_waveform_and_mux.py",
 ]
-BAD = re.compile(r"(holds?|stays? at|retains?) (the )?last (output )?value", re.I)
+BAD = re.compile(r"(holds?|stays?|retains?)( at)? (the )?last( generated| output)? value", re.I)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-05")
 @pytest.mark.parametrize("rel", FILES)
 def test_stop_waveform_docs_do_not_promise_hold(rel):
     hits = [ln for ln in (ROOT / rel).read_text(encoding="utf-8").splitlines() if BAD.search(ln)]

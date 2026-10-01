@@ -190,15 +190,15 @@ def stop_waveform() -> dict:
     """
     Stop the waveform generator.
 
-    The DAC output holds at the last generated value after stopping.
-    Call write_voltage to set a specific DC level afterwards.
+    The waveform channel is returned to HIGH_IMP (output off). Call
+    configure_io and write_voltage to drive a DC level afterwards.
 
     Returns: success.
     """
     bb = session.get_client()
     bb.stop_waveform()
     warnings = check_faults_post(bb)
-    res = {"success": True, "message": "Waveform stopped. DAC holds last value."}
+    res = {"success": True, "message": "Waveform stopped. Channel set to HIGH_IMP (output off)."}
     if warnings:
         res["warnings"] = warnings
     return res

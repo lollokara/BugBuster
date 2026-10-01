@@ -3739,7 +3739,7 @@ class BugBuster:
             })
 
     def stop_waveform(self) -> None:
-        """Stop the waveform generator.  The DAC output stays at the last value."""
+        """Stop the waveform generator.  The waveform channel returns to HIGH_IMP (output off)."""
         if self._usb:
             self._usb_cmd(CmdId.STOP_WAVEGEN)
         else:

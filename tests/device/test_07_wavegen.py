@@ -197,7 +197,6 @@ def test_wavegen_stop_all_channels(device):
     assert_no_faults(device)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-05")
 def test_wavegen_stop_returns_channel_to_high_imp(device):
     """AN-05 (decision B): stop_waveform() is a full stop - the firmware puts
     the waveform channel back to HIGH_IMP (output off). It does NOT hold the

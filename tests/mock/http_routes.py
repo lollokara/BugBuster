@@ -887,6 +887,29 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("POST", "/wifi/connect"):
         return {"ok": True}
 
+    # Waveform generator - firmware handle_post_wavegen_start/_stop.
+    if key == ("POST", "/wavegen/start"):
+        ch = int(body.get("channel", -1))
+        if not 0 <= ch <= 3:
+            return {"error": "Invalid channel", "code": 400}
+        device.wavegen_running = True
+        device.wavegen_config = {
+            "channel": ch,
+            "waveform": int(body.get("waveform", 0)),
+            "freq_hz": float(body.get("freq_hz", 0.0)),
+            "amplitude": float(body.get("amplitude", 0.0)),
+            "offset": float(body.get("offset", 0.0)),
+            "mode": int(body.get("mode", 0)),
+        }
+        return {"status": "started"}
+    if key == ("POST", "/wavegen/stop"):
+        # bbpStopWavegen(): a running waveform's channel goes back to HIGH_IMP (AN-05).
+        if device.wavegen_running and device.wavegen_config:
+            device.channels[device.wavegen_config["channel"]]["function"] = 0
+        device.wavegen_running = False
+        device.wavegen_config = None
+        return {"status": "stopped"}
+
     # Fallback
     return {"error": "not implemented", "path": path, "method": method, "code": 404}
 

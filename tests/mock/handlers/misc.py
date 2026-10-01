@@ -279,6 +279,10 @@ def _start_wavegen(device):
 
 def _stop_wavegen(device):
     def handler(payload: bytes) -> bytes:
+        # Firmware wavegen_stop_and_reset(): a running waveform's channel goes
+        # back to HIGH_IMP (AN-05). A stop with nothing running is a no-op.
+        if device.wavegen_running and device.wavegen_config:
+            device.channels[device.wavegen_config['channel']]["function"] = 0
         device.wavegen_running = False
         device.wavegen_config = None
         return b''
