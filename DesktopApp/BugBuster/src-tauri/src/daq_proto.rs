@@ -180,6 +180,11 @@ pub struct StatusRecord {
     pub cal_have_hi: bool,
     pub cal_have_mid: bool,
     pub cal_have_lo: bool,
+    /// Extension v9 (bytes 112-115): FINE conversions the ADC produced but the
+    /// P4 never captured, cumulative since the stream started. None before v9.
+    /// (v9 bytes 104-111 carry u32 drop counters, decoded into drop_fine /
+    /// drop_coarse above so they no longer saturate at 65535.)
+    pub missed_conversions: Option<u32>,
 }
 
 /// One digital event marker (flag or trigger), decoded from the 16-byte wire
@@ -444,6 +449,7 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 cal_have_hi: false,
                 cal_have_mid: false,
                 cal_have_lo: false,
+                missed_conversions: None,
             };
             // Offsets follow usb_status_payload_t in usb_proto.h; the golden
             // fixture test (status_matches_firmware_fixture) pins them.
@@ -481,6 +487,12 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 s.cal_have_hi  = (cal_have & 0x01) != 0;
                 s.cal_have_mid = (cal_have & 0x02) != 0;
                 s.cal_have_lo  = (cal_have & 0x04) != 0;
+            }
+            // Extension v9 (bytes 104-115): u32 drop counters + missed conversions.
+            if p.len() >= 116 {
+                s.drop_fine = rd_u32(p, 104);
+                s.drop_coarse = rd_u32(p, 108);
+                s.missed_conversions = Some(rd_u32(p, 112));
             }
             DaqRecord::Status(s)
         }
@@ -730,8 +742,9 @@ mod tests {
         chk("in_current", s.in_current as f64, f("in_current"));
         chk("adaq_ok_bits", s.adaq_ok_bits as f64, f("adaq_ok_bits"));
         chk("fine_err_pct", s.fine_err_pct as f64, f("fine_err_pct"));
-        chk("drop_fine", s.drop_fine as f64, f("drop_fine"));
-        chk("drop_coarse", s.drop_coarse as f64, f("drop_coarse"));
+        chk("drop_fine32", s.drop_fine as f64, f("drop_fine32"));
+        chk("drop_coarse32", s.drop_coarse as f64, f("drop_coarse32"));
+        chk("missed_conversions", s.missed_conversions.unwrap_or(u32::MAX) as f64, f("missed_conversions"));
         chk("fine_diag_sticky", s.fine_diag_sticky as f64, f("fine_diag_sticky"));
         chk("frames_tx", s.frames_tx as f64, f("frames_tx"));
         chk("bytes_per_sec", s.bytes_per_sec as f64, f("bytes_per_sec"));
@@ -745,6 +758,13 @@ mod tests {
         chk("cal_have_mid", s.cal_have_mid as u8 as f64, ((cal >> 1) & 1) as f64);
         chk("cal_have_lo", s.cal_have_lo as u8 as f64, ((cal >> 2) & 1) as f64);
         assert!(bad.is_empty(), "STATUS fields decoded wrong:\n{}", bad.join("\n"));
+
+        // Append-only: a v8 frame (first 104 bytes) still decodes, with the
+        // saturating u16 drop counters and no missed count.
+        let (rec8, _) = parse_frame(&data_frame(REC_STATUS, &raw[..104])).unwrap();
+        let DaqRecord::Status(s8) = rec8 else { panic!("wrong record") };
+        assert_eq!(s8.drop_fine as f64, f("drop_fine"));
+        assert_eq!(s8.missed_conversions, None);
     }
 
     #[test]

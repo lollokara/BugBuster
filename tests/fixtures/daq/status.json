@@ -1,8 +1,8 @@
 {
   "source": "Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h",
-  "source_sha256": "b1350ca55ac72380c3bcc240e7fdebc4493747a989915af77b4929dd6e657f0f",
+  "source_sha256": "76aec7fdf337c524502e3792b5cf3e838154be4965c50b675c77303fc4728832",
   "struct": "usb_status_payload_t",
-  "size": 104,
+  "size": 116,
   "fields": {
     "sample_rate": {
       "type": "u32",
@@ -183,6 +183,21 @@
       "type": "u8",
       "offset": 100,
       "value": 51
+    },
+    "drop_fine32": {
+      "type": "u32",
+      "offset": 104,
+      "value": 19145764
+    },
+    "drop_coarse32": {
+      "type": "u32",
+      "offset": 108,
+      "value": 19211557
+    },
+    "missed_conversions": {
+      "type": "u32",
+      "offset": 112,
+      "value": 19277350
     }
   }
 }

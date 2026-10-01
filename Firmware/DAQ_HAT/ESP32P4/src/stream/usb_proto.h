@@ -157,7 +157,9 @@ typedef struct __attribute__((packed)) {
 //   staging ingest progress (see ota/relay_stage.h). Extension v5 (bytes
 //   72-87): per-record-type TX/drop counters, split by WAVE_I vs WAVE_V.
 //   Extension v6 (bytes 88-95): acquisition configuration readback (filter,
-//   ADC decimation, stream decimation, actual ODR).
+//   ADC decimation, stream decimation, actual ODR). Extension v7 (96-99):
+//   board temperatures. Extension v8 (100-103): current-cal validity.
+//   Extension v9 (104-115): u32 drop counters and missed conversions.
 //   Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
@@ -201,7 +203,7 @@ typedef struct __attribute__((packed)) {
     uint32_t wave_v_frames;     // 76 — WAVE_V frames handed to the transport
     uint32_t wave_i_drops;      // 80 — WAVE_I frames dropped (back-pressure/no transport)
     uint32_t wave_v_drops;      // 84 — WAVE_V frames dropped
-    // --- extension v6 (offsets 92..99): acquisition configuration readback.
+    // --- extension v6 (offsets 88..95): acquisition configuration readback.
     // The device reports what it ACTUALLY applied, never what was requested:
     // the driver clamps filter/decimation combinations the part cannot hit,
     // and a UI that echoed its own request would silently misreport the rate.
@@ -209,7 +211,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  adc_dec;       // 89  ADAQ_DEC_*, or 0xFF when SINC3 programmable
     uint16_t stream_decim;  // 90  P4 stream decimation (>=1)
     uint32_t odr_mhz;       // 92  actual ODR, milli-SPS (ODR * 1000)
-    // --- extension v7 (offsets 100..103): onboard board temperatures, 0.1 C.
+    // --- extension v7 (offsets 96..99): onboard board temperatures, 0.1 C.
     // The two AD7415s (U2 analog area, U28 power area). USB_TEMP_NA when the
     // sensor is absent or has not been polled yet.
     //
@@ -238,7 +240,19 @@ typedef struct __attribute__((packed)) {
     // built against an older header still parses everything it knows about.
     uint8_t  cal_have_rcal; // 100  per-range current cal validity (bits 0-2)
     uint8_t  _pad3[3];      // 101-103  reserved
-} usb_status_payload_t;     // total: 104 bytes
+    // --- extension v9 (offsets 104..115): DAQ-05/P4-8.
+    // drop_fine/drop_coarse above are u16 and saturate at 65535 (kept for old
+    // hosts); these are the full u32 counts. missed_conversions = FINE
+    // conversions the ADC produced (ODR x time) that were never captured,
+    // cumulative since the stream started (board/daq_missed.h).
+    uint32_t drop_fine32;         // 104
+    uint32_t drop_coarse32;       // 108
+    uint32_t missed_conversions;  // 112
+} usb_status_payload_t;     // total: 116 bytes
+
+#ifndef __cplusplus
+_Static_assert(sizeof(usb_status_payload_t) == 116, "STATUS layout is append-only");
+#endif
 
 #define USB_TEMP_NA  ((int16_t)0x7FFF)   // sensor absent / not yet polled
 

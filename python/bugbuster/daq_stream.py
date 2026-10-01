@@ -246,6 +246,11 @@ def _parse_status(p: bytes) -> Dict[str, Any]:
         out["cal_have_hi"] = bool(cal_have & 0x01)
         out["cal_have_mid"] = bool(cal_have & 0x02)
         out["cal_have_lo"] = bool(cal_have & 0x04)
+    if len(p) >= 116:
+        # Extension v9: u32 drop counters (the v2 u16 ones saturate) and FINE
+        # conversions the ADC produced but the P4 never captured.
+        d32f, d32c, missed = struct.unpack_from("<III", p, 104)
+        out.update(drop_fine32=d32f, drop_coarse32=d32c, missed_conversions=missed)
     return out
 
 

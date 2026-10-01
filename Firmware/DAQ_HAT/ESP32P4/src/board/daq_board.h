@@ -38,6 +38,7 @@
 #include "range_cal.h"
 #include "s3_link.h"
 #include "ddp_master.h"
+#include "daq_missed.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -134,6 +135,10 @@ typedef struct daq_board {
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
+    // STATUS v9 missed_conversions: FINE DRDY edges never captured. Armed on
+    // the first STATUS after run_fast so capture start-up is not counted.
+    daq_missed_t            missed;
+    bool                    missed_armed;
     // P4: raw (un-decimated) fused-sample periods accumulated since the last
     // power-DSP push that haven't yet been folded into a whole dsp_decim-
     // sized dt -- 1 per fast_emit() call plus 1 per drop_fine/drop_coarse

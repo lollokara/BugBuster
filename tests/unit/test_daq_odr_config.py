@@ -97,15 +97,21 @@ def test_status_growth_is_append_only():
         f"{offsets.get('cal_have_rcal')} - v8 must be appended after v7, "
         "never inserted or reordered")
 
+    # v9: u32 drop counters + missed conversions, appended after v8 (DAQ-05/P4-8).
+    expected_v9 = {"drop_fine32": 104, "drop_coarse32": 108, "missed_conversions": 112}
+    for field, off in expected_v9.items():
+        assert offsets.get(field) == off, (
+            f"STATUS v9 field {field} must sit at offset {off}, got {offsets.get(field)}")
+
     # Total struct size (documented in the trailing comment on the closing
     # brace's line): 88 (v5) + 8 (v6: u8+u8+u16+u32) + 4 (v7: 2x i16)
-    # + 4 (v8: u8 + 3 reserved).
+    # + 4 (v8: u8 + 3 reserved) + 12 (v9: 3x u32).
     end_idx = PROTO.index(struct_body) + len(struct_body)
     line_end = PROTO.index("\n", end_idx)
     tail = PROTO[end_idx:line_end]
     m = re.search(r"total:\s*(\d+)\s*bytes", tail)
-    assert m and int(m.group(1)) == 104, \
-        f"usb_status_payload_t total size must be documented as 104 bytes, got {tail!r}"
+    assert m and int(m.group(1)) == 116, \
+        f"usb_status_payload_t total size must be documented as 116 bytes, got {tail!r}"
 
 
 def test_command_byte_does_not_collide():

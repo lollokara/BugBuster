@@ -927,8 +927,8 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
         .in_current     = 0.0f,
         .adaq_ok_bits     = adaq_ok_bits,
         .fine_err_pct     = fine_err_pct,
-        // Task 8 fix: report full uint32_t drop counters (was clamped to uint16).
-        // At 100 drops/s the old uint16 wrapped in ~11 minutes and then read healthy.
+        // v2 u16 fields saturate at 65535 (kept for old hosts); the full
+        // u32 counters are in extension v9 below.
         .drop_fine        = (uint16_t)(b->drop_fine   > 0xFFFFu ? 0xFFFFu : b->drop_fine),
         .drop_coarse      = (uint16_t)(b->drop_coarse > 0xFFFFu ? 0xFFFFu : b->drop_coarse),
         .fine_diag_sticky = b->adaq_ok[ADAQ_ROLE_FINE]
@@ -982,6 +982,20 @@ esp_err_t daq_board_stream_summary(daq_board_t *b)
     if (b->cal.rcal.have[RANGE_MID]) cal_bits |= (1u << 1);
     if (b->cal.rcal.have[RANGE_LO])  cal_bits |= (1u << 2);
     st.cal_have_rcal = cal_bits;
+
+    // Extension v9 (DAQ-05/P4-8): full u32 drop counters plus conversions
+    // the FINE ADC produced that were never captured (expected - received).
+    st.drop_fine32   = b->drop_fine;
+    st.drop_coarse32 = b->drop_coarse;
+    {
+        int64_t now_us = esp_timer_get_time();
+        uint32_t got = b->stream_a.sample_count;
+        if (!b->missed_armed) {
+            daq_missed_reset(&b->missed, now_us, got);
+            b->missed_armed = true;
+        }
+        st.missed_conversions = daq_missed_update(&b->missed, now_us, got, st.odr_mhz);
+    }
 
     usb_stream_send_status(&b->usb, &st);
     DAQ_PERF_END(DAQ_PERF_SUM_STATUS, t_st);
@@ -2839,6 +2853,7 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
     }
     b->drop_fine    = 0;
     b->drop_coarse  = 0;
+    b->missed_armed = false;   // STATUS v9: re-baseline on the next STATUS
     b->dsp_emit_periods = 0;   // P4 raw-period accumulator (see fast_emit)
 
     // Pin the processor to core 0 (alongside FINE capture). It runs below the

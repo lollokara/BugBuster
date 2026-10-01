@@ -28,14 +28,12 @@ FIELDS = META_J["fields"]
 V9 = {"drop_fine32": 104, "drop_coarse32": 108, "missed_conversions": 112}
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-05")
 def test_v9_fields_are_appended_after_v8():
     assert {k: FIELDS[k]["offset"] for k in V9} == V9
     assert all(FIELDS[k]["type"] == "u32" for k in V9)
     assert META_J["size"] == 116
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-05")
 @pytest.mark.parametrize("decode", [_parse_status, decode_status], ids=["daq_stream", "test_lib"])
 def test_python_decoders_read_v9(decode):
     got = decode(RAW)
@@ -72,7 +70,6 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-05")
 def test_missed_conversion_accounting():
     out = compile_and_run(MISSED_MAIN, cxx=False,
                           include_dirs=["Firmware/DAQ_HAT/ESP32P4/src/board"]).split()

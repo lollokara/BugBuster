@@ -580,6 +580,7 @@ impl MockDaqTransport {
             cal_have_hi: true,
             cal_have_mid: true,
             cal_have_lo: true,
+            missed_conversions: Some(0),
         }
     }
     /// Emit synthetic event markers for any 5 Hz burst edge that falls inside
