@@ -14,9 +14,7 @@ UNIT = REPO_ROOT / "tests" / "unit"
 BARE = re.compile(r"\b(fake_bb|fake_hal|bb|hal)\s*=\s*MagicMock\(\s*\)")
 
 # file -> audit ID; delete the entry when the file is migrated.
-NOT_YET_MIGRATED = {
-    "test_mcp_io_owner.py": "TEST-2",
-}
+NOT_YET_MIGRATED: dict[str, str] = {}
 
 
 def _params():
