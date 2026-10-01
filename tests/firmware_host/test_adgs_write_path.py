@@ -17,8 +17,6 @@ unchanged, and the write reports failure."""
 
 from pathlib import Path
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_defines
 
 DRV = "Firmware/ESP32/src/hal/adgs2414d.cpp"
@@ -115,12 +113,10 @@ int main(void) {
     adgs_set_all_safe(t);
     printf("all_safe reclose=%d final=0x%02X\n", reclosed(start, 0, 0x01, 0x04), g_latched[0]);
 
-    start = g_nh;
     adgs_set_switch_safe(1, 1, true);                    // dev1 S2
+    start = g_nh;
     adgs_set_switch_safe(1, 3, true);                    // dev1 S4, same group -> S2 must open first
-    int r2 = 0;
-    for (int i = start; i < g_nh; i++) if (g_hist[i][1] == 0x08) { r2 = 0; break; }
-    r2 = reclosed(start + 1, 1, 0x02, 0x08);
+    int r2 = reclosed(start, 1, 0x02, 0x08);
     printf("switch_safe reclose=%d final=0x%02X\n", r2, g_latched[1]);
 
     // IO-9: bus mutex unavailable for the whole write.
@@ -149,16 +145,13 @@ def _run(tmp_path: Path) -> list[str]:
     return out.strip().splitlines()
 
 
-@pytest.mark.xfail(strict=True, reason="IO-2")
 def test_set_all_break_before_make(tmp_path):
     assert _run(tmp_path)[0] == "all_safe reclose=0 final=0x04"
 
 
-@pytest.mark.xfail(strict=True, reason="IO-2")
 def test_set_switch_break_before_make(tmp_path):
     assert _run(tmp_path)[1] == "switch_safe reclose=0 final=0x08"
 
 
-@pytest.mark.xfail(strict=True, reason="IO-9")
 def test_bus_timeout_is_not_a_mux_fault(tmp_path):
     assert _run(tmp_path)[2] == "busy ok=0 faulted=0 shadow_kept=1"
