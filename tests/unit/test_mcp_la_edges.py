@@ -41,13 +41,11 @@ def _run():
         return waveform.capture_logic_analyzer(channels=1, rate_hz=RATE, depth=DEPTH)
 
 
-@pytest.mark.xfail(strict=True, reason="LA-04: sample count used as transition count")
 def test_frequency_of_square_wave():
     res = _run()
     assert res["frequency_hz"][0] == pytest.approx(SQUARE_HZ, rel=0.01)
 
 
-@pytest.mark.xfail(strict=True, reason="LA-04: raw samples reported as edges")
 def test_edges_are_transitions_with_timestamps():
     ch = _run()["channel_edges"][0]
     assert ch["transitions"] == 2 * SQUARE_HZ * DEPTH // RATE - 1

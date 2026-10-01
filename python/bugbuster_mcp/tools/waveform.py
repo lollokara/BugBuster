@@ -374,24 +374,25 @@ def capture_logic_analyzer(
 
     ch_data = bb.hat_la_decode(raw, channels=channels)
 
-    # Build per-channel edge summary
+    # Build per-channel edge summary. ch_data holds one 0/1 value per sample.
     duration_ms = (depth / actual_rate) * 1000
     ch_edges = []
     ch_freq  = []
-    for chi, edges in enumerate(ch_data):
+    for chi, samples in enumerate(ch_data):
         if chi >= channels:
             break
-        # edges is list of (timestamp_s, level) tuples from decode
-        transitions = len(edges) if edges else 0
+        edges = [(i / actual_rate, samples[i])
+                 for i in range(1, len(samples)) if samples[i] != samples[i - 1]]
         ch_edges.append({
             "channel":     chi,
-            "transitions": transitions,
-            "edges":       edges[:100] if edges else [],  # cap at 100 for readability
+            "transitions": len(edges),
+            "edges":       edges[:100],  # (time_s, new_level), capped for readability
         })
-        # Estimate frequency from transition rate
-        if transitions >= 2 and duration_ms > 0:
-            freq = transitions / 2 / (duration_ms / 1000)
-            ch_freq.append(round(freq, 2))
+        # Two transitions per period, measured between the first and last
+        # edge so partial periods at the window ends do not bias it.
+        if len(edges) >= 3:
+            span = edges[-1][0] - edges[0][0]
+            ch_freq.append(round((len(edges) - 1) / 2 / span, 2))
         else:
             ch_freq.append(0)
 
