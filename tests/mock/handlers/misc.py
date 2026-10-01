@@ -201,10 +201,10 @@ def _wifi_scan(device):
 # ---------------------------------------------------------------------------
 # WIFI_SET_AP_PASSWORD (0xEF)
 # client sends: struct.pack('<B', len(pass_b)) + pass_b
-# firmware returns: status byte
-#   0x00 = no change needed (NVS skip)
-#   0x01 = persisted OK
-#   0x02 = persist failed
+# firmware returns one status byte (cmd_wifi.cpp handler_wifi_set_ap_password):
+#   0x00 = applied live and persisted to NVS
+#   0x01 = applied live, NVS write failed (reverts on reboot)
+#   0x02 = failed (not applied)
 # ---------------------------------------------------------------------------
 
 def _wifi_set_ap_password(device):
@@ -213,9 +213,9 @@ def _wifi_set_ap_password(device):
             raise ValueError("Empty payload")
         length = payload[0]
         password = payload[1:1 + length].decode('utf-8', errors='replace')
-        device.wifi_ap_password = password
-        # Return the persist result configured on the device (default: 0x01 = persisted OK)
-        result = getattr(device, 'wifi_ap_password_persist_result', 0x01)
+        result = getattr(device, 'wifi_ap_password_persist_result', 0x00)
+        if result != 0x02:
+            device.wifi_ap_password = password
         return struct.pack('<B', result)
     return handler
 
