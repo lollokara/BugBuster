@@ -569,8 +569,8 @@ class BugBusterHAL:
     def read_current(self, io: int) -> float:
         """Read 4–20 mA loop current in mA (CURRENT_IN)."""
         self._require_mode(io, PortMode.CURRENT_IN, "read_current")
-        adc = self._bb.get_adc_value(self._routing[io].channel)
-        return (adc.value / 12.0) * 1000.0
+        # Firmware convertAdcCode() already returns mA for IIN channels.
+        return self._bb.get_adc_value(self._routing[io].channel).value
 
     def write_current(self, io: int, current_ma: float) -> None:
         """Set 4–20 mA output in mA (CURRENT_OUT)."""

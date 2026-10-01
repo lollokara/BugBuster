@@ -7,8 +7,6 @@ Runs WITHOUT hardware — all client calls are mocked.
 import unittest
 from unittest.mock import MagicMock
 
-import pytest
-
 from bugbuster.hal import (
     BugBusterHAL,
     DEFAULT_ROUTING,
@@ -465,7 +463,6 @@ class TestReadCurrentUnits(unittest.TestCase):
     (tasks.cpp: adcCodeToCurrent(...) * 1000.0f), so the HAL must pass the
     value through unchanged."""
 
-    @pytest.mark.xfail(strict=True, reason="AN-02: HAL divides an mA value by 12 and scales by 1000")
     def test_read_current_is_milliamps(self):
         hal, mock_bb = _make_hal()
         hal._io_mode[3] = PortMode.CURRENT_IN
