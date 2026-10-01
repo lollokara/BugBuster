@@ -2841,16 +2841,20 @@ pub async fn set_pin_drive_strength(pin: u8, drive: u8) -> CmdResult<()> {
 
 /// Configure software current limit for one of the 4 efuse blocks.
 /// efuse index: 0=VADJ1-A, 1=VADJ1-B, 2=VADJ2-A, 3=VADJ2-B.
-/// Stub — logs only until firmware wiring lands.
+/// No firmware implements a software limit yet (only the hardware e-fuse trip
+/// and the IMON readout), so this refuses rather than pretending to arm it.
+/// The value is still kept in the board profile.
 #[tauri::command]
 pub async fn set_efuse_config(efuse: u8, sw_limit_ma: u16, enabled: bool) -> CmdResult<()> {
     log::info!(
-        "[set_efuse_config] efuse={} sw_limit_ma={} enabled={}",
+        "[set_efuse_config] efuse={} sw_limit_ma={} enabled={} (not enforced)",
         efuse,
         sw_limit_ma,
         enabled
     );
-    Ok(())
+    Err("e-fuse software current limit is not enforced by the firmware; \
+         saved to the board profile only"
+        .to_string())
 }
 
 /// Open a native "Save As" dialog for a board profile JSON file.
@@ -4894,7 +4898,6 @@ mod tests {
     /// PWR-08: no firmware enforces an e-fuse software current limit, so the
     /// command must not report success (the board tab showed it as armed).
     #[test]
-    #[ignore = "PWR-08"]
     fn set_efuse_config_reports_unsupported() {
         let r = futures::executor::block_on(set_efuse_config(0, 500, true));
         let err = r.expect_err("SW limit is not enforced by any firmware");

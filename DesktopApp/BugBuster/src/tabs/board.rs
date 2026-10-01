@@ -328,7 +328,8 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     };
     let is_analog_capable = |i: usize| matches!(i, 2 | 5 | 8 | 11);
 
-    // Push efuse config to backend stub.
+    // Push efuse config. The backend refuses (no firmware enforces a SW
+    // limit), so only the enable toggle surfaces that to the user.
     let push_efuse = move |efuse: u8, sw_limit_ma: u16, enabled: bool| {
         #[derive(Serialize)]
         struct Args {
@@ -343,7 +344,9 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         })
         .unwrap();
         spawn_local(async move {
-            let _ = try_invoke("set_efuse_config", args).await;
+            if try_invoke("set_efuse_config", args).await.is_none() && enabled {
+                show_toast("SW current limit is not enforced by the firmware (saved to profile only)", "err");
+            }
         });
     };
 
@@ -619,11 +622,11 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     }
                                 }}</span>
                                 <span class="board-efuse-fault"
-                                    class:board-efuse-fault-ok=move || config.get().efuses[e].sw_limit_enabled
+                                    title="SW current limit is not enforced by the firmware"
                                 ></span>
                             </div>
                             <div class="board-efuse-row">
-                                <label title="Software current limit (100 – 1200 mA)">"SW Limit"</label>
+                                <label title="Software current limit (100 – 1200 mA). Saved to the board profile; not enforced by the firmware.">"SW Limit"</label>
                                 <input type="number" class="board-efuse-input"
                                     min="100" max="1200" step="50"
                                     prop:value=move || config.get().efuses[e].sw_limit_ma.to_string()
