@@ -109,6 +109,14 @@ def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
         )
 
 
+def _i2c_addr7(address: int) -> int:
+    """Validate a 7-bit I2C address. Masking an 8-bit one hits another device."""
+    if not 0 <= address <= 0x7F:
+        hint = f" - looks like an 8-bit address, use 0x{address >> 1:02X}" if address <= 0xFF else ""
+        raise ValueError(f"I2C address 0x{address:X} is not 7-bit{hint}")
+    return address
+
+
 # ---------------------------------------------------------------------------
 # Small dataclass-like result types  (plain named tuples are fine here)
 # ---------------------------------------------------------------------------
@@ -1670,6 +1678,7 @@ class BugBuster:
 
     def ext_i2c_write(self, address: int, data: Union[bytes, bytearray, list[int]], *, timeout_ms: int = 100) -> int:
         """Write bytes to the configured external I2C bus."""
+        address = _i2c_addr7(address)
         raw = bytes(data)
         if len(raw) > 255:
             raise ValueError("I2C write payload must be <=255 bytes")
@@ -1686,6 +1695,7 @@ class BugBuster:
 
     def ext_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> bytes:
         """Read bytes from the configured external I2C bus."""
+        address = _i2c_addr7(address)
         if not (1 <= length <= 255):
             raise ValueError("I2C read length must be 1-255 bytes")
         if not self._usb:
@@ -1709,6 +1719,7 @@ class BugBuster:
         timeout_ms: int = 100,
     ) -> bytes:
         """Write bytes then repeated-start read from the configured external I2C bus."""
+        address = _i2c_addr7(address)
         raw = bytes(write_data)
         if not (1 <= len(raw) <= 255):
             raise ValueError("I2C write-read write payload must be 1-255 bytes")
@@ -1789,6 +1800,7 @@ class BugBuster:
 
     def ext_job_submit_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> int:
         """Queue a deferred I2C read in ESP32 RAM/PSRAM and return its job id."""
+        address = _i2c_addr7(address)
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
         if not (1 <= length <= 255):
@@ -1806,6 +1818,7 @@ class BugBuster:
         timeout_ms: int = 100,
     ) -> int:
         """Queue a deferred I2C write/read transaction and return its job id."""
+        address = _i2c_addr7(address)
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
         raw = bytes(write_data)

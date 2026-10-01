@@ -283,7 +283,6 @@ class TestI2CAddressValidation(unittest.TestCase):
     """BUS-012: an 8-bit address (0xA0) was masked to 0x20 and sent to the
     wrong device. It must be rejected with the 7-bit form in the message."""
 
-    @unittest.expectedFailure  # BUS-012
     def test_rejects_8bit_address(self):
         transport = DummyTransport()
         bb = BugBuster(transport)
