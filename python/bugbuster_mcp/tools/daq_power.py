@@ -48,7 +48,19 @@ _RANGE_NAMES = {"a": 0, "amp": 0, "high": 0, "coarse": 0,
 _RANGE_LABELS = {0: "a (50 mohm shunt, ~50 mA - 3 A)",
                  1: "ma (2 ohm shunt, ~2 - 50 mA)",
                  2: "ua (51 ohm shunt, nA - ~2 mA)"}
-_SAMPLE_RATES_SPS = (10_000, 50_000, 100_000, 250_000, 1_000_000)
+# DAQ-06: the rates the ADC actually runs at, by registry option index.
+_SAMPLE_RATES_SPS = (8_000, 64_000, 128_000, 256_000, 512_000)
+# Nominal values the registry used to advertise, still accepted for old callers.
+_LEGACY_RATES_SPS = (10_000, 50_000, 100_000, 250_000, 1_000_000)
+
+
+def _rate_index(sps: int) -> int:
+    sps = int(sps)
+    if sps in _SAMPLE_RATES_SPS:
+        return _SAMPLE_RATES_SPS.index(sps)
+    if sps in _LEGACY_RATES_SPS:
+        return _LEGACY_RATES_SPS.index(sps)
+    raise ValueError(f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
 
 # Bound a single capture so one bad duration cannot exhaust host memory.
 # Samples are Python floats in lists, so budget ~64 B per sample across the
@@ -186,7 +198,9 @@ def register(mcp) -> None:
         - autorange: True lets the analog loop pick the shunt seamlessly
           (normal). False holds whatever range daq_set_current_range last set,
           which removes range-transition artefacts from a sensitive capture.
-        - sample_rate_sps: 10000, 50000, 100000, 250000 or 1000000.
+        - sample_rate_sps: 8000, 64000, 128000, 256000 or 512000 (the rates
+          the ADC really runs at; the old nominal 10k/50k/100k/250k/1M are
+          accepted and mapped to the same options).
         - reset_accumulators: zero the device energy and charge counters so the
           run starts from 0.
 
@@ -213,12 +227,9 @@ def register(mcp) -> None:
             bb.daq.set(DaqKey.AUTORANGING, bool(autorange))
             applied["autorange"] = bool(autorange)
         if sample_rate_sps is not None:
-            if int(sample_rate_sps) not in _SAMPLE_RATES_SPS:
-                raise ValueError(
-                    f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
-            bb.daq.set(DaqKey.SAMPLE_RATE_IDX,
-                       _SAMPLE_RATES_SPS.index(int(sample_rate_sps)))
-            applied["sample_rate_sps"] = int(sample_rate_sps)
+            idx = _rate_index(sample_rate_sps)
+            bb.daq.set(DaqKey.SAMPLE_RATE_IDX, idx)
+            applied["sample_rate_sps"] = _SAMPLE_RATES_SPS[idx]
         if enable is not None:
             bb.daq.set(DaqKey.SOURCE_ENABLE, bool(enable))
             applied["source_enabled"] = bool(enable)
@@ -271,20 +282,22 @@ def register(mcp) -> None:
         return {"autorange": False, "range": _RANGE_LABELS[idx]}
 
     @mcp.tool()
-    def daq_set_sample_rate(sample_rate_sps: int = 100000,
+    def daq_set_sample_rate(sample_rate_sps: int = 128000,
                             stream_decimation: int = 1,
                             i_understand_aliasing: bool = False) -> dict:
         """
         Set the acquisition rate.
 
         Pick the rate from the shortest feature that matters, not the run
-        length: a 50 us radio ramp needs 250 ksps or better. The device reports
+        length: a 50 us radio ramp needs 256 ksps or better. The device reports
         the ODR it ACTUALLY applied, which may differ from the request - the
         driver clamps filter/decimation combinations the part cannot hit. Read
         the applied rate back from a capture, never assume the setpoint.
 
         Parameters:
-        - sample_rate_sps: 10000, 50000, 100000, 250000 or 1000000. This is the
+        - sample_rate_sps: 8000, 64000, 128000, 256000 or 512000 - the rates
+          the ADC really runs at (old nominal 10k/50k/100k/250k/1M values are
+          accepted and mapped to the same options). This is the
           ADC's own ODR and IS anti-alias filtered - the correct way to trade
           bandwidth for a longer or smaller capture.
         - stream_decimation: keep 1 of every N streamed samples. This is a naive
@@ -299,9 +312,8 @@ def register(mcp) -> None:
 
         bb = session.get_client()
         require_hat(bb)
-        if int(sample_rate_sps) not in _SAMPLE_RATES_SPS:
-            raise ValueError(
-                f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
+        idx = _rate_index(sample_rate_sps)
+        sps = _SAMPLE_RATES_SPS[idx]
         if not (1 <= int(stream_decimation) <= 1000):
             raise ValueError("stream_decimation must be 1..1000")
         if int(stream_decimation) > 1 and not i_understand_aliasing:
@@ -311,13 +323,12 @@ def register(mcp) -> None:
                 "the measurement. Lower sample_rate_sps instead, or pass "
                 "i_understand_aliasing=True if you specifically want raw "
                 "sub-sampling.")
-        bb.daq.set(DaqKey.SAMPLE_RATE_IDX,
-                   _SAMPLE_RATES_SPS.index(int(sample_rate_sps)))
+        bb.daq.set(DaqKey.SAMPLE_RATE_IDX, idx)
         bb.daq.set(DaqKey.USB_DECIMATION, int(stream_decimation))
         return {
-            "sample_rate_sps": int(sample_rate_sps),
+            "sample_rate_sps": sps,
             "stream_decimation": int(stream_decimation),
-            "effective_stream_sps": int(sample_rate_sps) / int(stream_decimation),
+            "effective_stream_sps": sps / int(stream_decimation),
             "note": "The device reports the ODR it actually applied in every "
                     "capture; check capture.sample_rate_sps.",
         }

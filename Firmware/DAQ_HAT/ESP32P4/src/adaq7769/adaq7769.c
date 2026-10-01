@@ -384,9 +384,13 @@ esp_err_t adaq7769_set_output_data_rate(adaq7769_t *dev, float target_sps,
     esp_err_t err = adaq7769_set_mclk_div(dev, ADAQ_MCLK_DIV_2);
     if (err != ESP_OK) return err;
 
-    if (target_sps >= fmod / 12.0f) {
+    // DAQ-06: thresholds sit halfway (in ratio) between neighbouring ODRs, so
+    // asking for an exact achievable rate always lands on it: fMOD/16 needs
+    // target >= fMOD/24 (was fMOD/12, which sent a 512 kSPS request to
+    // Wideband /32 = 256 kSPS), and fMOD/8 needs target >= fMOD/12.
+    if (target_sps >= fmod / 24.0f) {
         // Very high rate -> Sinc5 fixed paths.
-        if (target_sps >= fmod / 6.0f) {
+        if (target_sps >= fmod / 12.0f) {
             err = adaq7769_set_filter(dev, ADAQ_FILTER_SINC5_X8, ADAQ_DEC_X32);   // /8
         } else {
             err = adaq7769_set_filter(dev, ADAQ_FILTER_SINC5_X16, ADAQ_DEC_X32);  // /16

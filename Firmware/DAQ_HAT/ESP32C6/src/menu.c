@@ -574,11 +574,11 @@ static const menu_t m_cal = { "Calibration", cal_items, 3 };
 
 // Radio pick-lists for the acquisition enums (selected row shows a dot).
 static const menu_item_t srate_items[] = {
-    { .label = "10 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 0, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "50 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 1, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "100 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 2, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "250 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 3, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "1 Msps",   .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 4, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "8 ksps",   .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 0, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "64 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 1, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "128 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 2, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "256 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 3, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "512 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 4, .sel_ref = &g_settings.sample_rate_idx },
 };
 static const menu_t m_srate = { "Sample Rate", srate_items, 5 };
 

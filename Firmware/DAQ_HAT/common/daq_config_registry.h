@@ -127,6 +127,8 @@ typedef enum {
 // Enum option indices (kept here so P4 + C6 agree without magic numbers).
 // -----------------------------------------------------------------------------
 enum { DAQ_RANGE_A = 0, DAQ_RANGE_MA = 1, DAQ_RANGE_UA = 2, DAQ_RANGE_COUNT };
+// Option indices; names are historical - the real rates are in
+// DAQ_SAMPLE_RATE_SPS (8k/64k/128k/256k/512k, DAQ-06).
 enum { DAQ_SR_10K = 0, DAQ_SR_50K, DAQ_SR_100K, DAQ_SR_250K, DAQ_SR_1M, DAQ_SR_COUNT };
 enum { DAQ_FFT_64 = 0, DAQ_FFT_128, DAQ_FFT_256, DAQ_FFT_512, DAQ_FFT_1024,
        DAQ_FFT_2048, DAQ_FFT_4096, DAQ_FFT_LEN_COUNT };

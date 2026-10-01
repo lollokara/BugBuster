@@ -14,8 +14,8 @@ static const char *TAG = "settings";
 settings_t g_settings;
 
 const char *const SETTINGS_RANGE[]      = { "A", "mA", "uA" };
-const char *const SETTINGS_SAMPLERATE[] = { "10ksps", "50ksps", "100ksps",
-                                            "250ksps", "1Msps" };
+const char *const SETTINGS_SAMPLERATE[] = { "8ksps", "64ksps", "128ksps",
+                                            "256ksps", "512ksps" };
 
 // On-flash blob: a version tag followed by the settings struct.
 typedef struct {
@@ -27,7 +27,7 @@ static void load_defaults(void)
 {
     g_settings.autoranging     = true;
     g_settings.range_idx       = 1;     // mA
-    g_settings.sample_rate_idx = 2;     // 100ksps
+    g_settings.sample_rate_idx = 2;     // 128ksps
     g_settings.dut_current_ma  = 1000;  // 1.0 A
     g_settings.dut_voltage_mv  = 5000;  // 5.0 V
 
