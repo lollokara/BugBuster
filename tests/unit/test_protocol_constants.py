@@ -88,7 +88,6 @@ def test_quicksetup_block_is_contiguous():
         assert int(member) == value, f"{member.name} drifted from 0x{value:02X}"
 
 
-@pytest.mark.xfail(strict=True, reason="PROTO-8")
 def test_fw_version_matches_firmware():
     """The simulator reports ESP32_FW_VERSION, so version-gated client paths
     were exercised against a firmware two majors old (3.4.0 vs 5.1.0)."""
