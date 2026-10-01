@@ -2,7 +2,7 @@
 // usb_transport.rs - USB CDC transport using BBP binary protocol
 // =============================================================================
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,8 +18,15 @@ use crate::transport::Transport;
 pub const KEEPALIVE_MS: u64 = 25_000;
 
 /// TR-3: true when nothing has been sent for KEEPALIVE_MS.
-fn keepalive_due(_last_tx_ms: u64, _now_ms: u64) -> bool {
-    false
+fn keepalive_due(last_tx_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(last_tx_ms) >= KEEPALIVE_MS
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Pending command awaiting a response, keyed by sequence number.
@@ -36,6 +43,8 @@ pub struct UsbTransport {
     /// `connect` (i.e. construction of a new `UsbTransport`).
     write_failed: Arc<AtomicBool>,
     seq_counter: AtomicU16,
+    /// TR-3: wall-clock ms of the last frame written (keepalive thread reads it).
+    last_tx_ms: Arc<AtomicU64>,
     port_name: String,
     handshake_info: Option<HandshakeInfo>,
     // Serial port writer (shared with reader thread)
@@ -201,10 +210,38 @@ impl UsbTransport {
                 log::info!("BBP reader thread exiting");
             })?;
 
+        // TR-3 keepalive: PING when idle so the firmware never drops back to
+        // the text CLI (60 s). Fire-and-forget with seq 0; the reader drops the
+        // unmatched response.
+        let last_tx_ms = Arc::new(AtomicU64::new(now_ms()));
+        {
+            let ka_connected = connected.clone();
+            let ka_writer = writer.clone();
+            let ka_last = last_tx_ms.clone();
+            std::thread::Builder::new()
+                .name("bbp-keepalive".into())
+                .spawn(move || {
+                    while ka_connected.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_secs(1));
+                        if !keepalive_due(ka_last.load(Ordering::Relaxed), now_ms()) {
+                            continue;
+                        }
+                        let frame = Message::build_frame(0, bbp::CMD_PING, &[]);
+                        if let Ok(mut w) = ka_writer.lock() {
+                            if let Some(ref mut port) = *w {
+                                let _ = port.write_all(&frame).and_then(|_| port.flush());
+                            }
+                        }
+                        ka_last.store(now_ms(), Ordering::Relaxed);
+                    }
+                })?;
+        }
+
         Ok(Self {
             connected,
             write_failed: Arc::new(AtomicBool::new(false)),
             seq_counter: AtomicU16::new(1),
+            last_tx_ms,
             port_name: port_name.to_string(),
             handshake_info: Some(handshake_info),
             writer,
@@ -294,6 +331,7 @@ impl Transport for UsbTransport {
                     self.write_failed.store(true, Ordering::Relaxed);
                     return Err(anyhow!("Serial write failed (write_failed latched): {}", e));
                 }
+                self.last_tx_ms.store(now_ms(), Ordering::Relaxed);
             } else {
                 return Err(anyhow!("Port closed"));
             }
@@ -385,7 +423,6 @@ mod keepalive_tests {
     use super::*;
 
     #[test]
-    #[ignore = "TR-3"]
     fn keepalive_fires_after_idle_and_not_before() {
         assert!(!keepalive_due(1_000, 1_000 + 10_000));
         assert!(keepalive_due(1_000, 1_000 + KEEPALIVE_MS));
