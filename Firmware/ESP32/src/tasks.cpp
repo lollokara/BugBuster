@@ -1877,8 +1877,10 @@ void tasks_reset_hardware(void)
         dio_configure(i, DIO_MODE_DISABLED);
     }
 
-    // 4. Reset HAT if connected
-    if (hat_detected()) {
+    // 4. Reset HAT pins if connected. Not the DAQ HAT: its P4 handles HAT_CMD_RESET
+    //    with esp_restart(), and this runs after every script.
+    const HatState *hs = hat_get_state();
+    if (hat_detected() && !(hs && hs->type == HAT_TYPE_DAQ_POWER)) {
         hat_reset();
     }
 
