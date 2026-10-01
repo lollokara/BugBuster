@@ -50,7 +50,7 @@ const QUEUE_DEPTH: usize = 4;
 const QUEUE_BUF_LEN: usize = 65536;
 /// Longest single wait inside `read_records`. The ingest thread holds the
 /// shared transport mutex for one call, so this bounds control-command latency.
-const DAQ_READ_SLICE_MS: u64 = 1000;
+const DAQ_READ_SLICE_MS: u64 = 50;
 /// Total silence on bulk IN before `read_records` reports a timeout (DESK-7).
 const DAQ_IDLE_TIMEOUT_MS: u64 = 1000;
 
@@ -63,6 +63,8 @@ pub struct DaqUsbConnection {
     /// Timestamp of the last "update firmware" warning emitted for a run of
     /// BadVersion frames, so we don't spam the log every drained byte.
     last_bad_version_warn: Option<Instant>,
+    /// Start of the current run of empty read slices (DESK-24).
+    idle_since: Option<Instant>,
 }
 
 impl Default for DaqUsbConnection {
@@ -80,6 +82,7 @@ impl DaqUsbConnection {
             rx: Vec::new(),
             out_seq: 0,
             last_bad_version_warn: None,
+            idle_since: None,
         }
     }
 
@@ -188,17 +191,24 @@ impl DaqTransport for DaqUsbConnection {
                 .queue
                 .as_mut()
                 .ok_or_else(|| anyhow!("DAQ USB not connected"))?;
-            // DESK-7 FIX: Increased from 400 ms to 1000 ms to reduce spurious timeouts.
-            // 400 ms was too tight and caused false failures that then triggered the
-            // over-eager re-enumeration path (DESK-8). 1000 ms matches the LA timeout
-            // pattern and gives the P4 adequate margin for normal acquisition pauses
-            // (range changes, calibration, etc.).
-            let completion = rt
-                .block_on(tokio::time::timeout(
-                    std::time::Duration::from_millis(DAQ_READ_SLICE_MS),
-                    queue.next_complete(),
-                ))
-                .map_err(|_| anyhow!("DAQ USB read timed out"))?;
+            // DESK-24: wait at most one short slice so the caller can release
+            // the shared transport mutex; only DAQ_IDLE_TIMEOUT_MS of total
+            // silence is an error (DESK-7 kept that at 1000 ms).
+            let completion = match rt.block_on(tokio::time::timeout(
+                std::time::Duration::from_millis(DAQ_READ_SLICE_MS),
+                queue.next_complete(),
+            )) {
+                Ok(c) => c,
+                Err(_) => {
+                    let since = *self.idle_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= Duration::from_millis(DAQ_IDLE_TIMEOUT_MS) {
+                        self.idle_since = None;
+                        return Err(anyhow!("DAQ USB read timed out"));
+                    }
+                    return Ok(Vec::new());
+                }
+            };
+            self.idle_since = None;
             // Resubmit immediately so the queue stays saturated with
             // QUEUE_DEPTH buffers in flight.
             queue.submit(RequestBuffer::new(QUEUE_BUF_LEN));
@@ -725,7 +735,6 @@ mod lock_hold_tests {
     /// `read_records` call, so a 1 s blocking read starved control commands
     /// (range lock, rate, stop) for up to 1 s while the stream was idle.
     #[test]
-    #[ignore = "DESK-24"]
     fn usb_read_slice_bounds_lock_hold() {
         const { assert!(super::DAQ_IDLE_TIMEOUT_MS >= 1000) };
         assert!(super::DAQ_READ_SLICE_MS <= 100, "slice {} ms", super::DAQ_READ_SLICE_MS);

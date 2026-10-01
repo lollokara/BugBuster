@@ -272,7 +272,8 @@ fn ingest_loop(
                     break; // receiver gone
                 }
             }
-            Ok(_) => {}
+            // DESK-24: give a waiting control command a chance at the mutex.
+            Ok(_) => std::thread::yield_now(),
             Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     }
