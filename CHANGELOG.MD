@@ -260,6 +260,7 @@
   | PROTO-8 | Python / simulator | `ESP32_FW_VERSION` 3.4.0 | 5.1.0, bumped by the release notebook |
   | WEB-KEYS | Web UI | DAQ V/I stuck at 0 with a permanent UNCALIBRATED banner; update card never offered updates; IDAC voltages 0; RTD key ignored | firmware keys, tested on captured fixtures |
   | IOS-KEYS | iOS | VOUT range, ADC config, RTD, Quick Setup list and autorun enable all sent or decoded the wrong shape | firmware shapes (source-checked; needs an Xcode build) |
+  | DESK-21 | Desktop Scope tab Record | every `.bbsc` file was a bare header (only ADC-stream events were written; the tab runs the scope stream) | BBSC v2: one record per scope bucket (avg/min/max per channel); CSV export reads v2 and v1 |
 
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6

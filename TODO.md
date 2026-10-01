@@ -109,9 +109,8 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
 
    | Status | Items |
    |---|---|
-   | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2 |
+   | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2, DESK-21 (BBSC v2 scope buckets) |
    | Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
-   | Confirmed, design pending | DESK-21 - Scope tab Record writes a header-only BBSC file: the writer is fed only by `EVT_ADC_DATA` and the Scope tab starts only the scope stream |
    | Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
