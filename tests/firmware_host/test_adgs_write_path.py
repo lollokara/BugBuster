@@ -18,8 +18,6 @@ unchanged, and the write reports failure."""
 import re
 from pathlib import Path
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_defines
 from tests.lib.srcread import REPO_ROOT
 
@@ -174,7 +172,6 @@ def test_bus_timeout_is_not_a_mux_fault(tmp_path):
     assert _run(tmp_path)[2] == "busy ok=0 faulted=0 shadow_kept=1"
 
 
-@pytest.mark.xfail(strict=True, reason="IO-3")
 def test_interlock_guards_the_physical_d_terminal_switch(tmp_path):
     # dev3 = IO9 / logical C / physical D: must be refused. dev2 (IO12) stays
     # refused too until the U17 index is bench-confirmed (conservative).

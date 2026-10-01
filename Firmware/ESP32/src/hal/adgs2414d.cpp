@@ -439,7 +439,7 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     // Interlock: if caller tries to set U17 S3 while U23 is active, block it.
     // Report the refusal - a silent return here answered the host with the
     // stale read-back and looked like a successful write to the wrong device.
-    if (!adgs_interlock_main_ok(states[U17_DEVICE_IDX], U17_S3_MASK,
+    if (!adgs_interlock_main_ok(states, ADGS_MAIN_DEVICES, ADGS_D_NET_DEV_MASK, U17_S3_MASK,
                                 s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
         return false;
@@ -480,7 +480,7 @@ bool adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 #if ADGS_HAS_SELFTEST
     // Interlock: block U17 S3 close if U23 is active. Report it (IO-8): this
     // used to return silently and every caller treated it as success.
-    if (!adgs_interlock_switch_ok(device, sw, closed, U17_DEVICE_IDX, U17_S3_MASK,
+    if (!adgs_interlock_switch_ok(device, sw, closed, ADGS_D_NET_DEV_MASK, U17_S3_MASK,
                                   s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
         return false;
@@ -760,7 +760,8 @@ bool adgs_set_selftest(uint8_t sw_byte)
     }
 
     // Safety interlock: U17 S3 must be open before ANY U23 switch can close.
-    if (!adgs_interlock_selftest_ok(sw_byte, s_mux_state[U17_DEVICE_IDX], U17_S3_MASK)) {
+    if (!adgs_interlock_selftest_ok(sw_byte, s_mux_state, ADGS_MAIN_DEVICES,
+                                    ADGS_D_NET_DEV_MASK, U17_S3_MASK)) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S3 (IO 9 analog) is closed!");
         return false;
     }
@@ -801,7 +802,8 @@ uint8_t adgs_get_selftest(void)
 
 bool adgs_u17_s3_active(void)
 {
-    return (s_mux_state[U17_DEVICE_IDX] & U17_S3_MASK) != 0;
+    // IO-3: any analog S3 that can reach the physical-D net.
+    return adgs_dnet_s3_closed(s_mux_state, ADGS_MAIN_DEVICES, ADGS_D_NET_DEV_MASK, U17_S3_MASK);
 }
 
 bool adgs_selftest_active(void)

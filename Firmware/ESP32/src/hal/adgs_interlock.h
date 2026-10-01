@@ -1,38 +1,51 @@
 #pragma once
 
 // =============================================================================
-// adgs_interlock.h - pure U17-S3 / U23 self-test mutual-exclusion rules.
+// adgs_interlock.h - pure self-test mutual-exclusion rules.
 //
-// U17 switch S3 (IO9 analog path) and any closed U23 self-test switch share the
-// AD74416H channel-D net, so they must never be closed together. Kept free of
-// hardware state so the decisions are host-testable
-// (tests/firmware_host/test_adgs_interlock.py). adgs2414d.cpp is the only
-// writer and calls these before every write.
+// Any closed U23 self-test switch drives the AD74416H PHYSICAL channel D net
+// (U23 S4 = U23_SW_ADC_CH_D). A main-MUX analog switch S3 that connects the
+// physical-D channel to a terminal must never be closed at the same time.
+// `d_net_dev_mask` lists the main MUX devices whose S3 can do that
+// (config.h ADGS_D_NET_DEV_MASK). Kept free of hardware state so the decisions
+// are host-testable (tests/firmware_host/test_adgs_interlock.py);
+// adgs2414d.cpp is the only writer and calls these before every write.
 // =============================================================================
 
 #include <stdbool.h>
 #include <stdint.h>
 
-// Whole main-device image write: refused if it closes U17 S3 while U23 is active.
-static inline bool adgs_interlock_main_ok(uint8_t u17_new_state, uint8_t u17_s3_mask,
-                                          uint8_t u23_state)
+static inline bool adgs_dnet_s3_closed(const uint8_t *main_states, uint8_t n_main,
+                                       uint8_t d_net_dev_mask, uint8_t s3_mask)
 {
-    return !((u17_new_state & u17_s3_mask) && u23_state != 0);
+    for (uint8_t d = 0; d < n_main; d++) {
+        if ((d_net_dev_mask & (1u << d)) && (main_states[d] & s3_mask)) return true;
+    }
+    return false;
 }
 
-// Single switch write: only CLOSING U17 S3 can be refused.
+// Whole main-device image write: refused if it closes a D-net S3 while U23 is active.
+static inline bool adgs_interlock_main_ok(const uint8_t *new_states, uint8_t n_main,
+                                          uint8_t d_net_dev_mask, uint8_t s3_mask,
+                                          uint8_t u23_state)
+{
+    return u23_state == 0 || !adgs_dnet_s3_closed(new_states, n_main, d_net_dev_mask, s3_mask);
+}
+
+// Single switch write: only CLOSING a D-net S3 can be refused.
 static inline bool adgs_interlock_switch_ok(uint8_t device, uint8_t sw, bool closed,
-                                            uint8_t u17_idx, uint8_t u17_s3_mask,
+                                            uint8_t d_net_dev_mask, uint8_t s3_mask,
                                             uint8_t u23_state)
 {
-    if (!closed || device != u17_idx) return true;
-    if ((uint8_t)(1u << sw) != u17_s3_mask) return true;
+    if (!closed || !(d_net_dev_mask & (1u << device))) return true;
+    if ((uint8_t)(1u << sw) != s3_mask) return true;
     return u23_state == 0;
 }
 
-// U23 self-test write: closing any U23 switch is refused while U17 S3 is closed.
-static inline bool adgs_interlock_selftest_ok(uint8_t sw_byte, uint8_t u17_state,
-                                              uint8_t u17_s3_mask)
+// U23 self-test write: closing any U23 switch is refused while a D-net S3 is closed.
+static inline bool adgs_interlock_selftest_ok(uint8_t sw_byte, const uint8_t *main_states,
+                                              uint8_t n_main, uint8_t d_net_dev_mask,
+                                              uint8_t s3_mask)
 {
-    return sw_byte == 0 || (u17_state & u17_s3_mask) == 0;
+    return sw_byte == 0 || !adgs_dnet_s3_closed(main_states, n_main, d_net_dev_mask, s3_mask);
 }

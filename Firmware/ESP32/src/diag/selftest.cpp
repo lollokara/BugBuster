@@ -950,7 +950,9 @@ bool selftest_start_auto_calibrate(uint8_t idac_channel)
         // opening the switch. Firmware maps it to the swapped physical
         // AD74416H register internally.
         tasks_apply_channel_function(SELFTEST_LOGICAL_CH, CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(U17_DEVICE_IDX, 2, false);
+        for (uint8_t dev = 0; dev < ADGS_MAIN_DEVICES; dev++) {   // IO-3: every D-net S3
+            if (ADGS_D_NET_DEV_MASK & (1u << dev)) adgs_set_switch_safe(dev, 2, false);
+        }
         
         if (adgs_u17_s3_active()) {
             ESP_LOGE(TAG, "Cannot calibrate: U17 S3 is closed and failed to open");

@@ -88,10 +88,16 @@
 #define IMON_R_IOCP_OHM     11000.0f  // External IOCP resistor (same for all 4 e-fuses)
 #define IMON_MV_PER_A       (IMON_GAIN_UA_PER_A * IMON_R_IOCP_OHM / 1000.0f)  // = 550 mV/A
 
-// Safety interlock: U17 S3 (device 2, bit 2) vs U23 any switch.
-// Self-test uses Physical Channel D (index 3), owned by public C / IO9 / U17.
-#define U17_S3_MASK         0x04   // U17 switch S3 = bit 2
-#define U17_DEVICE_IDX      2      // U17 = device index 2 (daisy chain: U10,U11,U17,U16,U23)
+// Safety interlock: a main-MUX analog switch S3 that connects AD74416H PHYSICAL
+// channel D to a terminal vs any U23 self-test switch (U23 S4 drives the same
+// physical-D net). Physical D is LOGICAL C, routed through MUX device 3 S3
+// (IO9) - tasks_apply_channel_function() and bus_planner.cpp IO_ROUTES.
+// IO-3: the interlock used to guard only device 2 ("U17", IO12/logical D), so
+// IO9's S3 could close onto an active self-test. Both devices are guarded
+// until the chain position of U17 is bench-confirmed (PCB files are binary).
+#define U17_S3_MASK         0x04   // analog switch S3 = bit 2
+#define U17_DEVICE_IDX      2      // legacy label only; use ADGS_D_NET_DEV_MASK
+#define ADGS_D_NET_DEV_MASK ((1u << 3) | (1u << 2))   // devices whose S3 can reach physical D
 
 // -----------------------------------------------------------------------------
 // SPI Configuration
