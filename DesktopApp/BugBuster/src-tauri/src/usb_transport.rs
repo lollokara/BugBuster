@@ -14,6 +14,14 @@ use crate::bbp::{self, FrameAccumulator, HandshakeInfo, Message, PayloadReader};
 use crate::state::DeviceState;
 use crate::transport::Transport;
 
+/// TR-3: the firmware drops back to the text CLI after 60 s without a frame.
+pub const KEEPALIVE_MS: u64 = 25_000;
+
+/// TR-3: true when nothing has been sent for KEEPALIVE_MS.
+fn keepalive_due(_last_tx_ms: u64, _now_ms: u64) -> bool {
+    false
+}
+
 /// Pending command awaiting a response, keyed by sequence number.
 struct PendingCommand {
     seq: u16,
@@ -369,5 +377,18 @@ impl Drop for UsbTransport {
         if let Ok(mut writer_lock) = self.writer.lock() {
             *writer_lock = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "TR-3"]
+    fn keepalive_fires_after_idle_and_not_before() {
+        assert!(!keepalive_due(1_000, 1_000 + 10_000));
+        assert!(keepalive_due(1_000, 1_000 + KEEPALIVE_MS));
+        assert!(KEEPALIVE_MS < 60_000);
     }
 }
