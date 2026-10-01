@@ -1121,7 +1121,7 @@ typedef struct {
  * @param rate_hz    Sample rate in Hz
  * @param depth      Total samples to capture
  */
-bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth);
+bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth, bool rle);
 
 /**
  * @brief Set LA trigger condition.

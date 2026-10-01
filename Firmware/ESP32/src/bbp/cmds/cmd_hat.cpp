@@ -587,8 +587,10 @@ static int handler_hat_la_config(const uint8_t *payload, size_t len,
     uint8_t  channels = bbp_get_u8(payload, &rpos);
     uint32_t rate_hz  = bbp_get_u32(payload, &rpos);
     uint32_t depth    = bbp_get_u32(payload, &rpos);
+    // Optional 10th byte (LA-03): RLE enable. 9-byte hosts mean RLE off.
+    bool     rle      = (len >= 10) ? (bbp_get_u8(payload, &rpos) != 0) : false;
 
-    if (!hat_la_configure(channels, rate_hz, depth)) {
+    if (!hat_la_configure(channels, rate_hz, depth, rle)) {
         uint8_t hat_err = hat_get_last_error();
         return (hat_err == HAT_ERR_BUSY) ? -(int)CMD_ERR_BUSY : hat_fail_code();
     }
@@ -846,6 +848,7 @@ static const ArgSpec s_hat_la_config_args[] = {
     { "channels", ARG_U8,  true, 0, 255 },
     { "rate_hz",  ARG_U32, true, 0, 0 },
     { "depth",    ARG_U32, true, 0, 0 },
+    { "rle",      ARG_U8,  false, 0, 1 },
 };
 static const ArgSpec s_hat_la_config_rsp[] = {
     { "channels", ARG_U8,  true, 0, 0 },
@@ -939,7 +942,7 @@ static const CmdDescriptor s_hat_cmds[] = {
     { BBP_CMD_HAT_DETECT_TARGET,         "hat_detect_target",
       NULL,                    0, s_hat_detect_target_rsp, 2, handler_hat_detect_target,       CMD_FLAG_READS_STATE },
     { BBP_CMD_HAT_LA_CONFIG,             "hat_la_config",
-      s_hat_la_config_args,    3, s_hat_la_config_rsp,   3, handler_hat_la_config,             0                   },
+      s_hat_la_config_args,    4, s_hat_la_config_rsp,   3, handler_hat_la_config,             0                   },
     { BBP_CMD_HAT_LA_ARM,                "hat_la_arm",
       NULL,                    0, NULL,                   0, handler_hat_la_arm,                0                   },
     { BBP_CMD_HAT_LA_FORCE,              "hat_la_force",

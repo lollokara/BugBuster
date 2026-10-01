@@ -7,8 +7,6 @@ so RLE could never be enabled. B: the 10th byte is parsed (optional, old
 import re
 from pathlib import Path
 
-import pytest
-
 SRC = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src"
 
 
@@ -24,14 +22,12 @@ def _body(rel: str, sig: str) -> str:
     raise AssertionError(sig)
 
 
-@pytest.mark.xfail(strict=True, reason="LA-03")
 def test_forwarded_frame_carries_rle_byte():
     body = _body("hat/hat.cpp", "bool hat_la_configure(")
     assert re.search(r"uint8_t\s+payload\[10\]", body), "payload buffer is not 10 bytes"
     assert re.search(r"HAT_CMD_LA_CONFIG\s*,\s*payload\s*,\s*10\b", body), "frame length is not 10"
 
 
-@pytest.mark.xfail(strict=True, reason="LA-03")
 def test_bbp_handler_parses_and_passes_rle():
     body = _body("bbp/cmds/cmd_hat.cpp", "static int handler_hat_la_config(")
     assert "len >= 10" in body

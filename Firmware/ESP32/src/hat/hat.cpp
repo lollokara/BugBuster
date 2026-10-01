@@ -2512,7 +2512,7 @@ bool hat_set_swd_clock(uint16_t khz)
 // Logic Analyzer
 // =============================================================================
 
-bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
+bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth, bool rle)
 {
     // Task 1: All LA functions require LA HAT (HAT_TYPE_SWD_GPIO)
     if (!hat_require_type(HAT_TYPE_SWD_GPIO)) return false;
@@ -2521,14 +2521,17 @@ bool hat_la_configure(uint8_t channels, uint32_t rate_hz, uint32_t depth)
     // Best effort stop before reconfiguring
     hat_la_stop();
 
-    uint8_t payload[9];
+    // LA-03: 10 bytes - the RP2040 reads payload[9] as the RLE enable
+    // (bb_main.c); a 9-byte frame meant RLE could never be turned on.
+    uint8_t payload[10];
     payload[0] = channels;
     memcpy(&payload[1], &rate_hz, 4);
     memcpy(&payload[5], &depth, 4);
+    payload[9] = rle ? 1 : 0;
 
     uint8_t rsp[4] = {};
     uint8_t rsp_len = 0;
-    return hat_command(HAT_CMD_LA_CONFIG, payload, 9, rsp, &rsp_len, 500, sizeof(rsp)) == HAT_RSP_OK;
+    return hat_command(HAT_CMD_LA_CONFIG, payload, 10, rsp, &rsp_len, 500, sizeof(rsp)) == HAT_RSP_OK;
 }
 
 bool hat_la_set_trigger(uint8_t type, uint8_t channel)
