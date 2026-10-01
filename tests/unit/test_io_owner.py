@@ -458,3 +458,38 @@ def test_g8_evt_io_preempted_emitted_on_lease_expiry():
         f"displaced_kind must be USB (1), got {payload[0]}"
     )
     assert payload[1] == 9, f"Event slot must be 9, got {payload[1]}"
+
+
+# ---------------------------------------------------------------------------
+# MCP-20: io_claim_lease - a held lease that survives other calls
+# ---------------------------------------------------------------------------
+
+def test_io_claim_lease_survives_auto_claimed_calls():
+    """A mutating call auto-claims and releases its slot unless the session
+    already holds it. A lease taken with io_claim_lease must therefore stay
+    held after such a call (the MCP io_claim tool relies on this)."""
+    client, device = _make_client()
+    client.io_claim_lease([12], lease_ms=30_000, purpose="mcp")
+    client.set_dac_voltage(0, 1.0)
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.USB
+
+
+def test_io_release_ends_a_lease():
+    client, device = _make_client()
+    client.io_claim_lease([12], lease_ms=30_000, purpose="mcp")
+    client.io_release([12])
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.NONE
+    client.set_dac_voltage(0, 1.0)  # auto-claim path again
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.NONE
+
+
+def test_io_claim_lease_refused_slot_raises():
+    client1, device = _make_client()
+    client1._io_claim_raw([12], 0, "foreign_owner")
+    client2 = _make_second_client(device)
+    try:
+        client2.io_claim_lease([12], lease_ms=5_000)
+    except RuntimeError as exc:
+        assert "12" in str(exc)
+    else:
+        raise AssertionError("claim on a slot held by another session must raise")

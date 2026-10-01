@@ -25,9 +25,7 @@ RECEIVERS = {"bb": BugBuster, "client": BugBuster, "hal": BugBusterHAL}
 
 # (tool file, method) -> audit ID. Each entry is a known A/B: it must fail
 # until its fix lands, then the entry is deleted.
-KNOWN_MISMATCHES = {
-    ("io_owner.py", "io_claim"): "MCP-20",
-}
+KNOWN_MISMATCHES: dict[tuple[str, str], str] = {}
 
 
 def _receiver_class(node: ast.expr):

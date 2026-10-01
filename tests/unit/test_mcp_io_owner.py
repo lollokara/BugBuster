@@ -9,16 +9,11 @@ MagicMock accepted the io_claim call the real client rejects (MCP-20).
 import unittest
 from unittest.mock import patch
 
-import pytest
-
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.io_owner import (
     register, _active_leases, _leases_lock, _verify_lease_covers,
 )
 from tests.unit._mock_client import make_client_mock, make_hal_mock
-
-_MCP20 = pytest.mark.xfail(strict=True, reason="MCP-20: io_claim tool calls the client context manager positionally")
-
 
 class DummyMCP:
     def __init__(self):
@@ -54,7 +49,6 @@ class TestIoClaim(unittest.TestCase):
         register(self.mcp)
         _clear_leases()
 
-    @_MCP20
     def test_io_claim_returns_handle(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -63,7 +57,6 @@ class TestIoClaim(unittest.TestCase):
         self.assertEqual(len(handle), 32)  # uuid4 hex
         fake_bb.io_claim_lease.assert_called_once_with([0, 1], lease_ms=10000, purpose="")
 
-    @_MCP20
     def test_io_claim_stores_slots_in_lease_dict(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -88,7 +81,6 @@ class TestIoClaim(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.mcp.tools["io_claim"]([-1])
 
-    @_MCP20
     def test_io_claim_with_purpose(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -103,7 +95,6 @@ class TestIoRelease(unittest.TestCase):
         register(self.mcp)
         _clear_leases()
 
-    @_MCP20
     def test_io_release_removes_handle(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -120,7 +111,6 @@ class TestIoRelease(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mcp.tools["io_release"]("nonexistent_handle_xyz")
 
-    @_MCP20
     def test_io_release_double_release_raises(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -201,7 +191,6 @@ class TestIoForceRelease(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mcp.tools["io_force_release"](slot=16)
 
-    @_MCP20
     def test_force_release_minus_one_clears_all_leases(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -211,7 +200,6 @@ class TestIoForceRelease(unittest.TestCase):
         with _leases_lock:
             self.assertNotIn(handle, _active_leases)
 
-    @_MCP20
     def test_force_release_slot_evicts_matching_lease(self):
         fake_bb = _fake_bb()
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):

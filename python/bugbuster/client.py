@@ -4375,14 +4375,15 @@ class BugBuster:
             h = (h * 0x01000193) & 0xFFFFFFFF
         return h
 
-    def _io_claim_raw(self, slots: list[int], lease_ms: int, purpose: str) -> None:
-        """Send IO_CLAIM command for the given slot indices."""
+    def _io_claim_raw(self, slots: list[int], lease_ms: int, purpose: str) -> list[int]:
+        """Send IO_CLAIM; return the per-slot status bytes (0 = acquired)."""
         if not self._usb:
-            return  # HTTP transport: ownership enforced server-side only
+            return [0] * len(slots)  # HTTP transport: ownership enforced server-side only
         n = len(slots)
         purpose_tag = self._fnv1a32(purpose)
         payload = struct.pack('<B', n) + bytes(slots) + struct.pack('<II', lease_ms, purpose_tag)
-        self._usb_cmd(CmdId.IO_CLAIM, payload)
+        resp = self._usb_cmd(CmdId.IO_CLAIM, payload)
+        return list(resp[1:1 + resp[0]]) if resp else []
 
     def _io_release_raw(self, slots: list[int]) -> None:
         """Send IO_RELEASE command for the given slot indices (or all if empty)."""
@@ -4436,6 +4437,23 @@ class BugBuster:
         else:
             return fn(*args, **kwargs)
 
+    def io_claim_lease(self, slots: list[int], *, lease_ms: int = 0, purpose: str = "") -> None:
+        """
+        Claim IO slots and keep them until :meth:`io_release` (or the lease
+        expires). Unlike the :meth:`io_claim` context manager this does not
+        release on return, so a long-lived holder (the MCP server) can span
+        several calls.
+
+        Raises ``RuntimeError`` naming the refused slots if the device rejects
+        any of them (held by another owner); nothing is kept in that case.
+        """
+        status = self._io_claim_raw(slots, lease_ms, purpose)
+        refused = [s for s, st in zip(slots, status, strict=False) if st != 0]
+        if refused:
+            self._io_release_raw([s for s in slots if s not in refused])
+            raise RuntimeError(f"IO slots {refused} are held by another owner")
+        self._io_claimed_slots = (self._io_claimed_slots or set()) | set(slots)
+
     def io_release(self, slots: list[int] = None) -> None:
         """
         Explicitly release IO slot ownership.
@@ -4444,6 +4462,10 @@ class BugBuster:
         an empty list to release all slots currently owned by this session.
         """
         self._io_release_raw(slots if slots else [])
+        if not slots:
+            self._io_claimed_slots = None
+        elif self._io_claimed_slots is not None:
+            self._io_claimed_slots = (self._io_claimed_slots - set(slots)) or None
 
     def io_owner_status(self) -> list[dict]:
         """
