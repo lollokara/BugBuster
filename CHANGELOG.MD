@@ -327,6 +327,24 @@
   | C6-23 | the task watchdog only logged after 5 s | panics (reboots) after 10 s; pinned by a required-key table in `check_sdkconfig_effective.py` |
   | C6-25 | an interrupted C6 staging run blocked every later C6 update until NVS was erased | a session orphaned by a P4 reboot or idle 120 s is replaced (host-tested; a board kill test was inconclusive) |
 
+- **Latency (2026-10 audit, M5, first part).** Measured on the board (COM6 /
+  192.168.3.51) before and after; S3 flashed over OTA.
+
+  | ID | Was | Now |
+  |---|---|---|
+  | USB-RX-LAT (found on the board) | the Python USB reader asked pyserial for 512 bytes, so every short reply waited out the 100 ms port timeout | reads what is waiting: PING RTT 107 ms -> 1.0 ms (every Python/MCP call) |
+  | TR-3 | after 60 s idle the firmware fell back to the text CLI; the next command timed out (10 s) | Python and desktop transports PING after 25 s idle: 5 ms after 70 s idle |
+  | WEB-23 | an open scope tab (SSE) blocked the whole web server: `/api/status` 0/10 answered | SSE runs on its own task: 10/10, p95 101 ms |
+  | AN-06 | the waveform loop spun on `taskYIELD()`: PING p95 4.1 ms and one 4.6 s stall during a 100 Hz wave | esp_timer-paced: p95 1.2 ms, max 3.7 ms |
+  | TR-6 / MCP-31 | `configure_io` on an analog IO: 11 frames, 761 ms | one lease, one MUX write: 5 frames, 405 ms |
+  | IO-13 | every MUX set-all paid the 100 ms break-before-make | only when a write both opens and closes switches; same-state write ~1 ms end to end |
+  | TR-7 | a timed-out I2C/SPI write, script or power command was resent | only idempotent reads are retried |
+  | TR-9 | every HAT tool sent its own `HAT_GET_STATUS` | cached per connection (5 checks: 1 frame) |
+  | PWR-16 | every DS4424 setpoint write committed NVS | written once, 1 s after the last change |
+  | PWR-10 | "cached" supply reads ran a ~0.6 s measurement on the BBP/HTTP task | cache only (the self-test worker is off on this board, so not timed) |
+  | AN-07 / AN-12 | scope events sent under `g_stateMutex`; ADC config held the SPI bus across a 20 ms settle | both released earlier (functional smoke only; no measurable change here) |
+  | TR-1 | suspected truncation of >512 B responses | already fixed by BBP-TXQ (M2): 100/100 1018 B responses intact; device test added |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the

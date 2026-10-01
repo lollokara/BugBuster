@@ -138,6 +138,15 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Fixed, verified on hardware | DAQ-05 + P4-8 (missed_conversions = expected - received within 0.12 % across 8k-512k), DAQ-06 (8k/64k/128k within 0.5 %; 256k/512k ODR correct, capture loses 19 %/54 % and now reports it), DAQ-08 + P4-9 (full-span V_DUT write 56-100 ms, A timed out at ~740 ms), DAQ-04 (5 STOP/START cycles, no index gaps; marker race itself is T1), C6-20 |
    | Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
    | Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
+
+   **Plan M5 status, part 1 (2026-10-02, branch `audit/2026-10-m5-latency`, S3 flashed by OTA).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, measured on hardware | USB-RX-LAT (new; PING 107 -> 1.0 ms), TR-3 (70 s idle: timeout -> 5 ms), WEB-23 (status with SSE open 0/10 -> 10/10), AN-06 (PING p95 during wave 4.1 -> 1.2 ms), TR-6 (11 -> 5 frames, 761 -> 405 ms; time target -60 % missed at -47 %), IO-13 |
+   | Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12 |
+   | Refuted / closed | TR-1 (fixed by BBP-TXQ in M2; device test added) |
+   | Not started yet | AN-10 / AN-11 (ADC_RDY acquisition, L), DESK-22..28, WEB-28, IOS-23 |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
