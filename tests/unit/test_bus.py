@@ -279,5 +279,31 @@ class TestI2CBusExecution(unittest.TestCase):
             BugBusterBusManager(MagicMock()).i2c_scan(sda=2)
 
 
+class TestI2CAddressValidation(unittest.TestCase):
+    """BUS-012: an 8-bit address (0xA0) was masked to 0x20 and sent to the
+    wrong device. It must be rejected with the 7-bit form in the message."""
+
+    @unittest.expectedFailure  # BUS-012
+    def test_rejects_8bit_address(self):
+        transport = DummyTransport()
+        bb = BugBuster(transport)
+        calls = (
+            lambda: bb.ext_i2c_write(0xA0, [0]),
+            lambda: bb.ext_i2c_read(0xA0, 1),
+            lambda: bb.ext_i2c_write_read(0xA0, [0], 1),
+            lambda: bb.ext_job_submit_i2c_read(0xA0, 1),
+            lambda: bb.ext_job_submit_i2c_write_read(0xA0, [0], 1),
+        )
+        for call in calls:
+            with self.assertRaisesRegex(ValueError, "0x50"):
+                call()
+        self.assertEqual(transport.posts, [])
+
+    def test_7bit_address_still_accepted(self):
+        """Control."""
+        bb = BugBuster(DummyTransport())
+        self.assertEqual(bb.ext_i2c_read(0x7F, 3), bytes([1, 2, 3]))
+
+
 if __name__ == "__main__":
     unittest.main()
