@@ -11,3 +11,10 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESP_HOSTED_CP_WIFI=y
 CONFIG_ESP_HOSTED_CP_BT=n
 CONFIG_ESP_HOSTED_COPROCESSOR_APP_MAIN=n
+
+# C6-23: a hung main loop must REBOOT (main.c registers app_main with the task
+# watchdog). The IDF default only logs a warning after 5 s. Pinned by the
+# REQUIRED table in Firmware/tools/check_sdkconfig_effective.py.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
