@@ -8,7 +8,6 @@ rewritten. Host-compiled debouncer + a static check on the driver.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 from tests.lib.srcread import REPO_ROOT
