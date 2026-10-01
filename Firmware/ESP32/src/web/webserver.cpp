@@ -217,6 +217,26 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
     return ESP_OK;
 }
 
+// Consecutive recv timeouts (httpd recv_wait_timeout, 5 s default) tolerated
+// before an upload is abandoned, so a stalled client cannot hold the httpd task.
+#define UPLOAD_RECV_MAX_TIMEOUTS 5
+
+static bool recv_timeout_retry(int *timeouts)
+{
+    return ++(*timeouts) <= UPLOAD_RECV_MAX_TIMEOUTS;
+}
+
+static int upload_recv(httpd_req_t *req, char *buf, size_t len)
+{
+    int timeouts = 0;
+    for (;;) {
+        int n = httpd_req_recv(req, buf, len);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && recv_timeout_retry(&timeouts)) continue;
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) ESP_LOGW(TAG, "upload stalled, aborting %s", req->uri);
+        return n;
+    }
+}
+
 static esp_err_t send_raw_json(httpd_req_t *req, const char *body, int code = 200)
 {
     char origin_buf[96];
@@ -3830,9 +3850,8 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
 
     while (remaining > 0) {
         int to_read = (remaining > 4096) ? 4096 : remaining;
-        int received = httpd_req_recv(req, buf, to_read);
+        int received = upload_recv(req, buf, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "OTA receive error at %d/%d bytes", total_written, req->content_len);
             failed = true;
             break;
@@ -3942,9 +3961,8 @@ static esp_err_t handle_rp2040_upload(httpd_req_t *req)
 
     while (remaining > 0) {
         int to_read = (remaining > 4096) ? 4096 : remaining;
-        int received = httpd_req_recv(req, buf, to_read);
+        int received = upload_recv(req, buf, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "RP2040 upload receive error at %d/%d bytes", total_written, req->content_len);
             failed = true;
             break;
@@ -4002,8 +4020,7 @@ static int daq_upload_read(void *vctx, uint8_t *buf, size_t max)
     if (c->remaining <= 0) return 0;
     size_t want = ((size_t)c->remaining < max) ? (size_t)c->remaining : max;
     while (true) {
-        int n = httpd_req_recv(c->req, (char *)buf, want);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;   // same retry as the other uploads
+        int n = upload_recv(c->req, (char *)buf, want);
         if (n <= 0) return -1;
         c->remaining -= n;
         return n;
@@ -4333,9 +4350,8 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
             to_read = remaining;
         }
 
-        int received = httpd_req_recv(req, buf + buf_fill, to_read);
+        int received = upload_recv(req, buf + buf_fill, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "SPIFFS recv error at offset %d", offset);
             failed = true;
             break;
@@ -4597,11 +4613,8 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, src + received, total - received);
+        int ret = upload_recv(req, src + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                continue;
-            }
             free(src);
             return send_error(req, 500, "Receive error");
         }
@@ -4640,11 +4653,8 @@ static esp_err_t handle_post_scripts_lint(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, src + received, total - received);
+        int ret = upload_recv(req, src + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                continue;
-            }
             free(src);
             return send_error(req, 500, "Receive error");
         }
@@ -4788,9 +4798,8 @@ static esp_err_t handle_post_scripts_files(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, (char *)buf + received, total - received);
+        int ret = upload_recv(req, (char *)buf + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
             free(buf);
             return send_error(req, 500, "Receive error");
         }
