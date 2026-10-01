@@ -1190,11 +1190,17 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
                 // Restart ADC conversion (respects scope mode if active).
                 tasks_rebuild_adc_conv_ctrl();
-                delay_ms(20);
-                s_device->clearAllAlerts();
-
-                // Release bus — ADC poll task resumes
+                // AN-12: release the bus for the first-conversion settle so
+                // the ADC poll / DAC / MUX are not stalled for 20 ms; take it
+                // back only for the alert clear.
                 xSemaphoreGiveRecursive(g_spi_bus_mutex);
+                delay_ms(20);
+                if (xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+                    s_device->clearAllAlerts();
+                    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+                } else {
+                    ESP_LOGW("cmd", "ADC config: bus busy, alert clear skipped");
+                }
                 break;
             }
 

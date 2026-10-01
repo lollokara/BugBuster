@@ -9,7 +9,6 @@ and the lock is taken again only for clearAllAlerts().
 
 import re
 
-import pytest
 
 from tests.lib.srcread import REPO_ROOT
 
@@ -22,7 +21,6 @@ def _case(label: str) -> str:
     return re.sub(r"//[^\n]*", "", SRC[start:end])
 
 
-@pytest.mark.xfail(strict=True, reason="AN-12")
 def test_adc_config_does_not_hold_the_spi_bus_across_the_20ms_settle():
     body = _case("CMD_ADC_CONFIG")
     give = body.index("xSemaphoreGiveRecursive(g_spi_bus_mutex)")
