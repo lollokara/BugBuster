@@ -207,6 +207,12 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out);
  */
 bool daq_board_pd_ok(const daq_board_t *b, uint16_t min_mv, uint16_t min_ma);
 
+/** DAQ-08: post a DUT-supply setting to the ctrl task (the ramp takes up to
+ *  ~2.5 s, far past the S3 link's 200 ms reply budget). False if not queued. */
+bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival);
+/** DAQ-08: apply one DUT-supply setting now (ctrl task or boot). */
+void daq_settings_apply_smu(daq_board_t *b, uint16_t key, int32_t ival);
+
 /**
  * @brief Start the USB-HS measurement stream: install the TinyUSB vendor
  *        backend, register the control-command handler, and enable streaming.

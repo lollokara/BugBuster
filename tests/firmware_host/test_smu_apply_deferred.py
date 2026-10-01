@@ -11,7 +11,6 @@ ramp continues there. T3: full-span V_DUT write replies in < 300 ms.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import REPO_ROOT
@@ -24,7 +23,6 @@ def _code(t: str) -> str:
     return re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", t, flags=re.S))
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-08")
 def test_on_apply_defers_smu_keys_to_the_ctrl_task():
     body = _code(extract_function(GLUE, r"static void on_apply\("))
     assert "daq_board_defer_smu" in body
@@ -32,7 +30,6 @@ def test_on_apply_defers_smu_keys_to_the_ctrl_task():
         assert call not in body, f"{call} still runs inline in on_apply"
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-08")
 def test_ctrl_task_executes_deferred_smu_apply():
     body = _code(extract_function(BOARD, r"static void daq_ctrl_task\("))
     assert "CTRL_MSG_SMU_APPLY" in body and "daq_settings_apply_smu" in body

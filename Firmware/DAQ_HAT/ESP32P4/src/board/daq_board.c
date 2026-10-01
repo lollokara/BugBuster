@@ -394,7 +394,13 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // TinyUSB task overflows its stack (Stack protection fault, MCAUSE=0x1b).
 // ---------------------------------------------------------------------------
 typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
-               CTRL_MSG_RANGE_CAL_START, CTRL_MSG_SET_ACQ_CONFIG } ctrl_msg_type_t;
+               CTRL_MSG_RANGE_CAL_START, CTRL_MSG_SET_ACQ_CONFIG,
+               CTRL_MSG_SMU_APPLY } ctrl_msg_type_t;
+
+typedef struct {
+    uint16_t key;      // DAQ_K_SOURCE_ENABLE / _DUT_VOLTAGE_MV / _DUT_ILIMIT_MA
+    int32_t  ival;
+} ctrl_smu_apply_t;
 
 // HATP_CMD_DAQ_SET_ACQ_CONFIG payload, deferred here for the same reason as
 // SET_RATE: adaq7769_set_filter()/_set_sinc3() are blocking SPI writes that
@@ -415,8 +421,20 @@ typedef struct {
         usb_cmd_source_t    source;
         usb_cmd_range_cal_t range_cal;
         ctrl_acq_config_t   acq_config;
+        ctrl_smu_apply_t    smu;
     };
 } ctrl_msg_t;
+
+bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival)
+{
+    if (!b->ctrl_queue) return false;
+    ctrl_msg_t msg = { .type = CTRL_MSG_SMU_APPLY };
+    msg.smu.key = key;
+    msg.smu.ival = ival;
+    // Short wait only: a full queue falls back to the inline apply rather
+    // than dropping a supply change.
+    return xQueueSend(b->ctrl_queue, &msg, pdMS_TO_TICKS(20)) == pdTRUE;
+}
 
 static void daq_ctrl_task(void *arg)
 {
@@ -476,6 +494,10 @@ static void daq_ctrl_task(void *arg)
                 daq_board_set_source(b, c->vdut, c->ilimit, c->enable != 0);
                 break;
             }
+
+            case CTRL_MSG_SMU_APPLY:   // DAQ-08: deferred from the settings apply
+                daq_settings_apply_smu(b, msg.smu.key, msg.smu.ival);
+                break;
 
             case CTRL_MSG_RANGE_CAL_START: {
                 const usb_cmd_range_cal_t *rc = &msg.range_cal;
