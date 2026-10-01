@@ -245,7 +245,7 @@ void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len)
 bool bbp_dac_read_active(uint8_t ch, uint16_t *code_out)
 {
     if (!s_dev || ch >= 4) return false;
-    *code_out = s_dev->getDacActive(ch);
+    *code_out = s_dev->getDacActive(tasks_logical_to_physical(ch));
     return true;
 }
 

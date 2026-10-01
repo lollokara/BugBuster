@@ -35,7 +35,6 @@ SITES = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="AN-03")
 @pytest.mark.parametrize("rel,anchor,bad", SITES, ids=[f"{s[0]}:{s[1][:30]}" for s in SITES])
 def test_per_channel_access_translates_logical_to_physical(rel, anchor, bad):
     body = _body(SRC / rel, anchor)

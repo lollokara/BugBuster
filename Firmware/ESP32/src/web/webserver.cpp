@@ -960,7 +960,7 @@ static esp_err_t handle_get_dac_readback(httpd_req_t *req)
     if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
 
     uint16_t activeCode = 0;
-    spiDriver.readRegister(AD74416H_REG_DAC_ACTIVE(ch), &activeCode);
+    spiDriver.readRegister(AD74416H_REG_DAC_ACTIVE(tasks_logical_to_physical((uint8_t)ch)), &activeCode);
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "channel", ch);

@@ -1488,7 +1488,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 uint16_t rtdCfgVal = RTD_CONFIG_RTD_MODE_SEL_MASK;  // 2-wire, RTD_ADC_REF = 0
                 if (cmd.rtdCfg.current != 0)
                     rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 1 mA
-                spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
+                spiDriver.writeRegister(
+                    AD74416H_REG_RTD_CONFIG(tasks_logical_to_physical(cmd.channel)), rtdCfgVal);
 
                 uint16_t excUa = (cmd.rtdCfg.current != 0) ? 1000 : 500;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
