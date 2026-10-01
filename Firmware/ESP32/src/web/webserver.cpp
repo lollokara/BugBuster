@@ -2416,6 +2416,15 @@ static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
 {
     char *resp = api_core_handle("GET", "/api/daq/wifi_stream/status", NULL);
     if (!resp) return send_error(req, 500, "wifi stream status failed");
+    if (check_admin_auth(req) != ESP_OK) {
+        // api_core is shared with BLE (paired channel); only HTTP strips the hotspot credentials.
+        cJSON *root = cJSON_Parse(resp);
+        cJSON_free(resp);
+        if (!root) return send_error(req, 500, "wifi stream status failed");
+        cJSON_DeleteItemFromObject(root, "ssid");
+        cJSON_DeleteItemFromObject(root, "password");
+        return send_json(req, root);
+    }
     esp_err_t rc = send_raw_json(req, resp);
     cJSON_free(resp);
     return rc;
