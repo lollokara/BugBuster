@@ -10,8 +10,6 @@ rail that is off / a VLOGIC that was never set."""
 
 from pathlib import Path
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 
 PLANNER = "Firmware/ESP32/src/bus/bus_planner.cpp"
@@ -124,13 +122,11 @@ def _run(tmp_path: Path) -> list[str]:
     return out.strip().splitlines()
 
 
-@pytest.mark.xfail(strict=True, reason="IO-1")
 def test_route_keeps_rail_vlogic_and_other_switches(tmp_path):
     lines = _run(tmp_path)
     assert lines[0] == "route_io2=1 vadj1=5.00 vlogic=1.80 mux0=0x10 mux1=0x10", lines
 
 
-@pytest.mark.xfail(strict=True, reason="IO-1")
 def test_uart_rx_route_keeps_tx_switch(tmp_path):
     lines = _run(tmp_path)
     assert lines[1] == "uart ok=1 mux0=0x50", lines

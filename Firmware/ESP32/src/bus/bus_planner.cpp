@@ -151,11 +151,14 @@ static const BusRouteEntry *find_route(uint8_t io_num)
 }
 
 // Compute 4-byte MUX state for a set of IO entries.
-// Mirrors bus.py:_mux_state_for (lines 129–134).
+// Mirrors bus.py:_mux_state_for (lines 129–134). With `merge`, start from the
+// live switch image so IOs outside `routes` keep their switches (IO-1).
 static void compute_mux_state(const BusRouteEntry **routes, size_t count,
-                               uint8_t mux_out[ADGS_API_MAIN_DEVICES])
+                               uint8_t mux_out[ADGS_API_MAIN_DEVICES],
+                               bool merge = false)
 {
-    memset(mux_out, 0, ADGS_API_MAIN_DEVICES);
+    if (merge) adgs_get_api_states(mux_out);
+    else       memset(mux_out, 0, ADGS_API_MAIN_DEVICES);
     for (size_t i = 0; i < count; i++) {
         const BusRouteEntry *r = routes[i];
         uint8_t dev = r->mux_device;
@@ -197,7 +200,8 @@ static void set_err(char *err, size_t err_len, const char *msg)
 static bool apply_power_and_mux(SemaphoreHandle_t mtx,
                                  const BusRouteEntry **routes, size_t count,
                                  float supply_v, float vlogic_v,
-                                 char *err, size_t err_len)
+                                 char *err, size_t err_len,
+                                 bool merge_mux = false)
 {
     // 1. MUX power
     if (!pca9535_set_control(PCA_CTRL_MUX_EN, true)) {
@@ -218,7 +222,7 @@ static bool apply_power_and_mux(SemaphoreHandle_t mtx,
     //    safe under the planner mutex), then drop the planner mutex so the
     //    SPI call below acquires g_spi_bus_mutex without inverting ranks.
     uint8_t mux_states[ADGS_API_MAIN_DEVICES];
-    compute_mux_state(routes, count, mux_states);
+    compute_mux_state(routes, count, mux_states, merge_mux);
 
     if (mtx) xSemaphoreGive(mtx);
     if (!adgs_set_api_all_safe(mux_states)) {
@@ -506,9 +510,26 @@ extern "C" bool bus_planner_route_digital_input(uint8_t io_num,
         return false;
     }
 
-    // Use 3.3 V for both supply and VLOGIC — safe read-only default
+    // IO-1: this runs for DIO configure, each UART bridge pin, quicksetup and
+    // HTTP, often while a target is powered. Keep an enabled rail's setpoint
+    // and a configured VLOGIC; 3.3 V is only the default for a rail that is
+    // off / a VLOGIC that was never set. Merge into the live MUX image so the
+    // other IOs (e.g. UART TX when RX is routed) keep their switches.
+    float supply_v = 3.3f;
+    float vlogic_v = 3.3f;
+    const PCA9535State *pca = pca9535_get_state();
+    const DS4424State  *ds  = ds4424_get_state();
+    if (pca && ds) {
+        bool rail_on = (r->supply_ctrl == PCA_CTRL_VADJ1_EN) ? pca->vadj1_en : pca->vadj2_en;
+        float rail_v = ds->state[r->supply_idac].target_v;
+        if (rail_on && rail_v >= 3.0f && rail_v <= 15.0f) supply_v = rail_v;
+        float vl = ds->state[IDAC_CH_VLOGIC].target_v;
+        if (vl >= 1.2f && vl <= 3.6f) vlogic_v = vl;
+    }
+
     const BusRouteEntry *routes[1] = { r };
-    bool ok = apply_power_and_mux(mtx, routes, 1, 3.3f, 3.3f, err, err_len);
+    bool ok = apply_power_and_mux(mtx, routes, 1, supply_v, vlogic_v, err, err_len,
+                                  /*merge_mux=*/true);
 
     xSemaphoreGive(mtx);
     return ok;
