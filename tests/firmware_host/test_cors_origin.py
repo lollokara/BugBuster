@@ -1,8 +1,6 @@
 """WEB-25: CORS echoed any Origin that merely starts with http://localhost
 (e.g. http://localhost.evil.com) back as allowed. Tests the real header."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 from tests.lib.srcread import REPO_ROOT
 
@@ -35,7 +33,6 @@ def test_loopback_dev_origins_allowed():
     assert all(got[o] for o, want in CASES.items() if want)
 
 
-@pytest.mark.xfail(strict=True, reason="WEB-25")
 def test_lookalike_origins_rejected():
     got = _run()
     bad = [o for o, want in CASES.items() if not want and got[o]]
