@@ -242,6 +242,23 @@ pub const CMD_OTA: u8 = 0x77;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 
+// PROTO-4: opcodes the firmware defines that the desktop table lacked
+// (tests/unit/test_bbp_command_parity_rust.py keeps this in sync with bbp.h).
+pub const CMD_MEM_STATUS: u8 = 0x0C;
+pub const CMD_ADC_LEDS_SET_MODE: u8 = 0x47;
+pub const CMD_START_ADC_DSP_STREAM: u8 = 0x64;
+pub const CMD_STOP_ADC_DSP_STREAM: u8 = 0x65;
+pub const CMD_RAIL_POWER_UP: u8 = 0x93;
+pub const CMD_SCRIPT_EVAL: u8 = 0xF5;
+pub const CMD_SCRIPT_STATUS: u8 = 0xF6;
+pub const CMD_SCRIPT_LOGS: u8 = 0xF7;
+pub const CMD_SCRIPT_STOP: u8 = 0xF8;
+pub const CMD_SCRIPT_UPLOAD: u8 = 0xF9;
+pub const CMD_SCRIPT_LIST: u8 = 0xFA;
+pub const CMD_SCRIPT_RUN_FILE: u8 = 0xFB;
+pub const CMD_SCRIPT_DELETE: u8 = 0xFC;
+pub const CMD_SCRIPT_AUTORUN: u8 = 0xFD;
+
 // -----------------------------------------------------------------------------
 // Event IDs
 // -----------------------------------------------------------------------------
@@ -255,6 +272,7 @@ pub const EVT_LA_DONE: u8 = 0x85;
 pub const EVT_IO_PREEMPTED: u8 = 0x86; // IO slot preempted by selftest/internal (mirrors firmware BBP_EVT_IO_PREEMPTED)
 pub const EVT_IO_OWNER_REJECT: u8 = 0x87; // IO claim rejected because slot held by another owner
 pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
+pub const EVT_ADC_DSP: u8 = 0x88; // DSP stream window (stats + FFT peaks + spikes)
 pub const EVT_DISCONNECT: u8 = 0xFE; // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------

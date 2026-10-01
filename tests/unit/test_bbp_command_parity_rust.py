@@ -7,8 +7,6 @@ recognise it on the wire (A: 0xF5-0xFD, 0x64/0x65, 0x47, EVT 0x88, 0x0C, ...).""
 
 import re
 
-import pytest
-
 from tests.lib.srcread import read_source
 
 BBP_H = read_source("Firmware/ESP32/src/bbp/bbp.h")
@@ -30,13 +28,11 @@ def _rust(prefix: str) -> set[int]:
     return {int(v, 16) for v in re.findall(rf"pub const {prefix}_\w+: u8 = 0x([0-9A-Fa-f]{{2}});", RS)}
 
 
-@pytest.mark.xfail(strict=True, reason="PROTO-4")
 def test_every_firmware_command_has_a_rust_constant():
     missing = {f"0x{k:02X} {n}" for k, n in _fw("CMD").items() if k not in _rust("CMD")}
     assert not missing, sorted(missing)
 
 
-@pytest.mark.xfail(strict=True, reason="PROTO-4")
 def test_every_firmware_event_has_a_rust_constant():
     missing = {f"0x{k:02X} {n}" for k, n in _fw("EVT").items() if k not in _rust("EVT")}
     assert not missing, sorted(missing)
