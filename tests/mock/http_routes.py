@@ -724,19 +724,23 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("POST", "/idac/cal/save"):
         return {"ok": True}
 
-    # IO expander (PCA9535) power status — GET /ioexp
+    # IO expander (PCA9535) power status — GET /ioexp. Shape of the real
+    # firmware response (see tests/fixtures/http/ioexp.json), not the client's
+    # normalised keys.
     if key == ("GET", "/ioexp"):
+        faults = getattr(device, "efuse_faults", [False] * 4)
+        pc = device.pca_control
         return {
             "present": True,
-            "logic_pg": True,
-            "vadj1_pg": True,
-            "vadj2_pg": True,
-            "efuse_faults": [False, False, False, False],
+            "powerGood": {"logic": True, "vadj1": True, "vadj2": True},
+            "efuses": [{"id": i + 1, "enabled": bool(pc.get(5 + i, False)),
+                        "fault": bool(faults[i])} for i in range(4)],
             "enables": {
-                "vadj1": True, "vadj2": True, "15v": False,
-                "mux": True, "usb_hub": True,
-                "efuse1": True, "efuse2": True, "efuse3": True, "efuse4": True,
+                "vadj1": bool(pc.get(0, False)), "vadj2": bool(pc.get(1, False)),
+                "analog15v": bool(pc.get(2, False)), "mux": bool(pc.get(3, True)),
+                "usbHub": bool(pc.get(4, True)),
             },
+            "input0": 0, "input1": 0, "output0": 0, "output1": 0,
         }
 
     # IO expander control — POST /ioexp/control
