@@ -36,25 +36,6 @@ static bool home_pd_ok(uint16_t min_mv, uint16_t min_ma)
     return dg.pd_mv >= min_mv && dg.pd_ma >= min_ma;
 }
 
-// Local demo data generator. No ESP32-P4 exists yet, so synthesize voltage and
-// current that sweep across many decades to exercise the autoscaling readout.
-static void sim_data(uint32_t t_ms, float *v, float *i, uint8_t *flags)
-{
-    float t = t_ms / 1000.0f;
-
-    // Voltage: 1 uV .. 30 V, log-swept.
-    float lo = -6.0f, hi = 1.477f;
-    float sv = sinf(t * 0.25f) * 0.5f + 0.5f;
-    *v = powf(10.0f, lo + (hi - lo) * sv) * (1.0f + 0.04f * sinf(t * 3.1f));
-
-    // Current: 1 nA .. 2 A, log-swept on a different phase.
-    float lo2 = -9.0f, hi2 = 0.301f;
-    float si = sinf(t * 0.17f + 1.2f) * 0.5f + 0.5f;
-    *i = powf(10.0f, lo2 + (hi2 - lo2) * si) * (1.0f + 0.04f * sinf(t * 2.3f));
-
-    *flags = DDP_FLAG_V_VALID | DDP_FLAG_I_VALID;
-}
-
 // Static screen shown while ddp_wifi_stream_mode() is true: the P4 has handed
 // the shared SDIO link to ESP-Hosted for iOS DAQ streaming, so we stop
 // rendering the normal readout/menu (which would otherwise fight the radio
@@ -202,18 +183,16 @@ void app_main(void)
             } else if (!have && (t - boot_ms) < 15000) {
                 // P4 still booting: not a fault, and no fabricated data.
                 ui_set_data(0.0f, 0.0f, 0, DDP_STATE_BOOT);
+            } else if (have && age < 2000) {
+                // A 1-2 s gap keeps the last real frame on screen, so one
+                // dropped DDP push does not flash FLT.
             } else {
-                // C6-9: a stale link shows FAULT rather than demo data that
-                // looks live. The banner fires once per outage, not every frame.
-                sim_data(t, &v, &i, &flags);
-                if (age >= 2000) {
-                    ui_set_data(v, i, flags, DDP_STATE_FAULT);
-                    if (!lost_announced) {
-                        lost_announced = true;
-                        ui_show_warning(UI_WARN_LINK_LOST);
-                    }
-                } else {
-                    ui_set_data(v, i, flags, DDP_STATE_SIM);
+                // C6-9/C6-22: a stale link shows FLT with dashes, never invented
+                // values. The banner fires once per outage, not every frame.
+                ui_set_data(0.0f, 0.0f, 0, DDP_STATE_FAULT);
+                if (!lost_announced) {
+                    lost_announced = true;
+                    ui_show_warning(UI_WARN_LINK_LOST);
                 }
             }
             ui_render(t);

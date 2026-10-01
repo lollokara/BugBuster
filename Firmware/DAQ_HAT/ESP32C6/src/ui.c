@@ -301,14 +301,16 @@ static void draw_header(uint32_t t_ms)
 // ---- A single hero value card ----------------------------------------------
 // glow: draw a soft accent ring outside the tile (supply on).
 // show_off: render "OFF" instead of the value (supply off).
+// no_data: render "--" instead of the value (no live P4 data; C6-22).
 // set_val: if non-NULL, render a greyed "SET <set_val>" line over the live value
 // in the small font (the baked digits are too tall for two rows).
 // range_badge: optional short current-range label (triangle + text) in the top row.
 static void draw_card(int x, int y, int w, int h, const char *label,
                       uint16_t accent, float value, char base_unit, bool over,
-                      bool glow, bool show_off, const char *set_val,
+                      bool glow, bool show_off, bool no_data, const char *set_val,
                       const char *range_badge)
 {
+    if (no_data) { over = false; set_val = NULL; range_badge = NULL; }
     if (over) accent = C_ROSE;
 
     // Optional outer glow ring, brightest next to the tile and fading outward.
@@ -326,8 +328,10 @@ static void draw_card(int x, int y, int w, int h, const char *label,
     char live[20] = {0};
     const char *us;
     uint16_t num_color;
-    if (show_off) {
-        // No baked-font glyphs for letters, so "OFF" uses the 5x7 font below.
+    // A word in place of the number: supply off, or no live data at all.
+    const char *word = show_off ? "OFF" : (no_data ? "--" : NULL);
+    if (word) {
+        // No baked-font glyphs for letters, so the word uses the 5x7 font below.
         us = "";
         num_color = C_MUTED;
         num[0] = '\0';
@@ -364,14 +368,14 @@ static void draw_card(int x, int y, int w, int h, const char *label,
 
     int band_top = y + 16;
     int band_bot = y + h - 3;
-    if (show_off) {
-        // "OFF" rendered with the scalable 5x7 font, centered in the band.
+    if (word) {
+        // The word rendered with the scalable 5x7 font, centered in the band.
         const int sz = 3;
-        int tw = gfx_text_w("OFF", sz);
+        int tw = gfx_text_w(word, sz);
         int th = 7 * sz;
         int ox = x + (w - tw) / 2;
         int oy = band_top + ((band_bot - band_top) - th) / 2;
-        gfx_text(ox, oy, "OFF", sz, num_color);
+        gfx_text(ox, oy, word, sz, num_color);
     } else if (set_val) {
         // Two 14 px rows + 2 px gap fit the 32 px band: SET (grey), live (white).
         const int sz = 2;
@@ -416,9 +420,10 @@ void ui_render(uint32_t t_ms)
     int x1 = x0 + cardw + gap;
 
     bool src_on = (s_flags & DDP_FLAG_SRC_ON) != 0;
-    // Only blank the current readout to "OFF" for real (LIVE) data; the demo
-    // sweep never asserts SRC_ON and should keep animating.
+    // Only blank the current readout to "OFF" for real (LIVE) data.
     bool cur_off = !src_on && s_state == DDP_STATE_LIVE;
+    // C6-22: anything but LIVE (booting, stale link) has no real number to show.
+    bool no_data = s_state != DDP_STATE_LIVE;
 
     // Decode the live current range for the badge (LIVE data only).
     const char *rbadge = NULL;
@@ -442,12 +447,12 @@ void ui_render(uint32_t t_ms)
 
     draw_card(x0, top, cardw, cardh, "VOLTAGE", C_BLUE,
               s_v, 'V', (s_flags & DDP_FLAG_V_OVERRANGE) != 0,
-              src_on, false, set_val, NULL);
+              src_on, false, no_data, set_val, NULL);
     PERF_MARK("cardV");
 
     draw_card(x1, top, cardw, cardh, "CURRENT", C_GREEN,
               s_i, 'A', (s_flags & DDP_FLAG_I_OVERRANGE) != 0,
-              src_on, cur_off, NULL, rbadge);
+              src_on, cur_off, no_data, NULL, rbadge);
     PERF_MARK("cardI");
 
     // Transient warning banner over the tiles (drawn last, on top).

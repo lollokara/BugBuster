@@ -12,7 +12,6 @@ recorded separately.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import REPO_ROOT
@@ -25,14 +24,12 @@ def _code(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
-@pytest.mark.xfail(strict=True, reason="C6-22")
 def test_home_screen_has_no_demo_generator():
     main = _code((C6 / "main.c").read_text(encoding="utf-8"))
     assert "sim_data" not in main
     assert "DDP_STATE_SIM" not in main
 
 
-@pytest.mark.xfail(strict=True, reason="C6-22")
 def test_diag_refresh_does_not_fabricate_rails():
     body = _code(extract_function(C6 / "menu.c", r"static void diag_refresh\(void\)"))
     assert "0xFFFF" not in body
@@ -41,7 +38,6 @@ def test_diag_refresh_does_not_fabricate_rails():
     assert re.search(r"memset\(&s_dg, 0, sizeof\(s_dg\)\)", body)
 
 
-@pytest.mark.xfail(strict=True, reason="C6-22")
 def test_value_cards_render_dashes_without_live_data():
     ui = _code((C6 / "ui.c").read_text(encoding="utf-8"))
     render = _code(extract_function(C6 / "ui.c", r"void ui_render\(uint32_t t_ms\)"))
@@ -51,7 +47,6 @@ def test_value_cards_render_dashes_without_live_data():
     assert "no_data" in ui
 
 
-@pytest.mark.xfail(strict=True, reason="C6-22")
 def test_sparkline_skips_samples_while_value_is_dashes():
     upd = _code(extract_function(C6 / "menu.c", r"menu_status_t menu_update\("))
     assert '"--"' in upd
