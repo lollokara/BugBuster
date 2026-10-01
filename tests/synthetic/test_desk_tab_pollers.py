@@ -12,14 +12,12 @@ import pytest
 TABS = Path(__file__).resolve().parents[2] / "DesktopApp" / "BugBuster" / "src" / "tabs"
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-22")
 @pytest.mark.parametrize("tab", ["hat.rs", "voltages.rs", "ioexp.rs", "usbpd.rs"])
 def test_tab_does_not_refetch_on_every_state_tick(tab):
     src = (TABS / tab).read_text(encoding="utf-8")
     assert "let _ = state.get()" not in src
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-22")
 def test_hat_probe_backs_off_on_bare_board():
     src = (TABS / "hat.rs").read_text(encoding="utf-8")
     assert re.search(r"HAT_ABSENT_POLL_MS", src)

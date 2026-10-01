@@ -784,6 +784,45 @@ pub fn start_efuse_imon_poll(imon: leptos::prelude::RwSignal<EfuseImonStatus>) {
 }
 
 // -----------------------------------------------------------------------------
+// DESK-22: per-tab polling
+// -----------------------------------------------------------------------------
+
+/// HAT status poll period while a HAT is fitted.
+pub const HAT_POLL_MS: u32 = 3000;
+/// HAT probe period on a bare board (hot-plug is still noticed, slowly).
+pub const HAT_ABSENT_POLL_MS: u32 = 15000;
+
+/// Run `tick` immediately and then again `next_ms()` after each tick finishes,
+/// until the calling component unmounts. Ticks never overlap, unlike
+/// `set_interval`, and nothing is tied to the `device-state` event rate.
+/// Call from a component body; use `try_set` on signals inside `tick`.
+pub fn start_tab_poll<F, Fut, N>(tick: F, next_ms: N)
+where
+    F: Fn() -> Fut + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+    N: Fn() -> u32 + 'static,
+{
+    use leptos::prelude::on_cleanup;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let alive = std::sync::Arc::new(AtomicBool::new(true));
+    let alive_clean = alive.clone();
+    on_cleanup(move || alive_clean.store(false, Ordering::Relaxed));
+    leptos::task::spawn_local(async move {
+        while alive.load(Ordering::Relaxed) {
+            tick().await;
+            let ms = next_ms() as i32;
+            let promise = js_sys::Promise::new(&mut |resolve, _| {
+                web_sys::window()
+                    .unwrap()
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms)
+                    .ok();
+            });
+            wasm_bindgen_futures::JsFuture::from(promise).await.ok();
+        }
+    });
+}
+
+// -----------------------------------------------------------------------------
 // HAT Expansion Board types & helpers
 // -----------------------------------------------------------------------------
 

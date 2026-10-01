@@ -1,21 +1,20 @@
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 
 #[component]
 pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (pd, set_pd) = signal(UsbPdState::default());
 
-    // Poll USB PD status whenever device state updates
-    let set_pd_clone = set_pd;
-    Effect::new(move |_| {
-        let _ = state.get(); // subscribe to state changes
-        spawn_local(async move {
+    // DESK-22: own 3 s poll instead of a refetch on every device-state tick.
+    let _ = state;
+    start_tab_poll(
+        move || async move {
             if let Some(st) = fetch_usbpd_status().await {
-                set_pd_clone.set(st);
+                set_pd.try_set(st);
             }
-        });
-    });
+        },
+        || 3000,
+    );
 
     view! {
         <div class="tab-content">
