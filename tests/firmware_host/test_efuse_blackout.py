@@ -14,8 +14,6 @@ and a fake esp_timer."""
 
 from pathlib import Path
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 
 PCA = "Firmware/ESP32/src/hal/pca9535.cpp"
@@ -163,7 +161,6 @@ def _run(tmp_path: Path) -> dict[str, int]:
     return {k: int(v) for k, v in (kv.split("=") for kv in out.split())}
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-02")
 def test_short_present_at_enable_trips_after_blackout(tmp_path):
     r = _run(tmp_path)
     assert r["trips"] == 1, r
