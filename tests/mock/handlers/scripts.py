@@ -113,8 +113,8 @@ def _script_status(device):
 
 def _script_logs(device):
     def handler(payload: bytes) -> bytes:
-        chunk = device.script_log_ring[:1020].encode("utf-8", errors="replace")
-        device.script_log_ring = device.script_log_ring[1020:]
+        chunk = device.script_log_ring[:1016].encode("utf-8", errors="replace")
+        device.script_log_ring = device.script_log_ring[1016:]
         return struct.pack('<H', len(chunk)) + chunk
     return handler
 

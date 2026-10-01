@@ -3,7 +3,7 @@
 //
 //   BBP_CMD_SCRIPT_EVAL       (0xF5)  Submit Python source for eval (max 32 KB)
 //   BBP_CMD_SCRIPT_STATUS     (0xF6)  Get script engine status
-//   BBP_CMD_SCRIPT_LOGS       (0xF7)  Drain script log ring (up to 1020 bytes)
+//   BBP_CMD_SCRIPT_LOGS       (0xF7)  Drain script log ring (up to SCRIPT_LOG_CHUNK bytes)
 //   BBP_CMD_SCRIPT_STOP       (0xF8)  Request cooperative stop
 //   BBP_CMD_SCRIPT_UPLOAD     (0xF9)  Upload script file to SPIFFS
 //   BBP_CMD_SCRIPT_LIST       (0xFA)  List stored script files
@@ -31,9 +31,9 @@ static const char *TAG = "cmd_script";
 // Maximum accepted script body (bytes).
 #define SCRIPT_MAX_SRC_LEN  (32 * 1024)
 
-// Maximum log chunk returned per LOGS call.
-// BBP_MAX_PAYLOAD=1024; 2 bytes for u16 prefix → 1022 usable, round down.
-#define SCRIPT_LOG_CHUNK    1020
+// Maximum log chunk returned per LOGS call: BBP_MAX_PAYLOAD (1024) minus the
+// frame header + CRC (6) and the u16 count prefix (2).
+#define SCRIPT_LOG_CHUNK    1016
 
 // ---------------------------------------------------------------------------
 // SCRIPT_EVAL  payload: u8 flags, u16 src_len, char[src_len] src

@@ -745,7 +745,7 @@ class BugBuster:
 
     def script_logs(self) -> str:
         """
-        Drain up to 1020 bytes from the on-device script log ring.
+        Drain up to 1016 bytes from the on-device script log ring.
 
         USB only.  Returns a ``str`` (UTF-8, errors replaced).
         Call repeatedly until the returned string is empty to drain fully.

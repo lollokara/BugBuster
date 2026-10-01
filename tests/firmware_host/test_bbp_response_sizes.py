@@ -6,8 +6,6 @@ SCRIPT_LOG_CHUNK bytes; a full log buffer used to exceed the frame and the
 response was silently dropped (host timeout).
 """
 
-import pytest
-
 from tests.firmware_host.fwhost import extract_defines
 
 BBP_H = "Firmware/ESP32/src/bbp/bbp.h"
@@ -20,7 +18,6 @@ def _define(path: str, name: str) -> int:
     return int(text.split(name, 1)[1].split("//", 1)[0].strip(), 0)
 
 
-@pytest.mark.xfail(strict=True, reason="TR-2: SCRIPT_LOGS full reply exceeds a frame")
 def test_script_logs_full_chunk_fits_a_frame():
     max_payload = _define(BBP_H, "BBP_MAX_PAYLOAD")
     chunk = _define(CMD_SCRIPT, "SCRIPT_LOG_CHUNK")
