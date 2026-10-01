@@ -18,6 +18,7 @@ functions at the bottom of this file::
         print(bb.get_adc_value(0))
 """
 
+import hashlib
 import struct
 import logging
 import warnings
@@ -115,6 +116,15 @@ def _i2c_addr7(address: int) -> int:
         hint = f" - looks like an 8-bit address, use 0x{address >> 1:02X}" if address <= 0xFF else ""
         raise ValueError(f"I2C address 0x{address:X} is not 7-bit{hint}")
     return address
+
+
+def ble_passkey(admin_token: str) -> str:
+    """Six-digit BLE pairing passkey for a device with this admin token.
+
+    Mirrors ``ble_pairing_passkey()`` in ``net/ble_service.cpp``.
+    """
+    digest = hashlib.sha256(admin_token.encode() + b"bb-ble-passkey").digest()
+    return f"{int.from_bytes(digest[:4], 'big') % 1_000_000:06d}"
 
 
 # ---------------------------------------------------------------------------

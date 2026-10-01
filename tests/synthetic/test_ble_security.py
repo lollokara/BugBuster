@@ -4,8 +4,6 @@ admin token guess loop, WiFi credentials or supply settings without pairing."""
 
 import re
 
-import pytest
-
 from tests.lib.srcread import read_source
 
 BLE = "Firmware/ESP32/src/net/ble_service.cpp"
@@ -18,7 +16,6 @@ def _flags(src: str, uuid: str) -> str:
     return m.group(1)
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-04")
 def test_control_characteristics_require_authenticated_encryption():
     src = read_source(BLE)
     weak = [u for u in WRITE_CHRS
@@ -26,9 +23,26 @@ def test_control_characteristics_require_authenticated_encryption():
     assert weak == [], f"plain writes allowed on {weak}"
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-04")
 def test_pairing_requires_mitm_passkey():
     src = read_source(BLE)
     assert "BLE_HS_IO_NO_INPUT_OUTPUT" not in src
     assert re.search(r"sm_mitm\s*=\s*1", src)
     assert "BLE_GAP_EVENT_PASSKEY_ACTION" in src
+
+
+def test_python_passkey_matches_firmware_derivation():
+    import hashlib
+
+    from bugbuster.client import ble_passkey
+    from tests.firmware_host.fwhost import compile_and_run, extract_function
+
+    token = "0" * 63 + "1"
+    digest = hashlib.sha256(token.encode() + b"bb-ble-passkey").digest()
+    fn = extract_function(BLE, r"^static uint32_t passkey_from_digest\(")
+    init = ", ".join(str(b) for b in digest)
+    out = compile_and_run(
+        "#include <stdint.h>\n#include <stdio.h>\n" + fn +
+        f"\nint main(void) {{ const uint8_t d[32] = {{{init}}};"
+        ' printf("%06u\\n", (unsigned)passkey_from_digest(d)); return 0; }\n')
+    assert out.strip() == ble_passkey(token)
+    assert re.search(r'label\[\] = "bb-ble-passkey"', read_source(BLE))
