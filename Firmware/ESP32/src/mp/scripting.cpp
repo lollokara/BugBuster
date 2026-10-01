@@ -13,6 +13,7 @@
 #include "script_storage.h"
 #include "config.h"
 #include "repl_ws.h"
+#include "bbp.h"
 #include "tasks.h"
 #include "esp_attr.h"
 
@@ -160,8 +161,9 @@ static void log_push_locked(const char *str, size_t len)
 
 void scripting_log_push(const char *str, size_t len)
 {
-    // Tee to stderr for IDF console visibility
-    fwrite(str, 1, len, stderr);
+    // Tee to stderr (CDC #0) for console visibility, except while a BBP host owns it:
+    // raw bytes there corrupt the COBS stream. Output still reaches the log ring.
+    if (!bbpCdcClaimed()) fwrite(str, 1, len, stderr);
 
     // Also feed the browser REPL terminal. repl_ws_forward() is non-blocking
     // and becomes a no-op until a WebSocket session is authenticated.
