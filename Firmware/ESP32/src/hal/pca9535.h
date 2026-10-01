@@ -261,6 +261,7 @@ void pca9535_install_isr(void);
  * @brief Set fault behavior configuration.
  */
 void pca9535_set_fault_config(const PcaFaultConfig *cfg);
+void pca9535_get_fault_config(PcaFaultConfig *cfg);
 
 /**
  * @brief Register a callback for fault events (e-fuse trips, PG changes).

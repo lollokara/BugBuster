@@ -122,6 +122,7 @@ static int handler_pca_set_fault_cfg(const uint8_t *payload, size_t len,
     if (len < 2) return -CMD_ERR_BAD_ARG;
     size_t rpos = 0;
     PcaFaultConfig cfg;
+    pca9535_get_fault_config(&cfg);
     cfg.auto_disable_efuse = bbp_get_u8(payload, &rpos) != 0;
     cfg.log_events         = bbp_get_u8(payload, &rpos) != 0;
     pca9535_set_fault_config(&cfg);

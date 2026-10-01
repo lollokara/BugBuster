@@ -6,8 +6,6 @@ became stack garbage. Compiled with -ftrivial-auto-var-init=pattern so the
 garbage is deterministic (0xFEFEFEFE) instead of whatever the stack held.
 """
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 
 CMD_PCA = "Firmware/ESP32/src/bbp/cmds/cmd_pca.cpp"
@@ -31,7 +29,6 @@ void pca9535_get_fault_config(PcaFaultConfig *c) { *c = g_cfg; }
 """
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-01")
 def test_set_fault_cfg_keeps_blackout_window():
     handler = extract_function(CMD_PCA, r"^static int handler_pca_set_fault_cfg\(")
     out = compile_and_run(
@@ -53,7 +50,6 @@ int main(void) {
     assert blackout == 100, f"blackout window clobbered: {blackout:#x}"
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-01")
 def test_http_fault_config_starts_from_current_config():
     """The HTTP twin had the same bare struct, and a missing key forced the
     flag to false instead of keeping it."""

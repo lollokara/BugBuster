@@ -565,6 +565,11 @@ void pca9535_set_fault_config(const PcaFaultConfig *cfg)
     if (cfg) s_fault_cfg = *cfg;
 }
 
+void pca9535_get_fault_config(PcaFaultConfig *cfg)
+{
+    if (cfg) *cfg = s_fault_cfg;
+}
+
 void pca9535_register_fault_callback(pca9535_fault_cb_t cb)
 {
     s_fault_cb = cb;

@@ -2338,9 +2338,12 @@ static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
     cJSON *json = recv_json_body(req);
     if (!json) return send_error(req, 400, "Invalid JSON or body too large");
 
-    PcaFaultConfig cfg;
-    cfg.auto_disable_efuse = cJSON_IsTrue(cJSON_GetObjectItem(json, "auto_disable"));
-    cfg.log_events = cJSON_IsTrue(cJSON_GetObjectItem(json, "log_events"));
+    PcaFaultConfig cfg = {};
+    pca9535_get_fault_config(&cfg);
+    cJSON *ad = cJSON_GetObjectItem(json, "auto_disable");
+    cJSON *le = cJSON_GetObjectItem(json, "log_events");
+    if (cJSON_IsBool(ad)) cfg.auto_disable_efuse = cJSON_IsTrue(ad);
+    if (cJSON_IsBool(le)) cfg.log_events = cJSON_IsTrue(le);
     cJSON_Delete(json);
 
     pca9535_set_fault_config(&cfg);
