@@ -17,7 +17,6 @@ relay_stage_init(), which reloads state from the NVS stub.
 
 from pathlib import Path
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run
 
@@ -107,9 +106,9 @@ int main(void) {
     relay_stage_init();                                  /* reboot */
     int after_reboot = start();
 
-    /* 2. Same boot, the S3 died mid-upload (no ABORT): stale after a minute. */
+    /* 2. Same boot, the S3 died mid-upload (no ABORT): stale after 120 s. */
     fresh(); start(); relay_stage_write(0, chunk, sizeof(chunk));
-    g_now_us += 60LL * 1000000;
+    g_now_us += 180LL * 1000000;
     int after_idle = start();
 
     /* 3. A live session (1 s since the last chunk) is still protected. */
@@ -141,12 +140,10 @@ def _run(tmp_path: Path) -> dict:
     return {k: int(v, 0) for k, v in (kv.split("=") for kv in out.split())}
 
 
-@pytest.mark.xfail(strict=True, reason="C6-25")
 def test_begin_replaces_a_session_orphaned_by_a_p4_reboot(tmp_path):
     assert _run(tmp_path)["after_reboot"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason="C6-25")
 def test_begin_replaces_a_session_idle_past_the_timeout(tmp_path):
     assert _run(tmp_path)["after_idle"] == 0
 
