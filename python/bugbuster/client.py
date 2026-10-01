@@ -4152,7 +4152,10 @@ class BugBuster:
         if code is None:
             raise ValueError(f"voltage_v must be one of {list(_V_TO_CODE)}")
         if self._usb:
+            # BBP SELECT_PDO only stages the PDO; GO 0x01 renegotiates. HTTP
+            # /api/usbpd/select does both in one call.
             self._usb_cmd(CmdId.USBPD_SELECT_PDO, struct.pack('<B', code))
+            self.usbpd_go(0x01)
         else:
             self._http_post("/usbpd/select", {"voltage": int(voltage_v)})
 

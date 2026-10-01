@@ -8,14 +8,10 @@ disagreed and the MCP usb_pd_select tool silently did nothing over USB.
 
 from unittest.mock import patch
 
-import pytest
-
 from bugbuster import BugBuster
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.power import register
 from tests.mock import SimulatedDevice, SimulatedUSBTransport
-
-_PWR06 = pytest.mark.xfail(strict=True, reason="PWR-06")
 
 
 class _DummyMCP:
@@ -29,7 +25,6 @@ class _DummyMCP:
         return deco
 
 
-@_PWR06
 def test_select_voltage_usb_commits_pdo():
     dev = SimulatedDevice()
     bb = BugBuster(SimulatedUSBTransport(dev))
@@ -38,7 +33,6 @@ def test_select_voltage_usb_commits_pdo():
     assert dev.usbpd_voltage == 2  # 9 V
 
 
-@_PWR06
 def test_mcp_usb_pd_select_commits_over_usb():
     session.configure(transport="usb", port="/dev/null", vlogic=3.3)
     mcp = _DummyMCP()
