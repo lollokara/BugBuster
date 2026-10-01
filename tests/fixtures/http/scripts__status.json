@@ -1,0 +1,14 @@
+{
+  "autoResetCount": 0,
+  "currentScriptId": 0,
+  "globalsBytes": 0,
+  "globalsCount": 0,
+  "idleForMs": 0,
+  "lastError": "",
+  "lastEvalAtMs": 0,
+  "mode": "EPHEMERAL",
+  "running": false,
+  "totalErrors": 0,
+  "totalRuns": 0,
+  "watermarkSoftHit": false
+}

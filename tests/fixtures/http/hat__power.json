@@ -1,0 +1,13 @@
+{
+  "connA": {
+    "currentMa": 0,
+    "enabled": false,
+    "fault": false
+  },
+  "connB": {
+    "currentMa": 0,
+    "enabled": false,
+    "fault": false
+  },
+  "ioVoltageMv": 0
+}

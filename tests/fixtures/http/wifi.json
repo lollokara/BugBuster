@@ -1,0 +1,14 @@
+{
+  "apIP": "192.168.4.1",
+  "apMAC": "02:00:00:00:00:01",
+  "apSSID": "<scrubbed>",
+  "ap_ip": "192.168.4.1",
+  "ap_mac": "02:00:00:00:00:01",
+  "ap_ssid": "<scrubbed>",
+  "connected": true,
+  "rssi": -57,
+  "staIP": "10.0.0.2",
+  "staSSID": "<scrubbed>",
+  "sta_ip": "10.0.0.2",
+  "sta_ssid": "<scrubbed>"
+}

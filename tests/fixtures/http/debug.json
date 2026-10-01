@@ -1,0 +1,31 @@
+{
+  "ds4424": {
+    "ch0": {
+      "code": 0,
+      "targetV": 3.2993838787078857
+    },
+    "ch1": {
+      "code": 3,
+      "targetV": 4.738033294677734
+    },
+    "ch2": {
+      "code": 16,
+      "targetV": 3.35010838508606
+    },
+    "present": true
+  },
+  "husb238": {
+    "attached": true,
+    "currentA": 3,
+    "present": true,
+    "voltageV": 9
+  },
+  "i2cBusOk": true,
+  "pca9535": {
+    "input0": 185,
+    "input1": 58,
+    "output0": 169,
+    "output1": 16,
+    "present": true
+  }
+}

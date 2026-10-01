@@ -1,0 +1,12 @@
+{
+  "macAddress": "02:00:00:00:00:01",
+  "mac_address": "02:00:00:00:00:01",
+  "siliconId0": "0x0028",
+  "siliconId1": "0x0545",
+  "siliconRev": 3,
+  "silicon_id0": 40,
+  "silicon_id1": 1349,
+  "silicon_rev": 3,
+  "spiOk": true,
+  "spi_ok": true
+}

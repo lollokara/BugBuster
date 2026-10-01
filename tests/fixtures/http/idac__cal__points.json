@@ -1,0 +1,363 @@
+{
+  "ch": 0,
+  "count": 89,
+  "points": [
+    {
+      "dacCode": -119,
+      "measuredV": 5.01679801940918
+    },
+    {
+      "dacCode": -116,
+      "measuredV": 4.97430419921875
+    },
+    {
+      "dacCode": -114,
+      "measuredV": 4.943485736846924
+    },
+    {
+      "dacCode": -111,
+      "measuredV": 4.900161266326904
+    },
+    {
+      "dacCode": -108,
+      "measuredV": 4.8575663566589355
+    },
+    {
+      "dacCode": -106,
+      "measuredV": 4.82711935043335
+    },
+    {
+      "dacCode": -103,
+      "measuredV": 4.783863067626953
+    },
+    {
+      "dacCode": -101,
+      "measuredV": 4.754765510559082
+    },
+    {
+      "dacCode": -98,
+      "measuredV": 4.711544036865234
+    },
+    {
+      "dacCode": -95,
+      "measuredV": 4.669419288635254
+    },
+    {
+      "dacCode": -93,
+      "measuredV": 4.64010238647461
+    },
+    {
+      "dacCode": -90,
+      "measuredV": 4.59702730178833
+    },
+    {
+      "dacCode": -88,
+      "measuredV": 4.569452285766602
+    },
+    {
+      "dacCode": -85,
+      "measuredV": 4.52484893798828
+    },
+    {
+      "dacCode": -82,
+      "measuredV": 4.48149299621582
+    },
+    {
+      "dacCode": -80,
+      "measuredV": 4.453922271728516
+    },
+    {
+      "dacCode": -77,
+      "measuredV": 4.409184455871582
+    },
+    {
+      "dacCode": -75,
+      "measuredV": 4.380616664886475
+    },
+    {
+      "dacCode": -72,
+      "measuredV": 4.338085174560547
+    },
+    {
+      "dacCode": -69,
+      "measuredV": 4.294183731079102
+    },
+    {
+      "dacCode": -67,
+      "measuredV": 4.2649970054626465
+    },
+    {
+      "dacCode": -64,
+      "measuredV": 4.222619533538818
+    },
+    {
+      "dacCode": -62,
+      "measuredV": 4.192687511444092
+    },
+    {
+      "dacCode": -59,
+      "measuredV": 4.149691581726074
+    },
+    {
+      "dacCode": -57,
+      "measuredV": 4.120555877685547
+    },
+    {
+      "dacCode": -54,
+      "measuredV": 4.07708740234375
+    },
+    {
+      "dacCode": -51,
+      "measuredV": 4.03462028503418
+    },
+    {
+      "dacCode": -49,
+      "measuredV": 4.00548791885376
+    },
+    {
+      "dacCode": -46,
+      "measuredV": 3.9623544216156
+    },
+    {
+      "dacCode": -44,
+      "measuredV": 3.9346024990081787
+    },
+    {
+      "dacCode": -41,
+      "measuredV": 3.890730142593384
+    },
+    {
+      "dacCode": -38,
+      "measuredV": 3.846510171890259
+    },
+    {
+      "dacCode": -36,
+      "measuredV": 3.819160223007202
+    },
+    {
+      "dacCode": -33,
+      "measuredV": 3.7747349739074707
+    },
+    {
+      "dacCode": -31,
+      "measuredV": 3.74592661857605
+    },
+    {
+      "dacCode": -28,
+      "measuredV": 3.703305244445801
+    },
+    {
+      "dacCode": -25,
+      "measuredV": 3.659377098083496
+    },
+    {
+      "dacCode": -23,
+      "measuredV": 3.6301567554473877
+    },
+    {
+      "dacCode": -20,
+      "measuredV": 3.587735652923584
+    },
+    {
+      "dacCode": -18,
+      "measuredV": 3.558220624923706
+    },
+    {
+      "dacCode": -15,
+      "measuredV": 3.515795946121216
+    },
+    {
+      "dacCode": -12,
+      "measuredV": 3.4733998775482178
+    },
+    {
+      "dacCode": -10,
+      "measuredV": 3.4434800148010254
+    },
+    {
+      "dacCode": -7,
+      "measuredV": 3.400109052658081
+    },
+    {
+      "dacCode": -5,
+      "measuredV": 3.37107253074646
+    },
+    {
+      "dacCode": -2,
+      "measuredV": 3.3269426822662354
+    },
+    {
+      "dacCode": 0,
+      "measuredV": 3.2993838787078857
+    },
+    {
+      "dacCode": 2,
+      "measuredV": 3.2730531692504883
+    },
+    {
+      "dacCode": 5,
+      "measuredV": 3.228236675262451
+    },
+    {
+      "dacCode": 7,
+      "measuredV": 3.201136350631714
+    },
+    {
+      "dacCode": 10,
+      "measuredV": 3.1581931114196777
+    },
+    {
+      "dacCode": 12,
+      "measuredV": 3.1277918815612793
+    },
+    {
+      "dacCode": 15,
+      "measuredV": 3.086850643157959
+    },
+    {
+      "dacCode": 17,
+      "measuredV": 3.0566790103912354
+    },
+    {
+      "dacCode": 20,
+      "measuredV": 3.01210355758667
+    },
+    {
+      "dacCode": 22,
+      "measuredV": 2.9856605529785156
+    },
+    {
+      "dacCode": 25,
+      "measuredV": 2.940600872039795
+    },
+    {
+      "dacCode": 27,
+      "measuredV": 2.91336464881897
+    },
+    {
+      "dacCode": 30,
+      "measuredV": 2.870649576187134
+    },
+    {
+      "dacCode": 33,
+      "measuredV": 2.8267836570739746
+    },
+    {
+      "dacCode": 35,
+      "measuredV": 2.799464464187622
+    },
+    {
+      "dacCode": 38,
+      "measuredV": 2.75677227973938
+    },
+    {
+      "dacCode": 40,
+      "measuredV": 2.7252910137176514
+    },
+    {
+      "dacCode": 43,
+      "measuredV": 2.6842360496521
+    },
+    {
+      "dacCode": 45,
+      "measuredV": 2.654684543609619
+    },
+    {
+      "dacCode": 48,
+      "measuredV": 2.6105897426605225
+    },
+    {
+      "dacCode": 50,
+      "measuredV": 2.584320545196533
+    },
+    {
+      "dacCode": 53,
+      "measuredV": 2.539310932159424
+    },
+    {
+      "dacCode": 55,
+      "measuredV": 2.512126922607422
+    },
+    {
+      "dacCode": 58,
+      "measuredV": 2.470021963119507
+    },
+    {
+      "dacCode": 60,
+      "measuredV": 2.438467025756836
+    },
+    {
+      "dacCode": 63,
+      "measuredV": 2.39747428894043
+    },
+    {
+      "dacCode": 66,
+      "measuredV": 2.3543636798858643
+    },
+    {
+      "dacCode": 68,
+      "measuredV": 2.324035406112671
+    },
+    {
+      "dacCode": 71,
+      "measuredV": 2.2830326557159424
+    },
+    {
+      "dacCode": 73,
+      "measuredV": 2.2528345584869385
+    },
+    {
+      "dacCode": 76,
+      "measuredV": 2.2093284130096436
+    },
+    {
+      "dacCode": 78,
+      "measuredV": 2.183095693588257
+    },
+    {
+      "dacCode": 81,
+      "measuredV": 2.1392390727996826
+    },
+    {
+      "dacCode": 83,
+      "measuredV": 2.1120264530181885
+    },
+    {
+      "dacCode": 86,
+      "measuredV": 2.068988800048828
+    },
+    {
+      "dacCode": 88,
+      "measuredV": 2.0375454425811768
+    },
+    {
+      "dacCode": 91,
+      "measuredV": 1.9966306686401367
+    },
+    {
+      "dacCode": 93,
+      "measuredV": 1.9657924175262451
+    },
+    {
+      "dacCode": 96,
+      "measuredV": 1.9226024150848389
+    },
+    {
+      "dacCode": 99,
+      "measuredV": 1.8817262649536133
+    },
+    {
+      "dacCode": 101,
+      "measuredV": 1.8517255783081055
+    },
+    {
+      "dacCode": 104,
+      "measuredV": 1.8082995414733887
+    },
+    {
+      "dacCode": 106,
+      "measuredV": 1.7820239067077637
+    }
+  ],
+  "valid": true
+}

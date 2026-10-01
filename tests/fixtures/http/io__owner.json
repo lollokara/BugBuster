@@ -1,0 +1,116 @@
+{
+  "slots": [
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 0
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 1
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 2
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 3
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 4
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 5
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 6
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 7
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 8
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 9
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 10
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 11
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 12
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 13
+    },
+    {
+      "free": false,
+      "kind": 5,
+      "lease_until_ms": 261852,
+      "session": 255,
+      "slot": 14
+    },
+    {
+      "free": true,
+      "kind": 0,
+      "lease_until_ms": 0,
+      "session": 0,
+      "slot": 15
+    }
+  ]
+}

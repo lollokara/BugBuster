@@ -1,0 +1,122 @@
+[
+  {
+    "id": 0,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 1",
+    "output": false,
+    "pin": 0,
+    "pulldown": false
+  },
+  {
+    "id": 1,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 2",
+    "output": false,
+    "pin": 1,
+    "pulldown": false
+  },
+  {
+    "id": 2,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 3",
+    "output": false,
+    "pin": 2,
+    "pulldown": false
+  },
+  {
+    "id": 3,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 4",
+    "output": false,
+    "pin": 3,
+    "pulldown": false
+  },
+  {
+    "id": 4,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 5",
+    "output": false,
+    "pin": 4,
+    "pulldown": false
+  },
+  {
+    "id": 5,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 6",
+    "output": false,
+    "pin": 5,
+    "pulldown": false
+  },
+  {
+    "id": 6,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 7",
+    "output": false,
+    "pin": 6,
+    "pulldown": false
+  },
+  {
+    "id": 7,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 8",
+    "output": false,
+    "pin": 7,
+    "pulldown": false
+  },
+  {
+    "id": 8,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 9",
+    "output": false,
+    "pin": 8,
+    "pulldown": false
+  },
+  {
+    "id": 9,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 10",
+    "output": false,
+    "pin": 9,
+    "pulldown": false
+  },
+  {
+    "id": 10,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 11",
+    "output": false,
+    "pin": 10,
+    "pulldown": false
+  },
+  {
+    "id": 11,
+    "input": false,
+    "mode": 0,
+    "modeName": "HIGH_IMP",
+    "name": "IO 12",
+    "output": false,
+    "pin": 11,
+    "pulldown": false
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "canRollback": true,
+  "fwMajor": 5,
+  "fwMinor": 1,
+  "fwPatch": 0,
+  "next": {
+    "address": 4259840,
+    "label": "app1",
+    "size": 4194304
+  },
+  "running": {
+    "address": 65536,
+    "label": "app0",
+    "size": 4194304,
+    "state": "VALID"
+  }
+}

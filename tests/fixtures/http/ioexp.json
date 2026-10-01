@@ -1,0 +1,41 @@
+{
+  "efuses": [
+    {
+      "enabled": false,
+      "fault": false,
+      "id": 1
+    },
+    {
+      "enabled": false,
+      "fault": false,
+      "id": 2
+    },
+    {
+      "enabled": false,
+      "fault": false,
+      "id": 3
+    },
+    {
+      "enabled": true,
+      "fault": false,
+      "id": 4
+    }
+  ],
+  "enables": {
+    "analog15v": true,
+    "mux": true,
+    "usbHub": true,
+    "vadj1": false,
+    "vadj2": true
+  },
+  "input0": 185,
+  "input1": 58,
+  "output0": 169,
+  "output1": 16,
+  "powerGood": {
+    "logic": true,
+    "vadj1": false,
+    "vadj2": true
+  },
+  "present": true
+}

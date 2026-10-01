@@ -1,0 +1,85 @@
+{
+  "internal": {
+    "freeBytes": 55515,
+    "free_bytes": 55515,
+    "largestBlockBytes": 36864,
+    "largest_block_bytes": 36864,
+    "minEverBytes": 46343,
+    "min_ever_bytes": 46343,
+    "totalBytes": 255547,
+    "total_bytes": 255547
+  },
+  "psram": {
+    "freeBytes": 7148372,
+    "free_bytes": 7148372,
+    "largestBlockBytes": 7077888,
+    "largest_block_bytes": 7077888,
+    "minEverBytes": 7121860,
+    "min_ever_bytes": 7121860,
+    "totalBytes": 8322040,
+    "total_bytes": 8322040
+  },
+  "tasks": [
+    {
+      "declaredBytes": 2560,
+      "declared_bytes": 2560,
+      "freeBytes": 1268,
+      "free_bytes": 1268,
+      "name": "adcPoll",
+      "peakUsedBytes": 1292,
+      "peak_used_bytes": 1292,
+      "running": true
+    },
+    {
+      "declaredBytes": 2560,
+      "declared_bytes": 2560,
+      "freeBytes": 1208,
+      "free_bytes": 1208,
+      "name": "faultMon",
+      "peakUsedBytes": 1352,
+      "peak_used_bytes": 1352,
+      "running": true
+    },
+    {
+      "declaredBytes": 3072,
+      "declared_bytes": 3072,
+      "freeBytes": 2244,
+      "free_bytes": 2244,
+      "name": "cmdProc",
+      "peakUsedBytes": 828,
+      "peak_used_bytes": 828,
+      "running": true
+    },
+    {
+      "declaredBytes": 2048,
+      "declared_bytes": 2048,
+      "freeBytes": 1176,
+      "free_bytes": 1176,
+      "name": "wavegen",
+      "peakUsedBytes": 872,
+      "peak_used_bytes": 872,
+      "running": true
+    },
+    {
+      "declaredBytes": 5120,
+      "declared_bytes": 5120,
+      "freeBytes": 2932,
+      "free_bytes": 2932,
+      "name": "mainLoop",
+      "peakUsedBytes": 2188,
+      "peak_used_bytes": 2188,
+      "running": true
+    },
+    {
+      "declaredBytes": 5120,
+      "declared_bytes": 5120,
+      "freeBytes": 2904,
+      "free_bytes": 2904,
+      "name": "bbpCli",
+      "peakUsedBytes": 2216,
+      "peak_used_bytes": 2216,
+      "running": true
+    }
+  ],
+  "uptimeMs": 266072
+}

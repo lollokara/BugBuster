@@ -1,0 +1,40 @@
+{
+  "alertMask": 0,
+  "alertStatus": 0,
+  "alert_mask": 0,
+  "alert_status": 0,
+  "channels": [
+    {
+      "alert": 0,
+      "channelAlert": 0,
+      "channelAlertMask": 0,
+      "id": 0,
+      "mask": 0
+    },
+    {
+      "alert": 0,
+      "channelAlert": 0,
+      "channelAlertMask": 0,
+      "id": 1,
+      "mask": 0
+    },
+    {
+      "alert": 0,
+      "channelAlert": 0,
+      "channelAlertMask": 0,
+      "id": 2,
+      "mask": 0
+    },
+    {
+      "alert": 0,
+      "channelAlert": 0,
+      "channelAlertMask": 0,
+      "id": 3,
+      "mask": 0
+    }
+  ],
+  "supplyAlertMask": 0,
+  "supplyAlertStatus": 0,
+  "supply_alert_mask": 0,
+  "supply_alert_status": 0
+}

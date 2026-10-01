@@ -1,0 +1,48 @@
+{
+  "attached": true,
+  "cc": "CC1",
+  "currentA": 3,
+  "pdResponse": 1,
+  "powerW": 27,
+  "present": true,
+  "selectedPdo": 2,
+  "sourcePdos": [
+    {
+      "detected": true,
+      "maxCurrentA": 3,
+      "maxPowerW": 15,
+      "voltage": "5V"
+    },
+    {
+      "detected": true,
+      "maxCurrentA": 3,
+      "maxPowerW": 27,
+      "voltage": "9V"
+    },
+    {
+      "detected": true,
+      "maxCurrentA": 3,
+      "maxPowerW": 36,
+      "voltage": "12V"
+    },
+    {
+      "detected": true,
+      "maxCurrentA": 3,
+      "maxPowerW": 45,
+      "voltage": "15V"
+    },
+    {
+      "detected": false,
+      "maxCurrentA": 0.5,
+      "maxPowerW": 9,
+      "voltage": "18V"
+    },
+    {
+      "detected": true,
+      "maxCurrentA": 3,
+      "maxPowerW": 60,
+      "voltage": "20V"
+    }
+  ],
+  "voltageV": 9
+}

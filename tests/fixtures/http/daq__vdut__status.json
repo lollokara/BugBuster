@@ -1,0 +1,9 @@
+{
+  "currentLimitMa": 1000,
+  "enabled": false,
+  "fault": false,
+  "measuredCurrentMa": -0.587467511650175,
+  "measuredVoltageV": 0.5078022480010986,
+  "present": true,
+  "voltageSetpointV": 4
+}
