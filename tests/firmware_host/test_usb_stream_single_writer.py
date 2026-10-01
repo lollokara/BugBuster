@@ -14,7 +14,6 @@ at max rate) is T3.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 from tests.lib.srcread import REPO_ROOT
@@ -32,7 +31,6 @@ def _case(body: str, label: str) -> str:
     return body[start: start + 1 + nxt.start()] if nxt else body[start:]
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-04")
 def test_stop_and_marker_handlers_defer_to_the_producer():
     usb = _code(extract_function(P4 / "board/daq_board.c", r"static void usb_cmd_handler\("))
     stop = _case(usb, "USB_CMD_STOP")
@@ -44,7 +42,6 @@ def test_stop_and_marker_handlers_defer_to_the_producer():
     assert "usb_stream_queue_marker" in mark
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-04")
 def test_producer_services_requests_before_each_sample():
     push = _code(extract_function(P4 / "stream/usb_stream.c", r"void usb_stream_push_sample\("))
     assert "usb_stream_service_requests" in push
@@ -74,7 +71,6 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-04")
 def test_marker_queue_is_bounded_fifo_and_wrap_safe():
     out = compile_and_run(MAIN, cxx=False, include_dirs=[P4 / "stream"]).strip()
     assert out == "ok=16 popped=16 fifo=1 dropped=4 wrap=4 wrapfifo=1", out

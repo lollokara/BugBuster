@@ -106,6 +106,30 @@ void usb_stream_reset_session(usb_stream_t *s)
     s->reset_pending = true;
 }
 
+void usb_stream_request_flush(usb_stream_t *s)
+{
+    __atomic_store_n(&s->flush_pending, true, __ATOMIC_RELEASE);
+}
+
+bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                             uint8_t kind)
+{
+    usb_mark_req_t r = { channel, edge, kind };
+    return usb_mark_q_push(&s->mark_q, r);
+}
+
+void usb_stream_service_requests(usb_stream_t *s)
+{
+    usb_mark_req_t r;
+    while (usb_mark_q_pop(&s->mark_q, &r)) {
+        usb_stream_send_marker(s, r.channel, r.edge, r.kind, UINT64_MAX);
+    }
+    if (__atomic_exchange_n(&s->flush_pending, false, __ATOMIC_ACQ_REL)) {
+        usb_stream_flush_wave_i(s);
+        usb_stream_flush_wave_v(s);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Frame assembly
 // -----------------------------------------------------------------------------
@@ -343,6 +367,7 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
     if (s->reset_pending) {
         usb_stream_reset_apply(s);   // consumed on the sole producer task
     }
+    usb_stream_service_requests(s);  // DAQ-04: markers + STOP flush
     uint64_t idx = s->sample_seq++;
     if (!s->streaming) {
         return;

@@ -654,8 +654,13 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
         case USB_CMD_STOP:
             usb_stream_set_streaming(&b->usb, false);
             ESP_LOGI(TAG, "CMD_STOP: streaming off");
-            usb_stream_flush_wave_i(&b->usb);
-            usb_stream_flush_wave_v(&b->usb);
+            // DAQ-04: daq_fast is the only frame_buf writer while it runs.
+            if (b->fast_running) {
+                usb_stream_request_flush(&b->usb);
+            } else {
+                usb_stream_flush_wave_i(&b->usb);
+                usb_stream_flush_wave_v(&b->usb);
+            }
             break;
         case USB_CMD_RESET_ENERGY:
             power_dsp_reset_energy(&b->dsp);
@@ -1486,8 +1491,12 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
 
         case HATP_CMD_DAQ_STOP:
             usb_stream_set_streaming(&b->usb, false);
-            usb_stream_flush_wave_i(&b->usb);
-            usb_stream_flush_wave_v(&b->usb);
+            if (b->fast_running) {           // DAQ-04: see USB_CMD_STOP
+                usb_stream_request_flush(&b->usb);
+            } else {
+                usb_stream_flush_wave_i(&b->usb);
+                usb_stream_flush_wave_v(&b->usb);
+            }
             return 0;
 
         // ---- ODR/filter configuration. Deferred to the ctrl_queue/ctrl_task
@@ -1779,8 +1788,13 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // shared IRQ line; here we use the UART-arrival sample index).
             if (len >= sizeof(s3link_daq_mark_t)) {
                 const s3link_daq_mark_t *m = (const s3link_daq_mark_t *)payload;
-                usb_stream_send_marker(&b->usb, m->channel, m->edge, m->kind,
-                                       UINT64_MAX);
+                // DAQ-04: queue for daq_fast (the frame_buf owner) when it runs.
+                if (b->fast_running) {
+                    usb_stream_queue_marker(&b->usb, m->channel, m->edge, m->kind);
+                } else {
+                    usb_stream_send_marker(&b->usb, m->channel, m->edge, m->kind,
+                                           UINT64_MAX);
+                }
                 return 0;
             }
             return -1;

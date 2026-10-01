@@ -21,6 +21,7 @@
 #include "esp_err.h"
 
 #include "usb_proto.h"
+#include "usb_marker_q.h"
 #include "power_dsp.h"
 #include "current_fusion.h"
 
@@ -188,6 +189,10 @@ typedef struct {
     // sole writer of the batch/counter fields — so the reset never tears a
     // mid-push batch or a non-atomic u64 sequence.
     volatile bool   reset_pending;
+    // DAQ-04: same handoff for the STOP flush and digital-event markers, which
+    // used to write frame_buf from the TinyUSB / S3-link tasks mid-frame.
+    volatile bool   flush_pending;
+    usb_mark_q_t    mark_q;
     volatile uint32_t dropped_frames;
 
     // Trigger latch (S3 owns the IO event logic; the PC keeps the pre-roll).
@@ -261,6 +266,19 @@ void usb_stream_batch_end(usb_stream_t *s);
  *        usb_stream_reset_apply() instead for an immediate reset.
  */
 void usb_stream_reset_session(usb_stream_t *s);
+
+/** @brief (any task) Ask the producer to flush the partial WAVE_I/WAVE_V
+ *         batches. Use instead of the flush_* calls while daq_fast runs. */
+void usb_stream_request_flush(usb_stream_t *s);
+
+/** @brief (S3-link task only: single producer) Queue a marker for the
+ *         producer to emit. Returns false when the queue is full. */
+bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                             uint8_t kind);
+
+/** @brief (producer only) Apply pending flush/marker requests. Called at the
+ *         top of usb_stream_push_sample(). */
+void usb_stream_service_requests(usb_stream_t *s);
 
 /**
  * @brief Apply the session reset immediately. ONLY safe when the producer
