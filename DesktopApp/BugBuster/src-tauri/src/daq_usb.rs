@@ -48,6 +48,11 @@ pub fn daq_usb_present() -> bool {
 const QUEUE_DEPTH: usize = 4;
 /// Size of each queued IN transfer buffer.
 const QUEUE_BUF_LEN: usize = 65536;
+/// Longest single wait inside `read_records`. The ingest thread holds the
+/// shared transport mutex for one call, so this bounds control-command latency.
+const DAQ_READ_SLICE_MS: u64 = 1000;
+/// Total silence on bulk IN before `read_records` reports a timeout (DESK-7).
+const DAQ_IDLE_TIMEOUT_MS: u64 = 1000;
 
 pub struct DaqUsbConnection {
     interface: Option<nusb::Interface>,
@@ -190,7 +195,7 @@ impl DaqTransport for DaqUsbConnection {
             // (range changes, calibration, etc.).
             let completion = rt
                 .block_on(tokio::time::timeout(
-                    std::time::Duration::from_millis(1000),
+                    std::time::Duration::from_millis(DAQ_READ_SLICE_MS),
                     queue.next_complete(),
                 ))
                 .map_err(|_| anyhow!("DAQ USB read timed out"))?;
@@ -711,6 +716,19 @@ impl DaqTransport for MockDaqTransport {
         }
         let _ = self.seq.wrapping_add(1);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lock_hold_tests {
+    /// DESK-24: the ingest thread holds the transport mutex for a whole
+    /// `read_records` call, so a 1 s blocking read starved control commands
+    /// (range lock, rate, stop) for up to 1 s while the stream was idle.
+    #[test]
+    #[ignore = "DESK-24"]
+    fn usb_read_slice_bounds_lock_hold() {
+        const { assert!(super::DAQ_IDLE_TIMEOUT_MS >= 1000) };
+        assert!(super::DAQ_READ_SLICE_MS <= 100, "slice {} ms", super::DAQ_READ_SLICE_MS);
     }
 }
 
