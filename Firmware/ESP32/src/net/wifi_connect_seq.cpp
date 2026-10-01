@@ -6,16 +6,16 @@
 
 bool wifi_connect_seq(const WifiConnectOps *ops, const char *ssid, const char *pass)
 {
-    // Full stop/restart for a clean connection
-    ops->disconnect();
-    ops->stop();
-    ops->delay(200);
+    // PLT-05: stay in AP+STA for the whole attempt. Switching to STA-only
+    // dropped the AP (the link HTTP clients and the phone use) for up to a
+    // minute, and a failed attempt then had no fallback path to the device.
+    char prev_ssid[33] = {};
+    char prev_pass[65] = {};
+    ops->get_sta(prev_ssid, sizeof(prev_ssid), prev_pass, sizeof(prev_pass));
 
-    // STA-only mode for connection (avoids AP channel conflicts)
-    ops->set_mode(true);
+    ops->disconnect();
+    ops->set_mode(false);
     ops->set_sta(ssid, pass);
-    ops->start();
-    ops->delay(200);
 
     // Retry up to 5 times with increasing delay
     bool connected = false;
@@ -27,18 +27,15 @@ bool wifi_connect_seq(const WifiConnectOps *ops, const char *ssid, const char *p
         connected = ops->try_connect(10000);
     }
 
-    // Restore AP+STA mode
-    if (!connected) ops->disconnect();
-    ops->stop();
-    ops->delay(100);
-    ops->set_mode(false);
-    ops->reapply_ap();
-    ops->set_sta(ssid, pass);   // keep the network we just tried
-    ops->start();
+    if (connected) {
+        ops->save_creds(ssid, pass);
+        return true;
+    }
 
-    // If we were connected in STA-only mode, reconnect in APSTA mode
-    if (connected) connected = ops->try_connect(10000);
-
-    if (connected) ops->save_creds(ssid, pass);
-    return connected;
+    // Failed: put the previous STA network back so the reconnect worker goes
+    // back to it instead of chasing the SSID that just failed.
+    ops->disconnect();
+    ops->set_sta(prev_ssid, prev_pass);
+    if (prev_ssid[0]) ops->try_connect(10000);
+    return false;
 }

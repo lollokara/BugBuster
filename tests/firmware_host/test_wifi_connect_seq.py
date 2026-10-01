@@ -9,8 +9,6 @@ A (sequence extracted verbatim from wifi_manager.cpp, no behaviour change):
 B: the AP stays up (AP+STA throughout), and a failed attempt restores the
    previous STA config; credentials are persisted only on success."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 
 MAIN = r"""
@@ -51,11 +49,9 @@ def _run() -> list[str]:
     return out.strip().splitlines()
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-05")
 def test_failed_connect_keeps_ap_and_restores_previous_sta():
     assert _run()[0] == "fail ok=0 ap_dropped=0 sta=HomeNet saves=0"
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-05")
 def test_successful_connect_keeps_ap_and_saves():
     assert _run()[1] == "good ok=1 ap_dropped=0 sta=NewNet saves=1"
