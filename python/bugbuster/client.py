@@ -101,6 +101,18 @@ from .protocol import ProtocolError
 
 log = logging.getLogger(__name__)
 
+# TR-7: commands that are safe to resend after a timeout - pure reads with no
+# device-side effect. Derived from names so a new GET_/_STATUS command is
+# covered; EXT_* bus transactions are excluded (a bus read is still a bus
+# transaction), as are draining reads such as SCRIPT_LOGS.
+_RETRY_SAFE_CMDS = frozenset(
+    int(c) for n, c in CmdId.__members__.items()
+    if not n.startswith("EXT_") and (
+        n == "PING" or n.startswith("GET_")
+        or n.endswith(("_STATUS", "_LIST", "_INFO", "_GET", "_GET_ALL"))
+        or "_GET_" in n)
+)
+
 
 def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
     """Raise ProtocolError if *resp* is shorter than *min_len* bytes."""
@@ -541,9 +553,9 @@ class BugBuster:
         """
         Send a binary command and return the raw response payload.
 
-        On ``TimeoutError`` the input buffer is drained for 50 ms and the
-        command is retried once.  If the second attempt also times out the
-        original exception is re-raised.
+        On ``TimeoutError`` an idempotent read (``_RETRY_SAFE_CMDS``) is
+        retried once after a 50 ms drain; anything else re-raises at once.
+        If the retry also times out the original exception is re-raised.
 
         A unit-testable pre-send hook is available: set
         ``client._usb_pre_send_hook`` to a callable that is invoked (with no
@@ -578,7 +590,11 @@ class BugBuster:
                     except (OSError, serial.SerialException) as _drain_exc:
                         log.debug("Drain read error (ignored): %s", _drain_exc)
                         break
-            # Single retry
+            # Single retry - only for idempotent reads (TR-7). A timed-out
+            # write usually DID run on the device; resending it would run it
+            # twice (I2C/SPI writes, SCRIPT_EVAL, power commands).
+            if cmd_id not in _RETRY_SAFE_CMDS:
+                raise
             try:
                 return _attempt()
             except TimeoutError:

@@ -28,7 +28,6 @@ def _client_counting():
 
 @pytest.mark.parametrize("cmd", [CmdId.EXT_I2C_WRITE, CmdId.EXT_SPI_TRANSFER,
                                  CmdId.SCRIPT_EVAL, CmdId.PCA_SET_PORT])
-@pytest.mark.xfail(strict=True, reason="TR-7")
 def test_side_effecting_commands_are_not_resent(cmd):
     client, calls = _client_counting()
     with pytest.raises(TimeoutError):
