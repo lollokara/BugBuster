@@ -369,41 +369,54 @@ class TestDigitalWriteRouting(unittest.TestCase):
 # =========================================================================
 
 class TestEnableIoBlockPower(unittest.TestCase):
-    """Verify _enable_io_block_power() activates the correct PCA controls."""
+    """Verify _enable_io_block_power() powers the right rail + e-fuse.
 
+    PWR-REFAC: a cold rail is brought up by ONE firmware-sequenced
+    rail_power_up() (e-fuse off -> V -> VADJ on -> settle -> e-fuse armed)
+    instead of host-timed power_set/idac_set_voltage calls. efuse_mask bit0 /
+    bit1 = the rail's first / second e-fuse.
+    """
+
+    @unittest.expectedFailure  # PWR-REFAC
     def test_block1_io3_enables_vadj1_and_efuse1(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[3]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE1, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(1, 3.3)
+        mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x01)
+        mock_bb.power_set.assert_not_called()
 
+    @unittest.expectedFailure  # PWR-REFAC
     def test_block1_io5_enables_vadj1_and_efuse2(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[5]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE2, on=True)
+        mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x02)
 
+    @unittest.expectedFailure  # PWR-REFAC
     def test_block2_io9_enables_vadj2_and_logical_efuse3(self):
         # Logical connector C uses EFUSE3 at the host API; firmware maps it to
         # the swapped PCA9535 hardware bit.
         hal, mock_bb = _make_hal()
         rt = hal._routing[9]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE3, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(2, 3.3)
+        mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x01)
 
+    @unittest.expectedFailure  # PWR-REFAC
     def test_block2_io12_enables_vadj2_and_logical_efuse4(self):
         # Logical connector D uses EFUSE4 at the host API; firmware maps it to
         # the swapped PCA9535 hardware bit.
         hal, mock_bb = _make_hal()
         rt = hal._routing[12]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE4, on=True)
+        mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x02)
+
+    @unittest.expectedFailure  # PWR-REFAC
+    def test_second_block_on_a_live_rail_only_arms_its_efuse(self):
+        hal, mock_bb = _make_hal()
+        hal._enable_io_block_power(hal._routing[3])    # cold VADJ1 + EFUSE1
+        hal._enable_io_block_power(hal._routing[5])    # VADJ1 already on
+        mock_bb.rail_power_up.assert_called_once()
+        mock_bb.power_set.assert_called_once_with(PowerControl.EFUSE2, on=True)
 
     def test_ioblock_3_4_keep_mux_gpio_with_connectors_but_channel_is_logical(self):
         hal, _ = _make_hal()
