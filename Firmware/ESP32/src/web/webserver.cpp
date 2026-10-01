@@ -30,6 +30,8 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "power/rail_power.h"
+#include "cmd_errors.h"
 #include "hat.h"
 #include "adgs2414d.h"
 #include "dio.h"
@@ -2374,6 +2376,45 @@ static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
     return send_json(req, rsp);
 }
 
+// POST /api/ioexp/rail_up  body: {"rail":1, "voltage":5.0, "settleMs":500,
+//   "confirm":false, "powerCycle":false, "efuseMask":0}
+// Same firmware sequence as BBP RAIL_POWER_UP (power/rail_power.h).
+static esp_err_t handle_post_ioexp_rail_up(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    const cJSON *j_rail = cJSON_GetObjectItem(body, "rail");
+    const cJSON *j_v    = cJSON_GetObjectItem(body, "voltage");
+    const cJSON *j_set  = cJSON_GetObjectItem(body, "settleMs");
+    const cJSON *j_mask = cJSON_GetObjectItem(body, "efuseMask");
+    int   rail   = cJSON_IsNumber(j_rail) ? j_rail->valueint : 0;
+    float volts  = cJSON_IsNumber(j_v) ? (float)j_v->valuedouble : 0.0f;
+    int   settle = cJSON_IsNumber(j_set) ? j_set->valueint : 500;
+    int   mask   = cJSON_IsNumber(j_mask) ? j_mask->valueint : 0;
+    uint8_t flags = (uint8_t)((cJSON_IsTrue(cJSON_GetObjectItem(body, "confirm")) ? RAIL_PU_CONFIRM : 0) |
+                              (cJSON_IsTrue(cJSON_GetObjectItem(body, "powerCycle")) ? RAIL_PU_POWER_CYCLE : 0));
+    cJSON_Delete(body);
+    if (rail < 1 || rail > 2 || settle < 0 || settle > (int)RAIL_PU_MAX_SETTLE_MS || mask < 0 || mask > 3)
+        return send_error(req, 400, "rail must be 1-2, settleMs 0-5000, efuseMask 0-3");
+
+    RailPowerResult r = {};
+    int rc = rail_power_up(rail_power_ops_hw(), (uint8_t)rail, volts, (uint16_t)settle,
+                           flags, (uint8_t)mask, &r);
+    if (rc == CMD_ERR_BAD_ARG)
+        return send_error(req, 400, "voltage must be 3-15 V; above 12 V needs confirm");
+    if (rc != 0) return send_error(req, 500, "rail power-up failed (I2C)");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "rail", rail);
+    cJSON_AddNumberToObject(root, "appliedV", r.applied_v);
+    cJSON_AddBoolToObject(root, "clamped", r.clamped);
+    cJSON_AddBoolToObject(root, "pg", r.pg);
+    cJSON *f = cJSON_AddArrayToObject(root, "efuseFaults");
+    cJSON_AddItemToArray(f, cJSON_CreateBool(r.fault[0]));
+    cJSON_AddItemToArray(f, cJSON_CreateBool(r.fault[1]));
+    return send_json(req, root);
+}
+
 // POST /api/ioexp dispatch
 static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 {
@@ -2381,6 +2422,7 @@ static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 
     if (strstr(req->uri, "/api/ioexp/control")) return handle_post_ioexp_control(req);
     if (strstr(req->uri, "/api/ioexp/fault_config")) return handle_post_ioexp_fault_config(req);
+    if (strstr(req->uri, "/api/ioexp/rail_up")) return handle_post_ioexp_rail_up(req);
     return send_error(req, 404, "Unknown IO Expander endpoint");
 }
 

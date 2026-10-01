@@ -2674,6 +2674,53 @@ class BugBuster:
         _require_resp_len(resp, 2, "PCA_SET_PORT")
         return resp[0], resp[1]
 
+    def rail_power_up(
+        self,
+        rail: int,
+        voltage: float,
+        settle_ms: int = 500,
+        *,
+        confirm: bool = False,
+        power_cycle: bool = False,
+        efuse_mask: int = 0,
+    ) -> dict:
+        """
+        Power a VADJ rail up as one firmware-sequenced operation.
+
+        Firmware order: rail e-fuses off -> (VADJ off + 200 ms discharge if
+        *power_cycle*) -> set *voltage* -> VADJ on -> *settle_ms* -> e-fuses
+        armed through the soft-start blackout gate -> power-good / fault read.
+
+        :param rail: 1 = VADJ1 (EFUSE1+2, IO 1-6), 2 = VADJ2 (EFUSE3+4, IO 7-12).
+        :param voltage: 3.0-15.0 V. Above 12 V the device refuses unless *confirm*.
+        :param settle_ms: wait between rail enable and e-fuse enable (0-5000).
+        :param efuse_mask: bit0/bit1 = the rail's first/second e-fuse; 0 = both.
+        :return: ``rail``, ``applied_v`` (after DAC clamping), ``clamped``,
+                 ``pg``, ``efuse_faults`` (two bools, the rail's e-fuses).
+        """
+        if rail not in (1, 2):
+            raise ValueError(f"rail must be 1 or 2, got {rail!r}")
+        if not 0 <= settle_ms <= 5000:
+            raise ValueError("settle_ms must be 0-5000")
+        if self._usb:
+            flags = (0x01 if confirm else 0) | (0x02 if power_cycle else 0)
+            payload = struct.pack('<BHHBB', rail, int(round(voltage * 1000)),
+                                  settle_ms, flags, efuse_mask & 0x03)
+            resp = self._usb_cmd(CmdId.RAIL_POWER_UP, payload)
+            r, mv, status = struct.unpack_from('<BHB', resp)
+            return {"rail": r, "applied_v": mv / 1000.0, "clamped": bool(status & 0x08),
+                    "pg": bool(status & 0x01),
+                    "efuse_faults": [bool(status & 0x02), bool(status & 0x04)]}
+        resp = self._http_post("/ioexp/rail_up", {
+            "rail": rail, "voltage": voltage, "settleMs": settle_ms,
+            "confirm": confirm, "powerCycle": power_cycle, "efuseMask": efuse_mask & 0x03,
+        })
+        if "error" in resp:
+            raise ValueError(resp["error"])
+        return {"rail": resp["rail"], "applied_v": float(resp["appliedV"]),
+                "clamped": bool(resp["clamped"]), "pg": bool(resp["pg"]),
+                "efuse_faults": [bool(x) for x in resp["efuseFaults"]]}
+
     def power_set_fault_config(self, auto_disable: bool = True, log_events: bool = True) -> None:
         """
         Configure PCA9535 fault behavior.

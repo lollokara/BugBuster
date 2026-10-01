@@ -48,12 +48,18 @@ def _enabled_efuses(bb):
     (2, {PowerControl.EFUSE3, PowerControl.EFUSE4}),
 ])
 def test_power_up_enables_both_efuses_of_the_rail(tools, rail, expected):
+    # PWR-REFAC: the e-fuse sequence now runs in firmware (RAIL_POWER_UP);
+    # the tool must target the right rail with both of its e-fuses (mask 0).
     bb = make_client_mock()
-    bb.power_get_status.return_value = {
-        "efuse_faults": [False] * 4, "vadj1_pg": True, "vadj2_pg": True}
+    bb.rail_power_up.return_value = {"rail": rail, "applied_v": 5.0, "clamped": False,
+                                     "pg": True, "efuse_faults": [False, False]}
     with patch("bugbuster_mcp.session.get_client", return_value=bb):
-        tools["target_power_up"](supply_voltage=5.0, rail=rail, settle_ms=0)
-    assert _enabled_efuses(bb) == expected
+        res = tools["target_power_up"](supply_voltage=5.0, rail=rail, settle_ms=0)
+    bb.rail_power_up.assert_called_once()
+    args, kwargs = bb.rail_power_up.call_args
+    assert args[0] == rail and kwargs.get("efuse_mask", 0) == 0
+    assert set(res["efuses"]) == {e.name for e in expected}
+    bb.power_set.assert_not_called()
 
 
 def test_tripped_efuse_reports_failure(tools):

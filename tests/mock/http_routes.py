@@ -756,6 +756,18 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("GET", "/ioexp/faults"):
         return {"faults": []}
 
+    # Sequenced rail power-up — POST /ioexp/rail_up (firmware power/rail_power.h)
+    if key == ("POST", "/ioexp/rail_up"):
+        from tests.mock.handlers.power import rail_power_up_model
+        b = body or {}
+        flags = (0x01 if b.get("confirm") else 0) | (0x02 if b.get("powerCycle") else 0)
+        r = rail_power_up_model(device, int(b.get("rail", 0)), float(b.get("voltage", 0.0)),
+                                flags, int(b.get("efuseMask", 0)))
+        if r is None:
+            return {"error": "voltage must be 3-15 V; above 12 V needs confirm", "code": 400}
+        return {"rail": r["rail"], "appliedV": r["applied_v"], "clamped": r["clamped"],
+                "pg": r["pg"], "efuseFaults": r["efuse_faults"]}
+
     # IO expander fault config — POST /ioexp/fault_config
     if key == ("POST", "/ioexp/fault_config"):
         return {"ok": True}

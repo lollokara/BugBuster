@@ -154,6 +154,7 @@ extern "C" {
 #define BBP_CMD_MUX_SET_ALL     0x90
 #define BBP_CMD_MUX_GET_ALL     0x91
 #define BBP_CMD_MUX_SET_SWITCH  0x92
+#define BBP_CMD_RAIL_POWER_UP   0x93  // Sequenced VADJ rail + e-fuse power-up (power/rail_power.h)
 
 // DS4424 IDAC
 #define BBP_CMD_IDAC_GET_STATUS     0xA0  // Get all IDAC channel states

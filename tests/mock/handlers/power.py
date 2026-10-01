@@ -16,6 +16,7 @@ def register(device) -> None:
     device.register_handler(CmdId.PCA_SET_PORT,      _pca_set_port(device))
     device.register_handler(CmdId.PCA_SET_FAULT_CFG, _pca_set_fault_cfg(device))
     device.register_handler(CmdId.PCA_GET_FAULT_LOG, _pca_get_fault_log(device))
+    device.register_handler(CmdId.RAIL_POWER_UP,     _rail_power_up(device))
     device.register_handler(CmdId.EFUSE_IMON_SET,    _efuse_imon_set(device))
     device.register_handler(CmdId.EFUSE_IMON_GET,    _efuse_imon_get(device))
 
@@ -120,6 +121,51 @@ def _pca_get_fault_log(device):
         log = getattr(device, "pca_fault_log", [])
         return struct.pack('<B', len(log)) + b"".join(
             struct.pack('<BBI', t, ch, ts) for t, ch, ts in log)
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# RAIL_POWER_UP (0x93) - firmware power/rail_power.h sequence, modelled.
+# payload: u8 rail(1-2), u16 mV, u16 settle_ms, u8 flags [, u8 efuse_mask]
+# resp:    u8 rail, u16 applied_mV, u8 status (b0 pg, b1/b2 fault, b3 clamped)
+# ---------------------------------------------------------------------------
+
+def rail_power_up_model(device, rail: int, volts: float, flags: int, mask: int):
+    """Shared by the BBP and HTTP simulators. None = refused (bad argument)."""
+    if rail not in (1, 2) or not 3.0 <= volts <= 15.0 or mask not in (0, 1, 2, 3):
+        return None
+    if volts > 12.0 and not (flags & 0x01):
+        return None
+    mask = mask or 0x03
+    first = 0 if rail == 1 else 2
+    ch = device.idac[rail]
+    applied = min(max(volts, ch["v_min"]), ch["v_max"])
+    ch["target_v"] = ch["actual_v"] = applied
+    device.pca_control[0 if rail == 1 else 1] = True          # VADJ1/VADJ2 enable
+    faults = list(getattr(device, "efuse_faults", [False] * 4))
+    for i in range(2):
+        if mask & (1 << i):
+            device.pca_control[5 + first + i] = True          # EFUSEn enable
+    return {"rail": rail, "applied_v": applied, "clamped": abs(applied - volts) > 0.01,
+            "pg": True,
+            "efuse_faults": [bool(faults[first]) and bool(mask & 1),
+                             bool(faults[first + 1]) and bool(mask & 2)]}
+
+
+def _rail_power_up(device):
+    def handler(payload: bytes) -> bytes:
+        if len(payload) < 6:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        rail, mv, settle, flags = struct.unpack_from('<BHHB', payload)
+        mask = payload[6] if len(payload) >= 7 else 0
+        if settle > 5000:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        r = rail_power_up_model(device, rail, mv / 1000.0, flags, mask)
+        if r is None:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        status = ((0x01 if r["pg"] else 0) | (0x02 if r["efuse_faults"][0] else 0) |
+                  (0x04 if r["efuse_faults"][1] else 0) | (0x08 if r["clamped"] else 0))
+        return struct.pack('<BHB', rail, int(round(r["applied_v"] * 1000)), status)
     return handler
 
 

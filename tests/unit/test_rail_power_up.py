@@ -16,13 +16,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from bugbuster import BugBuster
+from bugbuster.transport.usb import DeviceError
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.target import register
 from tests.mock import SimulatedDevice, SimulatedHTTPTransport, SimulatedUSBTransport
 
 RAIL_POWER_UP = 0x93
 RAW_POWER_CMDS = {0xB1, 0xB2, 0xA2}   # PCA_SET_CONTROL, PCA_SET_PORT, IDAC_SET_VOLTAGE
-pytestmark = pytest.mark.xfail(strict=True, reason="PWR-REFAC")
 
 
 class _DummyMCP:
@@ -71,7 +71,7 @@ def test_client_rail_power_up_reports_applied_voltage():
 
 def test_over_12v_needs_confirm_in_firmware():
     _dev, _sent, bb = _sim()
-    with pytest.raises(Exception):
+    with pytest.raises(DeviceError):
         bb._usb_cmd(RAIL_POWER_UP, bytes([1]) + (13000).to_bytes(2, "little") + (0).to_bytes(2, "little") + b"\x00")
     assert bb.rail_power_up(1, 13.0, settle_ms=0, confirm=True)["applied_v"] > 12.0
 

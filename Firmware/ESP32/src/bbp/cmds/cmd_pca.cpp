@@ -14,6 +14,7 @@
 #include "tasks.h"
 #include "state_lock.h"
 #include "pca9535.h"
+#include "power/rail_power.h"
 
 // ---------------------------------------------------------------------------
 // PCA_GET_STATUS  payload: (none)
@@ -240,6 +241,54 @@ static const ArgSpec s_pca_set_fault_cfg_rsp[] = {
 };
 
 // ---------------------------------------------------------------------------
+// RAIL_POWER_UP (0x93)  payload: u8 rail(1-2), u16 mV, u16 settle_ms,
+//                                u8 flags [, u8 efuse_mask]
+//   flags bit0 = confirm (required above 12 V), bit1 = power-cycle first
+//   efuse_mask bit0/bit1 = rail's first/second e-fuse, 0 or absent = both
+// resp: u8 rail, u16 applied_mV, u8 status
+//   status bit0 = VADJ power-good, bit1/bit2 = e-fuse fault, bit3 = clamped
+// The whole sequence runs in firmware (power/rail_power.h, PWR-REFAC).
+// ---------------------------------------------------------------------------
+static int handler_rail_power_up(const uint8_t *payload, size_t len,
+                                 uint8_t *resp, size_t *resp_len)
+{
+    if (len < 6) return -CMD_ERR_BAD_ARG;
+    size_t rpos = 0;
+    uint8_t  rail   = bbp_get_u8(payload, &rpos);
+    uint16_t mv     = bbp_get_u16(payload, &rpos);
+    uint16_t settle = bbp_get_u16(payload, &rpos);
+    uint8_t  flags  = bbp_get_u8(payload, &rpos);
+    uint8_t  mask   = (len >= 7) ? bbp_get_u8(payload, &rpos) : 0;
+    if (settle > RAIL_PU_MAX_SETTLE_MS) return -CMD_ERR_BAD_ARG;
+
+    RailPowerResult r = {};
+    int rc = rail_power_up(rail_power_ops_hw(), rail, (float)mv / 1000.0f,
+                           settle, flags, mask, &r);
+    if (rc != 0) return -rc;
+
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, rail);
+    bbp_put_u16(resp, &pos, (uint16_t)(r.applied_v * 1000.0f + 0.5f));
+    bbp_put_u8(resp, &pos, (uint8_t)((r.pg ? 0x01 : 0) | (r.fault[0] ? 0x02 : 0) |
+                                     (r.fault[1] ? 0x04 : 0) | (r.clamped ? 0x08 : 0)));
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static const ArgSpec s_rail_power_up_args[] = {
+    { "rail",       ARG_U8,  true,  1, 2 },
+    { "mv",         ARG_U16, true,  3000, 15000 },
+    { "settle_ms",  ARG_U16, true,  0, RAIL_PU_MAX_SETTLE_MS },
+    { "flags",      ARG_U8,  true,  0, 3 },
+    { "efuse_mask", ARG_U8,  false, 0, 3 },
+};
+static const ArgSpec s_rail_power_up_rsp[] = {
+    { "rail",       ARG_U8,  true, 0, 0 },
+    { "applied_mv", ARG_U16, true, 0, 0 },
+    { "status",     ARG_U8,  true, 0, 0 },
+};
+
+// ---------------------------------------------------------------------------
 // Descriptor table
 // ---------------------------------------------------------------------------
 static const CmdDescriptor s_pca_cmds[] = {
@@ -253,6 +302,8 @@ static const CmdDescriptor s_pca_cmds[] = {
       s_pca_set_fault_cfg_args,  2, s_pca_set_fault_cfg_rsp,  2, handler_pca_set_fault_cfg, 0                   },
     { BBP_CMD_PCA_GET_FAULT_LOG, "pca_get_fault_log",
       NULL,                      0, NULL,                      0, handler_pca_get_fault_log, CMD_FLAG_READS_STATE },
+    { BBP_CMD_RAIL_POWER_UP,     "rail_power_up",
+      s_rail_power_up_args,      5, s_rail_power_up_rsp,      3, handler_rail_power_up,     0                   },
 };
 
 extern "C" void register_cmds_pca(void)

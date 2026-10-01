@@ -7,11 +7,7 @@ at a stale voltage:
   e-fuses armed (blackout gate) -> wait blackout + margin -> PG / fault readback.
 >12 V needs the confirm flag; <3 V or >15 V is refused before any action."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
-
-pytestmark = pytest.mark.xfail(strict=True, reason="PWR-REFAC")
 
 MAIN = r"""
 #include <stdio.h>

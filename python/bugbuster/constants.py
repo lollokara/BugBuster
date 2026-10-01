@@ -374,6 +374,7 @@ class CmdId(IntEnum):
     MUX_SET_ALL      = 0x90
     MUX_GET_ALL      = 0x91
     MUX_SET_SWITCH   = 0x92
+    RAIL_POWER_UP    = 0x93
 
     # DS4424 IDAC
     IDAC_GET_STATUS   = 0xA0
@@ -569,6 +570,8 @@ CMD_TIMEOUTS_S: Dict[int, float] = {
     CmdId.DAQ_MEASURE:         10.0,
     # Calibration sweeps and supply diagnostics measure per point.
     CmdId.HAT_CALIBRATE_START:  60.0,
+    # Firmware-sequenced rail power-up: settle (<= 5 s) + discharge + blackout.
+    CmdId.RAIL_POWER_UP:        10.0,
     CmdId.HAT_CALIBRATE_IMPORT: 30.0,
     CmdId.SELFTEST_AUTO_CAL:    60.0,
     CmdId.SELFTEST_INT_SUPPLIES: 30.0,

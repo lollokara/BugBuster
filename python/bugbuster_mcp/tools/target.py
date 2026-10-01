@@ -28,16 +28,17 @@ def _rail_controls(rail: int):
     raise ValueError(f"rail must be 1 or 2, got {rail!r}")
 
 
-def _rail_warnings(bb, rail: int) -> list[str]:
-    """E-fuse trips and missing power-good for one rail, from the PCA9535 status."""
-    st = bb.power_get_status()
-    faults = st.get("efuse_faults") or [False] * 4
+def _result_warnings(res: dict, rail: int) -> list[str]:
+    """E-fuse trips, missing power-good and clamping from a rail_power_up() result."""
+    first = 1 if rail == 1 else 3
     warnings = []
-    for idx in ((0, 1) if rail == 1 else (2, 3)):
-        if idx < len(faults) and faults[idx]:
-            warnings.append(f"eFuse{idx + 1} tripped - possible overcurrent. Check wiring.")
-    if not st.get(f"vadj{rail}_pg", True):
+    for i, tripped in enumerate(res.get("efuse_faults") or []):
+        if tripped:
+            warnings.append(f"eFuse{first + i} tripped - possible overcurrent. Check wiring.")
+    if not res.get("pg", True):
         warnings.append(f"VADJ{rail} power-good signal not asserted - check load.")
+    if res.get("clamped"):
+        warnings.append(f"VADJ{rail} clamped to {res['applied_v']:.2f} V by the DAC limits.")
     return warnings
 
 
@@ -73,26 +74,21 @@ def register(mcp) -> None:
         Returns: rail, voltage, efuses, success, warnings. success is False
         when an e-fuse tripped or power-good is missing.
         """
-        efuses, vadj_ctrl, idac_ch = _rail_controls(rail)
+        efuses, _vadj_ctrl, _idac_ch = _rail_controls(rail)
         validate_vadj_voltage(supply_voltage, rail, confirm)
         bb = session.get_client()
 
-        for ef in efuses:
-            bb.power_set(ef, on=False)
-        bb.power_set(vadj_ctrl, on=True)
-        bb.idac_set_voltage(idac_ch, supply_voltage)
-        time.sleep(settle_ms / 1000.0)
-        for ef in efuses:
-            bb.power_set(ef, on=True)
-
-        time.sleep(0.1)
-        warnings = _rail_warnings(bb, rail)
+        # One firmware-sequenced frame (BBP RAIL_POWER_UP / HTTP rail_up): the
+        # e-fuse/VADJ ordering, settle and blackout no longer depend on the host.
+        res = bb.rail_power_up(rail, supply_voltage, settle_ms, confirm=confirm)
+        warnings = _result_warnings(res, rail)
         return {
-            "rail":     f"VADJ{rail}",
-            "voltage":  supply_voltage,
-            "efuses":   [ef.name for ef in efuses],
-            "success":  not warnings,
-            "warnings": warnings,
+            "rail":      f"VADJ{rail}",
+            "voltage":   supply_voltage,
+            "applied_v": res["applied_v"],
+            "efuses":    [ef.name for ef in efuses],
+            "success":   not warnings,
+            "warnings":  warnings,
         }
 
     @mcp.tool()
@@ -134,10 +130,8 @@ def register(mcp) -> None:
 
         Returns: success, uart_bridge, boot_io, warnings.
         """
-        from bugbuster.hal import DEFAULT_ROUTING
-
-        efuses, vadj_ctrl, idac_ch = _rail_controls(rail)
         validate_vadj_voltage(supply_voltage, rail, confirm)
+        _rail_controls(rail)
         bb  = session.get_client()
         hal = session.get_hal()
 
@@ -149,35 +143,14 @@ def register(mcp) -> None:
         if tx_gpio is None or rx_gpio is None:
             raise ValueError(f"Unsupported IO numbers: tx_io={tx_io}, rx_io={rx_io}")
 
-        # MUX switch masks (from hal.py _SW_* constants)
-        _SW_A_HIGH = 0x01   # Group A (position 1) — analog-capable IOs (3,6,9,12)
-        _SW_B_HIGH = 0x10   # Group B (position 2)
-        _SW_C_HIGH = 0x40   # Group C (position 3)
-        _GROUP_MASK = {1: 0x0F, 2: 0x30, 3: 0xC0}
-        _DRIVE_MASK = {1: _SW_A_HIGH, 2: _SW_B_HIGH, 3: _SW_C_HIGH}
+        # 1 - Assert BOOT low BEFORE the target is power-cycled. dio_configure
+        #     and the UART bridge route their IOs in firmware and MERGE into the
+        #     live MUX state (IO-1), so the earlier host-side MUX re-assertion
+        #     workaround is gone.
+        bb.dio_configure(boot_io, 2)        # mode 2 = OUTPUT
+        bb.dio_write(boot_io, False)        # drive low -> ESP32 BOOT pin = 0
 
-        def _mux_set_io(io_num, drive):
-            """Set MUX for one IO without touching power rails.
-            drive=True  → connect ESP GPIO to terminal (TX / BOOT out)
-            drive=False → same switch for input (RX) — same bit, different GPIO dir
-            Both TX and RX use the same MUX switch (ESP_HIGH); direction is set by
-            the ESP GPIO matrix via uart_set_pin / set_gpio_value."""
-            rt = DEFAULT_ROUTING[io_num]
-            mask = _DRIVE_MASK[rt.position] if drive else _DRIVE_MASK[rt.position]
-            cur = hal._mux_state[rt.mux_device]
-            cur = (cur & ~_GROUP_MASK[rt.position]) | mask
-            hal._mux_state[rt.mux_device] = cur
-            bb.mux_set_all(hal._mux_state)
-
-        # 1 — Assert BOOT low BEFORE any power reaches the target.
-        #     bus_planner_route_digital_input is called inside dio_configure and
-        #     clobbers the MUX, so we re-assert the correct state immediately after.
-        _mux_set_io(boot_io, drive=True)
-        bb.dio_configure(boot_io, 2)        # mode 2 = OUTPUT (clobbers MUX)
-        _mux_set_io(boot_io, drive=True)    # restore
-        bb.dio_write(boot_io, False)        # drive low → ESP32 BOOT pin = 0
-
-        # 2 — Configure UART bridge (also clobbers MUX via bus_planner).
+        # 2 - UART bridge: tx_io -> target RX, rx_io <- target TX.
         bb.set_uart_config(
             bridge_id=0, uart_num=1,
             tx_pin=tx_gpio, rx_pin=rx_gpio,
@@ -185,31 +158,18 @@ def register(mcp) -> None:
             data_bits=8, parity=0, stop_bits=0,
             enabled=True,
         )
+        if isinstance(getattr(hal, "_mux_state", None), list):
+            hal._mux_state[:] = bb.mux_get()   # keep the HAL shadow in sync
 
-        # 3 — Re-assert correct MUX state for all three IOs (firmware clobbered it).
-        _mux_set_io(tx_io,   drive=True)   # UART TX out → target RX
-        _mux_set_io(rx_io,   drive=False)  # UART RX in  ← target TX
-        _mux_set_io(boot_io, drive=True)   # BOOT still held low
+        # 3 - Full power cycle in ONE firmware-sequenced frame so the target
+        #     resets with BOOT held low (e-fuses off, VADJ off + discharge, set V,
+        #     VADJ on, settle, e-fuses armed, PG/fault read).
+        res = bb.rail_power_up(rail, supply_voltage, settle_ms,
+                               confirm=confirm, power_cycle=True)
 
-        # 4 — Full power cycle: turn everything off first, then bring up cleanly.
-        #     This ensures the target resets even if it was already powered.
-        for ef in efuses:
-            bb.power_set(ef, on=False)
-        bb.power_set(vadj_ctrl,  on=False)
-        time.sleep(0.2)   # let target fully discharge
-
-        bb.power_set(vadj_ctrl, on=True)
-        bb.idac_set_voltage(idac_ch, supply_voltage)
-        time.sleep(settle_ms / 1000.0)
-        for ef in efuses:
-            bb.power_set(ef, on=True)
-
-        # 5 — Leave BOOT low; esptool will connect while it's held low.
+        # 4 - Leave BOOT low; esptool connects while it is held low.
         # Call release_bootloader() after flashing to reboot into the app.
-        # (Do NOT release here.)
-
-        time.sleep(0.1)
-        warnings = _rail_warnings(bb, rail)
+        warnings = _result_warnings(res, rail)
 
         return {
             "success": not warnings,
@@ -243,7 +203,7 @@ def register(mcp) -> None:
         """
         from bugbuster.hal import PortMode
 
-        efuses, _vadj, _ch = _rail_controls(rail)
+        _rail_controls(rail)
         bb  = session.get_client()
         hal = session.get_hal()
 
@@ -251,14 +211,12 @@ def register(mcp) -> None:
         hal.write_digital(boot_io, True)
         time.sleep(0.1)
 
-        for ef in efuses:
-            bb.power_set(ef, on=False)
-        time.sleep(0.3)
-        for ef in efuses:
-            bb.power_set(ef, on=True)
-        time.sleep(0.5)
+        # Cycle the rail's e-fuses at the rail's CURRENT setpoint in one
+        # firmware-sequenced frame (VADJ stays on; 300 ms off-time as before).
+        cur_v = bb.idac_get_status()["channels"][rail].target_v
+        res = bb.rail_power_up(rail, cur_v, 300, confirm=cur_v > 12.0)
 
-        warnings = _rail_warnings(bb, rail)
+        warnings = _result_warnings(res, rail)
         return {
             "success":  not warnings,
             "boot_io":  boot_io,
