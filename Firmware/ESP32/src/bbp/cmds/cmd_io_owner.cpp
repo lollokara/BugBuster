@@ -70,9 +70,9 @@ static int handler_io_claim(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
-// IO_RELEASE  payload: u8 n_slots, u8 slots[n]
+// IO_RELEASE  payload: u8 n_slots, u8 slots[n]   (n_slots = 0: every slot the caller holds)
 //   session_id is the current BBP caller's (no wire spoofing, same as IO_CLAIM).
-//   resp: u8 n_slots, u8 released[n] (bool)
+//   resp: u8 n_slots, u8 released[n] (bool); for n_slots = 0: u8 0, u8 count_released
 // ---------------------------------------------------------------------------
 static int handler_io_release(const uint8_t *payload, size_t len,
                                uint8_t *resp, size_t *resp_len)
@@ -80,7 +80,16 @@ static int handler_io_release(const uint8_t *payload, size_t len,
     if (len < 1) return -CMD_ERR_BAD_ARG;
     size_t rpos = 0;
     uint8_t n_slots = bbp_get_u8(payload, &rpos);
-    if (n_slots == 0 || n_slots > IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
+    io_owner_t caller = io_owner_get_current_bbp_caller();
+    if (n_slots == 0) {
+        io_owner_kind_t kind = caller.kind == IO_OWNER_NONE ? IO_OWNER_USB : caller.kind;
+        size_t pos = 0;
+        bbp_put_u8(resp, &pos, 0);
+        bbp_put_u8(resp, &pos, io_owner_release_session(kind, caller.session_id));
+        *resp_len = pos;
+        return (int)pos;
+    }
+    if (n_slots > IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
     if (len < (size_t)(1 + n_slots)) return -CMD_ERR_BAD_ARG;
 
     uint8_t slots[IO_OWNER_NUM_SLOTS];
@@ -89,7 +98,7 @@ static int handler_io_release(const uint8_t *payload, size_t len,
         if (slots[i] >= IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
     }
 
-    uint8_t session_id = io_owner_get_current_bbp_caller().session_id;
+    uint8_t session_id = caller.session_id;
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, n_slots);
@@ -173,7 +182,7 @@ static const ArgSpec s_io_claim_rsp[] = {
 };
 
 static const ArgSpec s_io_release_args[] = {
-    { "n_slots",  ARG_U8, true, 1, IO_OWNER_NUM_SLOTS },
+    { "n_slots",  ARG_U8, true, 0, IO_OWNER_NUM_SLOTS },
     { "slots[]",  ARG_U8, true, 0, 15 },  // variable-length; n_slots entries
 };
 static const ArgSpec s_io_release_rsp[] = {

@@ -7,8 +7,6 @@ must take the client layout and release with the caller's own session (same
 no-spoofing rule as IO_CLAIM).
 """
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 from tests.lib.srcread import REPO_ROOT
 
@@ -82,7 +80,6 @@ def test_release_cannot_free_another_sessions_slot():
     assert "free 0 0" in out, out
 
 
-@pytest.mark.xfail(strict=True, reason="IO-5")
 def test_release_zero_slots_releases_all_of_the_callers():
     """n=0 is the documented "release everything I hold" form
     (BugBuster._io_release_raw, simulator)."""
