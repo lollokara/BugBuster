@@ -3,8 +3,6 @@ driver. The ArgSpec says 0..127 but nothing enforces ArgSpec ranges, so an
 8-bit address (0xA0) went out on the bus. Every I2C entry point must reject
 addr > 0x7F with BAD_ARG / OUT_OF_RANGE before touching the driver."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 
 CMD = "Firmware/ESP32/src/bbp/cmds/cmd_ext_bus.cpp"
@@ -62,6 +60,5 @@ def test_seven_bit_address_reaches_the_driver():
     assert _run(0x50).strip() == "0 0 0 0 0 calls=5"
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-012")
 def test_eight_bit_address_is_rejected_everywhere():
     assert _run(0xA0).strip() == "1 1 1 1 1 calls=0"
