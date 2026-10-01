@@ -86,3 +86,17 @@ def test_quicksetup_block_is_contiguous():
     ]
     for value, member in expected:
         assert int(member) == value, f"{member.name} drifted from 0x{value:02X}"
+
+
+@pytest.mark.xfail(strict=True, reason="PROTO-8")
+def test_fw_version_matches_firmware():
+    """The simulator reports ESP32_FW_VERSION, so version-gated client paths
+    were exercised against a firmware two majors old (3.4.0 vs 5.1.0)."""
+    from bugbuster.protocol import ESP32_FW_VERSION
+
+    text = ESP32_BBP_H.read_text(encoding="utf-8")
+    fw = tuple(
+        int(re.search(rf"(?m)^#define\s+BBP_FW_VERSION_{part}\s+(\d+)\s*$", text).group(1))
+        for part in ("MAJOR", "MINOR", "PATCH")
+    )
+    assert ESP32_FW_VERSION == fw
