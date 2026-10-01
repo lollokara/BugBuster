@@ -470,5 +470,31 @@ class TestReadCurrentUnits(unittest.TestCase):
         self.assertAlmostEqual(hal.read_current(3), 12.0)
 
 
+# =========================================================================
+# MCP-24: first configure() must not power a block at 12 V
+# =========================================================================
+
+class TestDefaultSupplyVoltage(unittest.TestCase):
+    """MCP configure_io never sets a supply voltage, so the HAL default is what
+    a DUT on the block sees. A 12 V default can destroy a 3.3 V target."""
+
+    @unittest.expectedFailure  # MCP-24
+    def test_first_configure_does_not_apply_12v(self):
+        for io in (3, 9):  # VADJ1 block and VADJ2 block
+            hal, mock_bb = _make_hal()
+            hal.configure(io, PortMode.DIGITAL_IN)
+            volts = [c.args[1] for c in mock_bb.idac_set_voltage.call_args_list
+                     if c.args[0] in (1, 2)]
+            self.assertTrue(volts, "block supply voltage was never set")
+            self.assertLessEqual(max(volts), 3.3, f"IO{io}: VADJ set to {volts}")
+
+    def test_explicit_supply_voltage_is_kept(self):
+        """Control: an explicit voltage still applies."""
+        hal, mock_bb = _make_hal()
+        hal._supply_v = 5.0
+        hal.configure(3, PortMode.DIGITAL_IN)
+        mock_bb.idac_set_voltage.assert_any_call(1, 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()
