@@ -8,7 +8,6 @@ then encode and send.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import REPO_ROOT
@@ -16,7 +15,6 @@ from tests.lib.srcread import REPO_ROOT
 BBP = REPO_ROOT / "Firmware/ESP32/src/bbp/bbp.cpp"
 
 
-@pytest.mark.xfail(strict=True, reason="AN-07")
 def test_scope_events_are_sent_after_the_state_mutex_is_released():
     body = re.sub(r"//[^\n]*", "", extract_function(BBP, r"static void processScopeStream\(void\)"))
     last_give = body.rindex("xSemaphoreGive(g_stateMutex)")

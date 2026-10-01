@@ -451,6 +451,14 @@ static void processScopeStream(void)
 {
     if (!s_scopeStreamActive) return;
 
+    // AN-07: copy new buckets under g_stateMutex, send after releasing it -
+    // the ADC poll task needs the same mutex to publish samples and used to
+    // wait behind the USB/WS writes. Bounded batch; the rest goes next call.
+    enum { SCOPE_BATCH = 16 };
+    static ScopeBucket s_batch[SCOPE_BATCH];
+    static uint16_t    s_batchSeq[SCOPE_BATCH];
+    uint16_t n = 0;
+
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
 
     uint16_t currentSeq = g_deviceState.scope->seq;
@@ -459,22 +467,31 @@ static void processScopeStream(void)
         return;
     }
 
-    // How many new buckets? (handle wrap)
+    // How many new buckets? (handle wrap; skip what the ring already overwrote)
     uint16_t newBuckets = currentSeq - s_scopeLastSeq;
-    if (newBuckets > SCOPE_BUF_SIZE) newBuckets = SCOPE_BUF_SIZE;
+    if (newBuckets > SCOPE_BUF_SIZE) {
+        s_scopeLastSeq = (uint16_t)(currentSeq - SCOPE_BUF_SIZE);
+        newBuckets = SCOPE_BUF_SIZE;
+    }
+    if (newBuckets > SCOPE_BATCH) newBuckets = SCOPE_BATCH;
 
-    // Send each new bucket as a SCOPE_DATA event
     for (uint16_t i = 0; i < newBuckets; i++) {
         uint16_t bucketSeq = s_scopeLastSeq + i + 1;
         uint16_t idx = (g_deviceState.scope->head - (currentSeq - bucketSeq) + SCOPE_BUF_SIZE)
                        % SCOPE_BUF_SIZE;
-        // Avoid sending partially-written data: only send if this index is valid
         if (idx >= SCOPE_BUF_SIZE) continue;
-        const ScopeBucket &b = g_deviceState.scope->buckets[idx];
+        s_batch[n] = g_deviceState.scope->buckets[idx];
+        s_batchSeq[n] = bucketSeq;
+        n++;
+    }
+    s_scopeLastSeq = (uint16_t)(s_scopeLastSeq + newBuckets);
+    xSemaphoreGive(g_stateMutex);
 
+    for (uint16_t k = 0; k < n; k++) {
+        const ScopeBucket &b = s_batch[k];
         uint8_t evtBuf[64];
         size_t pos = 0;
-        bbp_put_u32(evtBuf, &pos, bucketSeq);
+        bbp_put_u32(evtBuf, &pos, s_batchSeq[k]);
         bbp_put_u32(evtBuf, &pos, b.timestamp_ms);
         bbp_put_u16(evtBuf, &pos, b.count);
 
@@ -490,9 +507,6 @@ static void processScopeStream(void)
         // client is subscribed). HTTP/WS clients see identical data to BBP.
         ws_stream_forward(WS_STREAM_SCOPE, evtBuf, pos);
     }
-
-    s_scopeLastSeq = currentSeq;
-    xSemaphoreGive(g_stateMutex);
 }
 
 // -----------------------------------------------------------------------------
