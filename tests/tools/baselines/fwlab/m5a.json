@@ -1,6 +1,6 @@
 {
   "tag": "m5a",
-  "captured_at": 1790895849.5685632,
+  "captured_at": 1790895885.0006986,
   "probes": {
     "device_info": {
       "ok": true,
@@ -25,7 +25,7 @@
         "alert_mask": 0,
         "supply_alert_status": 0,
         "supply_alert_mask": 0,
-        "live_status": 2,
+        "live_status": 6,
         "channels": [
           {
             "id": 0,
@@ -67,8 +67,8 @@
             "id": 2,
             "function": 0,
             "function_name": "HIGH_IMP",
-            "adc_raw": 88748,
-            "adc_value": 0.0634775161743164,
+            "adc_raw": 0,
+            "adc_value": 0.0,
             "adc_range": 0,
             "adc_rate": 1,
             "adc_mux": 0,
@@ -118,8 +118,8 @@
           },
           {
             "source": 3,
-            "raw_code": 19593,
-            "value": 5.231895446777344
+            "raw_code": 19594,
+            "value": 5.2321624755859375
           }
         ],
         "mux_states": [
@@ -133,9 +133,9 @@
     "memory": {
       "ok": true,
       "data": {
-        "internal": "HeapPool(free_bytes=52311, min_ever_bytes=42619, largest_block_bytes=34816, total_bytes=254131)",
-        "psram": "HeapPool(free_bytes=7148956, min_ever_bytes=7135052, largest_block_bytes=7077888, total_bytes=8322040)",
-        "uptime_ms": 185914,
+        "internal": "HeapPool(free_bytes=52275, min_ever_bytes=42619, largest_block_bytes=34816, total_bytes=254131)",
+        "psram": "HeapPool(free_bytes=7148876, min_ever_bytes=7134948, largest_block_bytes=7077888, total_bytes=8322040)",
+        "uptime_ms": 221346,
         "tasks": [
           "TaskStack(name='adcPoll', declared_bytes=2560, free_bytes=1348, running=True)",
           "TaskStack(name='faultMon', declared_bytes=2560, free_bytes=1244, running=True)",
@@ -173,8 +173,8 @@
           },
           {
             "id": 1,
-            "code": 16,
-            "targetV": 3.4182004928588867,
+            "code": 3,
+            "targetV": 4.738033294677734,
             "midpointV": 5,
             "vMin": 3,
             "vMax": 15,
@@ -242,20 +242,20 @@
         "drop_fine": 0,
         "drop_coarse": 0,
         "fine_diag_sticky": 128,
-        "frames_tx": 5,
+        "frames_tx": 4,
         "bytes_per_sec": 0,
         "fifo_drop_frames": 0,
         "ring_high_water": 182,
-        "wave_i_index_lo": 540,
+        "wave_i_index_lo": 384,
         "wave_i_frames": 1,
-        "wave_v_frames": 2,
+        "wave_v_frames": 1,
         "wave_i_drops": 0,
         "wave_v_drops": 0,
         "filter": 4,
         "adc_decimation": 5,
         "stream_decimation": 1,
         "odr_sps": 8000.0,
-        "board_temp_analog_c": 49.0,
+        "board_temp_analog_c": 48.8,
         "board_temp_power_c": 50.0,
         "cal_have_hi": false,
         "cal_have_mid": false,
