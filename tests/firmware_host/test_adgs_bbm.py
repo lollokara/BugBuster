@@ -9,7 +9,6 @@ target is written in one frame. Same-state writes skip the dead time.
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 from tests.lib.srcread import REPO_ROOT
@@ -35,13 +34,11 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="IO-13")
 def test_dead_time_only_when_a_write_opens_and_closes():
     out = compile_and_run(MAIN, cxx=False, include_dirs=[HAL]).split()
     assert out == ["0", "0", "0", "1", "1"]
 
 
-@pytest.mark.xfail(strict=True, reason="IO-13")
 def test_set_all_safe_consults_the_planner():
     body = re.sub(r"//[^\n]*", "", extract_function(HAL / "adgs2414d.cpp",
                                                      r"bool adgs_set_all_safe\("))

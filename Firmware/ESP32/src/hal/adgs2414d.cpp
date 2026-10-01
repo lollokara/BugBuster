@@ -7,6 +7,7 @@
 
 #include "adgs2414d.h"
 #include "adgs_interlock.h"
+#include "adgs_bbm.h"
 #include "ad74416h_spi.h"
 #include "config.h"
 #include "esp_log.h"
@@ -445,6 +446,20 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
         return false;
     }
 #endif
+
+    // IO-13: break-before-make is only needed when this write both opens a
+    // switch and closes another. A pure close, pure open or same-state write
+    // goes out as one frame without the dead time.
+    if (!adgs_needs_dead_time(s_mux_state, states, ADGS_MAIN_DEVICES)) {
+        if (memcmp(s_mux_state, states, ADGS_MAIN_DEVICES) == 0) return true;
+        uint8_t direct[ADGS_NUM_DEVICES];
+        memcpy(direct, s_mux_state, ADGS_NUM_DEVICES);
+        memcpy(direct, states, ADGS_MAIN_DEVICES);
+        if (!adgs_write_states(direct)) return false;
+        memcpy(s_mux_state, direct, ADGS_MAIN_DEVICES);
+        sync_api_main_from_physical();
+        return true;
+    }
 
     // Step 1: Open main MUX switches (preserve self-test device)
     uint8_t temp[ADGS_NUM_DEVICES];
