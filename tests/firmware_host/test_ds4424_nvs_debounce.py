@@ -39,15 +39,13 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-16")
 def test_debouncer_coalesces_a_sweep_into_one_write():
     out = compile_and_run(MAIN, cxx=False, include_dirs=[HAL]).strip()
     assert out == "sweep=1 last=3900 same=0 two=2", out
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-16")
 def test_set_voltage_does_not_commit_nvs_inline():
     body = extract_function(HAL / "ds4424.cpp", r"bool ds4424_set_voltage\(")
     body = re.sub(r"//[^\n]*", "", body)
     assert "save_voltage_to_nvs" not in body
-    assert "ds4424_nvs_debounce_mark" in body
+    assert "schedule_voltage_save" in body
