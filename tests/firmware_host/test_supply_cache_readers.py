@@ -21,7 +21,6 @@ def _code(t):
     return re.sub(r"//[^\n]*", "", t)
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-10")
 @pytest.mark.parametrize("path,sig", [
     ("bbp/cmds/cmd_selftest.cpp", r"static int handler_selftest_supply_voltages_cached\("),
     ("web/webserver.cpp", r"static esp_err_t handle_get_selftest_supplies_cached\("),
@@ -30,6 +29,5 @@ def test_cached_supply_readers_do_not_measure(path, sig):
     assert "selftest_monitor_step" not in _code(extract_function(SRC / path, sig))
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-10")
 def test_api_core_does_not_measure_on_read():
     assert "selftest_monitor_step" not in _code((SRC / "net/api_core.cpp").read_text(encoding="utf-8"))

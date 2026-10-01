@@ -1905,9 +1905,7 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
 // GET /api/selftest/supplies/cached — cached supply rail voltages
 static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 {
-    if (selftest_worker_enabled()) {
-        selftest_monitor_step();
-    }
+    // PWR-10: cache only - the main loop's monitor step is the sampler.
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
 
     static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};

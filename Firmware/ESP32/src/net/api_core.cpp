@@ -993,11 +993,10 @@ static char *api_overview(void)
 
     cJSON *rails = cJSON_AddArrayToObject(root, "rails");
     static const char *rail_names[] = {"VADJ1", "VADJ2", "3V3_ADJ"};
-    // Live supply-rail measurement: only step the monitor when the self-test
-    // worker is enabled (it owns the ADC mux) and only measure rails whose
-    // enable bit is set (3V3_ADJ is always-on). Mirrors the HTTP /api/overview.
+    // Supply rails from the background monitor's cache (PWR-10: the 0.5 Hz
+    // main-loop step is the only sampler; reads never measure). Only rails
+    // whose enable bit is set are reported (3V3_ADJ is always-on).
     bool st_worker = selftest_worker_enabled();
-    if (st_worker) selftest_monitor_step();
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
     for (uint8_t i = 0; i < 3; i++) {
         bool rail_on = (i == 2) ? true

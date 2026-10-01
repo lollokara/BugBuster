@@ -73,16 +73,14 @@ static int handler_selftest_measure_supply(const uint8_t *payload, size_t len,
 // SELFTEST_SUPPLY_VOLTAGES_CACHED  payload: (none)
 // resp: bool available, u32 timestamp_ms, then SELFTEST_RAIL_COUNT f32 voltages
 // Wire format matches legacy handleSelftestSupplyVoltagesCached (bbp.cpp:1092-1107).
-// Calls selftest_monitor_step() if worker enabled, matching legacy behavior.
+// PWR-10: returns the cache only; the main loop's 0.5 Hz monitor step is the
+// sampler (the legacy handler measured one rail inline, ~0.6 s).
 // ---------------------------------------------------------------------------
 static int handler_selftest_supply_voltages_cached(const uint8_t *payload, size_t len,
                                                    uint8_t *resp, size_t *resp_len)
 {
     (void)payload; (void)len;
 
-    if (selftest_worker_enabled()) {
-        selftest_monitor_step();
-    }
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
 
     size_t pos = 0;
