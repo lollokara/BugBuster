@@ -25,6 +25,8 @@ def register(device) -> None:
     device.register_handler(CmdId.WIFI_CONNECT,          _wifi_connect(device))
     device.register_handler(CmdId.WIFI_SCAN,             _wifi_scan(device))
     device.register_handler(CmdId.WIFI_SET_AP_PASSWORD,  _wifi_set_ap_password(device))
+    device.register_handler(CmdId.WIFI_FORGET,           _wifi_forget(device))
+    device.register_handler(CmdId.ADC_LEDS_SET_MODE,     _adc_leds_set_mode(device))
     device.register_handler(CmdId.START_WAVEGEN,         _start_wavegen(device))
     device.register_handler(CmdId.STOP_WAVEGEN,     _stop_wavegen(device))
 
@@ -188,6 +190,27 @@ def _wifi_connect(device):
     def handler(payload: bytes) -> bytes:
         device.wifi_connected = True
         return struct.pack('<B', 1)   # connected = True
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# WIFI_FORGET (0x0A)  payload: none -> resp: bool ok   (cmd_wifi.cpp)
+# ADC_LEDS_SET_MODE (0x47)  payload: u8 mode -> resp: u8 mode   (cmd_status.cpp)
+# ---------------------------------------------------------------------------
+
+def _wifi_forget(device):
+    def handler(payload: bytes) -> bytes:
+        device.wifi_sta_forgotten = True
+        return b"\x01"
+    return handler
+
+
+def _adc_leds_set_mode(device):
+    def handler(payload: bytes) -> bytes:
+        if not payload:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.adc_leds_manual = payload[0] != 0
+        return bytes([payload[0]])
     return handler
 
 

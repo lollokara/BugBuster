@@ -14,8 +14,6 @@ Found 2026-08-06 by the reachability check below.
 
 import re
 
-import pytest
-
 from bugbuster.constants import CmdId
 from tests.lib.srcread import read_source
 
@@ -106,7 +104,6 @@ def test_every_python_cmdid_exists_in_the_firmware():
 _FIRMWARE_ONLY: dict[str, str] = {}
 
 
-@pytest.mark.xfail(strict=True, reason="PY-20")
 def test_every_firmware_opcode_has_a_cmdid():
     """The reverse direction: a firmware command the library cannot even name
     is unreachable from Python, MCP and every script built on them."""

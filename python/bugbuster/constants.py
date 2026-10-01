@@ -338,6 +338,7 @@ class CmdId(IntEnum):
     DIO_CONFIG       = 0x44
     DIO_WRITE        = 0x45
     DIO_READ         = 0x46
+    ADC_LEDS_SET_MODE = 0x47  # 0=auto, 1=manual (SET_GPIO_VALUE forces manual)
 
     # UART bridge
     GET_UART_CONFIG  = 0x50
@@ -456,6 +457,7 @@ class CmdId(IntEnum):
     SET_LSHIFT_OE         = 0xE0
     WIFI_GET_STATUS       = 0xE1
     WIFI_CONNECT          = 0xE2
+    WIFI_FORGET           = 0x0A  # Erase saved STA credentials and disconnect
     SET_SPI_CLOCK         = 0xE3
     WIFI_SCAN             = 0xE4
     WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)

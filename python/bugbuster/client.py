@@ -588,6 +588,21 @@ class BugBuster:
         if not self._usb:
             raise NotImplementedError(f"{method} is only available over USB")
 
+    def adc_leds_set_mode(self, manual: bool) -> bool:
+        """
+        Choose who drives the ADC status LEDs. **USB only.**
+
+        ``manual=False`` hands them back to the firmware's automatic display.
+        Any GPIO write (``SET_GPIO_VALUE``) switches them to manual, and this
+        is the only command that switches them back.
+
+        :return: the mode the device applied (True = manual).
+        """
+        self._require_usb("adc_leds_set_mode")
+        resp = self._usb_cmd(CmdId.ADC_LEDS_SET_MODE, bytes([1 if manual else 0]))
+        _require_resp_len(resp, 1, "ADC_LEDS_SET_MODE")
+        return bool(resp[0])
+
     # ------------------------------------------------------------------
     # ── Device ──────────────────────────────────────────────────────────
     # ------------------------------------------------------------------
@@ -4223,6 +4238,18 @@ class BugBuster:
         else:
             raw = self._http_get("/wifi/scan")
             return raw.get("networks", raw) if isinstance(raw, dict) else raw
+
+    def wifi_forget(self) -> bool:
+        """
+        Erase the saved STA credentials from NVS and disconnect. **USB only.**
+
+        The device drops off the station network until :meth:`wifi_connect`
+        is called again; the SoftAP is unaffected.
+        """
+        self._require_usb("wifi_forget")
+        resp = self._usb_cmd(CmdId.WIFI_FORGET)
+        _require_resp_len(resp, 1, "WIFI_FORGET")
+        return bool(resp[0])
 
     def wifi_set_ap_password(self, password: str) -> ApPasswordResult:
         """

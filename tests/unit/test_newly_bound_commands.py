@@ -271,3 +271,31 @@ def test_usbpd_go_is_usb_only(http):
     client, _ = http
     with pytest.raises(NotImplementedError):
         client.usbpd_go(1)
+
+
+# ---------------------------------------------------------------------------
+# PY-20: WIFI_FORGET (0x0A) and ADC_LEDS_SET_MODE (0x47)
+# ---------------------------------------------------------------------------
+
+def test_wifi_forget_sends_no_payload(usb):
+    client, device, rec = usb
+    assert client.wifi_forget() is True
+    assert rec.payload_for(CmdId.WIFI_FORGET) == b""
+    assert device.wifi_sta_forgotten
+
+
+@pytest.mark.parametrize("manual,byte", [(True, b"\x01"), (False, b"\x00")])
+def test_adc_leds_set_mode_encodes_mode(usb, manual, byte):
+    client, device, rec = usb
+    assert client.adc_leds_set_mode(manual) is manual
+    assert rec.payload_for(CmdId.ADC_LEDS_SET_MODE) == byte
+    assert device.adc_leds_manual is manual
+
+
+def test_wifi_forget_and_leds_mode_are_usb_only(http):
+    """Neither has an HTTP route in the firmware."""
+    client, _ = http
+    with pytest.raises(NotImplementedError):
+        client.wifi_forget()
+    with pytest.raises(NotImplementedError):
+        client.adc_leds_set_mode(False)
