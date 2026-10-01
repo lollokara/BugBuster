@@ -88,7 +88,7 @@ static int handler_ext_i2c_write(const uint8_t *payload, size_t len,
     uint16_t timeout_ms = bbp_get_u16(payload, &rpos);
     uint8_t  wr_len     = bbp_get_u8(payload, &rpos);
     if (len < 4 + wr_len) return -CMD_ERR_BAD_ARG;
-    if (addr > 0x7F) return -CMD_ERR_OUT_OF_RANGE;
+    if (addr > 0x7F) return -CMD_ERR_BAD_ARG;
 
     if (!ext_i2c_write(addr, payload + rpos, wr_len, timeout_ms)) {
         return ext_i2c_ready() ? -CMD_ERR_TIMEOUT : -CMD_ERR_INVALID_STATE;
@@ -114,7 +114,7 @@ static int handler_ext_i2c_read(const uint8_t *payload, size_t len,
     uint16_t timeout_ms = bbp_get_u16(payload, &rpos);
     uint8_t  rd_len     = bbp_get_u8(payload, &rpos);
     if (rd_len == 0 || rd_len > BBP_MAX_PAYLOAD - 1) return -CMD_ERR_BAD_ARG;
-    if (addr > 0x7F) return -CMD_ERR_OUT_OF_RANGE;
+    if (addr > 0x7F) return -CMD_ERR_BAD_ARG;
 
     if (!ext_i2c_read(addr, resp + 1, rd_len, timeout_ms)) {
         return ext_i2c_ready() ? -CMD_ERR_TIMEOUT : -CMD_ERR_INVALID_STATE;
@@ -142,7 +142,7 @@ static int handler_ext_i2c_write_read(const uint8_t *payload, size_t len,
     uint8_t  rd_len     = bbp_get_u8(payload, &rpos);
     if (wr_len == 0 || rd_len == 0 || rd_len > BBP_MAX_PAYLOAD - 1 || len < 5 + wr_len)
         return -CMD_ERR_BAD_ARG;
-    if (addr > 0x7F) return -CMD_ERR_OUT_OF_RANGE;
+    if (addr > 0x7F) return -CMD_ERR_BAD_ARG;
 
     if (!ext_i2c_write_read(addr, payload + rpos, wr_len, resp + 1, rd_len, timeout_ms)) {
         return ext_i2c_ready() ? -CMD_ERR_TIMEOUT : -CMD_ERR_INVALID_STATE;
@@ -230,7 +230,7 @@ static int handler_ext_job_submit(const uint8_t *payload, size_t len,
         if (len < rpos + 2) return -CMD_ERR_BAD_ARG;
         uint8_t addr     = bbp_get_u8(payload, &rpos);
         uint8_t read_len = bbp_get_u8(payload, &rpos);
-        if (addr > 0x7F) return -CMD_ERR_OUT_OF_RANGE;
+        if (addr > 0x7F) return -CMD_ERR_BAD_ARG;
         ok = ext_job_submit_i2c_read(addr, read_len, timeout_ms, &job_id);
     } else if (kind == EXT_BUS_JOB_I2C_WRITE_READ) {
         if (len < rpos + 3) return -CMD_ERR_BAD_ARG;
@@ -238,7 +238,7 @@ static int handler_ext_job_submit(const uint8_t *payload, size_t len,
         uint8_t wr_len   = bbp_get_u8(payload, &rpos);
         uint8_t read_len = bbp_get_u8(payload, &rpos);
         if (len < rpos + wr_len) return -CMD_ERR_BAD_ARG;
-        if (addr > 0x7F) return -CMD_ERR_OUT_OF_RANGE;
+        if (addr > 0x7F) return -CMD_ERR_BAD_ARG;
         ok = ext_job_submit_i2c_write_read(addr, payload + rpos, wr_len, read_len, timeout_ms, &job_id);
     } else if (kind == EXT_BUS_JOB_SPI_TRANSFER) {
         if (len < rpos + 2) return -CMD_ERR_BAD_ARG;
