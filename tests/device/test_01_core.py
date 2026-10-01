@@ -200,3 +200,31 @@ def test_status_has_die_temperature(device):
         f"die_temp_c={temp:.1f} °C is outside plausible range [-50, 150]"
     )
     assert_no_faults(device)
+
+def test_large_response_intact(usb_device, request):
+    """TR-1 (closed by BBP-TXQ, M2): BBP responses larger than the 512-byte
+    CDC TX FIFO arrive whole. SCRIPT_LOGS returns up to 1018 bytes."""
+    if request.config.getoption("--sim", default=False) or \
+            request.config.getoption("--sim-full", default=False):
+        pytest.skip("the simulator does not run MicroPython")
+    bb = usb_device
+    if not hasattr(bb, "script_eval"):
+        pytest.skip("no scripting on this transport")
+    for _ in range(20):
+        for _try in range(20):
+            try:
+                bb.script_eval("for i in range(30):\n    print('y' * 60, i)\n")
+                break
+            except RuntimeError:
+                time.sleep(0.25)
+        time.sleep(0.8)
+        text = ""
+        for _drain in range(10):
+            part = bb.script_logs()
+            assert len(part) <= 1016
+            if not part:
+                break
+            text += part
+        lines = [ln for ln in text.splitlines() if ln.startswith("y")]
+        assert len(lines) >= 30, text[-200:]
+        assert all(ln.split()[0] == "y" * 60 for ln in lines)
