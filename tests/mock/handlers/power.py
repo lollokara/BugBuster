@@ -86,8 +86,13 @@ def _pca_set_port(device):
         if len(payload) < 2:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
         port, val = payload[0], payload[1]
+        flags = payload[2] if len(payload) >= 3 else 0
         if port > 1:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        # PWR-03: firmware keeps LOGIC_EN (bit 0) and EN_USB_HUB (bit 7) on
+        # port 0 unless flags bit 0 (override) is set.
+        if port == 0 and not (flags & 0x01):
+            val |= 0x81
         device.pca_ports[port] = val
         return bytes([port, val])
     return handler

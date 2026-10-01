@@ -8,8 +8,6 @@ B: port 0 always keeps LOGIC_EN | EN_USB_HUB unless the new optional flags byte
 has bit 0 (override) set; port 1 e-fuse bits going off->on are armed through
 pca9535_user_arm_efuse() (logical index, silkscreen cross applied)."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_defines, extract_function
 
 CMD = "Firmware/ESP32/src/bbp/cmds/cmd_pca.cpp"
@@ -76,7 +74,6 @@ def _run() -> dict[str, str]:
     return {ln.split()[0]: " ".join(ln.split()[1:]) for ln in lines}
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-03")
 def test_port0_keeps_logic_and_usb_hub():
     r = _run()
     assert r["p0_zero"] == "r=1 wrote=0x81 arms=0", r
@@ -88,7 +85,6 @@ def test_port0_override_and_normal_write():
     assert r["p0_vadj"] == "r=1 wrote=0x85 arms=0", r
 
 
-@pytest.mark.xfail(strict=True, reason="PWR-03")
 def test_port1_efuse_enable_goes_through_arm_gate():
     r = _run()
     assert r["p1_on"] == "r=1 wrote=0x00 arms=2 L0 L2", r

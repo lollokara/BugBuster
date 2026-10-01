@@ -90,19 +90,56 @@ static int handler_pca_set_control(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
-// PCA_SET_PORT  payload: u8 port(0-1), u8 val  → resp: u8 port, u8 val
-// Wire format matches legacy handlePcaSetPort (bbp.cpp:1517-1534).
+// PCA_SET_PORT  payload: u8 port(0-1), u8 val [, u8 flags]
+//               → resp: u8 port, u8 val (the value actually applied)
+// Wire format matches legacy handlePcaSetPort (bbp.cpp:1517-1534); the
+// trailing flags byte is optional (older hosts send 2 bytes).
+// PWR-03 guards, applied for every BBP client (the Python check is host-side):
+//   - port 0 always keeps LOGIC_EN | EN_USB_HUB; clearing them drops USB and
+//     needs a physical reset. flags bit 0 (override) is the explicit opt-out.
+//   - port 1 e-fuse enables that go off->on are NOT written raw; they are armed
+//     through pca9535_user_arm_efuse() so the soft-start FLT blackout applies.
 // ---------------------------------------------------------------------------
 static int handler_pca_set_port(const uint8_t *payload, size_t len,
                                 uint8_t *resp, size_t *resp_len)
 {
     if (len < 2) return -CMD_ERR_BAD_ARG;
     size_t rpos = 0;
-    uint8_t port = bbp_get_u8(payload, &rpos);
-    uint8_t val  = bbp_get_u8(payload, &rpos);
+    uint8_t port  = bbp_get_u8(payload, &rpos);
+    uint8_t val   = bbp_get_u8(payload, &rpos);
+    uint8_t flags = (len >= 3) ? bbp_get_u8(payload, &rpos) : 0;
     if (port > 1) return -CMD_ERR_OUT_OF_RANGE;
 
-    if (!pca9535_set_port(port, val)) return -CMD_ERR_HARDWARE;
+    if (port == 0 && !(flags & 0x01)) {
+        val |= (uint8_t)(PCA9535_LOGIC_EN | PCA9535_EN_USB_HUB);
+    }
+
+    uint8_t raw = val;
+    uint8_t arm_mask = 0;
+    if (port == 1) {
+        const PCA9535State *st = pca9535_get_state();
+        const uint8_t cur = st ? st->output1 : 0;
+        const uint8_t en_bits = (uint8_t)(PCA9535_EFUSE_EN_1 | PCA9535_EFUSE_EN_2 |
+                                          PCA9535_EFUSE_EN_3 | PCA9535_EFUSE_EN_4);
+        arm_mask = (uint8_t)(val & ~cur & en_bits);
+        raw = (uint8_t)((val & ~arm_mask) | (cur & arm_mask));
+    }
+
+    if (!pca9535_set_port(port, raw)) return -CMD_ERR_HARDWARE;
+
+    if (arm_mask) {
+        // Physical bit -> logical e-fuse (silkscreen cross: phys bit 6 is
+        // logical EFUSE3, phys bit 4 is logical EFUSE4).
+        static const uint8_t phys_bit_to_logical[4][2] = {
+            { PCA9535_EFUSE_EN_1, 0 }, { PCA9535_EFUSE_EN_2, 1 },
+            { PCA9535_EFUSE_EN_4, 2 }, { PCA9535_EFUSE_EN_3, 3 },
+        };
+        for (const auto &m : phys_bit_to_logical) {
+            if ((arm_mask & m[0]) && !pca9535_user_arm_efuse(m[1], true)) {
+                return -CMD_ERR_HARDWARE;
+            }
+        }
+    }
 
     size_t pos = 0;
     bbp_put_u8(resp, &pos, port);
@@ -184,8 +221,9 @@ static const ArgSpec s_pca_set_control_rsp[] = {
 };
 
 static const ArgSpec s_pca_set_port_args[] = {
-    { "port", ARG_U8, true, 0, 1 },
-    { "val",  ARG_U8, true, 0, 255 },
+    { "port",  ARG_U8, true,  0, 1 },
+    { "val",   ARG_U8, true,  0, 255 },
+    { "flags", ARG_U8, false, 0, 1 },   // bit0 = override LOGIC_EN/USB_HUB guard
 };
 static const ArgSpec s_pca_set_port_rsp[] = {
     { "port", ARG_U8, true, 0, 0 },
@@ -210,7 +248,7 @@ static const CmdDescriptor s_pca_cmds[] = {
     { BBP_CMD_PCA_SET_CONTROL,   "pca_set_control",
       s_pca_set_control_args,    2, s_pca_set_control_rsp,    2, handler_pca_set_control,   0                   },
     { BBP_CMD_PCA_SET_PORT,      "pca_set_port",
-      s_pca_set_port_args,       2, s_pca_set_port_rsp,       2, handler_pca_set_port,      0                   },
+      s_pca_set_port_args,       3, s_pca_set_port_rsp,       2, handler_pca_set_port,      0                   },
     { BBP_CMD_PCA_SET_FAULT_CFG, "pca_set_fault_cfg",
       s_pca_set_fault_cfg_args,  2, s_pca_set_fault_cfg_rsp,  2, handler_pca_set_fault_cfg, 0                   },
     { BBP_CMD_PCA_GET_FAULT_LOG, "pca_get_fault_log",
