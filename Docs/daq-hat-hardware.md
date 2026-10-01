@@ -18,7 +18,7 @@ A **3-channel, 24-bit precision data-acquisition board** for characterising a De
 |---|---|---|---|
 | Host MCU | ESP32-P4 (in Waveshare module) | U30 | Dual-core RISC-V 400 MHz, runs all firmware |
 | WiFi/BLE coprocessor | ESP32-C6 (in same module) | U30 (internal) | Wireless connectivity, controlled by P4 via UART |
-| DAQ channel 1 | ADAQ7769-1 | U1 | 24-bit 1 MSPS, input via U24 mux, PGA supply ±15V_LDO |
+| DAQ channel 1 | ADAQ7769-1 | U1 | 24-bit, input via U24 mux, PGA supply ±15V_LDO. Firmware ODRs: 8k/64k/128k/256k/512k SPS (MCLK 16.384 MHz); capture keeps up to ~128 kSPS, STATUS reports `missed_conversions` above that |
 | DAQ channel 2 | ADAQ7769-1 | U22 | Same - direct CSA_005 input (no mux), PGA supply ±15V_LDO |
 | DAQ channel 3 | ADAQ7769-1 | U23 | Same - input via U25 mux, PGA supply ±24V_LDO |
 | Analog mux (±15V) | ADG5204 | U24 | 4:1 mux, routes to ADAQ1 (U1). VDD=+15V_LDO |

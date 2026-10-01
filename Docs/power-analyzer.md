@@ -98,19 +98,21 @@ Current and voltage run at independent, configurable rates, both SYNC-aligned.
 Voltage - a slowly-moving supply rail - is held and linearly interpolated up to
 the current rate, then `p[n] = v[n] · i[n]` using the Kelvin-sensed `V_dut`.
 
-Marker correlation across the two MCUs works through a shared epoch:
+Marker correlation across the two MCUs (DAQ-03):
 
-1. A pre-acquisition handshake plus a hardware SYNC pulse zeroes both timebases.
-2. The S3 timestamps its digital-marker events in that epoch, which maps to
-   exact P4 sample indices.
-3. A re-sync after the run bounds any clock drift across the capture.
+1. The S3 polls its IOs and stamps the poll that saw the edge.
+2. It sends the edge age (detection to send) with the marker; the P4 backs the
+   marker's sample index off by that age plus its own queue time.
+3. Residual error is about one S3 IO poll interval plus one UART frame, so a
+   marker brackets millisecond-scale code regions, not single samples.
 
 ## Bandwidth budget
 
-Two channels at 250 kSPS × 4 B ≈ **2 MB/s**. USB High-Speed gives roughly
-40 MB/s, so there is ample headroom - including for full-rate raw bursts. This
-is why the DSP results, not the raw samples, are the normal payload: it keeps
-the PC-side application simple without the wire being the constraint.
+Two channels at 256 kSPS × 4 B ≈ **2 MB/s**. USB High-Speed gives roughly
+40 MB/s, so the wire is not the constraint. The P4 capture is: at 256 kSPS it
+loses about 19 % of conversions and at 512 kSPS about 54 % (bench, 2026-10-01),
+which STATUS v9 reports as `missed_conversions`. 128 kSPS and below capture
+every sample.
 
 ## Calibration
 

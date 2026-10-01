@@ -309,6 +309,24 @@
   | PROTO-4 | the desktop table lacked 14 firmware commands and `EVT_ADC_DSP` | complete; parity test against `bbp.h` |
   | DESK-31 | a protocol mismatch refused the connection, locking users out of OTA | warns and connects |
 
+- **DAQ HAT firmware (2026-10 audit, M4).** P4, C6 and S3 built and flashed
+  over HTTP; checked on the board unless noted. No protocol version bump: the
+  STATUS record and the S3 mark payload grew append-only (USB stream 2, DDP 9).
+
+  | ID | Was | Now |
+  |---|---|---|
+  | DAQ-05 / P4-8 | conversions the ADC produced but the P4 never captured were not counted (~19 % lost at 256 kSPS while drop counters read 0); the u16 drop counters saturated | STATUS extension v9: u32 `drop_fine32`/`drop_coarse32` and `missed_conversions` (bench: matches expected - received within 0.12 %); Python, test-lib and desktop decoders updated, v8 frames still decode |
+  | DAQ-06 | Sample Rate offered 10k/50k/100k/250k/1M SPS; the ADC ran at 8k/64k/128k/256k/512k | options show the real rates; a 512 kSPS request now reaches Sinc5 /16; MCP accepts the real rates and maps the old values |
+  | DAQ-04 | a marker or a STOP flush wrote the stream frame buffer from another task while a WAVE frame was being built | both go through the producer (flush request + lock-free marker queue) |
+  | DAQ-03 | markers were stamped at UART arrival; docs called it the exact sample | the S3 sends the edge age and the P4 backs the index off by it; docs state the real bound (one IO poll + a UART frame). Accuracy not measured: no loopback wiring |
+  | DAQ-08 / P4-9 | a full-span V_DUT write ramped on the S3-link task and the BBP write timed out (~740 ms) | applied on the ctrl task; the write replies in 56-100 ms |
+  | DAQ-16 / P4-7 | a P4 update silently turned the DUT supply off | Python `upload_p4`/`apply_update(p4=True)`, the MCP tool and the desktop push warn when the supply is on (iOS not covered) |
+  | C6-20 | changing any C6 menu setting re-applied all 20 settings, restarting the acquisition | an unchanged value from the C6 is not re-applied |
+  | C6-21 | factory reset was never mirrored to the C6, and a rebooted C6 received only 2 keys, so its menu later re-sent stale values | reset notifies every key; a reappearing C6 gets a full chunked snapshot (host-tested; no C6 reboot on the board) |
+  | C6-22 | with the P4 link stale the C6 showed a log-swept demo and invented diagnostics rails, which the menu PD guard trusted | dashes, no demo data; the guard sees no valid PD (host-tested + build) |
+  | C6-23 | the task watchdog only logged after 5 s | panics (reboots) after 10 s; pinned by a required-key table in `check_sdkconfig_effective.py` |
+  | C6-25 | an interrupted C6 staging run blocked every later C6 update until NVS was erased | a session orphaned by a P4 reboot or idle 120 s is replaced (host-tested; a board kill test was inconclusive) |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the

@@ -2933,7 +2933,8 @@ Delete a named slot from NVS.
 
 ## 6.20 DAQ Trigger / Flag Sub-Protocol
 
-The DAQ HAT (ESP32-P4) streams power measurements at up to 250 kSPS, but the 12
+The DAQ HAT (ESP32-P4) streams power measurements at up to 512 kSPS (128 kSPS
+without capture loss), but the 12
 expansion **IOs live on the ESP32-S3 mainboard**. Trigger/flag support therefore
 spans three surfaces:
 
@@ -3005,6 +3006,9 @@ mirrored on the P4 side (`s3link_daq_arm_t` / `s3link_daq_mark_t`).
 1       edge            u8      0 = falling, 1 = rising
 2       kind            u8      0 = FLAG, 1 = TRIGGER
 3       _pad            u8
+4..7    age_us          u32 LE  us from edge detection on the S3 to send (DAQ-03;
+                                appended - a 4-byte payload from an older S3
+                                is accepted and treated as age 0)
 ```
 
 ### 6.20.3 USB-HS stream additions (P4 → PC, and PC → P4)
@@ -3033,11 +3037,13 @@ preserved through compression).
 4..7    pre_samples     u32 LE  requested pre-trigger depth (fused samples)
 ```
 
-The existing **HATP_CMD_DAQ_SYNC (0x54)** establishes the shared sample-index
-epoch the S3 timestamps its markers against. Precise (sub-sample) alignment is
-refined on the P4 using the shared, pulled-up bidirectional IRQ line between the
-S3 and P4 as a hardware event-capture edge; the UART `DAQ_MARK` delivers the
-channel/edge/kind metadata that the P4 pairs to the captured edge.
+Marker timing (DAQ-03): the S3 polls its IOs, stamps the poll time and sends
+the edge age in `age_us`. The P4 queues the marker for the stream producer
+(DAQ-04) and backs its sample index off by `age_us` plus its own queue time.
+Residual error is about one S3 IO poll interval plus one UART frame - not an
+exact sample. `HATP_CMD_DAQ_SYNC (0x54)` still records a `sync_epoch` on the P4
+but nothing reads it, and there is no hardware edge capture on the shared IRQ
+line.
 
 ---
 

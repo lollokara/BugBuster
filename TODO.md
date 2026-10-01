@@ -130,6 +130,14 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Fixed, host tests only | IO-2 (break-before-make transient needs a scope), LA-03 (needs the LA HAT, M8), PLT-05 (owner chose no WiFi changes on the board), FEAT-6, PROTO-4, DESK-31 |
    | Open (needs a bench decision) | IO-12 / AN-14: after `configure_io` on analog IO9 the device has **S3** closed (firmware auto-route) while the HAL shadow says **S2**; the next HAL MUX write flips it. Which switch is electrically correct needs a wired stimulus. IO-3 label: U17's daisy-chain slot is not recoverable from the binary PCB files - device 2 stays guarded until confirmed |
    | Read-only, settled | C6-20 caller classification (input to M4) |
+
+   **Plan M4 status (2026-10-01, branch `audit/2026-10-m4-daq`, P4/C6/S3 flashed over HTTP, USB stream 2 / DDP 9 unchanged).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | DAQ-05 + P4-8 (missed_conversions = expected - received within 0.12 % across 8k-512k), DAQ-06 (8k/64k/128k within 0.5 %; 256k/512k ODR correct, capture loses 19 %/54 % and now reports it), DAQ-08 + P4-9 (full-span V_DUT write 56-100 ms, A timed out at ~740 ms), DAQ-04 (5 STOP/START cycles, no index gaps; marker race itself is T1), C6-20 |
+   | Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
+   | Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
