@@ -281,6 +281,34 @@
   | WEB-25 | CORS echoed look-alike origins (`http://localhost.evil.com`) | exact loopback host, optional numeric port |
   | PLT-07 | MicroPython task had 1964 B of stack left after one HTTPS request, and was missing from stack telemetry | 8 KiB stack (4060 B left, measured); `uPython` reported by `device_memory` |
 
+- **ESP32-S3 routing and power safety (2026-10 audit, M3). BBP `PROTO_VERSION`
+  11 -> 12.** Built, flashed over OTA and checked on the board unless noted;
+  IDAC calibration unchanged (fwlab `m3-post` vs `audit-base`).
+
+  | ID | Was | Now |
+  |---|---|---|
+  | IO-3 | the self-test interlock guarded MUX device 2 (IO12), but the AD74416H physical-D terminal switch is device 3 S3 (IO9): IO9's analog path could close onto an active U23 self-test | every S3 that can reach physical D is guarded (`ADGS_D_NET_DEV_MASK`, devices 3 and 2 until the U17 chain slot is bench-confirmed) |
+  | IO-8 / MUX-4 | `MUX_SET_SWITCH` / `POST /api/mux/switch` answered success for an interlock-refused close; five callers ignored or only logged refusals | `ERR_ADGS_ROUTE_REJECTED` (0x13) / HTTP 409 for switch and set-all; bus planner, quick setup and channel auto-route check the result |
+  | IO-2 | MUX break-before-make was defeated: the verify frame re-latched the OLD switches during the 100 ms dead time | verify re-clocks the frame just written |
+  | IO-9 | a busy SPI bus (200 ms mutex timeout) was declared a MUX FAULT, zeroed the shadow and still reported success | reports failure, no fault, shadow follows the hardware |
+  | IO-1 | configuring a digital IO or the UART bridge reset VADJ and VLOGIC to 3.3 V and wiped every other IO's MUX switches | enabled rails and VLOGIC keep their setpoints; the route is merged into the live MUX state |
+  | IO-5 | `IO_RELEASE` took one slot and a host-supplied session id | `u8 n, slots[n]` released for the caller's session; `n = 0` releases all of them |
+  | IO-25 (found on hardware) | with a DAQ HAT, 1 Hz telemetry measured all rails through U23, so slot 14 (CH C) was always held by the self-test and no client could claim it | one rail per 5 s, cached |
+  | AN-03 | RTD config and DAC readback (BBP, HTTP, CLI) used logical C/D as physical register indexes | translated through `tasks_logical_to_physical()` |
+  | AN-04 | every HTTP/script DAC voltage write re-ran the range-change sequence (median 299 ms) | skipped when the range is unchanged (103 ms measured) |
+  | AN-05 | `stop_waveform` was documented as holding the last value | documented as returning the channel to HIGH_IMP (owner decision); simulator models it |
+  | PWR-02 | an e-fuse switched on into a short tripped inside the soft-start blackout and was never reported | FLT re-checked as a level at blackout end via a one-shot wake |
+  | PWR-03 | `PCA_SET_PORT` could clear `LOGIC_EN`/`EN_USB_HUB` (USB drop, physical reset) and enabled e-fuses without the blackout | port 0 keeps both unless the new override flag is set; e-fuse enables go through the arm gate |
+  | PWR-REFAC / PWR-11 | three host-side power-up sequences with host sleeps; >12 V confirm only in the MCP | new `RAIL_POWER_UP` (0x93, `POST /api/ioexp/rail_up`) runs the whole sequence in firmware and reports applied/clamped voltage, PG and faults; MCP target tools and the HAL send one frame |
+  | BUS-003 | external SPI ran without DMA, failing every transfer above 64 B (512 B advertised) | DMA channel + DMA-capable buffers |
+  | BUS-005 | deferred bus jobs ran out of order and an unfetched result could be overwritten | FIFO; results kept until fetched or 60 s old |
+  | BUS-012 | the firmware sent 8-bit I2C addresses (0x80-0xFF) to the bus | `INVALID_PARAM` on all five entry points |
+  | LA-03 | the S3 dropped the 10th `HAT_LA_CONFIG` byte, so LA RLE could not be enabled (host-tested; LA HAT check in M8) | forwarded |
+  | PLT-05 | WiFi connect dropped the AP for up to a minute and kept a failed SSID | AP+STA throughout; the previous network is restored on failure (host-tested only, owner choice) |
+  | FEAT-6 | Python/MCP/desktop error tables hand-copied; the MCP described 0x13 wrongly and never mapped any device error (regex never matched) | generated from `bbp.h` (`Firmware/tools/gen_error_tables.py`, CI `--check`); MCP maps by `DeviceError.code` |
+  | PROTO-4 | the desktop table lacked 14 firmware commands and `EVT_ADC_DSP` | complete; parity test against `bbp.h` |
+  | DESK-31 | a protocol mismatch refused the connection, locking users out of OTA | warns and connects |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the

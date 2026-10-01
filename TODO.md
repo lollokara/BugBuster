@@ -121,6 +121,15 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; needs a phone and the iOS prompt) |
    | Refuted | WEB-NULL - all 17 dereferences already guarded; gate added |
    | Fixed, verified on hardware (measured) | PLT-07 - uPython stack had 1964 B left after one HTTPS `bugbuster.http_get`; now 8 KiB, 4060 B left. The task is now in stack telemetry |
+
+   **Plan M3 status (2026-10-01, branch `audit/2026-10-m3-routing`, S3 flashed by OTA, BBP PROTO 12).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | IO-1, IO-3 (refusal on device 3 S3 checked live), IO-5, IO-8 + MUX-4, IO-9 (functional MUX checks; transient proof is T2), IO-25 (new, found on hardware), AN-03, AN-04 (299 -> 103 ms median), AN-05, BUS-003, BUS-005, BUS-012, PWR-03 (B only), PWR-02 (B only: no short fixture; T2 proves the trip), PWR-REFAC + PWR-11, PROTO bump |
+   | Fixed, host tests only | IO-2 (break-before-make transient needs a scope), LA-03 (needs the LA HAT, M8), PLT-05 (owner chose no WiFi changes on the board), FEAT-6, PROTO-4, DESK-31 |
+   | Open (needs a bench decision) | IO-12 / AN-14: after `configure_io` on analog IO9 the device has **S3** closed (firmware auto-route) while the HAL shadow says **S2**; the next HAL MUX write flips it. Which switch is electrically correct needs a wired stimulus. IO-3 label: U17's daisy-chain slot is not recoverable from the binary PCB files - device 2 stays guarded until confirmed |
+   | Read-only, settled | C6-20 caller classification (input to M4) |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,

@@ -1377,18 +1377,20 @@ held by a different session return `CMD_ERR_IO_OWNERSHIP` for that slot only;
 other slots in the batch are unaffected.
 
 #### 0xA8 IO_RELEASE
-Release a single previously claimed slot.
+Release slots held by the CALLER's session (the firmware takes the session from
+the transport; v12 and later).
 
 **Request payload:**
 ```
-0       slot_idx        u8      Slot index (0–15)
-1       session_id      u8      Session ID of the releasing caller
+0       n_slots         u8      Number of slots (0 = release every slot this session holds)
+1..N    slots           u8[]    Slot indices (0-15)
 ```
 
 **Response payload:**
 ```
-0       slot_idx        u8      Echoed slot index
-1       released        bool    true = slot was released, false = not owned by this session
+0       n_slots         u8      Echoed count
+1..N    released        u8[]    Per slot: 1 = released, 0 = not held by this session
+                                (n_slots = 0: one byte, the number of slots released)
 ```
 
 #### 0xA9 IO_OWNER_STATUS
@@ -1477,7 +1479,45 @@ Set raw output port value (only output-configured bits are applied).
 ```
 0       port            u8      Port number (0 or 1)
 1       value           u8      Output value
+2       flags           u8      Optional. bit0 = override the port-0 guard
 ```
+
+**Response payload:** `u8 port, u8 value` - the value actually applied.
+
+Guards applied for every client (v12):
+- Port 0 always keeps `LOGIC_EN` (bit 0) and `EN_USB_HUB` (bit 7) set unless
+  `flags` bit 0 is set. Clearing them drops USB and needs a physical reset.
+- Port 1 e-fuse enables that go off -> on are armed through the soft-start
+  blackout gate (same path as `PCA_SET_CONTROL`), not written raw.
+
+#### 0x93 RAIL_POWER_UP
+Power a VADJ rail up as ONE firmware-sequenced operation (v12): rail e-fuses
+off -> [VADJ off + 200 ms discharge] -> set voltage -> VADJ on -> settle ->
+e-fuses armed through the blackout gate -> wait out the blackout -> report.
+Source of truth: `Firmware/ESP32/src/power/rail_power.h`.
+
+**Request payload:**
+```
+0       rail            u8      1 = VADJ1 (EFUSE1+2), 2 = VADJ2 (EFUSE3+4)
+1       voltage_mv      u16     3000-15000 (LE)
+3       settle_ms       u16     0-5000, VADJ on -> e-fuses on (LE)
+5       flags           u8      bit0 = confirm (required above 12 V), bit1 = power-cycle first
+6       efuse_mask      u8      Optional. bit0/bit1 = the rail's first/second e-fuse; 0 = both
+```
+
+**Response payload:**
+```
+0       rail            u8
+1       applied_mv      u16     DAC setpoint actually applied (after clamping)
+3       status          u8      bit0 = VADJ power-good, bit1/bit2 = e-fuse fault, bit3 = clamped
+```
+
+Returns `ERR_INVALID_PARAM` for a bad rail, voltage, settle or mask, or above
+12 V without `confirm` - nothing is touched in that case.
+
+**Web API equivalent:** `POST /api/ioexp/rail_up` with body
+`{"rail":1, "voltage":5.0, "settleMs":500, "confirm":false, "powerCycle":false, "efuseMask":0}`
+(admin token required).
 
 #### 0xB3 PCA_SET_FAULT_CFG
 Configure PCA9535 fault handling behavior.
@@ -1872,7 +1912,9 @@ Configure logic analyzer capture parameters.
 0       channels        u8      Number of channels (1, 2, or 4)
 1       sample_rate_hz  u32     Desired sample rate in Hz (LE)
 5       depth_samples   u32     Number of samples to capture (LE, 0=max)
-9       rle_enabled     bool    Enable RLE compression
+9       rle_enabled     bool    Optional. Enable RLE compression (absent = off).
+                                The ESP32 forwards it to the HAT (v12; earlier
+                                firmware dropped it).
 ```
 
 **Response payload:**
@@ -2181,6 +2223,10 @@ Set the state of all 32 switches in the matrix. To prevent signal contention and
 
 **Response payload:** (empty)
 
+Returns `ERR_ADGS_ROUTE_REJECTED` (0x13) when the image would close an analog
+S3 that reaches AD74416H physical channel D (`ADGS_D_NET_DEV_MASK`) while the
+U23 self-test holds that net; nothing is written. HTTP answers 409.
+
 **Web API equivalent:** `POST /api/mux/all` with body `{"states": [0, 0, 0, 0]}`
 
 #### 0x91 MUX_GET_ALL
@@ -2209,6 +2255,10 @@ Set the state of a single switch in the matrix. Enforces safety dead-time for th
 | 2 | state | u8 | 0 = OPEN (Off), 1 = CLOSED (On). |
 
 **Response payload:** (empty)
+
+Returns `ERR_ADGS_ROUTE_REJECTED` (0x13) for the same self-test interlock
+refusal as `MUX_SET_ALL` (before v12 the refusal was silently answered as
+success). HTTP answers 409.
 
 **Web API equivalent:** `POST /api/mux/switch` with body `{"device": 0, "switch": 1, "closed": true}`
 
@@ -3518,6 +3568,7 @@ Host                                    Device
 | 0x90 | MUX_SET_ALL | H->D | 4 states | `POST /api/mux/all` |
 | 0x91 | MUX_GET_ALL | H->D | -- | `GET /api/mux` |
 | 0x92 | MUX_SET_SWITCH | H->D | dev, sw, state | `POST /api/mux/switch` |
+| 0x93 | RAIL_POWER_UP | H->D | rail, mV, settle, flags[, mask] | `POST /api/ioexp/rail_up` |
 | 0xA0 | IDAC_GET_STATUS | H->D | -- | `GET /api/idac` |
 | 0xA1 | IDAC_SET_CODE | H->D | ch, code | `POST /api/idac/code` |
 | 0xA2 | IDAC_SET_VOLTAGE | H->D | ch, voltage | `POST /api/idac/voltage` |
