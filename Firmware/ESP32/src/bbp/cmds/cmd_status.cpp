@@ -621,10 +621,10 @@ static int handler_mux_set_all(const uint8_t *payload, size_t len,
     uint8_t states[ADGS_API_MAIN_DEVICES] = {};
     memcpy(states, payload, ADGS_API_MAIN_DEVICES);
     if (!adgs_set_api_all_safe(states)) {
-        // Refused by the U17-S3 / U23 self-test mutual exclusion. The supply
-        // monitor owns U23 transiently, so this is a retry-later condition, not
-        // a permanently invalid request - BUSY says that, INVALID_STATE does not.
-        return -CMD_ERR_BUSY;
+        // Refused by the U17-S3 / U23 self-test mutual exclusion (MUX-4):
+        // BBP_ERR_ADGS_ROUTE_REJECTED. The supply monitor owns U23
+        // transiently, so hosts may retry.
+        return -CMD_ERR_ROUTE_REJECTED;
     }
     adgs_get_api_states(states);
     memcpy(resp, states, ADGS_API_MAIN_DEVICES);
@@ -671,7 +671,7 @@ static int handler_mux_set_switch(const uint8_t *payload, size_t len,
         return -CMD_ERR_OUT_OF_RANGE;
 
     if (!adgs_set_api_switch_safe(device, sw, closed))
-        return -CMD_ERR_OUT_OF_RANGE;
+        return -CMD_ERR_ROUTE_REJECTED;   // IO-8: indexes validated above
 
     // Update cached state (legacy bbp.cpp:2081-2084)
     ScopedStateLock lock;

@@ -3231,7 +3231,10 @@ static esp_err_t handle_post_mux_switch(httpd_req_t *req)
         return send_error(req, 400, "Invalid device/switch");
 
     if (!adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, closed)) {
-        return send_error(req, 400, "Invalid device/switch");
+        // IO-8: indexes are validated above, so this is an interlock refusal.
+        return send_error(req, 409,
+                          "MUX write refused: U17 S3 and the U23 self-test are "
+                          "mutually exclusive. Retry once the self-test releases.");
     }
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);

@@ -115,8 +115,10 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES]);
  * @param device   Device index 0-3
  * @param sw       Switch index 0-7
  * @param closed   true = close switch, false = open switch
+ * @return false on a bad index, before init, or when the U17-S3 / U23
+ *         self-test interlock refused the write (nothing is written then).
  */
-void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed);
+bool adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed);
 
 /**
  * @brief Get the cached switch state for a device.

@@ -168,7 +168,7 @@ def test_mux_per_device_control(device):
     supply monitor owns U23 intermittently even when worker is off.
     """
     import time as _time
-    from bugbuster.constants import CmdId
+    from bugbuster.constants import CmdId, ErrorCode
     from bugbuster.transport.usb import DeviceError
     from requests.exceptions import HTTPError
 
@@ -203,8 +203,8 @@ def test_mux_per_device_control(device):
                 except (DeviceError, HTTPError) as exc:
                     is_busy = False
                     if isinstance(exc, DeviceError):
-                        # USB: check error code (BUSY = 0x0F)
-                        is_busy = exc.code == 0x0F
+                        # USB: interlock refusal = ADGS_ROUTE_REJECTED (0x13, MUX-4)
+                        is_busy = exc.code == ErrorCode.ADGS_ROUTE_REJECTED
                     elif isinstance(exc, HTTPError):
                         # HTTP: check status code
                         is_busy = exc.response.status_code == 409
@@ -281,7 +281,7 @@ def test_mux_device2_interlock_reports_correctly(device, request):
     if _sim_mode:
         pytest.skip("Simulator does not implement U17-S3 interlock")
     import time as _time
-    from bugbuster.constants import CmdId
+    from bugbuster.constants import CmdId, ErrorCode
     from bugbuster.transport.usb import DeviceError
     from requests.exceptions import HTTPError
 
@@ -301,8 +301,8 @@ def test_mux_device2_interlock_reports_correctly(device, request):
         device.mux_set_all(target)
     except (DeviceError, HTTPError) as exc:
         if isinstance(exc, DeviceError):
-            # USB: BUSY = 0x0F
-            got_busy = exc.code == 0x0F
+            # USB: ADGS_ROUTE_REJECTED (0x13, MUX-4)
+            got_busy = exc.code == ErrorCode.ADGS_ROUTE_REJECTED
         elif isinstance(exc, HTTPError):
             # HTTP: 409 Conflict
             got_busy = exc.response.status_code == 409
@@ -314,7 +314,8 @@ def test_mux_device2_interlock_reports_correctly(device, request):
         device._http_post("/selftest/worker", {"enabled": False})  # noqa: SLF001
 
     assert got_busy, (
-        "MUX device 2 U17-S3 write with selftest active should return BUSY. "
+        "MUX device 2 U17-S3 write with selftest active should return "
+        "ROUTE_REJECTED (0x13) / HTTP 409. "
         "If this fails, the interlock is not reporting correctly - "
         "the silent-success bug (MUX-1) has returned."
     )

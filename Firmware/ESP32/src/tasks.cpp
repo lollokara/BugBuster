@@ -887,7 +887,13 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     // the AD74416H channel to the terminal for all analog/current/RTD/HART modes.
     {
         bool close_analog = (func != CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(mux_dev, 2, close_analog); // S3 is index 2
+        if (!adgs_set_switch_safe(mux_dev, 2, close_analog)) { // S3 is index 2
+            // IO-8: the self-test holds U23, so the terminal is NOT connected
+            // to the channel. The function is still applied; surface it.
+            ESP_LOGE("tasks", "CH%u analog route (MUX dev %u S3) refused by the "
+                              "self-test interlock - terminal not connected",
+                     logical_channel, mux_dev);
+        }
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {

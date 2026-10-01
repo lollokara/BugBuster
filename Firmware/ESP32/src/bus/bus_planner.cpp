@@ -225,13 +225,7 @@ static bool apply_power_and_mux(SemaphoreHandle_t mtx,
     compute_mux_state(routes, count, mux_states, merge_mux);
 
     if (mtx) xSemaphoreGive(mtx);
-    if (!adgs_set_api_all_safe(mux_states)) {
-        // A refused write here means the routing plan did not apply, so signals
-        // are not where the caller believes. Propagating this out is follow-up
-        // work; make it visible in the meantime rather than silently continuing.
-        ESP_LOGE("bus_planner", "MUX programming refused by the U17-S3 / U23 "
-                                "interlock - routing plan NOT applied");
-    }
+    const bool mux_ok = adgs_set_api_all_safe(mux_states);
     if (mtx) {
         // Re-take with portMAX_DELAY: the only blocker is another top-level
         // bus_planner_apply_* call that grabbed the planner mutex during our
@@ -241,6 +235,12 @@ static bool apply_power_and_mux(SemaphoreHandle_t mtx,
         // the caller's `xSemaphoreGive(mtx)` operating on an unheld mutex
         // (UB), so failing to re-take is not an option.
         xSemaphoreTake(mtx, portMAX_DELAY);
+    }
+    if (!mux_ok) {
+        // IO-8: the plan did not apply - do not energise rails/e-fuses into a
+        // route the caller believes exists.
+        set_err(err, err_len, "MUX route rejected by the U17-S3 / U23 self-test interlock");
+        return false;
     }
 
     // 5. Per-route: supply VADJ + e-fuse. MUX is already programmed, so any

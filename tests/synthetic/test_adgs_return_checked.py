@@ -13,8 +13,6 @@ failure (planner, quick setup, channel-function auto-route)."""
 import re
 from pathlib import Path
 
-import pytest
-
 SRC = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src"
 FILES = ["bbp/cmds/cmd_status.cpp", "web/webserver.cpp", "tasks.cpp",
          "bus/bus_planner.cpp", "web/quicksetup.cpp"]
@@ -33,19 +31,16 @@ def _unchecked(rel: str) -> list[str]:
     return bad
 
 
-@pytest.mark.xfail(strict=True, reason="IO-8")
 def test_switch_safe_reports_refusal():
     hdr = (SRC / "hal" / "adgs2414d.h").read_text(encoding="utf-8")
     assert re.search(r"\bbool\s+adgs_set_switch_safe\s*\(", hdr)
 
 
-@pytest.mark.xfail(strict=True, reason="IO-8")
 def test_every_mux_write_checks_its_result():
     bad = [b for f in FILES for b in _unchecked(f)]
     assert not bad, "\n".join(bad)
 
 
-@pytest.mark.xfail(strict=True, reason="MUX-4")
 def test_refusals_map_to_route_rejected():
     errs = (SRC / "bbp" / "cmd_errors.h").read_text(encoding="utf-8")
     assert re.search(r"CMD_ERR_ROUTE_REJECTED\s*:\s*return 0x13", errs) or \

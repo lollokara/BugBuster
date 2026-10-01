@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "adgs2414d.h"
+#include "adgs_interlock.h"
 #include "ad74416h_spi.h"
 #include "config.h"
 #include "esp_log.h"
@@ -410,7 +411,8 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     // Interlock: if caller tries to set U17 S3 while U23 is active, block it.
     // Report the refusal - a silent return here answered the host with the
     // stale read-back and looked like a successful write to the wrong device.
-    if ((states[U17_DEVICE_IDX] & U17_S3_MASK) && adgs_selftest_active()) {
+    if (!adgs_interlock_main_ok(states[U17_DEVICE_IDX], U17_S3_MASK,
+                                s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
         return false;
     }
@@ -434,16 +436,18 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     return true;
 }
 
-void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
+bool adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 {
-    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) return;
-    if (!s_mux_initialized) return;
+    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) return false;
+    if (!s_mux_initialized) return false;
 
 #if ADGS_HAS_SELFTEST
-    // Interlock: block U17 S3 close if U23 is active.
-    if (device == U17_DEVICE_IDX && sw == 2 && closed && adgs_selftest_active()) {
+    // Interlock: block U17 S3 close if U23 is active. Report it (IO-8): this
+    // used to return silently and every caller treated it as success.
+    if (!adgs_interlock_switch_ok(device, sw, closed, U17_DEVICE_IDX, U17_S3_MASK,
+                                  s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
-        return;
+        return false;
     }
 #endif
 
@@ -504,6 +508,7 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
     }
 #endif
     portEXIT_CRITICAL(&s_adgs_mux);
+    return true;
 }
 
 uint8_t adgs_get_state(uint8_t device)
@@ -558,7 +563,7 @@ bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed)
     }
 
     if (device < ADGS_MAIN_DEVICES) {
-        adgs_set_switch_safe(device, sw, closed);
+        if (!adgs_set_switch_safe(device, sw, closed)) return false;
         sync_api_main_from_physical();
         return true;
     }
@@ -713,7 +718,7 @@ bool adgs_set_selftest(uint8_t sw_byte)
     }
 
     // Safety interlock: U17 S3 must be open before ANY U23 switch can close.
-    if (sw_byte != 0 && adgs_u17_s3_active()) {
+    if (!adgs_interlock_selftest_ok(sw_byte, s_mux_state[U17_DEVICE_IDX], U17_S3_MASK)) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S3 (IO 9 analog) is closed!");
         return false;
     }
