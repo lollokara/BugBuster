@@ -226,7 +226,7 @@ export const api = {
     setRtdConfig: (mac: string, ch: number, current_uA: number) =>
       request<void>(`/api/channel/${ch}/rtd/config`, {
         method: "POST",
-        body: { current_uA },
+        body: { excitation_ua: current_uA },
         mac,
         admin: true,
       }),

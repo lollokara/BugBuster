@@ -22,19 +22,19 @@ describe("DAQ tab (WEB-21 / DAQ-11)", () => {
   const daq = fixture("daq.json");
   const vdut = fixture("daq__vdut__status.json");
 
-  it.fails("shows the measured VDUT voltage and current", () => {
+  it("shows the measured VDUT voltage and current", () => {
     const v = daqView(daq, vdut);
     expect(v.vdut.measuredV).toBeCloseTo(vdut.measuredVoltageV, 6);
     expect(v.vdut.measuredA).toBeCloseTo(vdut.measuredCurrentMa / 1000, 9);
   });
 
-  it.fails("labels the HAT from typeName and fwMajor/fwMinor", () => {
+  it("labels the HAT from typeName and fwMajor/fwMinor", () => {
     const v = daqView(daq, vdut);
     expect(v.typeLabel).toBe(daq.typeName);
     expect(v.version).toBe(`${daq.fwMajor}.${daq.fwMinor}`);
   });
 
-  it.fails("reports calibration as unknown (firmware exposes no per-range flags)", () => {
+  it("reports calibration as unknown (firmware exposes no per-range flags)", () => {
     expect(daqView(daq, vdut).calibration).toBe("unknown");
   });
 });
@@ -51,7 +51,7 @@ describe("GitHub update card (WEB-22)", () => {
     expect(src).not.toContain('"newer"');
   });
 
-  it.fails("offers the update the firmware reports", () => {
+  it("offers the update the firmware reports", () => {
     const r = {
       channel: "nightly", manifestBuildId: "b2", commit: "c",
       rp2040: component(false), esp32: component(true),
@@ -61,7 +61,7 @@ describe("GitHub update card (WEB-22)", () => {
 });
 
 describe("Voltages tab IDAC card", () => {
-  it.fails("shows each channel's targetV", () => {
+  it("shows each channel's targetV", () => {
     const idac = fixture("idac.json");
     const rows = idacRows(idac);
     expect(rows.map((r) => r.voltage)).toEqual(idac.channels.map((c: any) => c.targetV));
@@ -71,7 +71,7 @@ describe("Voltages tab IDAC card", () => {
 describe("RTD config", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.fails("sends a key the firmware reads", async () => {
+  it("sends a key the firmware reads", async () => {
     const src = fwSource("net/api_core.cpp");
     const handler = src.slice(src.indexOf("api_channel_rtd_config(int ch"));
     const read = new Set(

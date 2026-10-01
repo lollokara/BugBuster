@@ -2,7 +2,7 @@
 import type { UpdateCheckResult, UpdateComponent } from "../../api/types";
 
 export function componentHasUpdate(c: UpdateComponent | undefined): boolean {
-  return Boolean((c as any)?.newer);
+  return Boolean(c?.updateAvailable);
 }
 
 export function updateSelection(r: UpdateCheckResult) {

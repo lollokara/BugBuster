@@ -11,7 +11,7 @@ export function idacRows(idac: any): IdacRow[] {
   return (idac?.channels ?? []).map((c: any, i: number) => ({
     ch: i,
     code: c.code ?? 0,
-    voltage: c.voltage ?? 0,
+    voltage: c.targetV ?? 0,
     enabled: c.enabled ?? false,
   }));
 }
