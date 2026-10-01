@@ -551,6 +551,12 @@ fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// DAQ-16: warning for a P4 OTA started while the DUT supply is on, from a
+/// GET /api/daq/vdut/status body. None when the supply is off or unknown.
+fn vdut_ota_warning(_status: &serde_json::Value) -> Option<String> {
+    None
+}
+
 fn decode_hex_32(hex: &str) -> Result<[u8; 32], String> {
     if hex.len() != 64 {
         return Err("expected 64 hex chars".to_string());
@@ -4925,6 +4931,18 @@ mod tests {
         let mut w = PayloadWriter::new();
         f(&mut w);
         w.buf
+    }
+
+    #[test]
+    #[ignore = "DAQ-16"]
+    fn vdut_ota_warning_only_when_supply_enabled() {
+        let on = serde_json::json!({"present": true, "enabled": true, "voltageSetpointV": 3.3});
+        let w = vdut_ota_warning(&on).expect("supply on must warn");
+        assert!(w.contains("DUT supply") && w.contains("OFF"), "{w}");
+        assert!(w.contains("3.30 V"), "{w}");
+        let off = serde_json::json!({"present": true, "enabled": false});
+        assert_eq!(vdut_ota_warning(&off), None);
+        assert_eq!(vdut_ota_warning(&serde_json::json!({"error": "x"})), None);
     }
 
     /// PWR-08: no firmware enforces an e-fuse software current limit, so the
