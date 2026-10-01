@@ -7,9 +7,10 @@ B: the transport sends a PING when nothing has been sent for KEEPALIVE_S
 """
 
 
+from bugbuster.constants import CmdId
 from bugbuster.transport.usb import USBTransport
 
-PING = 0x01
+PING = CmdId.PING
 
 
 class _Clock:

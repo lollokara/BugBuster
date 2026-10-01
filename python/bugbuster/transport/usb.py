@@ -24,7 +24,7 @@ from typing import Callable, Optional
 import serial  # pyserial
 
 from ..protocol import HANDSHAKE_MAGIC, build_frame, parse_frame, ProtocolError
-from ..constants import MsgType, ErrorCode, CMD_TIMEOUTS_S
+from ..constants import CmdId, MsgType, ErrorCode, CMD_TIMEOUTS_S
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ class USBTransport:
         if self._clock() - self._last_tx < self.KEEPALIVE_S:
             return False
         try:
-            self.send_command(0x01, b"", timeout=2.0)   # PING
+            self.send_command(CmdId.PING, b"", timeout=2.0)
         except Exception as exc:
             log.debug("keepalive PING failed: %s", exc)
         self._last_tx = self._clock()
