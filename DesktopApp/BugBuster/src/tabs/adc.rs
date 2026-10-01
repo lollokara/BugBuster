@@ -9,8 +9,19 @@ pub const SLOTS: &[u8] = &[];
 
 const SPARK_CAP: usize = 120;
 
+/// DESK-28: set when this tab (re)starts the firmware ADC stream, so closing
+/// the tab stops only a stream it owns.
+static STREAM_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[component]
 pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    on_cleanup(move || {
+        if STREAM_STARTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            spawn_local(async move {
+                let _ = try_invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+            });
+        }
+    });
     // Per-channel rolling ring buffers of recent ADC values (capped at SPARK_CAP).
     let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
 
@@ -213,6 +224,7 @@ fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
             divider: 0,
         })
         .unwrap();
+        STREAM_STARTED.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = try_invoke("start_adc_stream", start_args).await;
         log(&format!(
             "[send_adc_config] ch={} mux={} range={} rate={} (stream restarted)",

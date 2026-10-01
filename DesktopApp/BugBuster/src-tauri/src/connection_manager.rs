@@ -247,28 +247,14 @@ impl ConnectionManager {
         // Spawn event listener for USB stream data
         let app_handle = app.clone();
         tokio::spawn(async move {
-            let mut last_adc_emit = std::time::Instant::now();
-            let mut adc_buffer: Vec<u8> = Vec::new();
-            let emit_interval = std::time::Duration::from_millis(33); // ~30 Hz
-
             loop {
-                // Use a short timeout so we can flush the buffer periodically
-                match tokio::time::timeout(std::time::Duration::from_millis(10), event_rx.recv())
-                    .await
-                {
-                    Ok(Some(msg)) => {
+                match event_rx.recv().await {
+                    Some(msg) => {
                         match msg.cmd_id {
                             bbp::EVT_ADC_DATA => {
+                                // DESK-28: no frontend listens for a display
+                                // event; ADC samples only feed the recorder.
                                 crate::commands::recording_feed(msg.cmd_id, &msg.payload);
-
-                                // Keep latest payload for throttled display
-                                adc_buffer = msg.payload;
-
-                                // Throttle display emit to ~30 Hz
-                                if last_adc_emit.elapsed() >= emit_interval {
-                                    let _ = app_handle.emit("adc-stream", &adc_buffer);
-                                    last_adc_emit = std::time::Instant::now();
-                                }
                             }
                             bbp::EVT_SCOPE_DATA => {
                                 crate::commands::recording_feed(msg.cmd_id, &msg.payload);
@@ -308,14 +294,7 @@ impl ConnectionManager {
                             _ => {}
                         }
                     }
-                    Ok(None) => break, // Channel closed
-                    Err(_) => {
-                        // Timeout — flush any pending ADC data
-                        if !adc_buffer.is_empty() && last_adc_emit.elapsed() >= emit_interval {
-                            let _ = app_handle.emit("adc-stream", &adc_buffer);
-                            last_adc_emit = std::time::Instant::now();
-                        }
-                    }
+                    None => break, // Channel closed
                 }
             }
         });

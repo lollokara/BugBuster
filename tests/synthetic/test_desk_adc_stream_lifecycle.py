@@ -5,19 +5,16 @@ firmware ADC stream but never stopped it when the tab closed."""
 
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DESK = ROOT / "DesktopApp" / "BugBuster"
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-28")
 def test_no_unlistened_adc_stream_event():
     host = (DESK / "src-tauri" / "src" / "connection_manager.rs").read_text(encoding="utf-8")
     assert '"adc-stream"' not in host
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-28")
 def test_adc_tab_stops_stream_on_close():
     tab = (DESK / "src" / "tabs" / "adc.rs").read_text(encoding="utf-8")
     cleanup = tab.split("on_cleanup", 1)
