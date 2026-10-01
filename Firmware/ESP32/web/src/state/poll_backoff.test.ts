@@ -18,7 +18,7 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe("WEB-28 shared poll backoff", () => {
-  it.fails("no poll loop reschedules itself with a bare numeric delay", () => {
+  it("no poll loop reschedules itself with a bare numeric delay", () => {
     const offenders: string[] = [];
     for (const f of walk(src)) {
       const text = readFileSync(f, "utf8");

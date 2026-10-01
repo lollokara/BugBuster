@@ -7,7 +7,7 @@ import {
   ownerKindName,
   type OwnerSlot,
 } from "../../api/io_lease";
-import { deviceMac } from "../../state/signals";
+import { deviceMac, pollIntervalFor } from "../../state/signals";
 
 export function IoOwnershipCard() {
   const mac = deviceMac.value;
@@ -25,7 +25,7 @@ export function IoOwnershipCard() {
       } catch {
         /* ignore — device may not have this endpoint yet */
       }
-      if (alive) setTimeout(tick, 2000);
+      if (alive) setTimeout(tick, pollIntervalFor(2000));
     };
     tick();
     return () => { alive = false; };

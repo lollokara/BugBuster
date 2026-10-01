@@ -7,7 +7,7 @@ import { signal } from "@preact/signals";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { api, PairingRequiredError } from "../../api/client";
-import { deviceMac } from "../../state/signals";
+import { deviceMac, pollIntervalFor } from "../../state/signals";
 import { daqView } from "./daqView";
 
 const daqStatus = signal<any>(null);
@@ -35,7 +35,7 @@ export function DAQ() {
       } catch {
         /* Device may not have DAQ HAT */
       }
-      if (alive) setTimeout(tick, 1000);
+      if (alive) setTimeout(tick, pollIntervalFor(1000));
     };
     tick();
     return () => { alive = false; };

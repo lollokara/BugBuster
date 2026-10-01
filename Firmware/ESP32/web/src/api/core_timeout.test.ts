@@ -10,7 +10,7 @@ describe("WEB-28 request timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it.fails("aborts a stalled request after REQUEST_TIMEOUT_MS", async () => {
+  it("aborts a stalled request after REQUEST_TIMEOUT_MS", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", (_p: string, init: RequestInit) =>
       new Promise((_res, rej) => {
@@ -23,7 +23,7 @@ describe("WEB-28 request timeout", () => {
     await check;
   });
 
-  it.fails("uses a bounded timeout", () => {
+  it("uses a bounded timeout", () => {
     expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
     expect(REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(15000);
   });

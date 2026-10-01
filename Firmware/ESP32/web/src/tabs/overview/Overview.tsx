@@ -12,6 +12,7 @@ import { DigitalIOGrid } from "../../components/DigitalIOGrid";
 import { SupplySliderCard } from "../../components/SupplySliderCard";
 import { QuickSetupTile } from "../../components/QuickSetupTile";
 import { CH_COLORS } from "../../scope/ScopeCanvas";
+import { pollIntervalFor } from "../../state/signals";
 import { api, HttpError, PairingRequiredError, type QuickSetupSummary } from "../../api/client";
 import {
   CHANNEL_FUNCTION_LABELS,
@@ -123,7 +124,7 @@ export function Overview() {
           console.warn("overview poll failed", e);
         }
       }
-      if (alive) window.setTimeout(tick, 2500);
+      if (alive) window.setTimeout(tick, pollIntervalFor(2500));
     };
     void tick();
     return () => {

@@ -113,6 +113,10 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+// WEB-28: without a timeout a busy device pinned all six per-host browser
+// connections behind stalled requests.
+export const REQUEST_TIMEOUT_MS = 10000;
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, mac, admin = false, signal } = opts;
   const headers: Record<string, string> = {};
@@ -123,16 +127,31 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     headers[ADMIN_TOKEN_HEADER] = token;
   }
 
+  const ctl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, REQUEST_TIMEOUT_MS);
+  const onCallerAbort = () => ctl.abort();
+  if (signal) {
+    if (signal.aborted) ctl.abort();
+    else signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
+      signal: ctl.signal,
     });
   } catch (err) {
+    if (timedOut) {
+      throw new HttpError(0, "Timeout", `no response within ${REQUEST_TIMEOUT_MS} ms`);
+    }
     throw new HttpError(0, "Network Error", err instanceof Error ? err.message : "fetch failed");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onCallerAbort);
   }
 
   if (res.status === 401) {

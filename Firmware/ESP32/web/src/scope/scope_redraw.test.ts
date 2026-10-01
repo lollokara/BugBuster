@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("WEB-28 scope canvas", () => {
-  it.fails("redraw gate skips frames whose inputs did not change", async () => {
-    const mod = await import(/* @vite-ignore */ "./redrawGate" + "");
+  it("redraw gate skips frames whose inputs did not change", async () => {
+    const mod = await import("./redrawGate");
     const gate = mod.makeRedrawGate();
     const buf: unknown[] = [];
     expect(gate([buf, 1, "overlay"])).toBe(true);
@@ -19,7 +19,7 @@ describe("WEB-28 scope canvas", () => {
     expect(gate([[], 2, "overlay"])).toBe(true);
   });
 
-  it.fails("SSE error counter resets on a successful open or message", () => {
+  it("SSE error counter resets on a successful open or message", () => {
     const src = readFileSync(join(here, "ScopeCanvas.tsx"), "utf8");
     expect(src).toMatch(/onopen\s*=\s*\(\)\s*=>\s*\{[^}]*consecutiveErrors\s*=\s*0/);
   });

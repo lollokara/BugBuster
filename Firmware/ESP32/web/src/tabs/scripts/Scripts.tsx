@@ -7,7 +7,7 @@ import { closeBrackets, autocompletion } from "@codemirror/autocomplete";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { api, PairingRequiredError, type AutorunStatus, type ScriptStatus, type ScriptStorageStatus } from "../../api/client";
-import { deviceMac } from "../../state/signals";
+import { deviceMac, pollIntervalFor } from "../../state/signals";
 import { bugbusterCompletions } from "./completions";
 import { apiDocs, functionConstants, type ApiDocEntry } from "./apiDocs";
 import { Repl } from "./Repl";
@@ -479,7 +479,7 @@ export function Scripts() {
       } catch {
         /* pairing modal handles auth failures */
       }
-      if (alive) window.setTimeout(tick, 1000);
+      if (alive) window.setTimeout(tick, pollIntervalFor(1000));
     };
     tick();
     return () => { alive = false; };
@@ -504,7 +504,7 @@ export function Scripts() {
           }
         }
       }
-      if (alive) window.setTimeout(tick, 500);
+      if (alive) window.setTimeout(tick, pollIntervalFor(500));
     };
     tick();
     return () => { alive = false; };
@@ -514,7 +514,7 @@ export function Scripts() {
     let alive = true;
     const tick = async () => {
       if (activeLeftPanel === "device") await refreshDevicePanel();
-      if (alive) window.setTimeout(tick, 2500);
+      if (alive) window.setTimeout(tick, pollIntervalFor(2500));
     };
     tick();
     return () => { alive = false; };

@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../api/client";
+import { makeRedrawGate } from "./redrawGate";
 import {
   scopeBuffer,
   scopeChannelEnabled,
@@ -121,7 +122,10 @@ export function ScopeCanvas() {
     } else {
       try {
         es = new EventSource("/api/scope/stream");
+        // WEB-28: only consecutive errors count; a good open resets the tally.
+        es.onopen = () => { consecutiveErrors = 0; };
         es.onmessage = (ev) => {
+          consecutiveErrors = 0;
           // WEB-5: Drop samples when page is hidden
           if (!alive || !scopeRunning.value) return;
           if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
@@ -172,6 +176,7 @@ export function ScopeCanvas() {
   // ---- RAF draw loop -------------------------------------------------------
   useEffect(() => {
     let raf = 0;
+    const gate = makeRedrawGate();
     const draw = () => {
       // WEB-5: Pause rendering when page is hidden
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -189,6 +194,18 @@ export function ScopeCanvas() {
         return;
       }
       const { w, h, dpr } = sizeRef.current;
+      // WEB-28: skip the frame when nothing that affects the plot changed.
+      if (
+        !gate([
+          scopeBuffer.value, w, h, dpr,
+          scopePlotMode.value, scopeChannelEnabled.value,
+          scopeChannelOffset.value, scopeChannelInvert.value,
+          scopeTimeBase.value, panRef.current.panT, scopeTriggerLevel.value,
+        ])
+      ) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = BG_COLOR;
       ctx.fillRect(0, 0, w, h);
