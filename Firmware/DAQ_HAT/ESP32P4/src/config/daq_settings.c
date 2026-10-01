@@ -318,9 +318,44 @@ bool daq_settings_action(uint8_t action_id, daq_src_t src)
         }
         unlock();
         daq_settings_apply_all();
+        // C6-21: every value just changed, so tell the mirrors (the glue pushes
+        // non-C6 notifications to the C6). Tagged LOCAL so a reset started from
+        // the C6 menu is still pushed back to it. Secrets are not mirrored.
+        if (s_notify) {
+            for (size_t i = 0; i < s_count; i++) {
+                if (s_schema[i].flags & DAQ_F_SECRET) continue;
+                s_notify(s_schema[i].key, DAQ_SRC_LOCAL, s_user);
+            }
+        }
     }
     if (s_action) return s_action(action_id, s_user);
     return true;
+}
+
+size_t daq_settings_count_nonsecret(void)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < s_count; i++) {
+        if (!(s_schema[i].flags & DAQ_F_SECRET)) n++;
+    }
+    return n;
+}
+
+int daq_settings_encode_chunk(size_t *idx, uint8_t *buf, size_t cap)
+{
+    size_t off = 0;
+    while (*idx < s_count) {
+        const daq_setting_schema_t *sc = &s_schema[*idx];
+        if (sc->flags & DAQ_F_SECRET) { (*idx)++; continue; }
+        int n = daq_settings_encode_one(sc->key, buf + off, cap - off);
+        if (n < 0) {
+            if (off == 0) { (*idx)++; continue; }   // cannot ever fit: skip it
+            break;                                    // next chunk
+        }
+        off += (size_t)n;
+        (*idx)++;
+    }
+    return (int)off;
 }
 
 void daq_settings_apply_all(void)

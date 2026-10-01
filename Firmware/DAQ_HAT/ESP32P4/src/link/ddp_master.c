@@ -167,14 +167,16 @@ static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
                 m->c6_fw_major = payload[1];
                 m->c6_fw_minor = payload[2];
                 if (fresh) {
-                    static const uint16_t keys[] = { DAQ_K_DUT_VOLTAGE_MV, DAQ_K_DUT_ILIMIT_MA };
-                    uint8_t tlv[2 * (DAQ_TLV_HDR_LEN + DAQ_TLV_MAX_VAL)];
-                    int n = 0;
-                    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
-                        int used = daq_settings_encode_one(keys[k], tlv + n, sizeof(tlv) - (size_t)n);
-                        if (used > 0) n += used;
+                    // C6-21: a (re)booted C6 gets the full non-secret store, not
+                    // just the two setpoints its home screen shows - otherwise
+                    // its menu holds stale values and resends them on the next
+                    // edit.
+                    uint8_t tlv[DDP_MAX_PAYLOAD];
+                    size_t idx = 0;
+                    int n;
+                    while ((n = daq_settings_encode_chunk(&idx, tlv, sizeof(tlv))) > 0) {
+                        ddp_master_config_push(m, tlv, (uint8_t)n);
                     }
-                    if (n > 0) ddp_master_config_push(m, tlv, (uint8_t)n);
                 }
             }
             break;

@@ -11,7 +11,6 @@ Host-compiled store (same harness as C6-20).
 
 from pathlib import Path
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run
 from tests.firmware_host.test_daq_settings_apply import COMMON, P4, STUBS
@@ -62,13 +61,11 @@ def _run(tmp_path: Path) -> dict:
     return {k: int(v) for k, v in (kv.split("=") for kv in out.split())}
 
 
-@pytest.mark.xfail(strict=True, reason="C6-21")
 def test_factory_reset_notifies_every_key(tmp_path):
     r = _run(tmp_path)
     assert r["reset_notify"] >= r["nonsecret"] > 0, r
 
 
-@pytest.mark.xfail(strict=True, reason="C6-21")
 def test_snapshot_chunks_cover_every_nonsecret_key_within_ddp_payload(tmp_path):
     r = _run(tmp_path)
     assert r["keys"] == r["nonsecret"] and r["maxlen"] <= 240 and r["chunks"] >= 1, r
