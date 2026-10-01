@@ -50,10 +50,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6.2.0
         with:
-          python-version: "3.x"
+          python-version: "3.12"
 
+      # Pinned with daq-hat-firmware.yml: newer cores pull tool-scons 4.11,
+      # which breaks the ESP-IDF builder (SCons.Tool.FortranCommon missing).
       - name: Install PlatformIO
-        run: python -m pip install --upgrade pip platformio
+        run: python -m pip install --upgrade pip "platformio==6.1.19"
 
       - name: Read firmware version
         id: version
