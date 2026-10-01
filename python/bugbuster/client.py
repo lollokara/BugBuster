@@ -2711,15 +2711,15 @@ class BugBuster:
             return {"rail": r, "applied_v": mv / 1000.0, "clamped": bool(status & 0x08),
                     "pg": bool(status & 0x01),
                     "efuse_faults": [bool(status & 0x02), bool(status & 0x04)]}
-        resp = self._http_post("/ioexp/rail_up", {
+        body = self._http_post("/ioexp/rail_up", {
             "rail": rail, "voltage": voltage, "settleMs": settle_ms,
             "confirm": confirm, "powerCycle": power_cycle, "efuseMask": efuse_mask & 0x03,
         })
-        if "error" in resp:
-            raise ValueError(resp["error"])
-        return {"rail": resp["rail"], "applied_v": float(resp["appliedV"]),
-                "clamped": bool(resp["clamped"]), "pg": bool(resp["pg"]),
-                "efuse_faults": [bool(x) for x in resp["efuseFaults"]]}
+        if "error" in body:
+            raise ValueError(body["error"])
+        return {"rail": body["rail"], "applied_v": float(body["appliedV"]),
+                "clamped": bool(body["clamped"]), "pg": bool(body["pg"]),
+                "efuse_faults": [bool(x) for x in body["efuseFaults"]]}
 
     def power_set_fault_config(self, auto_disable: bool = True, log_events: bool = True) -> None:
         """

@@ -803,13 +803,16 @@ class BugBusterHAL:
 
     def _enable_io_block_power(self, rt: IORouting) -> None:
         if rt.supply not in self._supplies_on:
-            self._bb.power_set(rt.supply, on=True)
-            self._bb.idac_set_voltage(rt.supply_idac, self._supply_v)
+            # PWR-REFAC: one firmware-sequenced frame brings a cold rail up with
+            # this block's e-fuse (off -> V -> VADJ on -> settle -> armed through
+            # the blackout gate). The 500 ms settle keeps targets with input
+            # capacitance (ESP32 dev boards) from tripping the e-fuse.
+            mask = 0x01 if (int(rt.efuse) - int(PowerControl.EFUSE1)) % 2 == 0 else 0x02
+            self._bb.rail_power_up(rt.supply_idac, self._supply_v, 500,
+                                   confirm=self._supply_v > 12.0, efuse_mask=mask)
             self._supplies_on.add(rt.supply)
-            # Let the adjustable rail settle before enabling the protected IO block.
-            # Some targets, including ESP32 dev boards with input capacitance,
-            # can trip the eFuse if the rail and eFuse are enabled back-to-back.
-            time.sleep(0.5)
+            self._efuses_on.add(rt.efuse)
+            return
         if rt.efuse not in self._efuses_on:
             self._bb.power_set(rt.efuse, on=True)
             self._efuses_on.add(rt.efuse)

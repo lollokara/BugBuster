@@ -377,7 +377,6 @@ class TestEnableIoBlockPower(unittest.TestCase):
     bit1 = the rail's first / second e-fuse.
     """
 
-    @unittest.expectedFailure  # PWR-REFAC
     def test_block1_io3_enables_vadj1_and_efuse1(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[3]
@@ -385,14 +384,12 @@ class TestEnableIoBlockPower(unittest.TestCase):
         mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x01)
         mock_bb.power_set.assert_not_called()
 
-    @unittest.expectedFailure  # PWR-REFAC
     def test_block1_io5_enables_vadj1_and_efuse2(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[5]
         hal._enable_io_block_power(rt)
         mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x02)
 
-    @unittest.expectedFailure  # PWR-REFAC
     def test_block2_io9_enables_vadj2_and_logical_efuse3(self):
         # Logical connector C uses EFUSE3 at the host API; firmware maps it to
         # the swapped PCA9535 hardware bit.
@@ -401,7 +398,6 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(rt)
         mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x01)
 
-    @unittest.expectedFailure  # PWR-REFAC
     def test_block2_io12_enables_vadj2_and_logical_efuse4(self):
         # Logical connector D uses EFUSE4 at the host API; firmware maps it to
         # the swapped PCA9535 hardware bit.
@@ -410,7 +406,6 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(rt)
         mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x02)
 
-    @unittest.expectedFailure  # PWR-REFAC
     def test_second_block_on_a_live_rail_only_arms_its_efuse(self):
         hal, mock_bb = _make_hal()
         hal._enable_io_block_power(hal._routing[3])    # cold VADJ1 + EFUSE1
@@ -446,16 +441,15 @@ class TestEnableIoBlockPower(unittest.TestCase):
 
     def test_efuse_skipped_if_already_on(self):
         # IO9/connector C routes through logical EFUSE3. The firmware owns the
-        # physical PCA9535 bit swap.
+        # physical PCA9535 bit swap. On a LIVE rail an e-fuse that is already
+        # on is not touched again.
         hal, mock_bb = _make_hal()
+        hal._supplies_on.add(PowerControl.VADJ2)
         hal._efuses_on.add(PowerControl.EFUSE3)
         rt = hal._routing[9]
         hal._enable_io_block_power(rt)
-        # supply (VADJ2) should be enabled, but efuse3 should not
-        power_calls = mock_bb.power_set.call_args_list
-        called_controls = [c[0][0] for c in power_calls]
-        self.assertIn(PowerControl.VADJ2, called_controls)
-        self.assertNotIn(PowerControl.EFUSE3, called_controls)
+        mock_bb.rail_power_up.assert_not_called()
+        mock_bb.power_set.assert_not_called()
 
     def test_ios_sharing_same_efuse_only_enable_once(self):
         """IO 3 and IO 2 share EFUSE1 — second call should skip it."""
@@ -495,8 +489,7 @@ class TestDefaultSupplyVoltage(unittest.TestCase):
         for io in (3, 9):  # VADJ1 block and VADJ2 block
             hal, mock_bb = _make_hal()
             hal.configure(io, PortMode.DIGITAL_IN)
-            volts = [c.args[1] for c in mock_bb.idac_set_voltage.call_args_list
-                     if c.args[0] in (1, 2)]
+            volts = [c.args[1] for c in mock_bb.rail_power_up.call_args_list]
             self.assertTrue(volts, "block supply voltage was never set")
             self.assertLessEqual(max(volts), 3.3, f"IO{io}: VADJ set to {volts}")
 
@@ -505,7 +498,7 @@ class TestDefaultSupplyVoltage(unittest.TestCase):
         hal, mock_bb = _make_hal()
         hal._supply_v = 5.0
         hal.configure(3, PortMode.DIGITAL_IN)
-        mock_bb.idac_set_voltage.assert_any_call(1, 5.0)
+        self.assertEqual(mock_bb.rail_power_up.call_args.args[:2], (1, 5.0))
 
 
 if __name__ == "__main__":
