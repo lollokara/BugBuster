@@ -325,22 +325,27 @@ extern "C" {
 
 // -----------------------------------------------------------------------------
 // Error Codes
+//
+// SINGLE SOURCE OF TRUTH. The trailing comment is the user-facing message.
+// Firmware/tools/gen_error_tables.py generates the Python ErrorCode enum, the
+// MCP ERROR_MESSAGES table and the desktop bbp.rs consts + error_to_string()
+// from this block; CI runs it with --check. Edit here, then run the generator.
 // -----------------------------------------------------------------------------
 
-#define BBP_ERR_INVALID_CMD     0x01
-#define BBP_ERR_INVALID_CH      0x02
-#define BBP_ERR_INVALID_PARAM   0x03
-#define BBP_ERR_SPI_FAIL        0x04
-#define BBP_ERR_QUEUE_FULL      0x05
-#define BBP_ERR_BUSY            0x06
-#define BBP_ERR_INVALID_STATE   0x07
-#define BBP_ERR_CRC_FAIL        0x08
-#define BBP_ERR_FRAME_TOO_LARGE 0x09
-#define BBP_ERR_STREAM_ACTIVE   0x0A
-#define BBP_ERR_TIMEOUT                0x11
-#define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot owned by another session
-#define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX mutual-exclusion rejected route
-#define BBP_ERR_UNSUPPORTED_HAT        0x14  // Command requires different HAT type (LA vs DAQ)
+#define BBP_ERR_INVALID_CMD            0x01  // The command is not recognized by the device
+#define BBP_ERR_INVALID_CH             0x02  // Channel number is out of range
+#define BBP_ERR_INVALID_PARAM          0x03  // One or more parameters are invalid
+#define BBP_ERR_SPI_FAIL               0x04  // SPI communication with the AD74416H failed
+#define BBP_ERR_QUEUE_FULL             0x05  // Device command queue is full - retry after a short delay
+#define BBP_ERR_BUSY                   0x06  // Device is busy processing another operation
+#define BBP_ERR_INVALID_STATE          0x07  // Operation cannot be performed in the current device state
+#define BBP_ERR_CRC_FAIL               0x08  // Payload CRC check failed
+#define BBP_ERR_FRAME_TOO_LARGE        0x09  // Command or response payload exceeds the maximum frame size
+#define BBP_ERR_STREAM_ACTIVE          0x0A  // Cannot configure while streaming is active
+#define BBP_ERR_TIMEOUT                0x11  // Device operation timed out or no response received
+#define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot is owned by another session
+#define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX route rejected by the U17-S3 / U23 self-test interlock
+#define BBP_ERR_UNSUPPORTED_HAT        0x14  // Command requires a different HAT type, or no HAT is attached
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)

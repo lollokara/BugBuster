@@ -24,7 +24,6 @@ FW = {name: int(val, 16) for name, val in
       re.findall(r"#define\s+BBP_ERR_(\w+)\s+0x([0-9A-Fa-f]+)", BBP_H)}
 
 
-@pytest.mark.xfail(strict=True, reason="FEAT-6")
 def test_mcp_error_table_matches_firmware():
     from bugbuster_mcp.error_mapping import ERROR_MESSAGES
     assert set(ERROR_MESSAGES) == set(FW.values())
@@ -38,7 +37,6 @@ def test_rust_error_table_matches_firmware():
     assert rust == FW
 
 
-@pytest.mark.xfail(strict=True, reason="FEAT-6")
 def test_mcp_wrapper_maps_device_errors():
     from bugbuster_mcp.tool_wrappers import with_error_context
 
@@ -51,7 +49,6 @@ def test_mcp_wrapper_maps_device_errors():
     assert "MUX" in str(ei.value) and "self-test" in str(ei.value)
 
 
-@pytest.mark.xfail(strict=True, reason="FEAT-6")
 def test_generated_tables_are_current():
     gen = REPO_ROOT / "Firmware" / "tools" / "gen_error_tables.py"
     assert gen.exists(), "Firmware/tools/gen_error_tables.py missing"

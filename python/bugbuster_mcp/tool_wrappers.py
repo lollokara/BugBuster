@@ -36,7 +36,21 @@ def with_error_context(tool_name: str):
             except Exception as e:
                 # Check for device error patterns in the exception message
                 error_msg = str(e)
-                
+
+                # FEAT-6: DeviceError carries the numeric code; its message
+                # prints the NAME ("Device error TIMEOUT"), so the hex regex
+                # below never matched a real device error.
+                code = getattr(e, "code", None)
+                if isinstance(code, int) and "device error" in error_msg.lower():
+                    transport = None
+                    try:
+                        transport = session.get_transport()
+                        if transport == "auto":
+                            transport = None
+                    except Exception:
+                        pass
+                    raise RuntimeError(map_device_error(code, tool_name, transport=transport)) from e
+
                 # Pattern: "Device error 0x11" or similar
                 if "device error" in error_msg.lower():
                     import re
