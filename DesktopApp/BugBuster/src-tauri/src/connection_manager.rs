@@ -164,6 +164,7 @@ impl ConnectionManager {
         // Check firmware version compatibility
         if let Some(h) = transport.handshake_info() {
             if h.proto_version != bbp::PROTO_VERSION {
+                let blocking = proto_mismatch_blocks(h.proto_version, bbp::PROTO_VERSION);
                 // DESK-10 FIX: Protocol version mismatch is now a connection failure,
                 // not a warning. An incompatible version causes confusing downstream
                 // failures; fail fast and clearly instead.
@@ -179,10 +180,12 @@ impl ConnectionManager {
                     &serde_json::json!({
                         "device_version": h.proto_version,
                         "expected_version": bbp::PROTO_VERSION,
-                        "blocking": true,
+                        "blocking": blocking,
                     }),
                 );
-                return Err(anyhow!(err_msg));
+                if blocking {
+                    return Err(anyhow!(err_msg));
+                }
             }
         }
 
@@ -1077,5 +1080,31 @@ impl ConnectionManager {
 
         log::warn!("get_token: no token for {} — device needs USB pairing", key);
         None
+    }
+}
+
+/// Whether a BBP protocol-version mismatch refuses the connection.
+/// (DESK-31: see tests; the decision lives here so it is unit-testable.)
+pub fn proto_mismatch_blocks(device: u8, app: u8) -> bool {
+    device != app
+}
+
+#[cfg(test)]
+mod proto_policy_tests {
+    use super::proto_mismatch_blocks;
+
+    #[test]
+    fn matching_versions_never_block() {
+        assert!(!proto_mismatch_blocks(12, 12));
+    }
+
+    /// DESK-31: refusing to connect on a mismatch locks the user out of the
+    /// device - the desktop is how firmware gets updated (OTA). A mismatch must
+    /// warn and connect so the user can update.
+    #[test]
+    #[ignore = "DESK-31"]
+    fn mismatch_warns_but_connects_so_firmware_can_be_updated() {
+        assert!(!proto_mismatch_blocks(11, 12));
+        assert!(!proto_mismatch_blocks(13, 12));
     }
 }
