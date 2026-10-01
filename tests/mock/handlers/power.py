@@ -107,12 +107,14 @@ def _pca_set_fault_cfg(device):
 # ---------------------------------------------------------------------------
 # PCA_GET_FAULT_LOG (0xB4)
 # client: count (B), then count × (ftype B, ch B, ts I)
-# Return empty log (count=0).
+# device.pca_fault_log: list of (ftype, channel 0-based, ts_ms); default empty.
 # ---------------------------------------------------------------------------
 
 def _pca_get_fault_log(device):
     def handler(payload: bytes) -> bytes:
-        return struct.pack('<B', 0)  # count = 0
+        log = getattr(device, "pca_fault_log", [])
+        return struct.pack('<B', len(log)) + b"".join(
+            struct.pack('<BBI', t, ch, ts) for t, ch, ts in log)
     return handler
 
 
