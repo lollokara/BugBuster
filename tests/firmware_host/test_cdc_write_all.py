@@ -5,14 +5,11 @@ mismatch, then a timeout). Once TR-2 let 1030-byte frames through, a full
 SCRIPT_LOGS reply hit it every time. The write must loop until every byte is
 queued, with a bounded wait so a host that stops reading cannot hang the task."""
 
-import pytest
-
 from tests.firmware_host.fwhost import extract_function
 
 USB_CDC = "Firmware/ESP32/src/net/usb_cdc.cpp"
 
 
-@pytest.mark.xfail(strict=True, reason="BBP-TXQ")
 def test_cdc0_write_queues_the_whole_buffer():
     body = extract_function(USB_CDC, r"^uint32_t usb_cdc_cli_write\(")
     assert "while" in body or "for (" in body, "single write_queue call"
