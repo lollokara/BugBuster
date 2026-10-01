@@ -8,7 +8,6 @@ T3 metric (tmp script, recorded in CHANGELOG): VIN ch0 at 9.6 kSPS, div 1."""
 import re
 from pathlib import Path
 
-import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src"
 BBP = (SRC / "bbp" / "bbp.cpp")
@@ -20,21 +19,21 @@ def _fn(text: str, sig: str) -> str:
     return text[start: text.index("\n}\n", start)]
 
 
-@pytest.mark.xfail(strict=True, reason="AN-10")
 def test_stream_start_drops_diagnostic_slots():
     src = BBP.read_text(encoding="utf-8")
     assert "tasks_scope_mode_enter" in _fn(src, "void bbpStartAdcStream(")
-    assert "tasks_scope_mode_exit" in _fn(src, "void bbpStopAdcStream(")
+    stop = _fn(src, "void bbpStopAdcStream(")
+    if "adcStreamEnd()" in stop:
+        stop = _fn(src, "static void adcStreamEnd(")
+    assert "tasks_scope_mode_exit" in stop
 
 
-@pytest.mark.xfail(strict=True, reason="AN-10")
 def test_stream_divider_is_applied():
     src = BBP.read_text(encoding="utf-8")
     push = _fn(src, "void bbpPushAdcSample(")
     assert re.search(r"s_adcStreamDiv", push), "producer ignores div"
 
 
-@pytest.mark.xfail(strict=True, reason="AN-11")
 def test_adc_poll_wakes_on_adc_rdy():
     src = TASKS.read_text(encoding="utf-8")
     assert "PIN_ADC_RDY" in src and "gpio_isr_handler_add" in src

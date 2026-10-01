@@ -3101,7 +3101,13 @@ Each sample (per active channel, in mask order):
 
 Example: 4 channels active, 50 samples per batch:
 - Payload = 7 + (50 x 12) = 607 bytes
-- At 9.6 kSPS: ~192 batches/sec (50 samples each) -> ~117 KB/s
+- Throughput is bounded by the S3 poll loop, not the converter: the stream
+  delivers about 1.2 k samples/s at most (measured 2026-10-02, 9.6 kSPS
+  conversion). START_ADC_STREAM's `effectiveRate` reports the capped value,
+  divided by `div`, which the device applies (AN-10).
+- While a stream is active the conversion sequence carries only the streamed
+  channels (the diagnostic slots are paused, as in scope mode), and the poll
+  task wakes on the AD74416H ADC_RDY edge (AN-11).
 
 **Batching strategy (firmware):**
 - Collect samples into a buffer

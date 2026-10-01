@@ -171,6 +171,20 @@ static bool setVoutRangePreservingOutput(uint8_t logical_channel, float present_
 // -----------------------------------------------------------------------------
 
 // Map ADC rate enum to approximate poll interval in ms.
+// AN-11 counters, read by tasks_adc_poll_stats().
+static volatile uint32_t s_adcLoops = 0;
+static volatile uint32_t s_adcReadyHits = 0;
+static volatile uint32_t s_adcRdyIrqs = 0;
+
+void tasks_adc_poll_stats(AdcPollStats *out)
+{
+    if (!out) return;
+    out->loops   = s_adcLoops;
+    out->ready   = s_adcReadyHits;
+    out->rdy_irq = s_adcRdyIrqs;
+}
+
+// Map ADC rate enum to approximate poll interval in ms.
 // We can't match full SPI throughput at 9600 SPS, but we poll as fast as
 // practical for higher rates. Minimum ~2ms due to SPI + FreeRTOS overhead.
 uint32_t tasks_adc_rate_poll_ms(AdcRate fastest)
@@ -219,6 +233,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
     TickType_t pollDelay = pdMS_TO_TICKS(50);
 
     for (;;) {
+        s_adcLoops++;
         if (s_device) {
             uint32_t raw[AD74416H_NUM_CHANNELS];
             float    eng[AD74416H_NUM_CHANNELS];
@@ -264,6 +279,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
 
             bool adcReady = s_device->isAdcReady();
+            if (adcReady) s_adcReadyHits++;
 
             // Read hardware (outside mutex) - only for channels that have fresh ADC data
             // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
@@ -432,7 +448,44 @@ static void taskAdcPoll(void* /*pvParameters*/)
         if (pollDelay == 0) {
             delay_us(50);
         }
-        vTaskDelay(pollDelay);
+        // AN-11: wake on the AD74416H ADC_RDY falling edge (adc_rdy_isr), with
+        // the rate-derived poll interval as the fallback if the pin is quiet.
+        // At high conversion rates an edge is always pending, so the loop would
+        // never block and would starve cmdProc (prio 2, same core): after
+        // ADC_WAKE_BURST back-to-back wakes, sleep one tick.
+        static constexpr uint8_t ADC_WAKE_BURST = 4;
+        static uint8_t s_wakeBurst = 0;
+        if (ulTaskNotifyTake(pdTRUE, pollDelay) > 0) {
+            if (++s_wakeBurst >= ADC_WAKE_BURST) {
+                s_wakeBurst = 0;
+                vTaskDelay(1);
+            }
+        } else {
+            s_wakeBurst = 0;
+        }
+    }
+}
+
+// AN-11: ADC_RDY (open-drain, active low) -> notify adcPoll.
+static void IRAM_ATTR adc_rdy_isr(void * /*arg*/)
+{
+    s_adcRdyIrqs++;
+    BaseType_t woken = pdFALSE;
+    if (g_adcTaskHandle) vTaskNotifyGiveFromISR(g_adcTaskHandle, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+static void adc_rdy_irq_init(void)
+{
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW("adcPoll", "ADC_RDY: isr service failed (%s), polling only", esp_err_to_name(err));
+        return;
+    }
+    gpio_set_intr_type(PIN_ADC_RDY, GPIO_INTR_NEGEDGE);
+    err = gpio_isr_handler_add(PIN_ADC_RDY, adc_rdy_isr, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGW("adcPoll", "ADC_RDY: handler add failed (%s), polling only", esp_err_to_name(err));
     }
 }
 
@@ -1787,6 +1840,8 @@ void initTasks(AD74416H& device)
         1
     ) != pdPASS) {
         ESP_LOGE("tasks", "Failed to create task adcPoll — heap exhausted");
+    } else {
+        adc_rdy_irq_init();
     }
 
     if (xTaskCreatePinnedToCore(

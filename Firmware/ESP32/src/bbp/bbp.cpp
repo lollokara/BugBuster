@@ -55,6 +55,21 @@ static const uint8_t s_magic[BBP_MAGIC_LEN] = {
 
 // ADC stream state
 static uint8_t  s_adcStreamMask = 0;    // 0 = inactive
+// AN-10: divider applied by the producer (adcPoll task) and the scope-mode
+// reference the stream holds so the conversion sequence carries only the
+// streamed channels (no 20 SPS diagnostic slots).
+static volatile uint8_t s_adcStreamDiv = 1;
+static uint8_t  s_adcStreamDivCount = 0;   // producer-only
+static bool     s_adcStreamScope = false;  // BBP task only
+
+static void adcStreamEnd(void)
+{
+    s_adcStreamMask = 0;
+    if (s_adcStreamScope) {
+        s_adcStreamScope = false;
+        tasks_scope_mode_exit();
+    }
+}
 
 // Scope stream state
 static bool     s_scopeStreamActive = false;
@@ -610,7 +625,7 @@ bool bbpDetectHandshake(uint8_t byte)
             s_rxLen = 0;
             s_evtSeq = 0;
             s_lastFrameMs = millis_now();
-            s_adcStreamMask = 0;
+            adcStreamEnd();
             s_scopeStreamActive = false;
 
             return true;
@@ -627,7 +642,7 @@ bool bbpDetectHandshake(uint8_t byte)
 
 void bbpExitBinaryMode(void)
 {
-    s_adcStreamMask = 0;
+    adcStreamEnd();
     s_scopeStreamActive = false;
     bbpStopWavegen();  // Stop wavegen on disconnect
     cmd_ota_abort_session();
@@ -725,6 +740,13 @@ void bbpProcess(void)
 
 void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us)
 {
+    // AN-10: honour the START_ADC_STREAM divider (it used to be echoed only).
+    uint8_t div = s_adcStreamDiv;
+    if (div > 1) {
+        if (++s_adcStreamDivCount < div) return;
+        s_adcStreamDivCount = 0;
+    }
+
     // Lock-free SPSC: only the producer (ADC task) writes head
     uint16_t head = __atomic_load_n(&s_adcBuf.head, __ATOMIC_RELAXED);
     uint16_t next = (head + 1) & (BBP_ADC_STREAM_BUF_SIZE - 1);
@@ -759,6 +781,12 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
     s_adcBuf.head  = 0;
     s_adcBuf.tail  = 0;
 
+    s_adcStreamDiv = div;
+    s_adcStreamDivCount = 0;
+    if (!s_adcStreamScope) {
+        tasks_scope_mode_enter(mask);
+        s_adcStreamScope = true;
+    }
     s_adcStreamMask = mask;
 
     // Estimate effective sample rate from fastest active channel
@@ -785,6 +813,12 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
         }
         xSemaphoreGive(g_stateMutex);
     }
+    // AN-10: report what the poll loop can deliver, not the converter rate.
+    // Measured 2026-10-02 (VIN ch0, ADC_RDY wake): 9.6 kSPS -> 1165-1353/s,
+    // 4.8 kSPS -> ~1130/s, 1.2 kSPS -> ~735-1030/s. Each sample costs several
+    // SPI transactions (LIVE_STATUS, result UPR+LWR, CONV_CTRL RMW).
+    static constexpr uint16_t ADC_STREAM_MAX_SPS = 1200;
+    if (effectiveRate > ADC_STREAM_MAX_SPS) effectiveRate = ADC_STREAM_MAX_SPS;
     effectiveRate /= div;
 
     ESP_LOGI(TAG, "ADC stream started: mask=0x%02X div=%d rate=%d", mask, div, effectiveRate);
@@ -794,7 +828,7 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
 
 void bbpStopAdcStream(void)
 {
-    s_adcStreamMask = 0;
+    adcStreamEnd();
     ESP_LOGI(TAG, "ADC stream stopped");
 }
 

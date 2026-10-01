@@ -3170,6 +3170,16 @@ static esp_err_t handle_get_debug(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "i2cBusOk", i2c_bus_ready());
 
+    // AN-11: ADC poll loop counters
+    {
+        AdcPollStats ps = {};
+        tasks_adc_poll_stats(&ps);
+        cJSON *ap = cJSON_AddObjectToObject(root, "adcPoll");
+        cJSON_AddNumberToObject(ap, "loops", ps.loops);
+        cJSON_AddNumberToObject(ap, "ready", ps.ready);
+        cJSON_AddNumberToObject(ap, "rdyIrq", ps.rdy_irq);
+    }
+
     // DS4424
     cJSON *idac = cJSON_AddObjectToObject(root, "ds4424");
     cJSON_AddBoolToObject(idac, "present", ds4424_present());

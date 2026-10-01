@@ -3848,8 +3848,10 @@ class BugBuster:
         """
         Start continuous ADC data streaming. **USB only.**
 
-        The device pushes batches of raw 24-bit ADC codes at up to 9.6 kSPS
-        per channel.
+        The device pushes batches of raw 24-bit ADC codes. The converter runs
+        at up to 9.6 kSPS, but the stream delivers about 1.2 k samples/s at
+        most (SPI read cost per sample); the START reply's effective rate
+        reports the capped value. *divider* is applied on the device.
 
         *channels* — list of channel indices to stream (e.g. ``[0, 1, 2, 3]``).
         *divider*  — sample rate divisor (1 = full rate, 2 = half rate, …).
