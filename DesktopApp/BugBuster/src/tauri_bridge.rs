@@ -2228,7 +2228,91 @@ pub async fn daq_get_view(
     })
     .unwrap();
     let result = try_invoke("daq_get_view", args).await?;
-    serde_wasm_bindgen::from_value(result).ok()
+    // DESK-25: binary payload (ArrayBuffer), see DaqViewData::from_view_bytes.
+    let bytes = js_sys::Uint8Array::new(&result).to_vec();
+    DaqViewData::from_view_bytes(&bytes)
+}
+
+/// Must match `DAQ_VIEW_BIN_MAGIC` in src-tauri `daq_store.rs`.
+pub const DAQ_VIEW_BIN_MAGIC: [u8; 4] = *b"DVB1";
+
+impl DaqViewData {
+    /// Decode the layout written by src-tauri `DaqViewData::to_view_bytes`.
+    pub fn from_view_bytes(b: &[u8]) -> Option<Self> {
+        struct Rd<'a>(&'a [u8]);
+        impl<'a> Rd<'a> {
+            fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+                if self.0.len() < n {
+                    return None;
+                }
+                let (a, b) = self.0.split_at(n);
+                self.0 = b;
+                Some(a)
+            }
+            fn u8(&mut self) -> Option<u8> { Some(self.take(1)?[0]) }
+            fn u32(&mut self) -> Option<u32> { Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?)) }
+            fn u64(&mut self) -> Option<u64> { Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?)) }
+            fn f64(&mut self) -> Option<f64> { Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?)) }
+            fn f32s(&mut self) -> Option<Vec<f32>> {
+                let n = self.u32()? as usize;
+                let raw = self.take(n.checked_mul(4)?)?;
+                Some(raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+            }
+            fn u8s(&mut self) -> Option<Vec<u8>> {
+                let n = self.u32()? as usize;
+                Some(self.take(n)?.to_vec())
+            }
+        }
+        let mut r = Rd(b);
+        if r.take(4)? != DAQ_VIEW_BIN_MAGIC {
+            return None;
+        }
+        let sample_rate_hz = r.u32()?;
+        let total_samples = r.u64()?;
+        let view_start = r.u64()?;
+        let view_end = r.u64()?;
+        let flags = r.u8()?;
+        let actual_rate_hz = r.f64()?;
+        let i_min = r.f32s()?;
+        let i_max = r.f32s()?;
+        let v_min = r.f32s()?;
+        let v_max = r.f32s()?;
+        let p_min = r.f32s()?;
+        let p_max = r.f32s()?;
+        let didt = r.f32s()?;
+        let source = r.u8s()?;
+        let gap = r.u8s()?;
+        let n = r.u32()? as usize;
+        let mut markers = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            markers.push(DaqMarker {
+                sample_index: r.u64()?,
+                timestamp_us: r.u64()?,
+                channel: r.u8()?,
+                edge: r.u8()?,
+                kind: r.u8()?,
+            });
+        }
+        Some(DaqViewData {
+            sample_rate_hz,
+            total_samples,
+            view_start,
+            view_end,
+            decimated: flags & 1 != 0,
+            overflow: flags & 2 != 0,
+            actual_rate_hz,
+            i_min,
+            i_max,
+            v_min,
+            v_max,
+            p_min,
+            p_max,
+            source,
+            didt,
+            gap,
+            markers,
+        })
+    }
 }
 
 pub async fn daq_get_integral(start: u64, end: u64) -> Option<DaqIntegral> {

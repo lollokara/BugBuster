@@ -1009,8 +1009,38 @@ impl DaqStore {
 pub const DAQ_VIEW_BIN_MAGIC: [u8; 4] = *b"DVB1";
 
 impl DaqViewData {
+    /// Little-endian layout: magic, rate u32, total/start/end u64, flags u8
+    /// (bit0 decimated, bit1 overflow), actual_rate f64, then seven
+    /// length-prefixed (u32) f32 arrays (i_min i_max v_min v_max p_min p_max
+    /// didt), two length-prefixed u8 arrays (source gap), and a u32 marker
+    /// count followed by 19-byte markers (u64 index, u64 ts, channel, edge, kind).
     pub fn to_view_bytes(&self) -> Vec<u8> {
-        Vec::new()
+        let n = self.i_min.len();
+        let mut b = Vec::with_capacity(64 + n * (7 * 4 + 2) + self.markers.len() * 19);
+        b.extend_from_slice(&DAQ_VIEW_BIN_MAGIC);
+        b.extend_from_slice(&self.sample_rate_hz.to_le_bytes());
+        b.extend_from_slice(&self.total_samples.to_le_bytes());
+        b.extend_from_slice(&self.view_start.to_le_bytes());
+        b.extend_from_slice(&self.view_end.to_le_bytes());
+        b.push(self.decimated as u8 | (self.overflow as u8) << 1);
+        b.extend_from_slice(&self.actual_rate_hz.to_le_bytes());
+        for a in [&self.i_min, &self.i_max, &self.v_min, &self.v_max, &self.p_min, &self.p_max, &self.didt] {
+            b.extend_from_slice(&(a.len() as u32).to_le_bytes());
+            for x in a.iter() {
+                b.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        for a in [&self.source, &self.gap] {
+            b.extend_from_slice(&(a.len() as u32).to_le_bytes());
+            b.extend_from_slice(a);
+        }
+        b.extend_from_slice(&(self.markers.len() as u32).to_le_bytes());
+        for m in &self.markers {
+            b.extend_from_slice(&m.sample_index.to_le_bytes());
+            b.extend_from_slice(&m.timestamp_us.to_le_bytes());
+            b.extend_from_slice(&[m.channel, m.edge, m.kind]);
+        }
+        b
     }
 }
 
@@ -1072,7 +1102,6 @@ mod view_bin_tests {
 
     /// DESK-25: the DAQ view shipped ~14k floats as JSON at up to 30 Hz.
     #[test]
-    #[ignore = "DESK-25"]
     fn view_bytes_roundtrip_and_smaller_than_json() {
         let n = 1800;
         let f = |k: f32| (0..n).map(|i| i as f32 * k + 0.123_456_7).collect::<Vec<f32>>();

@@ -14,7 +14,7 @@
 use crate::bbp;
 use crate::connection_manager::ConnectionManager;
 use crate::daq_proto::{self, DaqRecord, EnergyRecord, FftRecord, StatsRecord, StatusRecord};
-use crate::daq_store::{DaqIntegral, DaqStore, DaqViewData};
+use crate::daq_store::{DaqIntegral, DaqStore};
 use crate::daq_usb::{daq_usb_present, DaqTransport, DaqUsbConnection, MockDaqTransport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -364,9 +364,11 @@ pub fn daq_get_view(
     smooth: u32,
     filter_type: u8,
     daq: State<'_, DaqState>,
-) -> CmdResult<DaqViewData> {
+) -> CmdResult<tauri::ipc::Response> {
+    // DESK-25: raw bytes (ArrayBuffer on the JS side), not JSON.
     let store = daq.store.read().map_err(map_err)?;
-    Ok(store.get_view(start, end, max_points, smooth, filter_type))
+    let view = store.get_view(start, end, max_points, smooth, filter_type);
+    Ok(tauri::ipc::Response::new(view.to_view_bytes()))
 }
 
 #[tauri::command]
