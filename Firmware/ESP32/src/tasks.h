@@ -433,7 +433,7 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 
 // Number of entries tasks_get_registry() can return. Keep in lockstep with
 // s_task_registry[] in tasks.cpp.
-#define BB_TASK_REGISTRY_MAX 6
+#define BB_TASK_REGISTRY_MAX 7
 
 // One row of the task table. `handle` is resolved at call time, not cached:
 // during boot and after a task exits it can legitimately be NULL.

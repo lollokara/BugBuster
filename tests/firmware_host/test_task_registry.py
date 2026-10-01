@@ -4,13 +4,10 @@ over HTTPS) could not be measured from MCP/HTTP/BBP at all."""
 
 import re
 
-import pytest
-
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-07")
 def test_micropython_task_is_in_stack_telemetry():
     reg = extract_function("Firmware/ESP32/src/tasks.cpp", r"^size_t tasks_get_registry\(")
     assert '"uPython"' in reg

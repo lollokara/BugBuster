@@ -1817,6 +1817,7 @@ size_t tasks_get_registry(BbTaskInfo *out, size_t max)
         { "wavegen",  TASK_STACK_WAVEGEN  },
         { "mainLoop", TASK_STACK_MAINLOOP },
         { "bbpCli",   TASK_STACK_BBPCLI   },
+        { "uPython",  MP_TASK_STACK       },
     };
     const size_t n_spec = sizeof(spec) / sizeof(spec[0]);
     size_t n = 0;
