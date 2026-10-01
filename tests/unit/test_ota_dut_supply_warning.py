@@ -66,7 +66,6 @@ def img(tmp_path):
     return str(p)
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-16")
 def test_upload_p4_warns_when_dut_supply_on(img):
     c, calls = _client(ON)
     r = c.upload_p4(img)
@@ -76,7 +75,6 @@ def test_upload_p4_warns_when_dut_supply_on(img):
     assert [m for m, _ in calls] == ["GET", "POST"]
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-16")
 def test_apply_update_with_p4_warns_when_dut_supply_on():
     c, _ = _client(ON)
     r = c.apply_update(p4=True)

@@ -553,8 +553,21 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// DAQ-16: warning for a P4 OTA started while the DUT supply is on, from a
 /// GET /api/daq/vdut/status body. None when the supply is off or unknown.
-fn vdut_ota_warning(_status: &serde_json::Value) -> Option<String> {
-    None
+fn vdut_ota_warning(status: &serde_json::Value) -> Option<String> {
+    if status.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let at = status
+        .get("voltageSetpointV")
+        .and_then(|v| v.as_f64())
+        .map(|v| format!(" ({:.2} V)", v))
+        .unwrap_or_default();
+    Some(format!(
+        "DUT supply was ON{} when the P4 update started. The P4 reset turns it OFF \
+         and it does not come back on by itself - re-enable it after the update \
+         if the DUT needs power.",
+        at
+    ))
 }
 
 fn decode_hex_32(hex: &str) -> Result<[u8; 32], String> {
@@ -836,6 +849,28 @@ pub async fn ota_upload_daq(
         .timeout(std::time::Duration::from_secs(900))
         .build()
         .map_err(|e| e.to_string())?;
+
+    // DAQ-16: advisory only. A failed status read never blocks the push.
+    let mut supply_warning: Option<String> = None;
+    if target == "p4" {
+        if let Ok(r) = client
+            .get(format!("{}/api/daq/vdut/status", base_url))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(v) = r.json::<serde_json::Value>().await {
+                    supply_warning = vdut_ota_warning(&v);
+                }
+            }
+        }
+        if let Some(ref w) = supply_warning {
+            log::warn!("{}", w);
+            emit_progress(&app, "warning", 0.0, w);
+        }
+    }
+
     let mut req = client
         .post(format!(
             "{}/api/ota/upload_{}?sha256={}",
@@ -908,6 +943,9 @@ pub async fn ota_upload_daq(
                             .map(|v| format!(" — now running {}", v))
                             .unwrap_or_default()
                     );
+                    if let Some(ref w) = supply_warning {
+                        final_msg = format!("{}. {}", final_msg, w);
+                    }
                     // Only a *successful* done record should flip the frontend's
                     // success state; app.rs treats any "done" stage as success.
                     emit_progress(&app, "done", 100.0, &final_msg);
@@ -4934,7 +4972,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "DAQ-16"]
     fn vdut_ota_warning_only_when_supply_enabled() {
         let on = serde_json::json!({"present": true, "enabled": true, "voltageSetpointV": 3.3});
         let w = vdut_ota_warning(&on).expect("supply on must warn");

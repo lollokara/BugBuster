@@ -193,6 +193,8 @@ def register(mcp) -> None:
 
         Returns only after the P4 has been reset and the new version confirmed
         running. Takes 60-90 s. The DAQ stream drops briefly during the reset.
+        The reset turns the DUT supply OFF; if it was on, the result has a
+        ``warnings`` list saying so - re-enable it afterwards if needed.
         """
         ota = _make_ota(host, admin_token)
         try:
