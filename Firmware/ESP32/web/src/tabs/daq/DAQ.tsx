@@ -8,6 +8,7 @@ import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { api, PairingRequiredError } from "../../api/client";
 import { deviceMac } from "../../state/signals";
+import { daqView } from "./daqView";
 
 const daqStatus = signal<any>(null);
 const vdutStatus = signal<any>(null);
@@ -40,28 +41,14 @@ export function DAQ() {
     return () => { alive = false; };
   }, []);
 
-  const present = daqStatus.value?.present ?? false;
-  const hatType = daqStatus.value?.type ?? 0;
-  const hatVersion = daqStatus.value?.version ?? "—";
-
-  const vdutEnabled = vdutStatus.value?.enabled ?? false;
-  const vdutVMeas = vdutStatus.value?.voltage_v ?? 0;
-  const vdutIMeas = vdutStatus.value?.current_a ?? 0;
-  const vdutPower = vdutVMeas * vdutIMeas;
-
-  // WEB-1: Calibration status from firmware (P4-1)
-  const calHaveHi = vdutStatus.value?.cal_have_hi ?? false;
-  const calHaveMid = vdutStatus.value?.cal_have_mid ?? false;
-  const calHaveLo = vdutStatus.value?.cal_have_lo ?? false;
-  const anyUncalibrated = !calHaveHi || !calHaveMid || !calHaveLo;
-
-  const range = vdutStatus.value?.range ?? "unknown";
-  const rangeCalibrated = (
-    range === "hi" ? calHaveHi :
-    range === "mid" ? calHaveMid :
-    range === "lo" ? calHaveLo :
-    false
-  );
+  const view = daqView(daqStatus.value, vdutStatus.value);
+  const present = view.present;
+  const vdutEnabled = view.vdut.enabled;
+  const vdutVMeas = view.vdut.measuredV;
+  const vdutIMeas = view.vdut.measuredA;
+  const vdutPower = view.vdut.powerW;
+  const range = view.vdut.range;
+  const rangeCalibrated = view.calibration === "calibrated";
 
   const toggleEnable = async () => {
     if (!mac) return;
@@ -113,18 +100,15 @@ export function DAQ() {
       <GlassCard title="DAQ HAT Status">
         <div class="kv-row">
           <span>Type</span>
-          <span class="mono">{hatType === 0x10 ? "DAQ HAT" : `0x${hatType.toString(16)}`}</span>
+          <span class="mono">{view.typeLabel}</span>
         </div>
         <div class="kv-row">
           <span>Version</span>
-          <span class="mono">{hatVersion}</span>
+          <span class="mono">{view.version}</span>
         </div>
-        {anyUncalibrated && (
+        {view.calibration === "uncalibrated" && (
           <div style="margin-top: 1rem; padding: 0.5rem; background: rgba(245, 158, 11, 0.1); border-left: 3px solid #f59e0b; color: #f59e0b;">
             ⚠ One or more current ranges are UNCALIBRATED. Current and energy readings carry an uncompensated offset.
-            <div style="margin-top: 0.5rem; font-size: 0.875rem;">
-              Calibration status: HI={calHaveHi ? "✓" : "✗"}, MID={calHaveMid ? "✓" : "✗"}, LO={calHaveLo ? "✓" : "✗"}
-            </div>
           </div>
         )}
       </GlassCard>
