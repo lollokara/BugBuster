@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -145,6 +146,18 @@ void daq_settings_set_callbacks(daq_settings_apply_cb_t apply,
 }
 
 // ---------------------------------------------------------------------------
+// C6-20: the C6 menu resends the whole settings set on every edit. Re-applying
+// an UNCHANGED value from it restarted the acquisition (rate/range/filter) on a
+// brightness change. Every other source keeps re-applying unchanged values:
+// the CLI, S3 and local firmware rely on that re-assert (e.g. retrying
+// `vdut on` after a USB-PD refusal left the slot at 1 with the supply off).
+// ---------------------------------------------------------------------------
+static bool should_apply(bool changed, daq_src_t src)
+{
+    return changed || src != DAQ_SRC_C6;
+}
+
+// ---------------------------------------------------------------------------
 // Scalar accessors.
 // ---------------------------------------------------------------------------
 bool daq_settings_get_i32(uint16_t key, int32_t *out)
@@ -173,7 +186,7 @@ bool daq_settings_set_i32(uint16_t key, int32_t value, daq_src_t src)
     unlock();
 
     if (changed && (sc->flags & DAQ_F_PERSIST)) persist_scalar(key, value);
-    if (s_apply)  s_apply(key, value, NULL, s_user);
+    if (s_apply && should_apply(changed, src))  s_apply(key, value, NULL, s_user);
     if (changed && s_notify) s_notify(key, src, s_user);
     return true;
 }
@@ -218,7 +231,7 @@ bool daq_settings_set_str(uint16_t key, const char *val, daq_src_t src)
     unlock();
 
     if (changed && (sc->flags & DAQ_F_PERSIST)) persist_str(key, copy);
-    if (s_apply)  s_apply(key, 0, copy, s_user);
+    if (s_apply && should_apply(changed, src))  s_apply(key, 0, copy, s_user);
     if (changed && s_notify) s_notify(key, src, s_user);
     return true;
 }

@@ -10,8 +10,6 @@ refusal - M3.0 caller classification)."""
 
 from pathlib import Path
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 
 P4 = "Firmware/DAQ_HAT/ESP32P4/src/config"
@@ -93,7 +91,6 @@ def _run(tmp_path: Path) -> str:
                            include_dirs=[tmp_path, P4, COMMON]).strip()
 
 
-@pytest.mark.xfail(strict=True, reason="C6-20")
 def test_unchanged_c6_resend_is_not_reapplied(tmp_path):
     assert _run(tmp_path).startswith("c6_same=0 ")
 
