@@ -119,16 +119,16 @@ static const char* http_status_string(int code)
     }
 }
 
-static void add_number_alias(cJSON *obj, const char *camel, const char *snake, double value)
+// IOS-23: camelCase only (see api_core.cpp); the second argument keeps the
+// retired snake_case name greppable.
+static void add_number_alias(cJSON *obj, const char *camel, const char * /*retired*/, double value)
 {
     cJSON_AddNumberToObject(obj, camel, value);
-    cJSON_AddNumberToObject(obj, snake, value);
 }
 
-static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, bool value)
+static void add_bool_alias(cJSON *obj, const char *camel, const char * /*retired*/, bool value)
 {
     cJSON_AddBoolToObject(obj, camel, value);
-    cJSON_AddBoolToObject(obj, snake, value);
 }
 
 // -----------------------------------------------------------------------------
@@ -673,8 +673,6 @@ static esp_err_t handle_get_faults(httpd_req_t *req)
             cJSON_AddNumberToObject(obj, "id", ch);
             cJSON_AddNumberToObject(obj, "channelAlert", g_deviceState.channels[ch].channelAlertStatus);
             cJSON_AddNumberToObject(obj, "channelAlertMask", g_deviceState.channels[ch].channelAlertMask);
-            cJSON_AddNumberToObject(obj, "alert", g_deviceState.channels[ch].channelAlertStatus);
-            cJSON_AddNumberToObject(obj, "mask", g_deviceState.channels[ch].channelAlertMask);
             cJSON_AddItemToArray(channels, obj);
         }
         xSemaphoreGive(g_stateMutex);
@@ -2691,7 +2689,6 @@ static esp_err_t handle_post_hat_detect(httpd_req_t *req)
     cJSON_AddNumberToObject(rsp, "type", type);
     cJSON_AddStringToObject(rsp, "typeName", hat_type_name(type));
     cJSON_AddNumberToObject(rsp, "detectVoltage", hs->detect_voltage);
-    cJSON_AddNumberToObject(rsp, "detect_voltage", hs->detect_voltage);
     return send_json(req, rsp);
 }
 

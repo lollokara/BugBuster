@@ -40,23 +40,24 @@ public struct ChannelState: Codable, Identifiable, Equatable {
     public let alertMask: Int
     public let rtdExcitationUa: Int?
 
+    // IOS-23: the firmware emits camelCase only.
     enum CodingKeys: String, CodingKey {
         case id
         case function
-        case functionCode = "function_code"
-        case adcRaw = "adc_raw"
-        case adcValue = "adc_value"
-        case adcRange = "adc_range"
-        case adcRate = "adc_rate"
-        case adcMux = "adc_mux"
-        case dacCode = "dac_code"
-        case dacValue = "dac_value"
-        case dinState = "din_state"
-        case dinCounter = "din_counter"
-        case doState = "do_state"
-        case alert = "channel_alert"
-        case alertMask = "channel_alert_mask"
-        case rtdExcitationUa = "rtd_excitation_ua"
+        case functionCode
+        case adcRaw
+        case adcValue
+        case adcRange
+        case adcRate
+        case adcMux
+        case dacCode
+        case dacValue
+        case dinState
+        case dinCounter
+        case doState
+        case alert = "channelAlert"
+        case alertMask = "channelAlertMask"
+        case rtdExcitationUa
     }
 }
 
@@ -93,15 +94,15 @@ public struct DeviceStatus: Codable, Equatable {
     public let uptimeMs: Double
     
     enum CodingKeys: String, CodingKey {
-        case spiOk = "spi_ok"
-        case i2cOk = "i2c_ok"
-        case muxOk = "mux_ok"
-        case dieTemp = "die_temp_c"
-        case alertStatus = "alert_status"
-        case alertMask = "alert_mask"
-        case supplyAlertStatus = "supply_alert_status"
-        case supplyAlertMask = "supply_alert_mask"
-        case liveStatus = "live_status"
+        case spiOk
+        case i2cOk
+        case muxOk
+        case dieTemp
+        case alertStatus
+        case alertMask
+        case supplyAlertStatus
+        case supplyAlertMask
+        case liveStatus
         case channels
         case diagnostics
         case muxStates = "muxStates"
@@ -276,12 +277,12 @@ public struct WifiStatus: Codable, Equatable {
     
     enum CodingKeys: String, CodingKey {
         case connected
-        case staSSID = "sta_ssid"
-        case staIP = "sta_ip"
+        case staSSID
+        case staIP
         case rssi
-        case apSSID = "ap_ssid"
-        case apIP = "ap_ip"
-        case apMAC = "ap_mac"
+        case apSSID
+        case apIP
+        case apMAC
     }
 }
 
@@ -341,11 +342,11 @@ public struct DeviceInfo: Codable, Equatable {
     public let spiOk: Bool
     
     enum CodingKeys: String, CodingKey {
-        case siliconRev = "silicon_rev"
-        case siliconId0 = "siliconId0"
-        case siliconId1 = "siliconId1"
-        case macAddress = "mac_address"
-        case spiOk = "spi_ok"
+        case siliconRev
+        case siliconId0
+        case siliconId1
+        case macAddress
+        case spiOk
     }
 }
 

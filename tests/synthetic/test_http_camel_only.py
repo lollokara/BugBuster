@@ -25,7 +25,6 @@ def _alias_body(src: str, name: str) -> str:
     return src[start: src.index("\n}", start)]
 
 
-@pytest.mark.xfail(strict=True, reason="IOS-23")
 @pytest.mark.parametrize("path", [API_CORE, WEBSERVER], ids=["api_core", "webserver"])
 def test_alias_helpers_emit_camel_only(path):
     src = path.read_text(encoding="utf-8")
@@ -34,14 +33,12 @@ def test_alias_helpers_emit_camel_only(path):
         assert "snake" not in body.split("{", 1)[1], f"{helper} still emits the snake twin"
 
 
-@pytest.mark.xfail(strict=True, reason="IOS-23")
 def test_explicit_snake_twins_removed():
     src = API_CORE.read_text(encoding="utf-8") + WEBSERVER.read_text(encoding="utf-8")
     left = [k for k in RETIRED if re.search(rf'cJSON_Add\w+ToObject\(\w+, "{k}"', src)]
     assert left == []
 
 
-@pytest.mark.xfail(strict=True, reason="IOS-23")
 def test_ios_reads_camel_case():
     src = IOS_MODELS.read_text(encoding="utf-8")
     snake = re.findall(r'case \w+ = "([a-z0-9]+_[a-z0-9_]+)"', src)

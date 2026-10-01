@@ -120,18 +120,17 @@ static bool ac_valid_adc_rate(int v)
     }
 }
 
-// camelCase + snake_case aliases — kept identical to the HTTP layer so the
-// on-device web UI and the iOS app decode the same payload on every transport.
-static void add_number_alias(cJSON *obj, const char *camel, const char *snake, double value)
+// IOS-23: replies used to carry a camelCase and a snake_case copy of each
+// field. Every client (web, iOS, desktop, Python) reads camelCase, so only
+// that form is emitted; the second argument keeps the retired name greppable.
+static void add_number_alias(cJSON *obj, const char *camel, const char * /*retired*/, double value)
 {
     cJSON_AddNumberToObject(obj, camel, value);
-    cJSON_AddNumberToObject(obj, snake, value);
 }
 
-static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, bool value)
+static void add_bool_alias(cJSON *obj, const char *camel, const char * /*retired*/, bool value)
 {
     cJSON_AddBoolToObject(obj, camel, value);
-    cJSON_AddBoolToObject(obj, snake, value);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,13 +161,9 @@ static char *api_device_info(void)
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "siliconRev", (int)rev);
-    cJSON_AddNumberToObject(root, "silicon_rev", (int)rev);
     cJSON_AddStringToObject(root, "siliconId0", id0Str);
     cJSON_AddStringToObject(root, "siliconId1", id1Str);
-    cJSON_AddNumberToObject(root, "silicon_id0", (int)id0);
-    cJSON_AddNumberToObject(root, "silicon_id1", (int)id1);
     cJSON_AddStringToObject(root, "macAddress", macStr);
-    cJSON_AddStringToObject(root, "mac_address", macStr);
     add_bool_alias(root, "spiOk", "spi_ok", spiOk);
     return json_take(root);
 }
@@ -183,7 +178,6 @@ static char *api_status(void)
         add_bool_alias(root, "muxOk", "mux_ok", g_deviceState.muxOk);
         add_bool_alias(root, "muxFaulted", "mux_faulted", adgs_is_faulted());
         cJSON_AddNumberToObject(root, "dieTemp", g_deviceState.dieTemperature);
-        cJSON_AddNumberToObject(root, "die_temp_c", g_deviceState.dieTemperature);
         add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
         add_number_alias(root, "alertMask", "alert_mask", g_deviceState.alertMask);
         add_number_alias(root, "supplyAlertStatus", "supply_alert_status", g_deviceState.supplyAlertStatus);
@@ -324,25 +318,21 @@ static char *api_hat(void)
         cJSON_AddStringToObject(root, "kind", hat_get_type_string());
     }
     cJSON_AddNumberToObject(root, "detectVoltage", hs->detect_voltage);
-    cJSON_AddNumberToObject(root, "detect_voltage", hs->detect_voltage);
     cJSON_AddNumberToObject(root, "fwMajor", hs->fw_version_major);
     cJSON_AddNumberToObject(root, "fwMinor", hs->fw_version_minor);
     cJSON_AddBoolToObject(root, "configConfirmed", hs->config_confirmed);
-    cJSON_AddBoolToObject(root, "config_confirmed", hs->config_confirmed);
     cJSON_AddBoolToObject(root, "dapConnected", hs->dap_connected);
     cJSON_AddBoolToObject(root, "targetDetected", hs->target_detected);
     cJSON_AddNumberToObject(root, "targetDpidr", hs->target_dpidr);
     cJSON_AddNumberToObject(root, "laRoute", hs->la_route);
 
     cJSON *pins = cJSON_AddArrayToObject(root, "pinConfig");
-    cJSON *pin_config = cJSON_AddArrayToObject(root, "pin_config");
     for (int i = 0; i < HAT_NUM_EXT_PINS; i++) {
         cJSON *pin = cJSON_CreateObject();
         cJSON_AddNumberToObject(pin, "pin", i);
         cJSON_AddNumberToObject(pin, "function", hs->pin_config[i]);
         cJSON_AddStringToObject(pin, "functionName", hat_func_name(hs->pin_config[i]));
         cJSON_AddItemToArray(pins, pin);
-        cJSON_AddItemToArray(pin_config, cJSON_CreateNumber(hs->pin_config[i]));
     }
     return json_take(root);
 }
@@ -609,18 +599,13 @@ static char *api_wifi(void)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "connected", wifi_is_connected());
     cJSON_AddStringToObject(root, "staSSID", wifi_get_sta_ssid());
-    cJSON_AddStringToObject(root, "sta_ssid", wifi_get_sta_ssid());
     cJSON_AddStringToObject(root, "staIP", wifi_get_sta_ip());
-    cJSON_AddStringToObject(root, "sta_ip", wifi_get_sta_ip());
     cJSON_AddNumberToObject(root, "rssi", wifi_get_rssi());
     wifi_config_t ap_cfg = {};
     esp_wifi_get_config(WIFI_IF_AP, &ap_cfg);
     cJSON_AddStringToObject(root, "apSSID", (const char *)ap_cfg.ap.ssid);
-    cJSON_AddStringToObject(root, "ap_ssid", (const char *)ap_cfg.ap.ssid);
     cJSON_AddStringToObject(root, "apIP", wifi_get_ap_ip());
-    cJSON_AddStringToObject(root, "ap_ip", wifi_get_ap_ip());
     cJSON_AddStringToObject(root, "apMAC", wifi_get_ap_mac());
-    cJSON_AddStringToObject(root, "ap_mac", wifi_get_ap_mac());
     return json_take(root);
 }
 
@@ -1664,11 +1649,6 @@ static char *api_channel_adc(int ch)
         cJSON_AddNumberToObject(root, "adcRange", (int)cs.adcRange);
         cJSON_AddNumberToObject(root, "adcRate", (int)cs.adcRate);
         cJSON_AddNumberToObject(root, "adcMux", (int)cs.adcMux);
-        cJSON_AddNumberToObject(root, "raw_code", cs.adcRawCode);
-        cJSON_AddNumberToObject(root, "value", cs.adcValue);
-        cJSON_AddNumberToObject(root, "range", (int)cs.adcRange);
-        cJSON_AddNumberToObject(root, "rate", (int)cs.adcRate);
-        cJSON_AddNumberToObject(root, "mux", (int)cs.adcMux);
         xSemaphoreGive(g_stateMutex);
     } else {
         cJSON_Delete(root);
