@@ -37,7 +37,9 @@ int rail_power_up(const RailPowerOps *ops, uint8_t rail, float volts,
     float applied = volts;
     if (!ops->vadj_set(rail, volts, &applied)) return 5;
     out->applied_v = applied;
-    out->clamped = fabsf(applied - volts) > 0.01f;
+    // DS4424 steps are ~0.1 V, so a few tens of mV is quantisation; only a
+    // larger difference means the DAC limits clamped the request.
+    out->clamped = fabsf(applied - volts) > RAIL_PU_CLAMP_TOL_V;
     if (!ops->vadj_enable(rail, true)) return 5;
     ops->delay(settle_ms);
 

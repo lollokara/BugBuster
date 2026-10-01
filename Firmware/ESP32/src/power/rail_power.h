@@ -25,6 +25,7 @@
 #define RAIL_PU_CONFIRM_ABOVE_V 12.0f
 #define RAIL_PU_DISCHARGE_MS     200u
 #define RAIL_PU_POST_ARM_MS      120u  // e-fuse blackout (100 ms) + margin
+#define RAIL_PU_CLAMP_TOL_V      0.15f // > one DS4424 step: beyond it = clamped
 
 typedef struct {
     bool (*efuse_arm)(uint8_t logical, bool on);           // via the blackout gate

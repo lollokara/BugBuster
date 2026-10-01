@@ -146,7 +146,7 @@ def rail_power_up_model(device, rail: int, volts: float, flags: int, mask: int):
     for i in range(2):
         if mask & (1 << i):
             device.pca_control[5 + first + i] = True          # EFUSEn enable
-    return {"rail": rail, "applied_v": applied, "clamped": abs(applied - volts) > 0.01,
+    return {"rail": rail, "applied_v": applied, "clamped": abs(applied - volts) > 0.15,
             "pg": True,
             "efuse_faults": [bool(faults[first]) and bool(mask & 1),
                              bool(faults[first + 1]) and bool(mask & 2)]}
