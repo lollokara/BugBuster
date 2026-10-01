@@ -120,7 +120,7 @@ size_t bbp_cobs_encode(const uint8_t *input, size_t length, uint8_t *output)
     return write_idx;
 }
 
-size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output)
+size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output, size_t max_out)
 {
     size_t read_idx  = 0;
     size_t write_idx = 0;
@@ -129,10 +129,12 @@ size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output)
         uint8_t code = input[read_idx++];
         if (code == 0) break;  // Invalid in COBS stream
         for (uint8_t i = 1; i < code && read_idx < length; i++) {
+            if (write_idx >= max_out) return 0;
             output[write_idx++] = input[read_idx++];
         }
         // Add implicit zero delimiter between groups, but NOT after the last group
         if (code != 0xFF && read_idx < length) {
+            if (write_idx >= max_out) return 0;
             output[write_idx++] = 0x00;
         }
     }
@@ -184,6 +186,16 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     if (payload && payloadLen > 0) {
         if (pos + payloadLen + 2 > BBP_MAX_PAYLOAD) {
             ESP_LOGW(TAG, "sendMsg: payload too large (%u + %u > %u)", (unsigned)pos, (unsigned)payloadLen, BBP_MAX_PAYLOAD);
+            // Tell the host instead of leaving it to time out.
+            pos = 0;
+            bbp_put_u8(s_msgBuf, &pos, BBP_MSG_ERR);
+            bbp_put_u16(s_msgBuf, &pos, seq);
+            bbp_put_u8(s_msgBuf, &pos, cmdId);
+            bbp_put_u8(s_msgBuf, &pos, BBP_ERR_FRAME_TOO_LARGE);
+            bbp_put_u8(s_msgBuf, &pos, cmdId);
+            uint16_t ecrc = bbp_crc16(s_msgBuf, pos);
+            bbp_put_u16(s_msgBuf, &pos, ecrc);
+            sendFrame(s_msgBuf, pos);
             if (s_txMutex) xSemaphoreGive(s_txMutex);
             return;
         }
@@ -669,7 +681,7 @@ void bbpProcess(void)
             if (byte == BBP_FRAME_DELIMITER) {
                 // End of frame - decode and dispatch
                 if (s_rxLen > 0) {
-                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, s_decodedBuf);
+                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, s_decodedBuf, sizeof(s_decodedBuf));
                     if (decodedLen >= BBP_MIN_MSG_SIZE && decodedLen <= BBP_MAX_PAYLOAD) {
                         dispatchMessage(s_decodedBuf, decodedLen);
                     }

@@ -39,7 +39,7 @@ extern "C" {
 
 // Framing
 #define BBP_MAX_PAYLOAD         1024
-#define BBP_COBS_MAX            (BBP_MAX_PAYLOAD + 2 + 1) // payload + COBS overhead + delimiter
+#define BBP_COBS_MAX            (BBP_MAX_PAYLOAD + BBP_MAX_PAYLOAD / 254 + 3) // worst-case COBS overhead + delimiter
 #define BBP_FRAME_DELIMITER     0x00
 
 // Message header size: type(1) + seq(2) + cmd(1) = 4
@@ -363,7 +363,8 @@ struct BbpAdcStreamBuf {
 // -----------------------------------------------------------------------------
 
 size_t bbp_cobs_encode(const uint8_t *input, size_t length, uint8_t *output);
-size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output);
+// Returns the decoded length, or 0 if the frame is malformed or would exceed max_out.
+size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output, size_t max_out);
 
 // -----------------------------------------------------------------------------
 // CRC-16/CCITT

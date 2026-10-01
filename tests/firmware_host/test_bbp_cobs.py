@@ -1,14 +1,11 @@
 """TR-2: BBP COBS buffer sizing, using the real firmware encoder and defines."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_defines, extract_function
 
 BBP_CPP = "Firmware/ESP32/src/bbp/bbp.cpp"
 BBP_H = "Firmware/ESP32/src/bbp/bbp.h"
 
 
-@pytest.mark.xfail(strict=True, reason="TR-2: BBP_COBS_MAX undersized (1030 > 1027)")
 def test_worst_case_frame_fits_cobs_buffer():
     """sendFrame() writes cobs_encode(msg) plus a 0x00 delimiter into
     s_cobsBuf[BBP_COBS_MAX]; sendMsg() admits messages up to BBP_MAX_PAYLOAD.
@@ -33,7 +30,6 @@ int main(void) {{
     assert framed <= cap, f"framed {framed} bytes > BBP_COBS_MAX {cap}"
 
 
-@pytest.mark.xfail(strict=True, reason="TR-2: COBS decode has no output bound")
 def test_decode_never_writes_past_the_output_buffer():
     """bbpProcess() accumulates up to RX_BUF_SIZE (BBP_COBS_MAX + 16) encoded
     bytes and decodes them into s_decodedBuf[BBP_MAX_PAYLOAD]. A host can send

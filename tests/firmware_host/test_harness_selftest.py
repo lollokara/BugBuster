@@ -52,7 +52,7 @@ int main(void) {{
     for (int i = 0; i < 600; i++) in[i] = (uint8_t)(i % 7 == 0 ? 0 : i);
     size_t n = bbp_cobs_encode(in, sizeof in, enc);
     for (size_t i = 0; i < n; i++) if (enc[i] == 0) {{ puts("zero-in-encoding"); return 0; }}
-    size_t m = bbp_cobs_decode(enc, n, dec);
+    size_t m = bbp_cobs_decode(enc, n, dec, sizeof dec);
     puts(m == sizeof in && memcmp(in, dec, m) == 0 ? "ok" : "mismatch");
     return 0;
 }}
