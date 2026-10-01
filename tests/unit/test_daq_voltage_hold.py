@@ -6,8 +6,6 @@ session reset (usb_stream.c). With different rates the two indices are not
 comparable: voltage sample j is at t = j / rate_v.
 """
 
-import pytest
-
 from bugbuster.daq_stream import CaptureAccumulator, WaveIRecord, WaveVRecord
 
 RATE_I = 8_000
@@ -27,7 +25,6 @@ def _capture(rate_v=RATE_V, n_v=N_V):
     return acc.finish()
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-02: voltage index compared to current index")
 def test_voltage_step_lands_at_the_right_time_when_rates_differ():
     cap = _capture()
     step_i = int(STEP_T * RATE_I)

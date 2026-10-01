@@ -395,7 +395,7 @@ class CaptureAccumulator:
         # deque, not list: this is drained from the head on every waveform
         # record, and list.pop(0) made capture assembly O(n^2) - the host fell
         # behind the stream and the DEVICE dropped frames to back-pressure.
-        self._v_pending: Deque[Tuple[int, float]] = deque()
+        self._v_pending: Deque[Tuple[float, float]] = deque()  # (t_s, volts)
 
     @property
     def full(self) -> bool:
@@ -438,19 +438,22 @@ class CaptureAccumulator:
         self._drain_voltage()
 
     def _feed_voltage(self, rec: WaveVRecord) -> None:
+        # WAVE_V indices count voltage samples (volt_seq), not fused current
+        # samples; both restart at 0 together, so compare in seconds.
+        rate_v = float(rec.sample_rate) or (self.cap.sample_rate or 1.0)
         for k, v in enumerate(rec.voltage):
-            self._v_pending.append((rec.start_index + k, v))
+            self._v_pending.append(((rec.start_index + k) / rate_v, v))
         self._drain_voltage()
 
     def _drain_voltage(self) -> None:
         """Zero-order-hold voltage onto the current timebase."""
         cap = self.cap
-        if cap.start_index is None:
+        if cap.start_index is None or cap.sample_rate <= 0:
             return
         target = cap.sample_count
         while len(cap.voltage) < target:
-            abs_idx = cap.start_index + len(cap.voltage)
-            while self._v_pending and self._v_pending[0][0] <= abs_idx:
+            t_i = (cap.start_index + len(cap.voltage)) / cap.sample_rate
+            while self._v_pending and self._v_pending[0][0] <= t_i + 1e-12:
                 self._last_v = self._v_pending.popleft()[1]
             if self._last_v is None:
                 if self._v_pending:
