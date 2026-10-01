@@ -1447,11 +1447,19 @@ void hat_daq_push_telemetry(void)
 
     // Supply rails from the background self-test monitor (cached; -1 when the
     // monitor is disabled or blocked by the Channel-D interlock). The monitor
-    // is off by default, so when its cache is unavailable we measure the three
-    // rails on demand here — this is the only rail source the C6 Diagnostics
-    // menu has. selftest_measure_supply() routes through U23 and safely returns
-    // -1 when a client owns the mux path, so the on-demand read never disturbs
-    // an active measurement.
+    // is off by default, so when its cache is unavailable we measure on demand
+    // here - this is the only rail source the C6 Diagnostics menu has.
+    // IO-25: each U23 measurement claims slot 14 (logical CH-C) with a 5 s
+    // lease and blocks for hundreds of ms. Measuring all three rails every
+    // second kept the slot permanently held, so clients could never claim
+    // CH-C. Refresh ONE rail per TLM_RAIL_REFRESH_MS, round-robin, and serve
+    // the rest from cache. A -1 result (slot held by a client) keeps the last
+    // good value.
+    static constexpr uint32_t TLM_RAIL_REFRESH_MS = 5000;
+    static float    s_rail_v[SELFTEST_RAIL_COUNT] = { -1.0f, -1.0f, -1.0f };
+    static uint8_t  s_rail_idx = 0;
+    static bool     s_rail_primed = false;
+    static uint32_t s_rail_last_ms = 0;
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
     float v1, v2, vl;
     if (sv && sv->available) {
@@ -1459,9 +1467,17 @@ void hat_daq_push_telemetry(void)
         v2 = sv->voltage[SELFTEST_RAIL_VADJ2];
         vl = sv->voltage[SELFTEST_RAIL_3V3_ADJ];
     } else {
-        v1 = selftest_measure_supply(SELFTEST_RAIL_VADJ1, true);
-        v2 = selftest_measure_supply(SELFTEST_RAIL_VADJ2, true);
-        vl = selftest_measure_supply(SELFTEST_RAIL_3V3_ADJ, true);
+        const uint32_t now = hat_now_ms();
+        if (!s_rail_primed || (uint32_t)(now - s_rail_last_ms) >= TLM_RAIL_REFRESH_MS) {
+            s_rail_primed  = true;
+            s_rail_last_ms = now;
+            float v = selftest_measure_supply(s_rail_idx, true);
+            if (v >= 0.0f) s_rail_v[s_rail_idx] = v;
+            s_rail_idx = (uint8_t)((s_rail_idx + 1) % SELFTEST_RAIL_COUNT);
+        }
+        v1 = s_rail_v[SELFTEST_RAIL_VADJ1];
+        v2 = s_rail_v[SELFTEST_RAIL_VADJ2];
+        vl = s_rail_v[SELFTEST_RAIL_3V3_ADJ];
     }
     if (v1 >= 0.0f || v2 >= 0.0f || vl >= 0.0f) {
         tlm.vadj1_mv  = (v1 >= 0.0f) ? (uint16_t)lroundf(v1 * 1000.0f) : 0;

@@ -6,8 +6,6 @@ claim on CH-C got HELD_BY_OTHER and the channel's function was toggled every
 second. Telemetry must refresh at most one rail per 5 s and serve the rest from
 cache."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 
 HAT = "Firmware/ESP32/src/hat/hat.cpp"
@@ -70,7 +68,6 @@ def _run() -> dict[str, int]:
     return {k: int(v) for k, v in (kv.split("=") for kv in out)}
 
 
-@pytest.mark.xfail(strict=True, reason="IO-25")
 def test_telemetry_does_not_hammer_u23():
     r = _run()
     # 10 ticks over >= 10 s: at most one rail refresh per 5 s, plus the first.
