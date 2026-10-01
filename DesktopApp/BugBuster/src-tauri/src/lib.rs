@@ -174,7 +174,6 @@ pub fn run() {
             // Recording (BBSC binary + CSV legacy)
             commands::start_recording,
             commands::stop_recording,
-            commands::append_recording_data,
             commands::export_bbsc_to_csv,
             commands::start_csv_recording,
             commands::stop_csv_recording,

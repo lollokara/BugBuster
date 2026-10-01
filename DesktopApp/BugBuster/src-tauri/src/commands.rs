@@ -2227,15 +2227,22 @@ pub fn write_text_file(path: String, content: String) -> CmdResult<()> {
 // -----------------------------------------------------------------------------
 // BBSC Binary Recording + CSV Export
 //
-// Format: [4B magic "BBSC"] [4B header_len LE] [JSON header] [raw samples...]
-// Each sample: 3 bytes per active channel (24-bit raw ADC codes, LE)
+// Format: [4B magic "BBSC"] [4B header_len LE] [JSON header] [records...]
+// v2 (written now): one record per scope bucket (EVT_SCOPE_DATA):
+//   [seq u32][ts_ms u32][count u16] then per active channel (avg, min, max) f32, all LE.
+// v1 (read only): 3 bytes per active channel per sample (24-bit raw ADC codes, LE).
 // -----------------------------------------------------------------------------
+
+const BBSC_VERSION: u64 = 2;
+const SCOPE_HDR_LEN: usize = 10;
+const SCOPE_EVT_LEN: usize = SCOPE_HDR_LEN + 4 * 12;
 
 /// Recording state: file writer + metadata
 pub struct RecordingState {
     pub writer: BufWriter<File>,
     pub sample_count: u64,
     pub path: String,
+    pub mask: u8,
 }
 
 pub static RECORDING: Mutex<Option<RecordingState>> = Mutex::new(None);
@@ -2262,7 +2269,8 @@ pub fn start_recording(
 
     // Build JSON header
     let header = serde_json::json!({
-        "version": 1,
+        "version": BBSC_VERSION,
+        "kind": "scope_buckets",
         "channels": num_ch,
         "mask": channel_mask,
         "sample_rate": sample_rate,
@@ -2286,6 +2294,7 @@ pub fn start_recording(
         writer,
         sample_count: 0,
         path: path.clone(),
+        mask: channel_mask & 0x0F,
     });
 
     log::info!(
@@ -2315,38 +2324,24 @@ pub fn stop_recording() -> CmdResult<u64> {
 
 /// Append raw ADC samples (binary, from adc-stream event payload)
 /// This receives the raw EVT_ADC_DATA payload and writes sample data directly.
-#[tauri::command]
-pub fn append_recording_data(raw_payload: Vec<u8>) -> CmdResult<()> {
-    recording_feed(bbp::EVT_ADC_DATA, &raw_payload);
-    Ok(())
-}
-
 /// Feed one device event to the active recording, if any.
 pub fn recording_feed(cmd_id: u8, payload: &[u8]) {
-    if cmd_id != bbp::EVT_ADC_DATA {
+    if cmd_id != bbp::EVT_SCOPE_DATA || payload.len() < SCOPE_EVT_LEN {
         return;
     }
     let Ok(mut guard) = RECORDING.lock() else { return };
     let Some(rec) = guard.as_mut() else { return };
-    let raw_payload = payload;
 
-    // Parse: [mask:1][timestamp:4][count:2][samples: count * num_ch * 3]
-    if raw_payload.len() < 7 {
-        return;
+    let mut out = Vec::with_capacity(SCOPE_EVT_LEN);
+    out.extend_from_slice(&payload[..SCOPE_HDR_LEN]);
+    for ch in 0..4 {
+        if rec.mask & (1 << ch) != 0 {
+            let off = SCOPE_HDR_LEN + ch * 12;
+            out.extend_from_slice(&payload[off..off + 12]);
+        }
     }
-    let mask = raw_payload[0];
-    let count = u16::from_le_bytes([raw_payload[5], raw_payload[6]]) as usize;
-
-    // Only write the raw sample data (skip the 7-byte header)
-    let data_start = 7;
-    let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
-    let data_len = count * num_ch * 3;
-    let data_end = data_start + data_len;
-
-    if raw_payload.len() >= data_end
-        && rec.writer.write_all(&raw_payload[data_start..data_end]).is_ok()
-    {
-        rec.sample_count += count as u64;
+    if rec.writer.write_all(&out).is_ok() {
+        rec.sample_count += 1;
     }
 }
 
@@ -2390,15 +2385,47 @@ pub fn export_bbsc_to_csv(bbsc_path: String, csv_path: String) -> CmdResult<u64>
 
     let active_channels: Vec<usize> = (0..4).filter(|b| mask & (1 << b) != 0).collect();
     let num_ch = active_channels.len();
-    let bytes_per_sample = num_ch * 3;
 
     // Create CSV
     let csv_file = File::create(&csv_path).map_err(|e| format!("Create error: {}", e))?;
     let mut csv = BufWriter::new(csv_file);
+    let ch_names = ["ch_a", "ch_b", "ch_c", "ch_d"];
+
+    if header["version"].as_u64().unwrap_or(1) >= 2 {
+        let mut hdr = "seq,time_s,count".to_string();
+        for &ch in &active_channels {
+            for k in ["avg", "min", "max"] {
+                hdr.push_str(&format!(",{}_{}_v", ch_names[ch], k));
+            }
+        }
+        writeln!(csv, "{}", hdr).map_err(|e| format!("Write error: {}", e))?;
+
+        let mut rec = vec![0u8; SCOPE_HDR_LEN + num_ch * 12];
+        let mut n: u64 = 0;
+        loop {
+            match reader.read_exact(&mut rec) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(format!("Read error: {}", e)),
+            }
+            let u32_at = |o: usize| u32::from_le_bytes([rec[o], rec[o + 1], rec[o + 2], rec[o + 3]]);
+            let count = u16::from_le_bytes([rec[8], rec[9]]);
+            let mut line = format!("{},{:.3},{}", u32_at(0), u32_at(4) as f64 / 1000.0, count);
+            for i in 0..num_ch * 3 {
+                line.push_str(&format!(",{:.6}", f32::from_bits(u32_at(SCOPE_HDR_LEN + i * 4))));
+            }
+            writeln!(csv, "{}", line).map_err(|e| format!("Write error: {}", e))?;
+            n += 1;
+        }
+        csv.flush().map_err(|e| format!("Flush error: {}", e))?;
+        log::info!("Exported {} scope buckets from {} to {}", n, bbsc_path, csv_path);
+        return Ok(n);
+    }
+
+    let bytes_per_sample = num_ch * 3;
 
     // CSV header
     let mut hdr = "sample,time_s".to_string();
-    let ch_names = ["ch_a", "ch_b", "ch_c", "ch_d"];
     for &ch in &active_channels {
         hdr.push(',');
         hdr.push_str(ch_names[ch]);
@@ -4912,7 +4939,6 @@ mod tests {
     /// DESK-21: Scope tab Record only produces scope buckets (EVT_SCOPE_DATA,
     /// bbp.cpp processScopeStream); they must reach the file and the CSV.
     #[test]
-    #[ignore = "DESK-21"]
     fn scope_buckets_are_recorded_and_exported() {
         let dir = std::env::temp_dir().join(format!("bb-desk21-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
