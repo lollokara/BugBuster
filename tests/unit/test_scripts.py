@@ -525,3 +525,17 @@ class TestAutorun:
         """SCRIPT_AUTORUN opcode is 0xFD."""
         from bugbuster.constants import CmdId
         assert CmdId.SCRIPT_AUTORUN == 0xFD
+
+
+@pytest.mark.xfail(strict=True, reason="PLT-03")
+def test_scriptcmd_always_zero_initialised():
+    """PLT-03: scripting_run_string() queued a ScriptCmd whose is_lint and
+    lint_* pointers were stack garbage; the worker takes the lint path (and
+    writes through lint_err_out) whenever is_lint happens to be non-zero."""
+    import re
+
+    from tests.lib.srcread import read_source
+
+    src = read_source("Firmware/ESP32/src/mp/scripting.cpp")
+    bare = [m.group(0) for m in re.finditer(r"\bScriptCmd\s+\w+\s*;", src)]
+    assert bare == [], f"uninitialised ScriptCmd declarations: {bare}"
