@@ -2786,6 +2786,31 @@ class BugBuster:
                 "call hat_detect() to refresh, then retry."
             )
 
+    # TR-9: how long a positive HAT status answers presence/type checks.
+    HAT_CACHE_TTL_S = 30.0
+
+    def hat_status_cached(self) -> dict:
+        """HAT status for presence/type guards, cached per connection.
+
+        Only a *detected* status is cached (a HAT plugged in later is noticed
+        on the next call); it expires after HAT_CACHE_TTL_S, on reconnect
+        (transport ``connect_gen``) and on hat_detect()/hat_reset().
+        """
+        import time as _time
+        gen = getattr(self._t, "connect_gen", 0)
+        c = getattr(self, "_hat_status_cache", None)
+        now = _time.monotonic()
+        if c is not None and c[0] == gen and now - c[1] < self.HAT_CACHE_TTL_S:
+            return c[2]
+        status = self.hat_get_status()
+        self._hat_status_cache = (gen, now, status) if status.get("detected") else None
+        return status
+
+    def hat_invalidate_cache(self) -> None:
+        """Forget the cached HAT status (TR-9)."""
+        self._hat_status_cache = None
+        self._hat_present_cache = None
+
     def hat_get_status(self) -> dict:
         """
         Get HAT expansion board status: detection, connection, pin config.
@@ -2897,6 +2922,7 @@ class BugBuster:
     def hat_reset(self) -> bool:
         """Reset HAT to default state (all pins disconnected)."""
         self._require_hat_present()
+        self._hat_status_cache = None
         if self._usb:
             self._usb_cmd(CmdId.HAT_RESET)
             return True
@@ -2913,6 +2939,7 @@ class BugBuster:
         """
         # Invalidate the cached presence — the very point of calling
         # hat_detect() is usually to re-probe after wiring changes.
+        self._hat_status_cache = None
         self._hat_present_cache = None
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_DETECT)

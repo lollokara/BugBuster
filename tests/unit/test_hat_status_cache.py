@@ -36,7 +36,6 @@ def _hat_frames(sent):
     return sum(1 for s in sent if s == int(CmdId.HAT_GET_STATUS))
 
 
-@pytest.mark.xfail(strict=True, reason="TR-9")
 def test_repeated_hat_checks_cost_one_status_frame():
     c, sent = _client()
     if not c.hat_get_status().get("detected"):
@@ -47,7 +46,6 @@ def test_repeated_hat_checks_cost_one_status_frame():
     assert _hat_frames(sent) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="TR-9")
 def test_hat_reset_invalidates_the_cache():
     c, sent = _client()
     require_hat(c)

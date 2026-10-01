@@ -152,7 +152,7 @@ def require_hat(bb) -> None:
     Raise an informative error if the HAT expansion board is not detected.
     """
     try:
-        status = bb.hat_get_status()
+        status = bb.hat_status_cached() if hasattr(bb, "hat_status_cached") else bb.hat_get_status()
         if not status.get("detected"):
             raise RuntimeError(
                 "No HAT expansion board detected. "

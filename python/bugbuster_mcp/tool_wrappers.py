@@ -108,7 +108,8 @@ def require_hat_type(expected_type_name: str, expected_type_code: int | None = N
             # Try to get HAT status and check type
             try:
                 bb = session.get_client()
-                hat_status = bb.hat_get_status()
+                hat_status = (bb.hat_status_cached() if hasattr(bb, "hat_status_cached")
+                              else bb.hat_get_status())
                 
                 # Check if HAT is detected at all
                 if not hat_status.get("detected"):

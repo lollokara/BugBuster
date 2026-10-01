@@ -248,6 +248,8 @@ class USBTransport:
             target=self._reader_loop, name="bbp-reader", daemon=True
         )
         self._reader_thread.start()
+        # TR-9: lets clients drop per-connection caches after a reconnect.
+        self.connect_gen = getattr(self, "connect_gen", 0) + 1
         self._last_tx = self._clock()
         if self._keepalive_thread is None or not self._keepalive_thread.is_alive():
             self._keepalive_thread = threading.Thread(
