@@ -563,7 +563,7 @@ impl HttpTransport {
             for (i, d) in diag.iter().enumerate().take(4) {
                 state.diag[i] = DiagState {
                     source: d.get("source").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
-                    raw_code: d.get("raw").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    raw_code: d.get("rawCode").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
                     value: d.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                 };
             }
@@ -2213,7 +2213,6 @@ mod diag_raw_tests {
     /// DESK-DIAG-RAW: firmware emits `diagnostics[].rawCode`; the desktop read
     /// `raw`, so HTTP diagnostic raw codes were always 0.
     #[test]
-    #[ignore = "DESK-DIAG-RAW"]
     fn status_diag_raw_code_is_parsed() {
         let j = serde_json::json!({
             "spiOk": true, "channels": [],
