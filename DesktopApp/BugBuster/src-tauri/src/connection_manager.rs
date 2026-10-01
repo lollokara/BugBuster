@@ -165,16 +165,15 @@ impl ConnectionManager {
         if let Some(h) = transport.handshake_info() {
             if h.proto_version != bbp::PROTO_VERSION {
                 let blocking = proto_mismatch_blocks(h.proto_version, bbp::PROTO_VERSION);
-                // DESK-10 FIX: Protocol version mismatch is now a connection failure,
-                // not a warning. An incompatible version causes confusing downstream
-                // failures; fail fast and clearly instead.
+                // DESK-31 (supersedes DESK-10's hard failure): warn loudly and
+                // connect, so the user can reach the OTA tab to fix the mismatch.
                 let err_msg = format!(
                     "Protocol version mismatch: device reports v{}, expected v{}. \
-                     Update firmware or desktop app to matching versions.",
+                     Connecting anyway - update firmware (OTA tab) or the desktop app.",
                     h.proto_version,
                     bbp::PROTO_VERSION
                 );
-                log::error!("{}", err_msg);
+                log::warn!("{}", err_msg);
                 let _ = app.emit(
                     "version-mismatch",
                     &serde_json::json!({
@@ -1084,9 +1083,12 @@ impl ConnectionManager {
 }
 
 /// Whether a BBP protocol-version mismatch refuses the connection.
-/// (DESK-31: see tests; the decision lives here so it is unit-testable.)
-pub fn proto_mismatch_blocks(device: u8, app: u8) -> bool {
-    device != app
+///
+/// DESK-31: never. The desktop is how firmware is updated (OTA tab), so a
+/// hard failure on mismatch locked users out of the very fix they needed. The
+/// mismatch is reported as a non-blocking `version-mismatch` event instead.
+pub fn proto_mismatch_blocks(_device: u8, _app: u8) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -1102,7 +1104,6 @@ mod proto_policy_tests {
     /// device - the desktop is how firmware gets updated (OTA). A mismatch must
     /// warn and connect so the user can update.
     #[test]
-    #[ignore = "DESK-31"]
     fn mismatch_warns_but_connects_so_firmware_can_be_updated() {
         assert!(!proto_mismatch_blocks(11, 12));
         assert!(!proto_mismatch_blocks(13, 12));
