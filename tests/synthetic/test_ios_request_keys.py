@@ -12,14 +12,10 @@ reads. Each expectation was verified against the handler:
 
 import re
 
-import pytest
-
 from tests.lib.srcread import read_source
 
 OVERVIEW = read_source("iOSApp/Sources/Views/OverviewTab.swift")
 SCRIPTS = read_source("iOSApp/Sources/Views/ScriptsTab.swift")
-
-_IOS = pytest.mark.xfail(strict=True, reason="IOS-KEYS")
 
 
 def _json_after(src: str, path_fragment: str) -> str:
@@ -29,25 +25,21 @@ def _json_after(src: str, path_fragment: str) -> str:
     return m.group(1)
 
 
-@_IOS
 def test_vout_range_sends_bipolar():
     body = _json_after(OVERVIEW, '/vout/range"')
     assert '"bipolar"' in body, body
 
 
-@_IOS
 def test_adc_config_sends_mux():
     body = _json_after(OVERVIEW, '/adc/config"')
     assert '"mux"' in body, body
 
 
-@_IOS
 def test_rtd_config_sends_a_key_the_firmware_reads():
     body = _json_after(OVERVIEW, '/rtd/config"')
     assert '"excitation_ua"' in body or '"current"' in body, body
 
 
-@_IOS
 def test_quicksetup_list_decodes_the_slots_wrapper():
     i = OVERVIEW.index("func loadQuicksetups")
     fn = OVERVIEW[i:i + 600]
@@ -55,7 +47,6 @@ def test_quicksetup_list_decodes_the_slots_wrapper():
     assert ".slots" in fn
 
 
-@_IOS
 def test_autorun_enable_passes_name_query():
     i = SCRIPTS.index("func toggleAutorun")
     fn = SCRIPTS[i:i + 900]

@@ -822,8 +822,19 @@ struct ScriptsTab: View {
     }
 
     private func toggleAutorun(_ enabled: Bool) {
+        // The firmware needs the script to autorun: ?name=<file> (400 without it).
+        let path: String
+        if enabled {
+            guard let name = editingFileName,
+                  let q = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+                connectionManager.showToast("Open a script to set it as autorun", type: .error)
+                return
+            }
+            path = "/api/scripts/autorun/enable?name=\(q)"
+        } else {
+            path = "/api/scripts/autorun/disable"
+        }
         isLoadingAutorun = true
-        let path = enabled ? "/api/scripts/autorun/enable" : "/api/scripts/autorun/disable"
         Task {
             let ok = try? await connectionManager.postAction(path: path, json: [:])
             DispatchQueue.main.async {

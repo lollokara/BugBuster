@@ -72,10 +72,17 @@ struct OverviewTab: View {
     @State private var showIVPlotConfig = false
 
     struct QuickSetupSlot: Identifiable, Codable {
+        struct Summary: Codable { let name: String? }
         var id: Int { index }
         let index: Int
         let occupied: Bool
-        let name: String
+        let summary: Summary?
+        var name: String { summary?.name ?? "Slot \(index)" }
+    }
+
+    // GET /api/quicksetup returns {"slots": [...]}, not a bare array.
+    struct QuickSetupList: Codable {
+        let slots: [QuickSetupSlot]
     }
 
     var hatPresent: Bool {
@@ -609,9 +616,9 @@ struct OverviewTab: View {
 
     private func loadQuicksetups() {
         Task {
-            if let slots: [QuickSetupSlot] = try? await connectionManager.getRequest(path: "/api/quicksetup") {
+            if let list: QuickSetupList = try? await connectionManager.getRequest(path: "/api/quicksetup") {
                 DispatchQueue.main.async {
-                    self.quicksetupSlots = slots.filter { $0.occupied }
+                    self.quicksetupSlots = list.slots.filter { $0.occupied }
                 }
             }
         }
@@ -1016,7 +1023,7 @@ struct ChannelConfigSheet: View {
                 // VOUT: set range, then DAC voltage
                 _ = try? await connectionManager.postAction(
                     path: "/api/channel/\(chId)/vout/range",
-                    json: ["range": vRange]
+                    json: ["bipolar": vRange == 1]
                 )
                 if let val = Double(valString) {
                     _ = try? await connectionManager.postAction(
@@ -1033,16 +1040,17 @@ struct ChannelConfigSheet: View {
                     )
                 }
             } else if funcIndex == 3 || funcIndex == 4 || funcIndex == 5 {
-                // VIN / Current Input: set ADC config
+                // VIN / Current Input: set ADC config. The firmware requires
+                // mux; 0 = LF_TO_AGND, the default the HAL and web UI use.
                 _ = try? await connectionManager.postAction(
                     path: "/api/channel/\(chId)/adc/config",
-                    json: ["range": aRange, "rate": aRate]
+                    json: ["mux": 0, "range": aRange, "rate": aRate]
                 )
             } else if funcIndex == 7 {
                 // RTD: set excitation
                 _ = try? await connectionManager.postAction(
                     path: "/api/channel/\(chId)/rtd/config",
-                    json: ["excitationUa": rtdUa]
+                    json: ["excitation_ua": rtdUa]
                 )
             }
 
