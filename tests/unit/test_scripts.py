@@ -527,7 +527,6 @@ class TestAutorun:
         assert CmdId.SCRIPT_AUTORUN == 0xFD
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-03")
 def test_scriptcmd_always_zero_initialised():
     """PLT-03: scripting_run_string() queued a ScriptCmd whose is_lint and
     lint_* pointers were stack garbage; the worker takes the lint path (and

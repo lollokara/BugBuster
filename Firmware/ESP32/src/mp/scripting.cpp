@@ -430,7 +430,7 @@ static void taskMicroPython(void *pvParam)
     mp_stack_set_top((void *)&stack_dummy);
     mp_stack_set_limit(MP_TASK_STACK - 1024);
 
-    ScriptCmd cmd;
+    ScriptCmd cmd = {};
 
     for (;;) {
         // ---------------------------------------------------------------
@@ -687,7 +687,7 @@ bool scripting_run_string(const char *src, size_t len, bool persist)
     memcpy(payload, src, len);
     payload[len] = '\0';
 
-    ScriptCmd cmd;
+    ScriptCmd cmd = {};
     cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
     cmd.payload = payload;
     cmd.len     = len;
