@@ -5,13 +5,12 @@ changes; live readings update in place."""
 
 from pathlib import Path
 
-import pytest
 
 ADC = Path(__file__).resolve().parents[2] / "DesktopApp" / "BugBuster" / "src" / "tabs" / "adc.rs"
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-23")
 def test_adc_grid_tracks_config_not_every_tick():
     src = ADC.read_text(encoding="utf-8")
-    assert "let ds = state.get();" not in src
+    grid = src[src.index("channel-grid-wide"):]
+    assert "state.get()" not in grid
     assert "Memo::new" in src
