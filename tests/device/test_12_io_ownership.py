@@ -105,8 +105,8 @@ def test_http_claim_blocks_second_usb_session(sim_device):
         0xA7,  # IO_CLAIM
         bytes([1, 12]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"USB session should be rejected for HTTP-owned slot, got 0x{resp[0]:02x}"
+    assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
+        f"USB session should be rejected for HTTP-owned slot, got 0x{resp[1]:02x}"
     )
 
     # Cleanup

@@ -536,13 +536,13 @@ class IoOwnerKind(IntEnum):
 
 
 class IoClaimStatus(IntEnum):
-    """Per-slot status bytes returned by IO_CLAIM / IO_RELEASE responses."""
+    """Per-slot status bytes in the IO_CLAIM reply ``[n, status[n]]``.
+
+    These are firmware ``CmdError`` values (cmd_io_owner.cpp). IO_RELEASE
+    replies ``[n, released[n]]`` with bools instead.
+    """
     OK                = 0x00
-    HELD_BY_OTHER     = 0x01  # Slot owned by a different session
-    NOT_OWNED         = 0x02  # Release attempted but caller does not own slot
-    INVALID_SLOT      = 0x03  # Slot index >= 16
-    LEASE_EXPIRED     = 0x04  # Diagnostic only, never returned by claim
-    ADMIN_REQUIRED    = 0x05  # Force-release attempted without admin token
+    HELD_BY_OTHER     = 11    # CMD_ERR_IO_OWNERSHIP: slot owned by another session
 
 
 # ---------------------------------------------------------------------------
