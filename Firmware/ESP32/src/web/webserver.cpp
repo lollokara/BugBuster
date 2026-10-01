@@ -767,7 +767,10 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
 //   latency at ~100 ms. For a homemade scope that's well below human
 //   perception and it lets the HTTP socket close quickly when the tab is
 //   hidden.
-static esp_err_t handle_get_scope_stream(httpd_req_t *req)
+// WEB-23: this loop runs on its own task with a detached (async) request -
+// httpd serves every socket from one task, so running it inline stalled
+// every other request for as long as a scope tab was open.
+static esp_err_t scope_sse_loop(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
@@ -886,6 +889,38 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
 
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+}
+
+#define SCOPE_SSE_MAX_STREAMS 2
+static volatile int s_scope_sse_streams = 0;
+
+static void scope_sse_task(void *arg)
+{
+    httpd_req_t *req = (httpd_req_t *)arg;
+    scope_sse_loop(req);
+    httpd_req_async_handler_complete(req);
+    __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+    vTaskDelete(NULL);
+}
+
+// GET /api/scope/stream - detach and stream from a dedicated task (WEB-23).
+static esp_err_t handle_get_scope_stream(httpd_req_t *req)
+{
+    if (__atomic_add_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST) > SCOPE_SSE_MAX_STREAMS) {
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return send_error(req, 503, "too many scope streams");
+    }
+    httpd_req_t *async_req = NULL;
+    if (httpd_req_async_handler_begin(req, &async_req) != ESP_OK) {
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return send_error(req, 500, "scope stream: async begin failed");
+    }
+    if (xTaskCreate(scope_sse_task, "scope_sse", 4096, async_req, 4, NULL) != pdPASS) {
+        httpd_req_async_handler_complete(async_req);
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 // GET /api/diagnostics
