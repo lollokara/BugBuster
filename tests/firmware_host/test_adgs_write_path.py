@@ -15,9 +15,13 @@ the hardware was never touched.
 B: a bus timeout is not a hardware fault - fault flag stays clear, shadow
 unchanged, and the write reports failure."""
 
+import re
 from pathlib import Path
 
+import pytest
+
 from tests.firmware_host.fwhost import compile_and_run, extract_defines
+from tests.lib.srcread import REPO_ROOT
 
 DRV = "Firmware/ESP32/src/hal/adgs2414d.cpp"
 
@@ -126,16 +130,29 @@ int main(void) {
     bool ok = adgs_set_all_safe(u);
     g_take_fail = 0;
     printf("busy ok=%d faulted=%d shadow_kept=%d\n", ok, adgs_is_faulted(), adgs_get_state(0) == before);
+
+    // IO-3: U23 S4 ties AD74416H PHYSICAL D to the shared self-test rail.
+    // Physical D is logical C, whose terminal switch is MUX device 3 S3 (IO9)
+    // per tasks.cpp. Closing it while U23 is active must be refused.
+    uint8_t open_all[4] = { 0, 0, 0, 0 };
+    adgs_set_all_safe(open_all);
+    adgs_set_selftest(0x08);                              // U23 S4 closed
+    bool d3 = adgs_set_switch_safe(3, 2, true);
+    bool d2 = adgs_set_switch_safe(2, 2, true);
+    adgs_set_selftest(0x00);
+    printf("interlock dev3_s3=%d dev2_s3=%d\n", d3, d2);
     return 0;
 }
 """
 
 
 def _run(tmp_path: Path) -> list[str]:
-    cfg = extract_defines("Firmware/ESP32/src/config.h", [
-        "ADGS_NUM_DEVICES", "ADGS_MAIN_DEVICES", "ADGS_SELFTEST_DEV", "ADGS_DEAD_TIME_MS",
-        "ADGS_NUM_SWITCHES",
-        "ADGS_HAS_SELFTEST", "U17_DEVICE_IDX", "U17_S3_MASK", "U23_SW_ADC_CH_D"])
+    names = ["ADGS_NUM_DEVICES", "ADGS_MAIN_DEVICES", "ADGS_SELFTEST_DEV", "ADGS_DEAD_TIME_MS",
+             "ADGS_NUM_SWITCHES", "ADGS_HAS_SELFTEST", "U17_DEVICE_IDX", "U17_S3_MASK",
+             "U23_SW_ADC_CH_D", "ADGS_D_NET_DEV_MASK"]
+    cfg_text = (REPO_ROOT / "Firmware/ESP32/src/config.h").read_text(encoding="utf-8")
+    cfg = extract_defines("Firmware/ESP32/src/config.h",
+                          [n for n in names if re.search(rf"#define\s+{n}\b", cfg_text)])
     for name, text in STUBS.items():
         p = tmp_path / name
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -155,3 +172,10 @@ def test_set_switch_break_before_make(tmp_path):
 
 def test_bus_timeout_is_not_a_mux_fault(tmp_path):
     assert _run(tmp_path)[2] == "busy ok=0 faulted=0 shadow_kept=1"
+
+
+@pytest.mark.xfail(strict=True, reason="IO-3")
+def test_interlock_guards_the_physical_d_terminal_switch(tmp_path):
+    # dev3 = IO9 / logical C / physical D: must be refused. dev2 (IO12) stays
+    # refused too until the U17 index is bench-confirmed (conservative).
+    assert _run(tmp_path)[3] == "interlock dev3_s3=0 dev2_s3=0"
