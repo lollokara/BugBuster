@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from bugbuster import BugBuster
+from bugbuster.bus import BugBusterBusManager
 from bugbuster.hal import BugBusterHAL
 from tests.lib.srcread import REPO_ROOT, read_source
 
@@ -32,6 +33,10 @@ KNOWN_MISMATCHES = {
 def _receiver_class(node: ast.expr):
     if isinstance(node, ast.Name):
         return RECEIVERS.get(node.id)
+    # bb.bus.method(...)
+    if (isinstance(node, ast.Attribute) and node.attr == "bus"
+            and RECEIVERS.get(getattr(node.value, "id", None)) is BugBuster):
+        return BugBusterBusManager
     # session.get_client().method(...)
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name) and node.func.value.id == "session"):

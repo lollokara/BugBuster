@@ -8,11 +8,15 @@ survived its own unit tests. ``create_autospec`` enforces the real signatures.
 from unittest.mock import create_autospec
 
 from bugbuster import BugBuster
+from bugbuster.bus import BugBusterBusManager
 from bugbuster.hal import BugBusterHAL
 
 
 def make_client_mock():
-    return create_autospec(BugBuster, instance=True)
+    bb = create_autospec(BugBuster, instance=True)
+    # `bus` is a lazy property; autospec cannot see what it returns.
+    bb.bus = create_autospec(BugBusterBusManager, instance=True)
+    return bb
 
 
 def make_hal_mock():
