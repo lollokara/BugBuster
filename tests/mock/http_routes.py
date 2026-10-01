@@ -167,6 +167,20 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
                 "srcSelGpio": ch["do_src_sel_gpio"],
                 "t1": ch["do_t1"], "t2": ch["do_t2"]}
 
+    # Current limit - POST /api/channel/<ch>/ilimit. Mirrors
+    # handle_post_current_limit: only "limit8mA" is read, and a missing key
+    # silently means 25 mA, which is how a wrong client key goes unnoticed.
+    if method == "POST" and path.startswith("/channel/") and path.endswith("/ilimit"):
+        try:
+            ch_idx = int(path.split("/")[2])
+        except ValueError:
+            return {"error": "Channel must be 0-3", "code": 400}
+        if not (0 <= ch_idx < len(device.channels)):
+            return {"error": "Channel must be 0-3", "code": 400}
+        limit8 = bool(body.get("limit8mA", False))
+        device.channels[ch_idx]["current_limit"] = 1 if limit8 else 0
+        return {"ok": True, "channel": ch_idx, "limit8mA": limit8}
+
     # AVDD rail selection — POST /api/channel/<ch>/avdd
     if method == "POST" and path.startswith("/channel/") and path.endswith("/avdd"):
         parts = path.split("/")
