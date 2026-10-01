@@ -147,6 +147,16 @@ AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", 
 
 
 @dataclass(frozen=True)
+class ApPasswordResult:
+    """Result of :meth:`BugBuster.wifi_set_ap_password`. Truthy when applied."""
+    applied: bool
+    persisted: bool   # False: live now, reverts to the old password on reboot
+
+    def __bool__(self) -> bool:
+        return self.applied
+
+
+@dataclass(frozen=True)
 class EfuseImonStatus:
     """E-fuse IMON monitor state. ``efuse`` 0 = monitor off, 1..4 = logical EFUSE1..4."""
     result: str          # "ok" or the firmware result name
@@ -4198,11 +4208,14 @@ class BugBuster:
             raw = self._http_get("/wifi/scan")
             return raw.get("networks", raw) if isinstance(raw, dict) else raw
 
-    def wifi_set_ap_password(self, password: str) -> bool:
+    def wifi_set_ap_password(self, password: str) -> ApPasswordResult:
         """
         Set the SoftAP password. Persists to NVS and applies live (no reboot needed).
         Password must be 8–63 characters (WPA2-PSK requirement).
-        Returns ``True`` on success, ``False`` on failure.
+
+        Returns an :class:`ApPasswordResult` that is truthy when the password
+        was applied. Check ``.persisted``: when False the NVS write failed and
+        the old password returns on the next reboot.
         """
         if len(password) < 8 or len(password) > 63:
             raise ValueError(
@@ -4213,12 +4226,14 @@ class BugBuster:
             payload = struct.pack('<B', len(pass_b)) + pass_b
             resp = self._usb_cmd(CmdId.WIFI_SET_AP_PASSWORD, payload)
             _require_resp_len(resp, 1, "WIFI_SET_AP_PASSWORD")
-            return bool(resp[0])
+            # 0x00 applied+persisted, 0x01 applied not persisted, 0x02 failed
+            return ApPasswordResult(applied=resp[0] != 0x02, persisted=resp[0] == 0x00)
         else:
             result = self._http_post("/wifi/ap_password", {"password": password})
             if isinstance(result, dict):
-                return bool(result.get("success", False))
-            return bool(result)
+                applied = bool(result.get("success", False))
+                return ApPasswordResult(applied, applied and bool(result.get("persisted", False)))
+            return ApPasswordResult(bool(result), False)
 
     # ------------------------------------------------------------------
     # ── Quick Setup slots ─────────────────────────────────────────────
