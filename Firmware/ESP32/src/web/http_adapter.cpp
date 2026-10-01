@@ -10,6 +10,7 @@
 // exactly so the same handlers serve both transports.
 // =============================================================================
 #include "http_adapter.h"
+#include "cors.h"
 #include "cmd_registry.h"
 #include "cmd_errors.h"
 #include "bbp_codec.h"
@@ -33,8 +34,7 @@ static void set_cors_headers_local(httpd_req_t *req, char *origin_buf, size_t or
 {
     origin_buf[0] = '\0';
     if (httpd_req_get_hdr_value_str(req, "Origin", origin_buf, origin_buf_size) == ESP_OK) {
-        if (strncmp(origin_buf, "http://localhost", 16) == 0 ||
-            strncmp(origin_buf, "http://127.0.0.1", 16) == 0) {
+        if (cors_origin_allowed(origin_buf)) {
             httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin_buf);
             httpd_resp_set_hdr(req, "Vary", "Origin");
         }
