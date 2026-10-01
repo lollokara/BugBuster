@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 #include "ext_job_queue.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -429,6 +430,11 @@ static uint8_t *job_alloc(size_t len)
     return ptr;
 }
 
+static uint32_t job_now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
 static void ext_job_worker(void *)
 {
     while (true) {
@@ -456,7 +462,7 @@ static void ext_job_worker(void *)
         }
 
         if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            ext_jq_complete(s_jq, idx, ok);
+            ext_jq_complete(s_jq, idx, ok, job_now_ms());
             xSemaphoreGive(s_job_mutex);
         }
     }
@@ -508,7 +514,8 @@ static bool submit_job(uint8_t kind, uint8_t addr, const uint8_t *tx, size_t tx_
         return false;
     }
 
-    uint32_t id = ext_jq_submit(s_jq, kind, addr, timeout_ms, tx_copy, tx_len, rx_buf, rx_len);
+    uint32_t id = ext_jq_submit(s_jq, kind, addr, timeout_ms, tx_copy, tx_len, rx_buf, rx_len,
+                                job_now_ms());
     xSemaphoreGive(s_job_mutex);
     if (id == 0) {
         if (tx_copy) free(tx_copy);

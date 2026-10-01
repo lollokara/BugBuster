@@ -8,8 +8,6 @@ A - two defects:
 B: FIFO by submission order; an unfetched result is never recycled (until it
    is fetched or ages past the result TTL), so a full queue refuses new work."""
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run
 
 MAIN = r"""
@@ -80,12 +78,10 @@ def _run() -> list[str]:
     return out.strip().splitlines()
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-005")
 def test_unfetched_results_are_not_recycled():
     assert _run()[0] == "full: d=refused a=A1 b=B2 c=C3"
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-005")
 def test_jobs_run_fifo():
     assert _run()[1] == "fifo: ok"
 

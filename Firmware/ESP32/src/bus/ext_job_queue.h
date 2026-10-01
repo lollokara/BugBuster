@@ -20,6 +20,13 @@
 #define EXT_JOB_CAPACITY 16
 #endif
 
+// BUS-005: a finished result is kept until the host fetches it. A result that
+// nobody fetches is recycled only after this long, so one client that forgets
+// its jobs cannot wedge the queue forever.
+#ifndef EXT_JOB_RESULT_TTL_MS
+#define EXT_JOB_RESULT_TTL_MS 60000u
+#endif
+
 struct ExtBusJob {
     uint32_t id;
     uint8_t kind;
@@ -30,6 +37,8 @@ struct ExtBusJob {
     size_t rx_len;
     uint8_t *tx;
     uint8_t *rx;
+    bool fetched;        // DONE/ERROR result read by the host at least once
+    uint32_t done_ms;    // completion time, for the result TTL
 };
 
 struct ExtJobQueue {
@@ -52,16 +61,18 @@ static inline void ext_jq_init(ExtJobQueue &q)
 }
 
 // Claim a slot for a new job and store it as QUEUED. Takes ownership of
-// tx/rx on success. Returns the job id, or 0 when no slot is free.
+// tx/rx on success. Returns the job id, or 0 when no slot is free. A finished
+// slot is reusable only once its result was fetched or has outlived the TTL.
 static inline uint32_t ext_jq_submit(ExtJobQueue &q, uint8_t kind, uint8_t addr,
                                      uint16_t timeout_ms, uint8_t *tx, size_t tx_len,
-                                     uint8_t *rx, size_t rx_len)
+                                     uint8_t *rx, size_t rx_len, uint32_t now_ms)
 {
     int slot = -1;
     for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        if (q.jobs[i].status == EXT_BUS_JOB_EMPTY ||
-            q.jobs[i].status == EXT_BUS_JOB_DONE ||
-            q.jobs[i].status == EXT_BUS_JOB_ERROR) {
+        const ExtBusJob &j = q.jobs[i];
+        bool finished = (j.status == EXT_BUS_JOB_DONE || j.status == EXT_BUS_JOB_ERROR);
+        if (j.status == EXT_BUS_JOB_EMPTY ||
+            (finished && (j.fetched || (uint32_t)(now_ms - j.done_ms) >= EXT_JOB_RESULT_TTL_MS))) {
             slot = (int)i;
             break;
         }
@@ -80,24 +91,29 @@ static inline uint32_t ext_jq_submit(ExtJobQueue &q, uint8_t kind, uint8_t addr,
     job.rx = rx;
     job.tx_len = tx_len;
     job.rx_len = rx_len;
+    job.fetched = false;
+    job.done_ms = 0;
     return job.id;
 }
 
-// Pick the next job to run and mark it RUNNING. Returns the slot or -1.
+// Pick the OLDEST queued job (FIFO by id, wrap-safe) and mark it RUNNING.
+// Returns the slot or -1.
 static inline int ext_jq_take_next(ExtJobQueue &q)
 {
+    int best = -1;
     for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        if (q.jobs[i].status == EXT_BUS_JOB_QUEUED) {
-            q.jobs[i].status = EXT_BUS_JOB_RUNNING;
-            return (int)i;
-        }
+        if (q.jobs[i].status != EXT_BUS_JOB_QUEUED) continue;
+        if (best < 0 || (int32_t)(q.jobs[i].id - q.jobs[best].id) < 0) best = (int)i;
     }
-    return -1;
+    if (best >= 0) q.jobs[best].status = EXT_BUS_JOB_RUNNING;
+    return best;
 }
 
-static inline void ext_jq_complete(ExtJobQueue &q, int slot, bool ok)
+static inline void ext_jq_complete(ExtJobQueue &q, int slot, bool ok, uint32_t now_ms)
 {
     q.jobs[slot].status = ok ? EXT_BUS_JOB_DONE : EXT_BUS_JOB_ERROR;
+    q.jobs[slot].fetched = false;
+    q.jobs[slot].done_ms = now_ms;
 }
 
 // Look a job up by id. Copies the result for DONE jobs. Returns false if the
@@ -111,6 +127,9 @@ static inline bool ext_jq_get(ExtJobQueue &q, uint32_t job_id, uint8_t *status, 
             *status = job.status;
             *kind = job.kind;
             *result_len = 0;
+            if (job.status == EXT_BUS_JOB_DONE || job.status == EXT_BUS_JOB_ERROR) {
+                job.fetched = true;   // slot may now be recycled
+            }
             if (job.status == EXT_BUS_JOB_DONE && job.rx && result && max_result_len > 0) {
                 size_t n = job.rx_len < max_result_len ? job.rx_len : max_result_len;
                 memcpy(result, job.rx, n);
