@@ -101,6 +101,18 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    report success on failure today. Items: AN-01, AN-02, MCP-20, MCP-21,
    MCP-22, MCP-23, PLT-02, LA-04, DAQ-01, DAQ-02, IO-11, WEB-KEYS, IOS-KEYS,
    PWR-06, BUS-012, DESK-20, PY-20.
+
+   **Wave A status (2026-10-01, branch `audit/2026-10-m1-host-fixes`).** Each
+   fix is a `test(ID)` commit that fails on the old code followed by a
+   `fix(ID)` commit. Verified in unit / `--sim` / vitest / `cargo test` only -
+   **not yet on hardware**, so the per-item tags below stay as they were.
+
+   | Status | Items |
+   |---|---|
+   | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2 |
+   | Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
+   | Confirmed, design pending | DESK-21 - Scope tab Record writes a header-only BBSC file: the writer is fed only by `EVT_ADC_DATA` and the Scope tab starts only the scope stream |
+   | Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,

@@ -236,6 +236,31 @@
 
 ### Fixed
 
+- **Host-side correctness pass (2026-10 audit, Wave A).** Every fix ships with
+  a test that fails on the previous code. Verified in the unit, simulator,
+  vitest and `cargo test` suites; not yet re-checked on hardware.
+
+  | ID | Surface | Was | Now |
+  |---|---|---|---|
+  | AN-02 | Python HAL | `read_current()` multiplied mA by 1000/12 | returns the firmware's mA |
+  | AN-01 | Python (HTTP) | current limit posted under a key the firmware ignores | `limit8mA` |
+  | MCP-20 | MCP `io_claim` | crashed (`TypeError`) on every call | new `BugBuster.io_claim_lease()`; refused slots raise |
+  | MCP-21 | MCP `selftest`, `check_faults` | read keys the client never returns, so neither could fail; e-fuses the firmware auto-disabled were invisible | real keys; auto-disabled e-fuses reported from the fault log |
+  | MCP-22 | MCP `target_power_up`, `enter_bootloader` | VADJ2 checked EFUSE1; no PG/e-fuse warnings over HTTP; no >12 V gate | per-rail e-fuses, warnings, `confirm` above 12 V |
+  | MCP-23 | MCP `uart_config` | even/odd parity swapped | correct mapping |
+  | MCP-24 | Python HAL / MCP `configure_io` | first IO on a block powered VADJ at 12 V | 3.3 V default |
+  | PLT-02 | Python `wifi_set_ap_password` | success byte inverted | `ApPasswordResult(applied, persisted)` |
+  | LA-04 | MCP `capture_logic_analyzer` | frequency from sample count (1 kHz read as 50 kHz) | edge-timed frequency |
+  | DAQ-01 | Desktop DAQ STATUS decoder | 12 fields at wrong offsets | matches the firmware struct (fixture-tested) |
+  | DAQ-02 | Python DAQ capture | voltage held 8x late when V and I rates differ | held by time |
+  | PWR-06 | Python / MCP USB-PD select | over USB only staged the PDO | sends GO, as HTTP does |
+  | PWR-08 | Desktop Board tab | e-fuse "SW Limit" showed armed; nothing enforces it | command errors; UI says profile-only |
+  | BUS-012 | Python ext I2C | 8-bit address 0xA0 silently sent to 0x20 | rejected, error suggests 0x50 |
+  | PY-20 | Python | no API for `WIFI_FORGET` 0x0A, `ADC_LEDS_SET_MODE` 0x47 | `wifi_forget()`, `adc_leds_set_mode()`; parity test checks both directions |
+  | PROTO-8 | Python / simulator | `ESP32_FW_VERSION` 3.4.0 | 5.1.0, bumped by the release notebook |
+  | WEB-KEYS | Web UI | DAQ V/I stuck at 0 with a permanent UNCALIBRATED banner; update card never offered updates; IDAC voltages 0; RTD key ignored | firmware keys, tested on captured fixtures |
+  | IOS-KEYS | iOS | VOUT range, ADC config, RTD, Quick Setup list and autorun enable all sent or decoded the wrong shape | firmware shapes (source-checked; needs an Xcode build) |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
