@@ -55,6 +55,19 @@ WAIVERS: dict[tuple[str, str], str] = {
 }
 
 
+# (project, key) -> required value in the TRACKED sdkconfig.defaults. Checked on
+# every run, including a clean checkout with no generated sdkconfig: a safety
+# setting that is only in a gitignored generated file is not shipped.
+REQUIRED: dict[tuple[str, str], str] = {
+    # C6-23: app_main registers with the task watchdog and its comment promised
+    # "a hung main loop triggers a reboot ... 10 s". Without these the IDF
+    # default only logs a warning after 5 s - a hung C6 needed a power cycle.
+    ("Firmware/DAQ_HAT/ESP32C6", "CONFIG_ESP_TASK_WDT_EN"): "y",
+    ("Firmware/DAQ_HAT/ESP32C6", "CONFIG_ESP_TASK_WDT_PANIC"): "y",
+    ("Firmware/DAQ_HAT/ESP32C6", "CONFIG_ESP_TASK_WDT_TIMEOUT_S"): "10",
+}
+
+
 def parse(text: str) -> dict[str, str]:
     """Map every CONFIG_ key to its value. An unset key maps to the sentinel 'n'."""
     values = {key: value.strip() for key, value in SET_RE.findall(text)}
@@ -81,6 +94,13 @@ def main() -> int:
     failures: list[str] = []
     unknown: list[str] = []
     checked_projects = 0
+
+    for (rel, key), want in REQUIRED.items():
+        defaults_path = ROOT / rel / "sdkconfig.defaults"
+        have = parse(defaults_path.read_text(encoding="utf-8", errors="ignore")) \
+            if defaults_path.exists() else {}
+        if normalise(have.get(key, "n")) != normalise(want):
+            failures.append(f"{rel}/sdkconfig.defaults: required {key}={want}, has {have.get(key)!r}")
 
     for rel in PROJECTS:
         project = ROOT / rel
