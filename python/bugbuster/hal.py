@@ -371,6 +371,8 @@ class BugBusterHAL:
         Custom routing table overriding :data:`DEFAULT_ROUTING`.
     supply_voltage : float
         Default VADJ voltage (volts) when IO_Blocks are first enabled.
+        3.3 V, the lowest common DUT supply; set it (or call
+        :meth:`set_voltage`) before configuring IOs for a higher rail.
     vlogic : float
         Default logic-level voltage (volts) for all digital IOs.
     adc_rate : AdcRate
@@ -381,7 +383,7 @@ class BugBusterHAL:
         self,
         client,
         routing:        Optional[dict]    = None,
-        supply_voltage: float   = 12.0,
+        supply_voltage: float   = 3.3,
         vlogic:         float   = 3.3,
         adc_rate:       AdcRate = AdcRate.SPS_200_H,
     ):

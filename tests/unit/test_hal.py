@@ -377,7 +377,7 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE1, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(1, 12.0)
+        mock_bb.idac_set_voltage.assert_called_once_with(1, 3.3)
 
     def test_block1_io5_enables_vadj1_and_efuse2(self):
         hal, mock_bb = _make_hal()
@@ -394,7 +394,7 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(rt)
         mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
         mock_bb.power_set.assert_any_call(PowerControl.EFUSE3, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(2, 12.0)
+        mock_bb.idac_set_voltage.assert_called_once_with(2, 3.3)
 
     def test_block2_io12_enables_vadj2_and_logical_efuse4(self):
         # Logical connector D uses EFUSE4 at the host API; firmware maps it to
@@ -478,7 +478,6 @@ class TestDefaultSupplyVoltage(unittest.TestCase):
     """MCP configure_io never sets a supply voltage, so the HAL default is what
     a DUT on the block sees. A 12 V default can destroy a 3.3 V target."""
 
-    @unittest.expectedFailure  # MCP-24
     def test_first_configure_does_not_apply_12v(self):
         for io in (3, 9):  # VADJ1 block and VADJ2 block
             hal, mock_bb = _make_hal()
