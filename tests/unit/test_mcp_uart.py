@@ -31,11 +31,7 @@ def tools():
     return mcp.tools
 
 
-@pytest.mark.parametrize("name,code", [
-    pytest.param("even", 2, marks=pytest.mark.xfail(strict=True, reason="MCP-23")),
-    pytest.param("odd", 1, marks=pytest.mark.xfail(strict=True, reason="MCP-23")),
-    ("none", 0),
-])
+@pytest.mark.parametrize("name,code", [("even", 2), ("odd", 1), ("none", 0)])
 def test_parity_name_maps_to_firmware_code(tools, name, code):
     bb = make_client_mock()
     bb.get_uart_config.return_value = [{"baudrate": 115200, "parity": 0}]

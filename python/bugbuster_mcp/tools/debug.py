@@ -7,6 +7,7 @@ Tools: setup_serial_bridge, setup_swd, uart_config
 from __future__ import annotations
 from typing import Optional
 from .. import session
+from ..config import UART_PARITY_MAP
 from ..safety import require_valid_io, require_hat, check_faults_post
 
 
@@ -186,12 +187,11 @@ def register(mcp) -> None:
         new_stop_bits = stop_bits  if stop_bits  else cfg.get("stop_bits", 1)
         new_enabled   = enabled    if enabled is not None else cfg.get("enabled", False)
 
-        _PARITY_MAP = {"none": 0, "even": 1, "odd": 2}
         if parity:
             parity_key = parity.lower()
-            if parity_key not in _PARITY_MAP:
+            if parity_key not in UART_PARITY_MAP:
                 raise ValueError("parity must be 'none', 'even', or 'odd'.")
-            new_parity = _PARITY_MAP[parity_key]
+            new_parity = UART_PARITY_MAP[parity_key]
         else:
             new_parity = cfg.get("parity", 0)
 
