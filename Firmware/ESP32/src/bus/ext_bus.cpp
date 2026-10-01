@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
+#include "ext_job_queue.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -47,25 +48,11 @@ static uint8_t s_spi_cs_gpio = 0xFF;
 static uint32_t s_spi_frequency_hz = 0;
 static uint8_t s_spi_mode = 0;
 
-static constexpr size_t EXT_JOB_CAPACITY = 16;
 static constexpr size_t EXT_JOB_MAX_BYTES = 512;
-
-struct ExtBusJob {
-    uint32_t id;
-    uint8_t kind;
-    uint8_t status;
-    uint8_t addr;
-    uint16_t timeout_ms;
-    size_t tx_len;
-    size_t rx_len;
-    uint8_t *tx;
-    uint8_t *rx;
-};
 
 static SemaphoreHandle_t s_job_mutex = nullptr;
 static TaskHandle_t s_job_task = nullptr;
-static ExtBusJob s_jobs[EXT_JOB_CAPACITY] = {};
-static uint32_t s_next_job_id = 1;
+static ExtJobQueue s_jq = { {}, 1 };
 
 static bool valid_gpio(uint8_t gpio)
 {
@@ -442,32 +429,12 @@ static uint8_t *job_alloc(size_t len)
     return ptr;
 }
 
-static void job_free_buffers(ExtBusJob &job)
-{
-    if (job.tx) {
-        free(job.tx);
-        job.tx = nullptr;
-    }
-    if (job.rx) {
-        free(job.rx);
-        job.rx = nullptr;
-    }
-    job.tx_len = 0;
-    job.rx_len = 0;
-}
-
 static void ext_job_worker(void *)
 {
     while (true) {
         int idx = -1;
         if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-                if (s_jobs[i].status == EXT_BUS_JOB_QUEUED) {
-                    s_jobs[i].status = EXT_BUS_JOB_RUNNING;
-                    idx = (int)i;
-                    break;
-                }
-            }
+            idx = ext_jq_take_next(s_jq);
             xSemaphoreGive(s_job_mutex);
         }
 
@@ -476,7 +443,7 @@ static void ext_job_worker(void *)
             continue;
         }
 
-        ExtBusJob *job = &s_jobs[idx];
+        ExtBusJob *job = &s_jq.jobs[idx];
         bool ok = false;
         if (job->kind == EXT_BUS_JOB_I2C_READ) {
             ok = ext_i2c_read(job->addr, job->rx, job->rx_len, job->timeout_ms);
@@ -489,7 +456,7 @@ static void ext_job_worker(void *)
         }
 
         if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            job->status = ok ? EXT_BUS_JOB_DONE : EXT_BUS_JOB_ERROR;
+            ext_jq_complete(s_jq, idx, ok);
             xSemaphoreGive(s_job_mutex);
         }
     }
@@ -541,37 +508,14 @@ static bool submit_job(uint8_t kind, uint8_t addr, const uint8_t *tx, size_t tx_
         return false;
     }
 
-    int slot = -1;
-    for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        if (s_jobs[i].status == EXT_BUS_JOB_EMPTY ||
-            s_jobs[i].status == EXT_BUS_JOB_DONE ||
-            s_jobs[i].status == EXT_BUS_JOB_ERROR) {
-            slot = (int)i;
-            break;
-        }
-    }
-    if (slot < 0) {
-        xSemaphoreGive(s_job_mutex);
+    uint32_t id = ext_jq_submit(s_jq, kind, addr, timeout_ms, tx_copy, tx_len, rx_buf, rx_len);
+    xSemaphoreGive(s_job_mutex);
+    if (id == 0) {
         if (tx_copy) free(tx_copy);
         if (rx_buf) free(rx_buf);
         return false;
     }
-
-    ExtBusJob &job = s_jobs[slot];
-    job_free_buffers(job);
-    job.id = s_next_job_id++;
-    if (s_next_job_id == 0) s_next_job_id = 1;
-    job.kind = kind;
-    job.status = EXT_BUS_JOB_QUEUED;
-    job.addr = addr;
-    job.timeout_ms = timeout_ms;
-    job.tx = tx_copy;
-    job.rx = rx_buf;
-    job.tx_len = tx_len;
-    job.rx_len = rx_len;
-    *job_id = job.id;
-
-    xSemaphoreGive(s_job_mutex);
+    *job_id = id;
     return true;
 }
 
@@ -600,21 +544,7 @@ bool ext_job_get(uint32_t job_id, uint8_t *status, uint8_t *kind,
 {
     if (!status || !kind || !result_len || !ensure_job_runtime()) return false;
     if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        ExtBusJob &job = s_jobs[i];
-        if (job.id == job_id && job.status != EXT_BUS_JOB_EMPTY) {
-            *status = job.status;
-            *kind = job.kind;
-            *result_len = 0;
-            if (job.status == EXT_BUS_JOB_DONE && job.rx && result && max_result_len > 0) {
-                size_t n = job.rx_len < max_result_len ? job.rx_len : max_result_len;
-                memcpy(result, job.rx, n);
-                *result_len = n;
-            }
-            xSemaphoreGive(s_job_mutex);
-            return true;
-        }
-    }
+    bool found = ext_jq_get(s_jq, job_id, status, kind, result, max_result_len, result_len);
     xSemaphoreGive(s_job_mutex);
-    return false;
+    return found;
 }
