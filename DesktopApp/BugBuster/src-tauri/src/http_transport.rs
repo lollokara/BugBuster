@@ -2209,6 +2209,22 @@ impl Transport for HttpTransport {
 }
 
 #[cfg(test)]
+mod diag_raw_tests {
+    /// DESK-DIAG-RAW: firmware emits `diagnostics[].rawCode`; the desktop read
+    /// `raw`, so HTTP diagnostic raw codes were always 0.
+    #[test]
+    #[ignore = "DESK-DIAG-RAW"]
+    fn status_diag_raw_code_is_parsed() {
+        let j = serde_json::json!({
+            "spiOk": true, "channels": [],
+            "diagnostics": [{"source": 2, "rawCode": 4660, "value": 1.5}]
+        });
+        let st = super::HttpTransport::parse_status_json(&j).expect("parse");
+        assert_eq!(st.diag[0].raw_code, 4660);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{encode_gpio_status_payload, encode_selftest_supplies_cached_payload};
     use serde_json::json;
