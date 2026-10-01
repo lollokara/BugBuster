@@ -7,8 +7,6 @@ must take the client layout and release with the caller's own session (same
 no-spoofing rule as IO_CLAIM).
 """
 
-import pytest
-
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 from tests.lib.srcread import REPO_ROOT
 
@@ -60,7 +58,6 @@ def test_claim_works_in_the_harness():
     assert "claimed 1 1" in out
 
 
-@pytest.mark.xfail(strict=True, reason="IO-5")
 def test_release_takes_the_client_layout():
     out = _run(CLAIM_12_13 + r"""
     uint8_t rel[] = { 2, 12, 13 };
