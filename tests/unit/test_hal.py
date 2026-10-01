@@ -7,6 +7,8 @@ Runs WITHOUT hardware — all client calls are mocked.
 import unittest
 from unittest.mock import MagicMock
 
+import pytest
+
 from bugbuster.hal import (
     BugBusterHAL,
     DEFAULT_ROUTING,
@@ -452,6 +454,23 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(hal._routing[2])
         # VADJ1 and EFUSE1 already on — nothing should be called
         mock_bb.power_set.assert_not_called()
+
+
+# =========================================================================
+# AN-02: read_current units
+# =========================================================================
+
+class TestReadCurrentUnits(unittest.TestCase):
+    """Firmware convertAdcCode() already returns mA for every CH_FUNC_IIN_*
+    (tasks.cpp: adcCodeToCurrent(...) * 1000.0f), so the HAL must pass the
+    value through unchanged."""
+
+    @pytest.mark.xfail(strict=True, reason="AN-02: HAL divides an mA value by 12 and scales by 1000")
+    def test_read_current_is_milliamps(self):
+        hal, mock_bb = _make_hal()
+        hal._io_mode[3] = PortMode.CURRENT_IN
+        mock_bb.get_adc_value.return_value = MagicMock(value=12.0)
+        self.assertAlmostEqual(hal.read_current(3), 12.0)
 
 
 if __name__ == "__main__":
