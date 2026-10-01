@@ -112,6 +112,15 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2, DESK-21 (BBSC v2 scope buckets) |
    | Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
    | Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
+
+   **Plan M2 status (2026-10-01, branch `audit/2026-10-m2-s3-firmware`, S3 flashed by OTA).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | TR-2, PLT-01, PLT-06, PLT-10, WEB-25, WEB-24 (idle state only - READY state needs the DAQ WiFi stream up), BBP-TXQ, BBP-STDOUT, HAT-RESET (last three found on hardware during M2) |
+   | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; needs a phone and the iOS prompt) |
+   | Refuted | WEB-NULL - all 17 dereferences already guarded; gate added |
+   | Fixed, verified on hardware (measured) | PLT-07 - uPython stack had 1964 B left after one HTTPS `bugbuster.http_get`; now 8 KiB, 4060 B left. The task is now in stack telemetry |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,

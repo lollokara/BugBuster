@@ -262,6 +262,25 @@
   | IOS-KEYS | iOS | VOUT range, ADC config, RTD, Quick Setup list and autorun enable all sent or decoded the wrong shape | firmware shapes (source-checked; needs an Xcode build) |
   | DESK-21 | Desktop Scope tab Record | every `.bbsc` file was a bare header (only ADC-stream events were written; the tab runs the scope stream) | BBSC v2: one record per scope bucket (avg/min/max per channel); CSV export reads v2 and v1 |
 
+- **ESP32-S3 firmware safety pass (2026-10 audit, M2).** Built, flashed over
+  OTA and checked on the board; IDAC calibration fingerprint unchanged.
+
+  | ID | Was | Now |
+  |---|---|---|
+  | TR-2 | `BBP_COBS_MAX` 3 bytes short; a zero-free host frame overflowed `s_decodedBuf` by 14 bytes; oversize responses silently dropped (host timeout); a full `SCRIPT_LOGS` reply was 1028 bytes | worst-case COBS sizing, bounded decode, `BBP_ERR_FRAME_TOO_LARGE` reply, `SCRIPT_LOG_CHUNK` 1016 |
+  | BBP-TXQ (found on hardware) | CDC0 writes larger than the 512-byte TX FIFO lost their tail (CRC errors on large frames) | write loops until queued, 500 ms cap |
+  | BBP-STDOUT (found on hardware) | a script's `print()` went raw into the BBP stream on CDC0, corrupting the link | not teed to CDC0 while BBP owns it; log ring and REPL unchanged |
+  | HAT-RESET (found on hardware) | every script run sent `HAT_CMD_RESET`; the DAQ HAT P4 treats it as a reboot (P4 USB re-enumerated, C6 reset) | script teardown skips it for the DAQ HAT |
+  | PLT-01 | `POST /api/registry/set_dac_*` drove the DAC with no token | routes removed; CI gate: every mutating route checks the admin token |
+  | PLT-03 | `ScriptCmd` queued with uninitialised lint fields | zero-initialised |
+  | PLT-04 | BLE Auth/WiFi/Supply/API-request writes accepted over Just Works | encrypted + MITM-authenticated; passkey = `bugbuster.client.ble_passkey(token)` (iOS prompt still to build) |
+  | PLT-06 | a stalled upload held the single httpd task until the client closed | dropped after 5 consecutive recv timeouts (~40 s measured) |
+  | PLT-10 | an abandoned BBP OTA session blocked new uploads (and kept SPIFFS unmounted) until reboot | expires after 30 s idle, aborted on BBP exit/re-handshake |
+  | PWR-01 | setting the PCA fault config left the e-fuse blackout window as stack garbage; HTTP forced absent flags false | starts from the current config (`pca9535_get_fault_config()`) |
+  | WEB-24 | `/api/daq/wifi_stream/status` served the DAQ hotspot password without auth | SSID/password only with the admin token |
+  | WEB-25 | CORS echoed look-alike origins (`http://localhost.evil.com`) | exact loopback host, optional numeric port |
+  | PLT-07 | MicroPython task had 1964 B of stack left after one HTTPS request, and was missing from stack telemetry | 8 KiB stack (4060 B left, measured); `uPython` reported by `device_memory` |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
