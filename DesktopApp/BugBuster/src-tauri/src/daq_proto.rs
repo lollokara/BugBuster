@@ -151,31 +151,31 @@ pub struct StatusRecord {
     /// Extension v1 (bytes 20-27): SMU input-rail sense. 0 when not reported.
     pub in_voltage: f32,
     pub in_current: f32,
-    /// Extension v2 (bytes 28-39): FINE ADC health.
+    /// Extension v2 (bytes 28-35): FINE ADC health.
     /// `adaq_ok_bits`: bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok. 0 = old firmware.
     pub adaq_ok_bits: u8,
     /// Percentage of FINE samples that carried a STATUS_ERR bit (0-100).
     /// 100 means the fused stream is running on COARSE only.
     pub fine_err_pct: u8,
-    /// FINE pairing-resync drop counter (widened v3: uint32, was uint16).
+    /// FINE pairing-resync drop counter (u16 on the wire, saturates at 65535).
     pub drop_fine: u32,
-    /// COARSE pairing-resync drop counter (widened v3: uint32, was uint16).
+    /// COARSE pairing-resync drop counter (u16 on the wire, saturates at 65535).
     pub drop_coarse: u32,
     /// OR of all MASTER_STATUS (0x2D) bytes seen on the FINE ADAQ since boot.
     /// 0xFF = FINE ADAQ did not initialise. Bit map: 7=MASTER_ERR 6=ADC_ERR
     /// 5=DIG_ERR 4=CLK_QUAL 3=FILT_SAT 2=FILT_UNSETTLED 1=SPI_ERR 0=POR.
     pub fine_diag_sticky: u8,
-    /// Extension v3 (bytes 40-59): USB streaming performance counters.
-    /// 0 when not reported (payload < 60 bytes).
+    /// Extension v3 (bytes 36-55): USB streaming performance counters.
+    /// 0 when not reported (payload < 56 bytes).
     pub frames_tx: u32,
     pub bytes_per_sec: u32,
     pub fifo_drop_frames: u32,
     pub ring_high_water: u32,
     pub wave_i_index_lo: u32,
-    /// Extension v7 (bytes 100-103): board temperatures, 0.1 C. None when sensor absent.
+    /// Extension v7 (bytes 96-99): board temperatures, 0.1 C. None when sensor absent.
     pub board_temp_analog_c: Option<f32>,
     pub board_temp_power_c: Option<f32>,
-    /// Extension v8 (byte 104): per-range current calibration validity.
+    /// Extension v8 (byte 100): per-range current calibration validity.
     /// bit0=HI calibrated, bit1=MID calibrated, bit2=LO calibrated.
     pub cal_have_hi: bool,
     pub cal_have_mid: bool,
@@ -445,37 +445,39 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 cal_have_mid: false,
                 cal_have_lo: false,
             };
+            // Offsets follow usb_status_payload_t in usb_proto.h; the golden
+            // fixture test (status_matches_firmware_fixture) pins them.
             // Extension v1 (bytes 20-27): input-rail sense.
             if p.len() >= 28 {
                 s.in_voltage = rd_f32(p, 20);
                 s.in_current = rd_f32(p, 24);
             }
-            // Extension v2 (bytes 28-39): FINE ADC health, widened drop counters (v3).
-            if p.len() >= 40 {
+            // Extension v2 (bytes 28-35): FINE ADC health; drop counters are u16 (saturating).
+            if p.len() >= 36 {
                 s.adaq_ok_bits     = p[28];
                 s.fine_err_pct     = p[29];
-                s.drop_fine        = rd_u32(p, 30);
-                s.drop_coarse      = rd_u32(p, 34);
-                s.fine_diag_sticky = p[38];
+                s.drop_fine        = rd_u16(p, 30) as u32;
+                s.drop_coarse      = rd_u16(p, 32) as u32;
+                s.fine_diag_sticky = p[34];
             }
-            // Extension v3 (bytes 40-59): USB streaming performance counters.
-            if p.len() >= 60 {
-                s.frames_tx = rd_u32(p, 40);
-                s.bytes_per_sec = rd_u32(p, 44);
-                s.fifo_drop_frames = rd_u32(p, 48);
-                s.ring_high_water = rd_u32(p, 52);
-                s.wave_i_index_lo = rd_u32(p, 56);
+            // Extension v3 (bytes 36-55): USB streaming performance counters.
+            if p.len() >= 56 {
+                s.frames_tx = rd_u32(p, 36);
+                s.bytes_per_sec = rd_u32(p, 40);
+                s.fifo_drop_frames = rd_u32(p, 44);
+                s.ring_high_water = rd_u32(p, 48);
+                s.wave_i_index_lo = rd_u32(p, 52);
             }
-            // Extension v7 (bytes 100-103): board temperatures, 0.1 C.
-            if p.len() >= 104 {
-                let t0 = rd_u16(p, 100) as i16;
-                let t1 = rd_u16(p, 102) as i16;
+            // Extension v7 (bytes 96-99): board temperatures, 0.1 C.
+            if p.len() >= 100 {
+                let t0 = rd_u16(p, 96) as i16;
+                let t1 = rd_u16(p, 98) as i16;
                 s.board_temp_analog_c = if t0 == 0x7FFF { None } else { Some(t0 as f32 / 10.0) };
                 s.board_temp_power_c  = if t1 == 0x7FFF { None } else { Some(t1 as f32 / 10.0) };
             }
-            // Extension v8 (byte 104): per-range calibration validity.
-            if p.len() >= 105 {
-                let cal_have = p[104];
+            // Extension v8 (byte 100): per-range calibration validity.
+            if p.len() >= 101 {
+                let cal_have = p[100];
                 s.cal_have_hi  = (cal_have & 0x01) != 0;
                 s.cal_have_mid = (cal_have & 0x02) != 0;
                 s.cal_have_lo  = (cal_have & 0x04) != 0;
@@ -683,7 +685,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "DAQ-01: decoder reads frames_tx at 40, usb_proto.h puts it at 36"]
     fn status_perf_extension() {
         let mut p = vec![0u8; 56];
         p[36..40].copy_from_slice(&777u32.to_le_bytes()); // frames_tx
@@ -703,7 +704,6 @@ mod tests {
     /// Golden STATUS record generated by gcc from usb_proto.h
     /// (tests/firmware_host/gen_daq_status_fixture.py): every field distinct.
     #[test]
-    #[ignore = "DAQ-01: STATUS offsets from byte 30 disagree with usb_proto.h"]
     fn status_matches_firmware_fixture() {
         let raw: &[u8] = include_bytes!("../../../../tests/fixtures/daq/status.bin");
         let meta: serde_json::Value =
@@ -716,7 +716,8 @@ mod tests {
         };
         let mut bad = Vec::new();
         let mut chk = |name: &str, got: f64, want: f64| {
-            if (got - want).abs() > 1e-6 {
+            // Relative: f32 fields (temperatures in 0.1 C) cannot hold 1e-6 absolute.
+            if (got - want).abs() > 1e-6 * want.abs().max(1.0) {
                 bad.push(format!("{name}: got {got}, want {want}"));
             }
         };
