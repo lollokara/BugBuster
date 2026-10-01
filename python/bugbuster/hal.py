@@ -525,10 +525,31 @@ class BugBusterHAL:
                 f"Valid: {[m.name for m in sorted(rt.valid_modes)]}"
             )
 
+        # TR-6: one lease for the whole sequence instead of a claim/release
+        # pair around every channel call (unless the caller already holds it).
+        slots = [12 + rt.channel] if rt.channel is not None else []
+        held = getattr(self._bb, "_io_claimed_slots", None)
+        covered = isinstance(held, set) and set(slots) <= held
+        if slots and getattr(self._bb, "_usb", False) is True and not covered:
+            with self._bb.io_claim(slots, lease_ms=5000, purpose="configure_io"):
+                self._configure_locked(io, rt, mode, bipolar, rtd_ma_1)
+        else:
+            self._configure_locked(io, rt, mode, bipolar, rtd_ma_1)
+
+    def _configure_locked(self, io: int, rt: IORouting, mode: PortMode,
+                          bipolar: bool, rtd_ma_1: bool) -> None:
+        prev_mode = self._io_mode.get(io, PortMode.DISABLED)
+
         # ── Disable current mode ─────────────────────────────────────────
-        if rt.channel is not None:
+        # (TR-6: a channel the HAL left DISABLED is already HIGH_IMP.)
+        if rt.channel is not None and (prev_mode != PortMode.DISABLED or mode == PortMode.DISABLED):
             self._bb.set_channel_function(rt.channel, ChannelFunction.HIGH_IMP)
-        self._set_mux(rt, PortMode.DISABLED)
+        # TR-6: the explicit DISABLED MUX write is only needed when the rail
+        # is about to be powered up under a live route. Otherwise the target
+        # write below is break-before-make safe in firmware (IO-13).
+        if (mode == PortMode.DISABLED or
+                (prev_mode != PortMode.DISABLED and rt.supply not in self._supplies_on)):
+            self._set_mux(rt, PortMode.DISABLED)
 
         if mode == PortMode.DISABLED:
             self._io_mode[io] = PortMode.DISABLED

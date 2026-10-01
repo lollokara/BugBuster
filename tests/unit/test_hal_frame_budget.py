@@ -31,7 +31,6 @@ def _hal():
     return hal, sent
 
 
-@pytest.mark.xfail(strict=True, reason="TR-6")
 @pytest.mark.parametrize("mode", [PortMode.ANALOG_IN, PortMode.ANALOG_OUT])
 def test_configure_io_frame_budget(mode):
     hal, sent = _hal()
