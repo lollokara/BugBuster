@@ -6,7 +6,6 @@ B: the transport sends a PING when nothing has been sent for KEEPALIVE_S
 (25 s), well inside the 60 s firmware window. Fake clock, no hardware.
 """
 
-import pytest
 
 from bugbuster.transport.usb import USBTransport
 
@@ -30,7 +29,6 @@ def _transport():
     return t, clock, sent
 
 
-@pytest.mark.xfail(strict=True, reason="TR-3")
 def test_keepalive_pings_after_idle():
     t, clock, sent = _transport()
     t._last_tx = clock()
@@ -39,7 +37,6 @@ def test_keepalive_pings_after_idle():
     assert sent == [PING]
 
 
-@pytest.mark.xfail(strict=True, reason="TR-3")
 def test_no_ping_while_traffic_is_recent():
     t, clock, sent = _transport()
     t._last_tx = clock()
@@ -48,6 +45,5 @@ def test_no_ping_while_traffic_is_recent():
     assert sent == []
 
 
-@pytest.mark.xfail(strict=True, reason="TR-3")
 def test_keepalive_period_is_inside_the_firmware_idle_window():
     assert 0 < USBTransport.KEEPALIVE_S <= 30.0

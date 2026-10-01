@@ -15,6 +15,7 @@ See bbp-protocol.md §2–§5 for the complete wire specification.
 """
 
 import threading
+import time
 import queue
 import logging
 import random
@@ -61,6 +62,9 @@ class USBTransport:
     DEFAULT_BAUDRATE = 921600
     DEFAULT_TIMEOUT  = 5.0       # seconds to wait for a response
     READ_CHUNK       = 512       # bytes to read per serial.read() call
+    # TR-3: the firmware drops back to the text CLI after 60 s without a frame
+    # (bbp.cpp BBP_IDLE_TIMEOUT_MS). PING when idle this long.
+    KEEPALIVE_S      = 25.0
 
     def __init__(
         self,
@@ -85,6 +89,10 @@ class USBTransport:
 
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
+        # TR-3 keepalive: injectable clock for tests; time of the last frame sent.
+        self._clock: Callable[[], float] = time.monotonic
+        self._last_tx = 0.0
+        self._keepalive_thread: Optional[threading.Thread] = None
         # Set when the reader thread exits unexpectedly; cleared on reconnect.
         self._link_error: Optional[BaseException] = None
         # Reconnect automatically on the next command after a reader death.
@@ -240,6 +248,12 @@ class USBTransport:
             target=self._reader_loop, name="bbp-reader", daemon=True
         )
         self._reader_thread.start()
+        self._last_tx = self._clock()
+        if self._keepalive_thread is None or not self._keepalive_thread.is_alive():
+            self._keepalive_thread = threading.Thread(
+                target=self._keepalive_loop, name="bbp-keepalive", daemon=True
+            )
+            self._keepalive_thread.start()
 
         # Drain stale BBP frames from previous sessions. The ESP32 CDC TX
         # buffer may contain responses to timed-out commands from a prior
@@ -310,6 +324,25 @@ class USBTransport:
         self._link_error = None
         self.connect()
 
+    def keepalive_tick(self) -> bool:
+        """Send a PING if nothing has been sent for KEEPALIVE_S. Returns True
+        when a PING was attempted. Failures are left to the next real command
+        (which reconnects if the reader died)."""
+        if self._clock() - self._last_tx < self.KEEPALIVE_S:
+            return False
+        try:
+            self.send_command(0x01, b"", timeout=2.0)   # PING
+        except Exception as exc:
+            log.debug("keepalive PING failed: %s", exc)
+        self._last_tx = self._clock()
+        return True
+
+    def _keepalive_loop(self) -> None:
+        while self._running:
+            time.sleep(1.0)
+            if self._running and self.is_healthy():
+                self.keepalive_tick()
+
     def _resolve_timeout(self, cmd_id: int,
                          timeout: Optional[float] = None) -> float:
         """Explicit argument wins, then the per-command table, then the default."""
@@ -351,6 +384,7 @@ class USBTransport:
         if self._serial is not None:
             self._serial.write(frame)
             self._serial.flush()
+            self._last_tx = self._clock()
 
         try:
             result = resp_queue.get(timeout=wait)
