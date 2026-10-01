@@ -10,7 +10,6 @@ ulTaskNotifyTake between samples and never spins.
 
 import re
 
-import pytest
 
 from tests.lib.srcread import REPO_ROOT
 
@@ -23,7 +22,6 @@ def _wavegen_loop() -> str:
     return re.sub(r"//[^\n]*", "", SRC[start:end])
 
 
-@pytest.mark.xfail(strict=True, reason="AN-06")
 def test_waveform_pacing_blocks_instead_of_spinning():
     loop = _wavegen_loop()
     assert "while (esp_timer_get_time() < nextSampleTime)" not in loop

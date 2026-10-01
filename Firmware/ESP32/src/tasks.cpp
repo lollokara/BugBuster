@@ -1644,7 +1644,29 @@ static void taskWavegen(void* /*pvParameters*/)
 
         // Generation loop
         uint32_t sampleIndex = 0;
-        int64_t nextSampleTime = esp_timer_get_time();
+        // AN-06: a periodic esp_timer wakes this task once per sample. The
+        // old pacing spun on taskYIELD() for the sub-tick remainder, which
+        // starves every lower-priority task on this core.
+        TaskHandle_t self = xTaskGetCurrentTaskHandle();
+        esp_timer_handle_t pace = NULL;
+        const esp_timer_create_args_t pace_args = {
+            .callback = [](void *arg) { xTaskNotifyGive((TaskHandle_t)arg); },
+            .arg = self,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "wavegen_pace",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&pace_args, &pace) != ESP_OK ||
+            esp_timer_start_periodic(pace, sampleIntervalUs) != ESP_OK) {
+            ESP_LOGE("wavegen", "pacing timer failed");
+            if (pace) esp_timer_delete(pace);
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_deviceState.wavegen.active = false;
+                xSemaphoreGive(g_stateMutex);
+            }
+            continue;
+        }
+        ulTaskNotifyTake(pdTRUE, 0);   // drop any stale notification
 
         while (true) {
             // Check if still active. Default true so a transient mutex timeout
@@ -1690,27 +1712,12 @@ static void taskWavegen(void* /*pvParameters*/)
 
             sampleIndex++;
 
-            // Precise timing: yield cooperatively until next sample time.
-            // A busy-wait here would starve taskAdcPoll (same priority, same
-            // core) for the entire inter-sample interval.  taskYIELD() gives
-            // other ready tasks a chance to run on each scheduler tick while
-            // keeping the wavegen in the ready queue for low-latency reschedule.
-            nextSampleTime += sampleIntervalUs;
-            {
-                int64_t sleepUs = nextSampleTime - esp_timer_get_time();
-                if (sleepUs > 1000) {
-                    vTaskDelay(pdMS_TO_TICKS(sleepUs / 1000));
-                }
-                while (esp_timer_get_time() < nextSampleTime) {
-                    taskYIELD();
-                }
-                if (nextSampleTime < esp_timer_get_time() - (int64_t)sampleIntervalUs) {
-                    // Fallen more than one interval behind — reset timeline.
-                    nextSampleTime = esp_timer_get_time();
-                }
-            }
+            // Block until the pacing timer fires (missed ticks coalesce).
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
         }
 
+        esp_timer_stop(pace);
+        esp_timer_delete(pace);
         ESP_LOGI("wavegen", "Stopped");
     }
 }
