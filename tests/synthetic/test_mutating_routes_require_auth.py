@@ -8,8 +8,6 @@ with a reason; an unexplained entry is how a hole gets hidden.
 
 import re
 
-import pytest
-
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
@@ -52,7 +50,6 @@ def test_route_table_was_parsed():
     assert len(found) > 50
 
 
-@pytest.mark.xfail(strict=True, reason="PLT-01")
 def test_mutating_routes_require_auth():
     open_ = sorted(
         f"{method} {uri} ({handler})"
