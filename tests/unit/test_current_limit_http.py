@@ -5,14 +5,11 @@ so a client that sends any other key gets a silent no-op. The HTTP simulator
 route mirrors that handler.
 """
 
-import pytest
-
 from bugbuster import BugBuster
 from bugbuster.constants import CurrentLimit
 from tests.mock import SimulatedDevice, SimulatedHTTPTransport, SimulatedUSBTransport
 
 
-@pytest.mark.xfail(strict=True, reason="AN-01: client posts limit_8mA, firmware reads limit8mA")
 def test_http_current_limit_8ma_is_applied():
     dev = SimulatedDevice()
     bb = BugBuster(SimulatedHTTPTransport(dev))

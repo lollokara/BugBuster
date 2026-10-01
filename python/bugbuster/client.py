@@ -1220,7 +1220,7 @@ class BugBuster:
                 payload = struct.pack('<BB', channel, int(limit))
                 self._usb_cmd(CmdId.SET_CURRENT_LIMIT, payload)
             else:
-                self._http_post(f"/channel/{channel}/ilimit", {"limit_8mA": bool(limit)})
+                self._http_post(f"/channel/{channel}/ilimit", {"limit8mA": bool(limit)})
         self._auto_claim_wrap([channel + 12], _body)
 
     def set_avdd_select(self, channel: int, select: AvddSelect) -> None:
