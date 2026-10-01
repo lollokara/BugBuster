@@ -13,6 +13,7 @@
 #include "cmd_errors.h"
 #include "bbp_codec.h"
 #include "bbp.h"
+#include "config.h"
 
 #include "update/update_manager.h"
 
@@ -66,7 +67,11 @@ typedef struct {
     FILE *stage_file;
     bool spiffs_unmounted;
     const esp_partition_t *spiffs_partition;
+    uint32_t last_activity_ms;
 } OtaSession;
+
+// A host that vanishes mid-upload must not leave the session (or an unmounted SPIFFS) behind.
+#define OTA_SESSION_IDLE_MS 30000u
 
 static OtaSession s_ota = {};
 
@@ -281,6 +286,7 @@ static bool ota_begin_target(uint8_t target, uint32_t total_size, const uint8_t 
 
     memset(&s_ota, 0, sizeof(s_ota));
     s_ota.active = true;
+    s_ota.last_activity_ms = millis_now();
     s_ota.target = target;
     s_ota.total_size = total_size;
     s_ota.has_sha = has_sha;
@@ -359,9 +365,26 @@ static bool ota_finalize_target(void)
     }
 }
 
+static void ota_expire_idle_session(void)
+{
+    if (s_ota.active && millis_now() - s_ota.last_activity_ms > OTA_SESSION_IDLE_MS) {
+        ESP_LOGW(TAG, "OTA session idle > %u ms, aborting", (unsigned)OTA_SESSION_IDLE_MS);
+        ota_reset_session(false);
+    }
+}
+
+// Called when BBP mode ends (idle timeout or re-handshake): nobody can finish the upload.
+extern "C" void cmd_ota_abort_session(void)
+{
+    if (s_ota.active) ota_reset_session(false);
+}
+
 static int handler_ota(const uint8_t *payload, size_t len, uint8_t *resp, size_t *resp_len)
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;
+
+    ota_expire_idle_session();
+    if (s_ota.active) s_ota.last_activity_ms = millis_now();
 
     size_t rpos = 0;
     uint8_t op = bbp_get_u8(payload, &rpos);

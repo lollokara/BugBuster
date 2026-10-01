@@ -45,6 +45,8 @@ static uint16_t s_evtSeq = 0;          // Event sequence counter
 // automatically invalidated when a new host connects.
 static uint8_t  s_bbp_usb_session = 1;
 
+extern "C" void cmd_ota_abort_session(void);  // cmds/cmd_ota.cpp
+
 // Handshake detection state
 static uint8_t  s_magic_idx = 0;
 static const uint8_t s_magic[BBP_MAGIC_LEN] = {
@@ -562,6 +564,7 @@ bool bbpDetectHandshake(uint8_t byte)
             // so the response reflects the new session.
             bool re_handshake = s_cdcClaimed;
             if (re_handshake) {
+                cmd_ota_abort_session();
                 uint8_t prev_session = s_bbp_usb_session;
                 uint8_t released = io_owner_release_session(IO_OWNER_USB, prev_session);
                 s_bbp_usb_session++;
@@ -613,6 +616,7 @@ void bbpExitBinaryMode(void)
     s_adcStreamMask = 0;
     s_scopeStreamActive = false;
     bbpStopWavegen();  // Stop wavegen on disconnect
+    cmd_ota_abort_session();
     s_active = false;
     s_rxLen = 0;
     s_magic_idx = 0;
