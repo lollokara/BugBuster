@@ -998,14 +998,21 @@ bool tasks_apply_dac_code(uint8_t logical_channel, uint16_t code)
 bool tasks_apply_dac_voltage(uint8_t logical_channel, float voltage, bool bipolar)
 {
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
-    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
+    uint8_t physical_ch = tasks_logical_to_physical(logical_channel);
 
     float present_voltage = 0.0f;
+    bool range_change_needed = true;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         present_voltage = g_deviceState.channels[logical_channel].dacValue;
+        range_change_needed =
+            (g_deviceState.channels[logical_channel].dacBipolar != bipolar);
         xSemaphoreGive(g_stateMutex);
     }
-    if (!setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
+    // AN-04: same guard as the BBP CMD_SET_DAC_VOLTAGE path. Re-parking the
+    // output and waiting out the range settle on every same-range write is what
+    // made HTTP/script DAC writes slow and glitchy.
+    if (range_change_needed &&
+        !setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
         return false;
     }
     if (!s_device->setDacVoltage(physical_ch, voltage, bipolar)) {

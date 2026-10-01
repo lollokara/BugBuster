@@ -8,8 +8,6 @@ conversion). Both paths must share the guard."""
 import re
 from pathlib import Path
 
-import pytest
-
 TASKS = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src" / "tasks.cpp"
 
 
@@ -32,7 +30,6 @@ def test_bbp_path_has_guard():
     assert GUARD.search(_body("case CMD_SET_DAC_VOLTAGE:"))
 
 
-@pytest.mark.xfail(strict=True, reason="AN-04")
 def test_api_path_has_guard():
     body = _body("bool tasks_apply_dac_voltage(")
     assert GUARD.search(body), "tasks_apply_dac_voltage re-parks the output on every write"
