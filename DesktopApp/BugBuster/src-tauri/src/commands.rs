@@ -2317,15 +2317,22 @@ pub fn stop_recording() -> CmdResult<u64> {
 /// This receives the raw EVT_ADC_DATA payload and writes sample data directly.
 #[tauri::command]
 pub fn append_recording_data(raw_payload: Vec<u8>) -> CmdResult<()> {
-    let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let rec = match guard.as_mut() {
-        Some(r) => r,
-        None => return Ok(()),
-    };
+    recording_feed(bbp::EVT_ADC_DATA, &raw_payload);
+    Ok(())
+}
+
+/// Feed one device event to the active recording, if any.
+pub fn recording_feed(cmd_id: u8, payload: &[u8]) {
+    if cmd_id != bbp::EVT_ADC_DATA {
+        return;
+    }
+    let Ok(mut guard) = RECORDING.lock() else { return };
+    let Some(rec) = guard.as_mut() else { return };
+    let raw_payload = payload;
 
     // Parse: [mask:1][timestamp:4][count:2][samples: count * num_ch * 3]
     if raw_payload.len() < 7 {
-        return Ok(());
+        return;
     }
     let mask = raw_payload[0];
     let count = u16::from_le_bytes([raw_payload[5], raw_payload[6]]) as usize;
@@ -2336,13 +2343,11 @@ pub fn append_recording_data(raw_payload: Vec<u8>) -> CmdResult<()> {
     let data_len = count * num_ch * 3;
     let data_end = data_start + data_len;
 
-    if raw_payload.len() >= data_end {
-        rec.writer
-            .write_all(&raw_payload[data_start..data_end])
-            .map_err(|e| format!("Write error: {}", e))?;
+    if raw_payload.len() >= data_end
+        && rec.writer.write_all(&raw_payload[data_start..data_end]).is_ok()
+    {
         rec.sample_count += count as u64;
     }
-    Ok(())
 }
 
 /// Export a BBSC file to CSV
@@ -4902,6 +4907,41 @@ mod tests {
         let r = futures::executor::block_on(set_efuse_config(0, 500, true));
         let err = r.expect_err("SW limit is not enforced by any firmware");
         assert!(err.contains("not enforced"), "{err}");
+    }
+
+    /// DESK-21: Scope tab Record only produces scope buckets (EVT_SCOPE_DATA,
+    /// bbp.cpp processScopeStream); they must reach the file and the CSV.
+    #[test]
+    #[ignore = "DESK-21"]
+    fn scope_buckets_are_recorded_and_exported() {
+        let dir = std::env::temp_dir().join(format!("bb-desk21-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bbsc = dir.join("rec.bbsc").to_string_lossy().to_string();
+        let csv = dir.join("rec.csv").to_string_lossy().to_string();
+
+        start_recording(bbsc.clone(), 0b0101, vec![0; 4], 20).unwrap();
+        // [seq u32][ts_ms u32][count u16] then 4 x (avg, min, max) f32
+        let mut p = Vec::new();
+        p.extend_from_slice(&7u32.to_le_bytes());
+        p.extend_from_slice(&1500u32.to_le_bytes());
+        p.extend_from_slice(&10u16.to_le_bytes());
+        for ch in 0..4 {
+            for v in [1.0f32 + ch as f32, 0.5, 2.5] {
+                p.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        recording_feed(bbp::EVT_SCOPE_DATA, &p);
+        assert_eq!(stop_recording().unwrap(), 1, "one bucket recorded");
+
+        assert_eq!(export_bbsc_to_csv(bbsc, csv.clone()).unwrap(), 1);
+        let text = std::fs::read_to_string(&csv).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "seq,time_s,count,ch_a_avg_v,ch_a_min_v,ch_a_max_v,ch_c_avg_v,ch_c_min_v,ch_c_max_v"
+        );
+        assert_eq!(lines.next().unwrap(), "7,1.500,10,1.000000,0.500000,2.500000,3.000000,0.500000,2.500000");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

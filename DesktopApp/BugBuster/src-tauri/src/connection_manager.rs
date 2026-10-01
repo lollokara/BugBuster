@@ -257,34 +257,7 @@ impl ConnectionManager {
                     Ok(Some(msg)) => {
                         match msg.cmd_id {
                             bbp::EVT_ADC_DATA => {
-                                // Forward to recording backend (no frontend involvement)
-                                {
-                                    use crate::commands::RECORDING;
-                                    if let Ok(mut guard) = RECORDING.lock() {
-                                        if let Some(ref mut rec) = *guard {
-                                            // Parse count from payload and write raw sample data
-                                            if msg.payload.len() >= 7 {
-                                                let count = u16::from_le_bytes([
-                                                    msg.payload[5],
-                                                    msg.payload[6],
-                                                ])
-                                                    as usize;
-                                                let mask = msg.payload[0];
-                                                let num_ch =
-                                                    (0..4).filter(|b| mask & (1 << b) != 0).count();
-                                                let data_len = count * num_ch * 3;
-                                                let data_end = 7 + data_len;
-                                                if msg.payload.len() >= data_end {
-                                                    use std::io::Write;
-                                                    let _ = rec
-                                                        .writer
-                                                        .write_all(&msg.payload[7..data_end]);
-                                                    rec.sample_count += count as u64;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                crate::commands::recording_feed(msg.cmd_id, &msg.payload);
 
                                 // Keep latest payload for throttled display
                                 adc_buffer = msg.payload;
@@ -296,6 +269,7 @@ impl ConnectionManager {
                                 }
                             }
                             bbp::EVT_SCOPE_DATA => {
+                                crate::commands::recording_feed(msg.cmd_id, &msg.payload);
                                 let _ = app_handle.emit("scope-data", &msg.payload);
                             }
                             bbp::EVT_ALERT => {
