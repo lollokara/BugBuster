@@ -465,7 +465,11 @@ class USBTransport:
             if serial_port is None:
                 return None
             try:
-                chunk = serial_port.read(self.READ_CHUNK)
+                # USB-RX-LAT: read(READ_CHUNK) only returns early once that
+                # many bytes arrived, so a short response waited out the whole
+                # 100 ms port timeout. Read what is waiting (>= 1 byte).
+                waiting = getattr(serial_port, "in_waiting", 0) or 0
+                chunk = serial_port.read(min(max(waiting, 1), self.READ_CHUNK * 8))
             except serial.SerialException as exc:
                 # Spurious macOS "no data" exception — keep going
                 log.debug("Serial transient: %s", exc)

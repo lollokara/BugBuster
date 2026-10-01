@@ -11,7 +11,6 @@ as soon as its terminating 0x00 arrives.
 import threading
 import time
 
-import pytest
 
 from bugbuster.protocol import build_frame
 from bugbuster.transport.usb import USBTransport
@@ -47,7 +46,6 @@ class _PyserialLikePort:
         self.is_open = False
 
 
-@pytest.mark.xfail(strict=True, reason="USB-RX-LAT")
 def test_short_response_is_dispatched_without_waiting_the_read_timeout():
     frame = build_frame(0x1234, 0xFE, b"")   # a short PING-sized frame
     t = USBTransport("COM_TEST")
