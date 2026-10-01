@@ -4891,6 +4891,16 @@ mod tests {
         w.buf
     }
 
+    /// PWR-08: no firmware enforces an e-fuse software current limit, so the
+    /// command must not report success (the board tab showed it as armed).
+    #[test]
+    #[ignore = "PWR-08"]
+    fn set_efuse_config_reports_unsupported() {
+        let r = futures::executor::block_on(set_efuse_config(0, 500, true));
+        let err = r.expect_err("SW limit is not enforced by any firmware");
+        assert!(err.contains("not enforced"), "{err}");
+    }
+
     #[test]
     fn firmware_info_from_json_parses_version_fields() {
         let json = serde_json::json!({
