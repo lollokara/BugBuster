@@ -1,4 +1,7 @@
-use crate::components::channel_sparkline::ChannelSparkline;
+use crate::components::channel_sparkline::{
+    ch_key, ch_var, set_channel_function, ChannelEmpty, ChannelHead, ChannelSparkline,
+};
+use crate::components::ui::Readout;
 use crate::tauri_bridge::{self, *};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -55,16 +58,15 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     };
 
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"Analog-to-Digital Converter readings for all 4 channels. Configure the ADC range, sampling rate, and input multiplexer per channel. Values update in real-time."</div>
-            <div class="channel-grid-wide">
+        <div class="view">
+            <p class="group-subtitle">"Live readings for all four channels. Range, rate and input mux are set per channel."</p>
+            <div class="grid-2">
                 {move || {
                     let _ = cfg.get();
                     let ds = state.get_untracked();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
                         let has_adc = matches!(ch.function, 3 | 4 | 5 | 7 | 11 | 12);
-                        let color = CH_COLORS[i];
                         let is_res = ch.function == 7;
                         let range_info = ADC_RANGE_OPTIONS.iter().find(|r| r.0 == ch.adc_range);
                         let (rng_min, rng_max) = range_info.map(|r| (r.2, r.3)).unwrap_or((0.0, 12.0));
@@ -81,122 +83,121 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             if span > 0.0 { ((v - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 }
                         };
                         let unit = if matches!(ch.function, 4 | 5 | 11 | 12) { "mA" } else if is_res { "Ω" } else { "V" };
+                        let quantity = if is_res { "Resistance" } else if unit == "mA" { "Current" } else { "Voltage" };
                         let exc_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
                         let hist = history[i];
-                        let spark_color = color.to_string();
+
+                        let body = if !has_adc {
+                            view! {
+                                <ChannelEmpty icon="gauge" message="Set the channel to an input function to read it.">
+                                    <button class="btn btn-sm" on:click=move |_| set_channel_function(ch_idx, 3)>"Voltage in"</button>
+                                    <button class="btn btn-sm" on:click=move |_| set_channel_function(ch_idx, 4)>"Current in"</button>
+                                    <button class="btn btn-sm" on:click=move |_| set_channel_function(ch_idx, 7)>"Resistance"</button>
+                                </ChannelEmpty>
+                            }.into_any()
+                        } else {
+                            // Fix 4: For VOUT (1) / VIN (3) channels the only valid mux
+                            // is LF_TO_AGND (0). Force it there and disable the dropdown.
+                            let force_mux_zero = ch.function == 1 || ch.function == 3;
+                            if force_mux_zero && ch.adc_mux != 0 {
+                                send_adc_config(ch_idx, 0, ch.adc_range, ch.adc_rate);
+                            }
+                            view! {
+                                <div class="io-body">
+                                    <div class="io-primary">
+                                        <Readout
+                                            label=quantity
+                                            value=Signal::derive(move || format!("{:.4}", live(i).0))
+                                            unit=unit
+                                            size="lg"
+                                        />
+                                        <div class="io-meta">
+                                            <span>"Raw "<span class="io-code">{move || format!("0x{:06X}", live(i).1)}</span></span>
+                                            <span>"Code "{move || format!("{}", live(i).1)}</span>
+                                        </div>
+                                    </div>
+                                    <div class="meter io-meter" aria-hidden="true">
+                                        <span style=move || format!("width: {}%", pct())></span>
+                                    </div>
+
+                                    <ChannelSparkline
+                                        values=Signal::from(hist)
+                                        min=Signal::derive(move || bar_min)
+                                        max=Signal::derive(move || bar_max)
+                                        color_var=ch_var(i)
+                                    />
+
+                                    <div class="rows io-rows">
+                                        <label class="row">
+                                            <span class="row-label">"Range"</span>
+                                            <select
+                                                prop:value=ch.adc_range.to_string()
+                                                on:change=move |e| {
+                                                    let range: u8 = event_target_value(&e).parse().unwrap_or(0);
+                                                    send_adc_config(ch_idx, ch.adc_mux, range, ch.adc_rate);
+                                                }
+                                            >
+                                                {ADC_RANGE_OPTIONS.iter().map(|(code, name, _, _)| {
+                                                    view! { <option value=code.to_string()>{*name}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                        </label>
+                                        <label class="row">
+                                            <span class="row-label">"Rate"</span>
+                                            <select
+                                                prop:value=ch.adc_rate.to_string()
+                                                on:change=move |e| {
+                                                    let rate: u8 = event_target_value(&e).parse().unwrap_or(1);
+                                                    send_adc_config(ch_idx, ch.adc_mux, ch.adc_range, rate);
+                                                }
+                                            >
+                                                {ADC_RATE_OPTIONS.iter().map(|(code, name)| {
+                                                    view! { <option value=code.to_string()>{*name}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                        </label>
+                                        <label class="row">
+                                            <span class="row-label">"Mux"</span>
+                                            <select
+                                                prop:value=move || if force_mux_zero { "0".to_string() } else { ch.adc_mux.to_string() }
+                                                prop:disabled=force_mux_zero
+                                                on:change=move |e| {
+                                                    if force_mux_zero { return; }
+                                                    let mux: u8 = event_target_value(&e).parse().unwrap_or(0);
+                                                    send_adc_config(ch_idx, mux, ch.adc_range, ch.adc_rate);
+                                                }
+                                            >
+                                                {ADC_MUX_OPTIONS.iter().map(|(code, name)| {
+                                                    view! { <option value=code.to_string()>{*name}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                        </label>
+                                        {if is_res { Some(view! {
+                                            <label class="row">
+                                                <span class="row-label">"Excitation"</span>
+                                                <select
+                                                    prop:value=exc_ua.to_string()
+                                                    on:change=move |e| {
+                                                        let ua: u16 = event_target_value(&e).parse().unwrap_or(1000);
+                                                        tauri_bridge::send_set_rtd_config(ch_idx, ua);
+                                                    }
+                                                >
+                                                    {RTD_EXCITATION_OPTIONS.iter().map(|(ua, name)| {
+                                                        view! { <option value=ua.to_string()>{*name}</option> }
+                                                    }).collect::<Vec<_>>()}
+                                                </select>
+                                            </label>
+                                        })} else { None }}
+                                    </div>
+                                </div>
+                            }.into_any()
+                        };
 
                         view! {
-                            <div class="card channel-card" class:ch-disabled=!has_adc>
-                                <div class="card-header">
-                                    <div class="ch-badge" style=format!("background: {}22; color: {}; border: 1px solid {}44", color, color, color)>
-                                        {format!("CH {}", CH_NAMES[i])}
-                                    </div>
-                                    <span class="channel-func">{func_name(ch.function)}</span>
-                                </div>
-                                <div class="card-body">
-                                    {if !has_adc {
-                                        view! {
-                                            <div class="mode-warning">
-                                                <span class="mode-warning-icon">"ℹ"</span>
-                                                <span>"Set channel to an input mode (VIN, IIN) to read ADC"</span>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        view! {
-                                            <div>
-                                                <div class="big-value">{move || format!("{:.4}", live(i).0)}<span class="unit">{unit}</span></div>
-                                                <div class="card-details">
-                                                    <span>"Raw: 0x"{move || format!("{:06X}", live(i).1)}</span>
-                                                    <span>"Code: "{move || format!("{}", live(i).1)}</span>
-                                                </div>
-                                                <div class="bar-gauge" style=format!("--bar-color: {}", color)>
-                                                    <div class="bar-fill-dynamic" style=move || format!("width: {}%", pct())></div>
-                                                </div>
-
-                                                <ChannelSparkline
-                                                    values=Signal::from(hist)
-                                                    min=Signal::derive(move || bar_min)
-                                                    max=Signal::derive(move || bar_max)
-                                                    color=spark_color
-                                                />
-
-                                                <div class="config-section">
-                                                    <div class="config-row">
-                                                        <label>"Range"</label>
-                                                        <select class="dropdown"
-                                                            prop:value=ch.adc_range.to_string()
-                                                            on:change=move |e| {
-                                                                let range: u8 = event_target_value(&e).parse().unwrap_or(0);
-                                                                send_adc_config(ch_idx, ch.adc_mux, range, ch.adc_rate);
-                                                            }
-                                                        >
-                                                            {ADC_RANGE_OPTIONS.iter().map(|(code, name, _, _)| {
-                                                                view! { <option value=code.to_string()>{*name}</option> }
-                                                            }).collect::<Vec<_>>()}
-                                                        </select>
-                                                    </div>
-                                                    <div class="config-row">
-                                                        <label>"Rate"</label>
-                                                        <select class="dropdown"
-                                                            prop:value=ch.adc_rate.to_string()
-                                                            on:change=move |e| {
-                                                                let rate: u8 = event_target_value(&e).parse().unwrap_or(1);
-                                                                send_adc_config(ch_idx, ch.adc_mux, ch.adc_range, rate);
-                                                            }
-                                                        >
-                                                            {ADC_RATE_OPTIONS.iter().map(|(code, name)| {
-                                                                view! { <option value=code.to_string()>{*name}</option> }
-                                                            }).collect::<Vec<_>>()}
-                                                        </select>
-                                                    </div>
-                                                    <div class="config-row">
-                                                        <label>"Mux"</label>
-                                                        // Fix 4: For VOUT (1) / VIN (3) channels the only valid mux
-                                                        // is LF_TO_AGND (0). Force it there and disable the dropdown.
-                                                        {
-                                                            let force_mux_zero = ch.function == 1 || ch.function == 3;
-                                                            if force_mux_zero && ch.adc_mux != 0 {
-                                                                send_adc_config(ch_idx, 0, ch.adc_range, ch.adc_rate);
-                                                            }
-                                                            view! {
-                                                                <select class="dropdown"
-                                                                    prop:value=move || if force_mux_zero { "0".to_string() } else { ch.adc_mux.to_string() }
-                                                                    prop:disabled=force_mux_zero
-                                                                    on:change=move |e| {
-                                                                        if force_mux_zero { return; }
-                                                                        let mux: u8 = event_target_value(&e).parse().unwrap_or(0);
-                                                                        send_adc_config(ch_idx, mux, ch.adc_range, ch.adc_rate);
-                                                                    }
-                                                                >
-                                                                    {ADC_MUX_OPTIONS.iter().map(|(code, name)| {
-                                                                        view! { <option value=code.to_string()>{*name}</option> }
-                                                                    }).collect::<Vec<_>>()}
-                                                                </select>
-                                                            }
-                                                        }
-                                                    </div>
-                                                    {if is_res { Some(view! {
-                                                        <div class="config-row">
-                                                            <label>"Excitation"</label>
-                                                            <select class="dropdown"
-                                                                prop:value=exc_ua.to_string()
-                                                                on:change=move |e| {
-                                                                    let ua: u16 = event_target_value(&e).parse().unwrap_or(1000);
-                                                                    tauri_bridge::send_set_rtd_config(ch_idx, ua);
-                                                                }
-                                                            >
-                                                                {RTD_EXCITATION_OPTIONS.iter().map(|(ua, name)| {
-                                                                    view! { <option value=ua.to_string()>{*name}</option> }
-                                                                }).collect::<Vec<_>>()}
-                                                            </select>
-                                                        </div>
-                                                    })} else { None }}
-                                                </div>
-                                            </div>
-                                        }.into_any()
-                                    }}
-                                </div>
-                            </div>
+                            <section class="group io-card" data-ch=ch_key(i)>
+                                <ChannelHead idx=i func=func_name(ch.function) />
+                                {body}
+                            </section>
                         }
                     }).collect::<Vec<_>>()
                 }}

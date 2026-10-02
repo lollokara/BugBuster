@@ -1,3 +1,5 @@
+use crate::components::icons::Icon;
+use crate::components::ui::{Callout, Readout, Switch};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
@@ -52,17 +54,127 @@ const SUPPLY_BITS: &[(usize, &str, &str)] = &[
     (6, "AVDD_HI", "rose"),
 ];
 
-fn led_color(name: &str) -> &'static str {
-    match name {
-        "rose" => "var(--rose)",
-        "amber" => "var(--amber)",
-        "blue" => "var(--blue)",
-        _ => "var(--green)",
+const SLOT_COLORS: [&str; 4] = ["var(--ch-a)", "var(--ch-b)", "var(--ch-c)", "var(--ch-d)"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pane {
+    Health,
+    Channels,
+    Firmware,
+    Wifi,
+    App,
+}
+
+const PANES: &[(Pane, &str, &str)] = &[
+    (Pane::Health, "Health", "stethoscope"),
+    (Pane::Channels, "Channels", "activity"),
+    (Pane::Firmware, "Firmware", "cpu"),
+    (Pane::Wifi, "WiFi", "wifi"),
+    (Pane::App, "App Update", "download"),
+];
+
+fn flag_tone(color: &str) -> &'static str {
+    match color {
+        "rose" => "red",
+        "amber" => "orange",
+        "blue" => "blue",
+        _ => "green",
+    }
+}
+
+fn active_count(v: u16) -> usize {
+    (0..16).filter(|b| (v >> b) & 1 != 0).count()
+}
+
+/// (tone, label) for the die temperature.
+fn temp_status(t: f32) -> (&'static str, &'static str) {
+    if t > 100.0 {
+        ("red", "Hot")
+    } else if t > 70.0 {
+        ("orange", "Warm")
+    } else {
+        ("green", "Normal")
+    }
+}
+
+/// Nominal display range per diagnostic source, used only for the bar gauge.
+fn diag_range(source: u8) -> (f32, f32) {
+    match source {
+        0 => (0.0, 0.5),
+        1 => (0.0, 125.0),
+        2 => (4.5, 5.5),
+        3 => (4.5, 5.5),
+        4 => (1.6, 2.0),
+        5 => (0.0, 33.0),
+        6 => (4.5, 5.5),
+        7 => (-24.0, 0.0),
+        8 => (0.0, 30.0),
+        9 => (0.0, 30.0),
+        10 => (0.0, 5.0),
+        11 => (0.0, 5.0),
+        _ => (0.0, 5.0),
+    }
+}
+
+/// Register bit grid with a status badge. Set bits are marked by text, not colour alone.
+#[component]
+fn FlagPanel(
+    title: &'static str,
+    icon: &'static str,
+    bits: &'static [(usize, &'static str, &'static str)],
+    #[prop(into)] status: Signal<u16>,
+    #[prop(into)] reserved: Signal<bool>,
+    reserved_name: &'static str,
+) -> impl IntoView {
+    view! {
+        <div class="group dg-flags">
+            <div class="group-header">
+                <span class="group-title"><Icon name=icon size=16 />{title}</span>
+                <div class="group-actions">
+                    <span class="dg-mono dg-reg" title="Register value">{move || format!("0x{:04X}", status.get())}</span>
+                    <span class={move || if active_count(status.get()) > 0 { "badge tone-red" } else { "badge tone-green" }}>
+                        {move || if active_count(status.get()) > 0 {
+                            view! { <Icon name="triangle-alert" size=12 /> }.into_any()
+                        } else {
+                            view! { <Icon name="circle-check" size=12 /> }.into_any()
+                        }}
+                        {move || {
+                            let n = active_count(status.get());
+                            if n == 0 { "All clear".to_string() } else { format!("{} active", n) }
+                        }}
+                    </span>
+                </div>
+            </div>
+            <div class="dg-flag-grid">
+                {bits.iter().map(|(bit, name, color)| {
+                    let bit = *bit;
+                    let tone = flag_tone(color);
+                    let is_res = !reserved_name.is_empty() && *name == reserved_name;
+                    let on = move || (status.get() >> bit) & 1 != 0;
+                    let mon = move || !on() && is_res && reserved.get();
+                    view! {
+                        <div
+                            class=move || format!("dg-flag tone-{}{}{}", tone,
+                                if on() { " on" } else { "" },
+                                if mon() { " mon" } else { "" })
+                            title=move || if mon() { "Reserved for supply monitoring".to_string() } else { String::new() }
+                        >
+                            <span class="dg-flag-bit dg-mono">{format!("{:02}", bit)}</span>
+                            <span class="dg-flag-name">{*name}</span>
+                            <span class="dg-flag-state">
+                                {move || if on() { "SET" } else if mon() { "MON" } else { "clear" }}
+                            </span>
+                        </div>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+        </div>
     }
 }
 
 #[component]
 pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    let pane = RwSignal::new(Pane::Health);
     let update_checking = RwSignal::new(false);
     let update_info: RwSignal<Option<AppUpdateInfo>> = RwSignal::new(None);
     let update_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -109,7 +221,7 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     }
 
-    let on_worker_toggle = move |_| {
+    let on_worker_toggle = move || {
         let new_val = !worker_enabled.get();
         worker_toggling.set(true);
         leptos::task::spawn_local(async move {
@@ -194,263 +306,291 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     };
 
+    let alert_total = move || {
+        let s = state.get();
+        active_count(s.alert_status) + active_count(s.supply_alert_status)
+    };
+    let update_available = move || update_info.get().map(|i| i.available).unwrap_or(false);
+
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"Internal diagnostic ADC channels. Select what to measure per slot: die temperature, supply voltages (DVCC, AVCC, AVDD), or sense voltages. Useful for verifying power rail health."</div>
-            // Top row: Temp + Status LEDs
-            <div class="diag-top">
-                // Temperature
-                <div class="card diag-temp-card">
-                    <div class="temp-gauge-wrap">
-                        <div class="temp-value-hero">
-                            {move || format!("{:.1}", state.get().die_temperature)}
-                            <span class="temp-unit">"°C"</span>
-                        </div>
-                        <div class="temp-thermometer">
-                            <div class="temp-thermo-fill" style=move || {
-                                let t = state.get().die_temperature;
-                                let pct = ((t / 125.0) * 100.0).clamp(2.0, 100.0);
-                                let color = if t > 100.0 { "#ef4444" } else if t > 70.0 { "#f59e0b" } else { "#10b981" };
-                                format!("height: {:.1}%; background: {}", pct, color)
-                            }></div>
-                        </div>
-                        <div class="temp-label" style=move || {
-                            let t = state.get().die_temperature;
-                            let color = if t > 100.0 { "var(--rose)" } else if t > 70.0 { "var(--amber)" } else { "var(--green)" };
-                            format!("color: {}", color)
-                        }>
-                            {move || {
-                                let t = state.get().die_temperature;
-                                if t > 100.0 { "HOT" } else if t > 70.0 { "Warm" } else { "Normal" }
-                            }}
-                        </div>
-                    </div>
-                </div>
-
-                // Alert Status — futuristic panel
-                <div class="alert-panel">
-                    <div class="alert-panel-header">
-                        <div class="alert-panel-title">
-                            <span class="alert-panel-icon">"△"</span>
-                            " ALERT STATUS"
-                        </div>
-                        <span class="alert-panel-reg">{move || format!("REG 0x{:04X}", state.get().alert_status)}</span>
-                    </div>
-                    <div class="alert-panel-scanline"></div>
-                    <div class="alert-grid">
-                        {ALERT_BITS.iter().map(|(bit, name, color)| {
-                            let bit = *bit;
-                            let is_ch_d = *name == "CH_D";
-                            let lc = led_color(color);
-                            let accent = match *color { "rose" => "#ef4444", "amber" => "#f59e0b", "blue" => "#3b82f6", _ => "#10b981" };
-                            view! {
-                                <div class="alert-cell"
-                                    style=move || if (state.get().alert_status >> bit) & 1 != 0 {
-                                        format!("border-color: {}; background: {}0a; box-shadow: inset 0 0 20px {}08, 0 0 12px {}15", accent, accent, accent, accent)
-                                    } else if is_ch_d && supply_monitor_active.get() {
-                                        "border-color: #f59e0b; background: #f59e0b0a; opacity: 0.75;".to_string()
-                                    } else { String::new() }
-                                >
-                                    <div class="alert-cell-dot"
-                                        style=move || if (state.get().alert_status >> bit) & 1 != 0 {
-                                            format!("background: {}; box-shadow: 0 0 6px {}, 0 0 12px {}66", lc, lc, lc)
-                                        } else { String::new() }
-                                    ></div>
-                                    <span class="alert-cell-label"
-                                        style=move || if (state.get().alert_status >> bit) & 1 != 0 {
-                                            format!("color: {}", accent)
-                                        } else { String::new() }
-                                    >{*name}</span>
-                                    <span
-                                        title="Reserved for supply monitoring"
-                                        style=move || if is_ch_d && supply_monitor_active.get() {
-                                            "display:block;font-size:0.5rem;color:#f59e0b;line-height:1.2;"
-                                        } else { "display:none;" }
-                                    >"⚡MON"</span>
-                                </div>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                    <div class="alert-panel-footer">
-                        <span class="alert-panel-count" style=move || {
-                            let count = (0..16).filter(|b| (state.get().alert_status >> b) & 1 != 0).count();
-                            if count > 0 { "color: #ef4444".to_string() } else { "color: #10b981".to_string() }
-                        }>{move || {
-                            let count = (0..16).filter(|b| (state.get().alert_status >> b) & 1 != 0).count();
-                            if count == 0 { "ALL CLEAR".to_string() } else { format!("{} ACTIVE", count) }
-                        }}</span>
-                    </div>
-                </div>
-
-                // Supply Status — futuristic panel
-                <div class="alert-panel supply-panel">
-                    <div class="alert-panel-header">
-                        <div class="alert-panel-title">
-                            <span class="alert-panel-icon">"⚡"</span>
-                            " SUPPLY STATUS"
-                        </div>
-                        <span class="alert-panel-reg">{move || format!("REG 0x{:04X}", state.get().supply_alert_status)}</span>
-                    </div>
-                    <div class="alert-panel-scanline supply-scanline"></div>
-                    <div class="alert-grid">
-                        {SUPPLY_BITS.iter().map(|(bit, name, color)| {
-                            let bit = *bit;
-                            let lc = led_color(color);
-                            let accent = match *color { "rose" => "#ef4444", "amber" => "#f59e0b", "blue" => "#3b82f6", _ => "#10b981" };
-                            view! {
-                                <div class="alert-cell"
-                                    style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
-                                        format!("border-color: {}; background: {}0a; box-shadow: inset 0 0 20px {}08, 0 0 12px {}15", accent, accent, accent, accent)
-                                    } else { String::new() }
-                                >
-                                    <div class="alert-cell-dot"
-                                        style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
-                                            format!("background: {}; box-shadow: 0 0 6px {}, 0 0 12px {}66", lc, lc, lc)
-                                        } else { String::new() }
-                                    ></div>
-                                    <span class="alert-cell-label"
-                                        style=move || if (state.get().supply_alert_status >> bit) & 1 != 0 {
-                                            format!("color: {}", accent)
-                                        } else { String::new() }
-                                    >{*name}</span>
-                                </div>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                    <div class="alert-panel-footer">
-                        <span class="alert-panel-count" style=move || {
-                            let count = (0..16).filter(|b| (state.get().supply_alert_status >> b) & 1 != 0).count();
-                            if count > 0 { "color: #ef4444".to_string() } else { "color: #10b981".to_string() }
-                        }>{move || {
-                            let count = (0..16).filter(|b| (state.get().supply_alert_status >> b) & 1 != 0).count();
-                            if count == 0 { "ALL CLEAR".to_string() } else { format!("{} ACTIVE", count) }
-                        }}</span>
-                    </div>
-                </div>
-            </div>
-
-            // Selftest Worker toggle
-            <div class="card" style="margin-bottom:0.75rem;">
-                <div class="card-header">
-                    <span class="card-title">"Selftest Worker"</span>
-                    <span style=move || if supply_monitor_active.get() {
-                        "font-size:0.7rem;color:#f59e0b;padding:2px 6px;border:1px solid #f59e0b44;border-radius:4px;"
-                    } else {
-                        "font-size:0.7rem;color:#6b7280;padding:2px 6px;border:1px solid #ffffff11;border-radius:4px;"
-                    }>
-                        {move || if supply_monitor_active.get() { "CH-D RESERVED" } else { "Inactive" }}
-                    </span>
-                </div>
-                <div class="card-body" style="display:flex;align-items:center;gap:1rem;">
-                    <span style="font-size:0.8rem;color:#9ca3af;">
-                        "Periodic supply-rail selftest. When active, CH-D is reserved for internal measurements."
-                    </span>
-                    <button
-                        class=move || if worker_enabled.get() { "btn btn-sm btn-primary" } else { "btn btn-sm" }
-                        disabled=move || worker_toggling.get()
-                        on:click=on_worker_toggle
-                    >
-                        {move || if worker_toggling.get() { "…" } else if worker_enabled.get() { "Disable" } else { "Enable" }}
-                    </button>
-                </div>
-            </div>
-
-            // Diagnostic slots with source dropdowns
-            <h3 class="section-title">"Diagnostic Channels"</h3>
-            <div class="channel-grid">
-                {move || {
-                    let ds = state.get();
-                    ds.diag.into_iter().enumerate().map(|(i, d)| {
-                        let slot = i as u8;
-                        let source_name = DIAG_SOURCE_OPTIONS.iter()
-                            .find(|(c, _)| *c == d.source)
-                            .map(|(_, n)| *n).unwrap_or("?");
-                        let unit = if d.source == 1 { "°C" } else { "V" };
-                        let color = CH_COLORS[i];
-
+        <div class="view dg">
+            <div class="dg-shell">
+                // ============ SECTION LIST ============
+                <nav class="dg-nav" aria-label="Diagnostics sections">
+                    {PANES.iter().map(|(p, label, icon)| {
+                        let p = *p;
                         view! {
-                            <div class="card">
-                                <div class="card-header">
-                                    <div class="ch-badge" style=format!("background: {}22; color: {}; border: 1px solid {}44", color, color, color)>
-                                        {format!("Slot {}", i)}
+                            <button type="button" class="dg-nav-item"
+                                class:active=move || pane.get() == p
+                                aria-current=move || if pane.get() == p { "page" } else { "false" }
+                                on:click=move |_| pane.set(p)
+                            >
+                                <Icon name=*icon size=15 />
+                                <span class="dg-nav-label">{*label}</span>
+                                {match p {
+                                    Pane::Health => view! {
+                                        <span class="badge tone-red dg-nav-badge"
+                                            style:display={move || if alert_total() > 0 { "inline-flex" } else { "none" }}
+                                            title="Active alert bits"
+                                        >{move || alert_total().to_string()}</span>
+                                    }.into_any(),
+                                    Pane::App => view! {
+                                        <span class="badge tone-blue dg-nav-badge"
+                                            style:display=move || if update_available() { "inline-flex" } else { "none" }
+                                            title="A desktop update is available"
+                                        >"New"</span>
+                                    }.into_any(),
+                                    _ => view! { <></> }.into_any(),
+                                }}
+                            </button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </nav>
+
+                <div class="dg-content">
+                    // ============ HEALTH ============
+                    <section class="dg-pane" class:dg-hidden=move || pane.get() != Pane::Health>
+                        <p class="dg-desc">"AD74416H die temperature, alert registers and the periodic supply selftest."</p>
+                        <div class="dg-health">
+                            <div class="dg-side">
+                                <div class="group dg-temp">
+                                    <div class="group-header">
+                                        <span class="group-title"><Icon name="thermometer" size=16 />"Die temperature"</span>
+                                        <span class=move || format!("badge tone-{}", temp_status(state.get().die_temperature).0)>
+                                            {move || temp_status(state.get().die_temperature).1}
+                                        </span>
                                     </div>
-                                    <select class="dropdown dropdown-sm"
-                                        prop:value=d.source.to_string()
-                                        on:change=move |e| {
-                                            let src: u8 = event_target_value(&e).parse().unwrap_or(0);
-                                            #[derive(Serialize)]
-                                            struct Args { slot: u8, source: u8 }
-                                            let args = serde_wasm_bindgen::to_value(&Args { slot, source: src }).unwrap();
-                                            let src_name = DIAG_SOURCE_OPTIONS.iter()
-                                                .find(|(c, _)| *c == src)
-                                                .map(|(_, n)| *n).unwrap_or("?");
-                                            let label = format!("Set Diag {} to {}", slot, src_name);
-                                            invoke_with_feedback("set_diag_config", args, &label);
-                                        }
-                                    >
-                                        {DIAG_SOURCE_OPTIONS.iter().map(|(code, name)| {
-                                            view! { <option value=code.to_string()>{*name}</option> }
-                                        }).collect::<Vec<_>>()}
-                                    </select>
-                                </div>
-                                <div class="card-body">
-                                    <div class="big-value">{format!("{:.3}", d.value)}<span class="unit">{unit}</span></div>
-                                    <div class="card-details">
-                                        <span>"Source: "{source_name}</span>
-                                        <span>"Raw: 0x"{format!("{:04X}", d.raw_code)}</span>
-                                    </div>
-                                    <div class="bar-gauge" style=format!("--bar-color: {}", color)>
-                                        <div class="bar-fill-dynamic" style={
-                                            // Nominal ranges per diagnostic source
-                                            let (lo, hi) = match d.source {
-                                                0  => (0.0, 0.5),       // AGND
-                                                1  => (0.0, 125.0),     // Temperature (°C)
-                                                2  => (4.5, 5.5),       // DVCC (5V nom)
-                                                3  => (4.5, 5.5),       // AVCC (5V nom)
-                                                4  => (1.6, 2.0),       // LDO1V8 (1.8V nom)
-                                                5  => (0.0, 33.0),      // AVDD_HI (up to ~33V)
-                                                6  => (4.5, 5.5),       // ALDO5V (5V nom)
-                                                7  => (-24.0, 0.0),     // AVSS (negative)
-                                                8  => (0.0, 30.0),      // LVIN (input supply)
-                                                9  => (0.0, 30.0),      // DO_VDD
-                                                10 => (0.0, 5.0),       // AGND_SENSE
-                                                11 => (0.0, 5.0),       // AVDD_LO
-                                                _  => (0.0, 5.0),
-                                            };
-                                            let pct = if hi > lo {
-                                                ((d.value - lo) / (hi - lo) * 100.0).clamp(0.0, 100.0)
-                                            } else { 0.0 };
+                                    <Readout
+                                        label="AD74416H"
+                                        value=Signal::derive(move || format!("{:.1}", state.get().die_temperature))
+                                        unit="°C"
+                                        size="lg"
+                                        tone=Signal::derive(move || temp_status(state.get().die_temperature).0)
+                                    />
+                                    <div class=move || format!("dg-thermo tone-{}", temp_status(state.get().die_temperature).0)
+                                        role="progressbar" aria-label="Die temperature" aria-valuemin="0" aria-valuemax="125"
+                                        aria-valuenow=move || format!("{:.0}", state.get().die_temperature)>
+                                        <span style=move || {
+                                            let pct = ((state.get().die_temperature / 125.0) * 100.0).clamp(2.0, 100.0);
                                             format!("width: {:.1}%", pct)
-                                        }></div>
+                                        }></span>
+                                    </div>
+                                    <div class="dg-scale"><span>"0"</span><span>"70 warm"</span><span>"100 hot"</span><span>"125 °C"</span></div>
+                                </div>
+
+                                <div class="group">
+                                    <div class="group-header">
+                                        <span class="group-title"><Icon name="activity" size=16 />"Selftest worker"</span>
+                                        <span class=move || if supply_monitor_active.get() { "badge tone-orange" } else { "badge" }>
+                                            {move || if supply_monitor_active.get() { "CH-D reserved" } else { "Inactive" }}
+                                        </span>
+                                    </div>
+                                    <div class="row dg-worker">
+                                        <span>
+                                            <span class="row-label">"Supply-rail selftest"</span>
+                                            <span class="row-hint">"Runs periodically. While active, channel D is reserved for internal measurements."</span>
+                                        </span>
+                                        <Switch
+                                            checked=Signal::derive(move || worker_enabled.get())
+                                            disabled=Signal::derive(move || worker_toggling.get())
+                                            aria_label="Selftest worker"
+                                            on_change=Callback::new(move |_: bool| on_worker_toggle())
+                                        />
                                     </div>
                                 </div>
                             </div>
-                        }
-                    }).collect::<Vec<_>>()
-                }}
+
+                            <div class="dg-flags-col">
+                                <FlagPanel title="Alert status" icon="triangle-alert" bits=ALERT_BITS
+                                    status=Signal::derive(move || state.get().alert_status)
+                                    reserved=supply_monitor_active reserved_name="CH_D" />
+                                <FlagPanel title="Supply status" icon="zap" bits=SUPPLY_BITS
+                                    status=Signal::derive(move || state.get().supply_alert_status)
+                                    reserved=Signal::derive(|| false) reserved_name="" />
+                            </div>
+                        </div>
+                    </section>
+
+                    // ============ CHANNELS ============
+                    <section class="dg-pane" class:dg-hidden=move || pane.get() != Pane::Channels>
+                        <p class="dg-desc">"Internal diagnostic ADC channels. Choose what each slot measures: die temperature, supply rails or sense voltages."</p>
+                        <div class="dg-slots">
+                            {(0..4usize).map(|i| {
+                                let slot = i as u8;
+                                let src = move || state.with(|s| s.diag[i].source);
+                                view! {
+                                    <div class="group dg-slot" style=format!("--slot: {}", SLOT_COLORS[i])>
+                                        <div class="group-header">
+                                            <span class="group-title"><i class="dg-slot-dot"></i>{format!("Slot {}", i)}</span>
+                                            <select class="dropdown dropdown-sm dg-src"
+                                                aria-label=format!("Diagnostic source for slot {}", i)
+                                                on:change=move |e| {
+                                                    let src: u8 = event_target_value(&e).parse().unwrap_or(0);
+                                                    #[derive(Serialize)]
+                                                    struct Args { slot: u8, source: u8 }
+                                                    let args = serde_wasm_bindgen::to_value(&Args { slot, source: src }).unwrap();
+                                                    let src_name = DIAG_SOURCE_OPTIONS.iter()
+                                                        .find(|(c, _)| *c == src)
+                                                        .map(|(_, n)| *n).unwrap_or("?");
+                                                    let label = format!("Set Diag {} to {}", slot, src_name);
+                                                    invoke_with_feedback("set_diag_config", args, &label);
+                                                }
+                                            >
+                                                {DIAG_SOURCE_OPTIONS.iter().map(|(code, name)| {
+                                                    let code = *code;
+                                                    view! { <option value=code.to_string() selected=move || src() == code>{*name}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                        </div>
+                                        <div class="big-value dg-val">
+                                            {move || format!("{:.3}", state.with(|s| s.diag[i].value))}
+                                            <span class="unit">{move || if src() == 1 { "°C" } else { "V" }}</span>
+                                        </div>
+                                        <div class="progress dg-bar" role="presentation">
+                                            <span style=move || {
+                                                let (lo, hi) = diag_range(src());
+                                                let v = state.with(|s| s.diag[i].value);
+                                                let pct = if hi > lo { ((v - lo) / (hi - lo) * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+                                                format!("width: {:.1}%", pct)
+                                            }></span>
+                                        </div>
+                                        <dl class="kv dg-kv">
+                                            <dt>"Source"</dt>
+                                            <dd>{move || DIAG_SOURCE_OPTIONS.iter().find(|(c, _)| *c == src()).map(|(_, n)| *n).unwrap_or("?")}</dd>
+                                            <dt>"Raw code"</dt>
+                                            <dd class="dg-mono">{move || format!("0x{:04X}", state.with(|s| s.diag[i].raw_code))}</dd>
+                                            <dt>"Gauge range"</dt>
+                                            <dd class="dg-mono">{move || { let (lo, hi) = diag_range(src()); format!("{} to {}", lo, hi) }}</dd>
+                                        </dl>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    </section>
+
+                    // ============ FIRMWARE ============
+                    <section class="dg-pane" class:dg-hidden=move || pane.get() != Pane::Firmware>
+                        <FirmwareSection />
+                    </section>
+
+                    // ============ WIFI ============
+                    <section class="dg-pane" class:dg-hidden=move || pane.get() != Pane::Wifi>
+                        <WifiSection />
+                    </section>
+
+                    // ============ APP UPDATE ============
+                    <section class="dg-pane" class:dg-hidden=move || pane.get() != Pane::App>
+                        <p class="dg-desc">"Check for a newer BugBuster desktop build, or install a specific release."</p>
+                        <div class="group dg-app">
+                            <div class="group-header">
+                                <span class="group-title"><Icon name="download" size=16 />"Desktop app"</span>
+                                <span class="badge dg-mono">{move || {
+                                    update_info.get()
+                                        .map(|i| format!("v{}", i.current_version))
+                                        .unwrap_or_else(|| "v-".to_string())
+                                }}</span>
+                            </div>
+
+                            {move || {
+                                if update_checking.get() {
+                                    view! {
+                                        <div class="dg-status"><span class="spinner"></span>"Checking for updates..."</div>
+                                    }.into_any()
+                                } else if let Some(info) = update_info.get() {
+                                    if info.available {
+                                        let notes_preview = if info.notes.chars().count() > 200 {
+                                            format!("{}…", info.notes.chars().take(200).collect::<String>())
+                                        } else { info.notes.clone() };
+                                        view! {
+                                            <Callout tone="blue">
+                                                <strong>{format!("v{} available", info.version)}</strong>
+                                                {(!notes_preview.is_empty()).then(|| view! { <pre class="dg-notes">{notes_preview}</pre> })}
+                                                <div class="dg-callout-actions">
+                                                    <button class="btn btn-sm btn-primary"
+                                                        disabled=move || update_installing.get() || update_checking.get()
+                                                        on:click=on_install
+                                                    >{move || if update_installing.get() { "Installing..." } else { "Install & Restart" }}</button>
+                                                </div>
+                                            </Callout>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <div class="dg-status tone-text-green">
+                                                <Icon name="circle-check" size=15 />"Up to date"
+                                            </div>
+                                        }.into_any()
+                                    }
+                                } else { view! { <></> }.into_any() }
+                            }}
+
+                            {move || update_error.get().map(|err| view! {
+                                <Callout tone="red"><span class="dg-mono">{err}</span></Callout>
+                            })}
+
+                            <div class="dg-actions">
+                                <button class="btn btn-sm"
+                                    disabled=move || update_checking.get() || update_installing.get()
+                                    on:click=on_check
+                                ><Icon name="refresh-cw" size=14 />"Check for updates"</button>
+                                <button class="btn btn-sm"
+                                    disabled=move || releases_loading.get()
+                                    on:click=on_load_releases
+                                ><Icon name="list" size=14 />{move || if releases_loading.get() { "Loading..." } else { "Browse releases" }}</button>
+                            </div>
+
+                            {move || {
+                                let rlist = releases.get();
+                                if rlist.is_empty() { return view! { <></> }.into_any(); }
+                                view! {
+                                    <div class="dg-release">
+                                        <h4 class="dg-sub">"Install a specific version"</h4>
+                                        <div class="dg-release-row">
+                                            <select class="dropdown dg-wide" aria-label="Release to install"
+                                                on:change=move |e| {
+                                                    let val = event_target_value(&e);
+                                                    selected_release.set(val.parse::<usize>().ok());
+                                                }
+                                            >
+                                                <option value="">"Choose a release"</option>
+                                                {rlist.iter().enumerate().map(|(i, r)| {
+                                                    let label = if r.prerelease {
+                                                        format!("{} (nightly)", r.version)
+                                                    } else {
+                                                        let date = r.published_at.get(..10).unwrap_or(&r.published_at);
+                                                        format!("{} - {}", r.version, date)
+                                                    };
+                                                    let size_kb = r.installer_size / 1024;
+                                                    let label = format!("{} [{} KB]", label, size_kb);
+                                                    view! { <option value=i.to_string()>{label}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                            <button class="btn btn-sm btn-primary"
+                                                disabled=move || selected_release.get().is_none() || installing_url.get().is_some()
+                                                title=move || if selected_release.get().is_none() { "Choose a release first" } else { "" }
+                                                on:click=on_install_selected
+                                            >
+                                                {move || if installing_url.get().is_some() { "Downloading & installing..." } else { "Install selected" }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                }.into_any()
+                            }}
+                        </div>
+                    </section>
+                </div>
             </div>
 
-            // Firmware section
-            <h3 class="section-title">"Firmware"</h3>
-            <FirmwareSection />
-
-            // WiFi section
-            <h3 class="section-title">"WiFi"</h3>
-            <WifiSection />
-
-            // Startup popup — fixed overlay, shown when update is available
+            // Startup popup, shown when a desktop update is available
             {move || if show_update_popup.get() {
                 let info = update_info.get();
                 view! {
-                    <div style="position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px)">
-                        <div style="background: var(--surface-2, #1a1a2e); border: 1px solid rgba(59,130,246,0.4); border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 90%; box-shadow: 0 0 40px rgba(59,130,246,0.15)">
-                            <div style="font-size: 13px; font-weight: 700; color: var(--blue); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px">
-                                "UPDATE AVAILABLE"
-                            </div>
-                            <div style="font-size: 22px; font-weight: 700; color: var(--text-primary, #e2e8f0); margin-bottom: 6px">
+                    <div class="scrim dg-scrim">
+                        <div class="dg-dialog" role="dialog" aria-modal="true" aria-labelledby="dg-upd-title">
+                            <span class="badge tone-blue">"Update available"</span>
+                            <div class="dg-dialog-title" id="dg-upd-title">
                                 {info.as_ref().map(|i| format!("v{}", i.version)).unwrap_or_default()}
                             </div>
-                            <div style="font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 20px">
+                            <div class="dg-dialog-sub">
                                 {info.as_ref().map(|i| {
                                     if i.is_nightly {
                                         format!("A newer nightly build is available (you have v{})", i.current_version)
@@ -459,7 +599,10 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     }
                                 }).unwrap_or_default()}
                             </div>
-                            <div style="display: flex; gap: 10px">
+                            <div class="dg-dialog-actions">
+                                <button class="btn btn-sm btn-ghost"
+                                    on:click=move |_| { show_update_popup.set(false); }
+                                >"Later"</button>
                                 <button class="btn btn-sm btn-primary"
                                     disabled=move || update_installing.get()
                                     on:click=move |_| {
@@ -478,9 +621,6 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 >
                                     {move || if update_installing.get() { "Installing..." } else { "Install & Restart" }}
                                 </button>
-                                <button class="btn btn-sm btn-ghost"
-                                    on:click=move |_| { show_update_popup.set(false); }
-                                >"Later"</button>
                             </div>
                         </div>
                     </div>
@@ -488,108 +628,6 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             } else {
                 view! { <></> }.into_any()
             }}
-
-            // App Updates section
-            <h3 class="section-title">"App Updates"</h3>
-            <div class="alert-panel">
-                <div class="alert-panel-header">
-                    <div class="alert-panel-title">"APP UPDATE"</div>
-                    <span class="alert-panel-reg">{move || {
-                        update_info.get()
-                            .map(|i| format!("v{}", i.current_version))
-                            .unwrap_or_else(|| "—".to_string())
-                    }}</span>
-                </div>
-                <div class="alert-panel-scanline supply-scanline"></div>
-                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 10px">
-                    // Status row
-                    {move || {
-                        if update_checking.get() {
-                            view! {
-                                <div style="font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace">"Checking for updates..."</div>
-                            }.into_any()
-                        } else if let Some(info) = update_info.get() {
-                            if info.available {
-                                let notes_preview = if info.notes.len() > 200 { format!("{}…", &info.notes[..200]) } else { info.notes.clone() };
-                                view! {
-                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: rgba(59,130,246,0.07); border: 1px solid rgba(59,130,246,0.2); border-radius: 6px">
-                                        <span style="color: var(--blue); font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace">
-                                            {format!("v{} available", info.version)}
-                                        </span>
-                                        {if !notes_preview.is_empty() {
-                                            view! { <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.5; white-space: pre-wrap">{notes_preview}</div> }.into_any()
-                                        } else { view! { <></> }.into_any() }}
-                                        <button class="btn btn-sm btn-primary" style="align-self: flex-start"
-                                            disabled=move || update_installing.get() || update_checking.get()
-                                            on:click=on_install
-                                        >{move || if update_installing.get() { "Installing..." } else { "Install & Restart" }}</button>
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <div style="display: flex; align-items: center; gap: 8px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
-                                        <span style="color: var(--green); font-weight: 700">"✓"</span>
-                                        <span style="color: var(--green)">"Up to date"</span>
-                                    </div>
-                                }.into_any()
-                            }
-                        } else { view! { <></> }.into_any() }
-                    }}
-
-                    // Error
-                    {move || update_error.get().map(|err| view! {
-                        <div style="padding: 8px 10px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; color: var(--rose); font-size: 10px; font-family: 'JetBrains Mono', monospace">{err}</div>
-                    })}
-
-                    // Action buttons row
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap">
-                        <button class="btn btn-sm btn-ghost"
-                            disabled=move || update_checking.get() || update_installing.get()
-                            on:click=on_check
-                        >"Check for Updates"</button>
-                        <button class="btn btn-sm btn-ghost"
-                            disabled=move || releases_loading.get()
-                            on:click=on_load_releases
-                        >{move || if releases_loading.get() { "Loading..." } else { "Browse Releases" }}</button>
-                    </div>
-
-                    // Release version picker (shown when releases list is loaded)
-                    {move || {
-                        let rlist = releases.get();
-                        if rlist.is_empty() { return view! { <></> }.into_any(); }
-                        view! {
-                            <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px">
-                                <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em">"Select version to install:"</div>
-                                <select class="dropdown dropdown-sm"
-                                    on:change=move |e| {
-                                        let val = event_target_value(&e);
-                                        selected_release.set(val.parse::<usize>().ok());
-                                    }
-                                >
-                                    <option value="">"— choose a release —"</option>
-                                    {rlist.iter().enumerate().map(|(i, r)| {
-                                        let label = if r.prerelease {
-                                            format!("{} (nightly)", r.version)
-                                        } else {
-                                            let date = r.published_at.get(..10).unwrap_or(&r.published_at);
-                                            format!("{} — {}", r.version, date)
-                                        };
-                                        let size_kb = r.installer_size / 1024;
-                                        let label = format!("{} [{} KB]", label, size_kb);
-                                        view! { <option value=i.to_string()>{label}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                                <button class="btn btn-sm btn-primary" style="align-self: flex-start"
-                                    disabled=move || selected_release.get().is_none() || installing_url.get().is_some()
-                                    on:click=on_install_selected
-                                >
-                                    {move || if installing_url.get().is_some() { "Downloading & Installing..." } else { "Install Selected" }}
-                                </button>
-                            </div>
-                        }.into_any()
-                    }}
-                </div>
-            </div>
         </div>
     }
 }
@@ -599,30 +637,15 @@ pub fn DiagTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 /// "desktop-ota-progress" event stream, so no OTA flow needs its own copy.
 #[component]
 fn OtaProgressBar(ota_progress: ReadSignal<OtaProgress>) -> impl IntoView {
-    move || {
-        let prog = ota_progress.get();
-        let uploading = prog.stage == "uploading";
-        view! {
-            <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
-                <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
-                    <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage.clone()}</span>
-                    <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
-                </div>
-                <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
-                    <div
-                        style:width=move || format!("{}%", ota_progress.get().percent)
-                        style=move || if uploading {
-                            "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                        } else {
-                            "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                        }
-                    ></div>
-                </div>
-                <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
-                    {prog.message.clone()}
-                </div>
+    view! {
+        <div class="dg-ota" role="status">
+            <div class="dg-ota-head">
+                <span class="dg-ota-stage">{move || ota_progress.get().stage}</span>
+                <span class="dg-mono">{move || format!("{:.1}%", ota_progress.get().percent)}</span>
             </div>
-        }
+            <div class="progress"><span style=move || format!("width: {}%", ota_progress.get().percent)></span></div>
+            <div class="dg-ota-msg">{move || ota_progress.get().message}</div>
+        </div>
     }
 }
 
@@ -815,405 +838,282 @@ fn FirmwareSection() -> impl IntoView {
         });
     };
 
+    // Push a locally built P4/C6 image to the DAQ HAT over HTTP.
+    let push_daq = move |target: &'static str, title: &'static str, msg: &'static str| {
+        set_ota_active.set(true);
+        set_ota_success.set(false);
+        set_ota_error.set(None);
+        set_ota_progress.set(OtaProgress {
+            stage: "starting".to_string(),
+            percent: 0.0,
+            message: msg.to_string(),
+        });
+        leptos::task::spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(
+                &serde_json::json!({
+                    "title": title,
+                    "filters": [{"name": "Firmware", "extensions": ["bin"]}]
+                })
+            ).unwrap();
+            let result = try_invoke("plugin:dialog|open", args).await;
+            let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
+            let Some(path) = path else {
+                set_ota_active.set(false);
+                return;
+            };
+            if let Err(e) = upload_daq_image(target, &path).await {
+                set_ota_active.set(false);
+                set_ota_error.set(Some(e));
+            }
+        });
+    };
+
     view! {
-        <div>
-            <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
-                // Firmware Info card
-                <div class="alert-panel">
-                    <div class="alert-panel-header">
-                        <div class="alert-panel-title">"FIRMWARE INFO"</div>
-                        <span class="alert-panel-reg">{move || format!("PROTO v{}", fw.get().proto_version)}</span>
+        <div class="dg-stack">
+            <p class="dg-desc">"Installed firmware, release updates over the network, and manual image uploads."</p>
+
+            {move || ota_success.get().then(|| view! {
+                <Callout tone="green">
+                    <strong>"Update successful"</strong>
+                    <div>"Firmware updated successfully. The device is now rebooting."</div>
+                </Callout>
+            })}
+            {move || ota_error.get().map(|err| view! {
+                <Callout tone="red">
+                    <strong>"Update failed"</strong>
+                    <div class="dg-mono">{err}</div>
+                </Callout>
+            })}
+
+            <div class="dg-cols">
+                // Firmware info
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="cpu" size=16 />"Firmware info"</span>
+                        <span class="badge dg-mono" title="BBP protocol version">{move || format!("PROTO v{}", fw.get().proto_version)}</span>
                     </div>
-                    <div class="alert-panel-scanline"></div>
-                    <div style="padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
-                        <span style="color: var(--text-muted)">"ESP32 Version:"</span>
-                        <span style="color: var(--green); font-weight: 700">{move || {
+                    <dl class="kv dg-kv">
+                        <dt>"ESP32 mainboard"</dt>
+                        <dd class="dg-mono dg-ver">{move || {
                             let v = fw.get().fw_version.clone();
                             if v.is_empty() || v == "0.0.0" { "Fetching...".to_string() } else { format!("v{}", v) }
-                        }}</span>
-                        <span style="color: var(--text-muted)">"RP2040 Version:"</span>
-                        <span style="color: var(--green); font-weight: 700">{move || {
+                        }}</dd>
+                        <dt>"RP2040 HAT"</dt>
+                        <dd class="dg-mono dg-ver">{move || {
                             let v = rp2040_current.get();
                             if v.is_empty() { "Fetching...".to_string() } else { format!("v{}", v) }
-                        }}</span>
-                        <span style="color: var(--text-muted)">"Built:"</span>
-                        <span style="color: var(--text-dim)">{move || {
+                        }}</dd>
+                        <dt>"Built"</dt>
+                        <dd class="dg-mono">{move || {
                             let d = fw.get().build_date.clone();
-                            if d.is_empty() { "—".to_string() } else { d }
-                        }}</span>
-                        <span style="color: var(--text-muted)">"ESP-IDF:"</span>
-                        <span style="color: var(--text-dim)">{move || {
+                            if d.is_empty() { "-".to_string() } else { d }
+                        }}</dd>
+                        <dt>"ESP-IDF"</dt>
+                        <dd class="dg-mono">{move || {
                             let v = fw.get().idf_version.clone();
-                            if v.is_empty() { "—".to_string() } else { v }
-                        }}</span>
-                        <span style="color: var(--text-muted)">"Partition:"</span>
-                        <span style="color: var(--text-dim)">{move || {
+                            if v.is_empty() { "-".to_string() } else { v }
+                        }}</dd>
+                        <dt>"Partition"</dt>
+                        <dd class="dg-mono">{move || {
                             let p = fw.get().partition.clone();
                             let n = fw.get().next_partition.clone();
-                            if p.is_empty() { "—".to_string() } else { format!("{} (next: {})", p, n) }
-                        }}</span>
-                    </div>
+                            if p.is_empty() { "-".to_string() } else { format!("{} (next: {})", p, n) }
+                        }}</dd>
+                    </dl>
                 </div>
 
-                // OTA Update card (Git-based)
-                <div class="alert-panel">
-                    <div class="alert-panel-header">
-                        <div class="alert-panel-title">"FIRMWARE UPDATE (GIT)"</div>
-                    </div>
-                    <div class="alert-panel-scanline supply-scanline"></div>
-                    <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
-                        // Per-device version selection
-                        {move || {
-                            let releases = git_releases.get();
-                            if releases.is_empty() {
-                                view! {
-                                    <div style="font-size: 11px; color: var(--text-dim); padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px">
-                                        "Querying GitHub releases..."
-                                    </div>
-                                }.into_any()
-                            } else {
-                                let esp_releases: Vec<_> = releases.iter().filter(|r| !r.esp32_url.is_empty()).cloned().collect();
-                                let rp_releases: Vec<_> = releases.iter().filter(|r| !r.rp2040_url.is_empty()).cloned().collect();
-                                view! {
-                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; background: rgba(0,0,0,0.15); border-radius: 6px">
-                                        // ESP32 row
-                                        <div style="display: flex; align-items: center; gap: 8px">
-                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
-                                                <input type="checkbox"
-                                                    prop:checked=move || update_esp32.get()
-                                                    on:change=move |ev| update_esp32.set(event_target_checked(&ev))
-                                                    style="accent-color: var(--blue)"
-                                                />
-                                                "ESP32 Mainboard"
-                                            </label>
-                                            {if esp_releases.is_empty() {
-                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
-                                            } else {
-                                                view! {
-                                                    <select class="dropdown"
-                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
-                                                        prop:value=move || selected_esp32_tag.get()
-                                                        on:change=move |ev| selected_esp32_tag.set(event_target_value(&ev))
-                                                    >
-                                                        {esp_releases.into_iter().map(|r| {
-                                                            let tag = r.tag.clone();
-                                                            let label = if r.esp32_version.is_empty() {
-                                                                tag.clone()
-                                                            } else {
-                                                                format!("{} (v{})", tag, r.esp32_version)
-                                                            };
-                                                            view! { <option value=tag>{label}</option> }
-                                                        }).collect::<Vec<_>>()}
-                                                    </select>
-                                                }.into_any()
-                                            }}
-                                        </div>
-                                        // RP2040 row
-                                        <div style="display: flex; align-items: center; gap: 8px">
-                                            <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
-                                                <input type="checkbox"
-                                                    prop:checked=move || update_rp2040.get()
-                                                    on:change=move |ev| update_rp2040.set(event_target_checked(&ev))
-                                                    style="accent-color: var(--blue)"
-                                                />
-                                                "RP2040 HAT"
-                                            </label>
-                                            {if rp_releases.is_empty() {
-                                                view! { <span style="font-size: 10px; color: var(--text-dim); flex: 1">"No releases available"</span> }.into_any()
-                                            } else {
-                                                view! {
-                                                    <select class="dropdown"
-                                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
-                                                        prop:value=move || selected_rp2040_tag.get()
-                                                        on:change=move |ev| selected_rp2040_tag.set(event_target_value(&ev))
-                                                    >
-                                                        {rp_releases.into_iter().map(|r| {
-                                                            let tag = r.tag.clone();
-                                                            let label = if r.rp2040_version.is_empty() {
-                                                                tag.clone()
-                                                            } else {
-                                                                format!("{} (v{})", tag, r.rp2040_version)
-                                                            };
-                                                            view! { <option value=tag>{label}</option> }
-                                                        }).collect::<Vec<_>>()}
-                                                    </select>
-                                                }.into_any()
-                                            }}
-                                        </div>
-                                    </div>
-                                }.into_any()
-                            }
-                        }}
-
-                        // Trigger/Cancel button
-                        <div style="display: flex; gap: 8px; align-items: center">
-                            <button class="btn btn-sm btn-primary"
-                                disabled=move || ota_active.get() || (!update_esp32.get() && !update_rp2040.get()) || (update_esp32.get() && selected_esp32_release().is_none()) || (update_rp2040.get() && selected_rp2040_release().is_none())
-                                on:click=on_start_git_ota
-                                style="flex: 1"
-                            >
-                                {move || if ota_active.get() { "Update in progress..." } else { "Perform Update" }}
-                            </button>
-                        </div>
-
-                        // Active progress bar and status message
-                        {move || {
-                            if ota_active.get() {
-                                let prog = ota_progress.get();
-                                let uploading = prog.stage == "uploading";
-                                view! {
-                                    <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
-                                        <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
-                                            <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage}</span>
-                                            <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
-                                        </div>
-                                        <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
-                                            <div
-                                                style:width=move || format!("{}%", ota_progress.get().percent)
-                                                style=move || if uploading {
-                                                    "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                                                } else {
-                                                    "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                                                }
-                                            ></div>
-                                        </div>
-                                        <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
-                                            {prog.message}
-                                        </div>
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! { <></> }.into_any()
-                            }
-                        }}
-
-                        // Success state
-                        {move || {
-                            if ota_success.get() {
-                                view! {
-                                    <div style="padding: 10px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; color: var(--green); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
-                                        <b style="font-weight: 700">"✓ UPDATE SUCCESSFUL"</b>
-                                        <span>"Firmware updated successfully. The device is now rebooting."</span>
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! { <></> }.into_any()
-                            }
-                        }}
-
-                        // Error state
-                        {move || {
-                            if let Some(err) = ota_error.get() {
-                                view! {
-                                    <div style="padding: 10px 12px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; color: var(--rose); font-size: 11px; font-family: 'JetBrains Mono', monospace; display: flex; flex-direction: column; gap: 4px">
-                                        <b style="font-weight: 700">"✗ UPDATE FAILED"</b>
-                                        <span>{err}</span>
-                                    </div>
-                                }.into_any()
-                            } else {
-                                view! { <></> }.into_any()
-                            }
-                        }}
-                    </div>
-                </div>
-            </div>
-
-            <div class="alert-panel" style="margin-top: 16px">
-                <div class="alert-panel-header">
-                    <div class="alert-panel-title">"SPIFFS UPDATE (GIT)"</div>
-                </div>
-                <div class="alert-panel-scanline supply-scanline"></div>
-                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
-                    <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
-                        "Updates the ESP32 SPIFFS partition used by the web UI. The image comes from the ESP32 release assets and is applied over WiFi or USB."
+                // Git release update
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="cloud-download" size=16 />"Firmware update (GitHub)"</span>
                     </div>
                     {move || {
                         let releases = git_releases.get();
-                        let spiffs_releases: Vec<_> = releases.iter().filter(|r| !r.spiffs_url.is_empty()).cloned().collect();
-                        if spiffs_releases.is_empty() {
+                        if releases.is_empty() {
                             view! {
-                                <div style="font-size: 11px; color: var(--text-dim); padding: 6px; background: rgba(0,0,0,0.2); border-radius: 4px">
-                                    "No SPIFFS images available in the current release set."
-                                </div>
+                                <div class="dg-status"><span class="spinner"></span>"Querying GitHub releases..."</div>
                             }.into_any()
                         } else {
+                            let esp_releases: Vec<_> = releases.iter().filter(|r| !r.esp32_url.is_empty()).cloned().collect();
+                            let rp_releases: Vec<_> = releases.iter().filter(|r| !r.rp2040_url.is_empty()).cloned().collect();
                             view! {
-                                <div style="display: flex; align-items: center; gap: 8px">
-                                    <label style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; color: var(--text); white-space: nowrap; min-width: 120px">
-                                        <span>"SPIFFS"</span>
-                                    </label>
-                                    <select class="dropdown"
-                                        style="flex: 1; height: 28px; background: rgba(12,20,38,0.7); border: 1px solid var(--border-bright); color: var(--text); border-radius: 6px; padding: 2px 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; outline: none"
-                                        prop:value=move || selected_spiffs_tag.get()
-                                        on:change=move |ev| selected_spiffs_tag.set(event_target_value(&ev))
-                                    >
-                                        {spiffs_releases.into_iter().map(|r| {
-                                            let tag = r.tag.clone();
-                                            let label = if r.spiffs_version.is_empty() {
-                                                tag.clone()
-                                            } else {
-                                                format!("{} (v{})", tag, r.spiffs_version)
-                                            };
-                                            view! { <option value=tag>{label}</option> }
-                                        }).collect::<Vec<_>>()}
-                                    </select>
-                                    <button class="btn btn-sm btn-primary"
-                                        disabled=move || ota_active.get() || selected_spiffs_release().is_none()
-                                        on:click=on_start_spiffs_ota
-                                        style="white-space: nowrap"
-                                    >
-                                        {move || if ota_active.get() { "Updating..." } else { "Update SPIFFS" }}
-                                    </button>
+                                <div class="rows">
+                                    <div class="row dg-dev">
+                                        <label class="dg-check">
+                                            <input type="checkbox"
+                                                prop:checked=move || update_esp32.get()
+                                                on:change=move |ev| update_esp32.set(event_target_checked(&ev))
+                                            />
+                                            <span>
+                                                <span class="row-label">"ESP32 mainboard"</span>
+                                                <span class="row-hint dg-mono">{move || {
+                                                    let v = esp32_current.get();
+                                                    if v.is_empty() { "installed: unknown".to_string() } else { format!("installed: v{}", v) }
+                                                }}</span>
+                                            </span>
+                                        </label>
+                                        {if esp_releases.is_empty() {
+                                            view! { <span class="subtle text-footnote">"No releases available"</span> }.into_any()
+                                        } else {
+                                            view! {
+                                                <select class="dropdown dg-wide dg-mono" aria-label="ESP32 release"
+                                                    on:change=move |ev| selected_esp32_tag.set(event_target_value(&ev))
+                                                >
+                                                    {esp_releases.into_iter().map(|r| {
+                                                        let tag = r.tag.clone();
+                                                        let sel_tag = tag.clone();
+                                                        let label = if r.esp32_version.is_empty() {
+                                                            tag.clone()
+                                                        } else {
+                                                            format!("{} (v{})", tag, r.esp32_version)
+                                                        };
+                                                        view! { <option value=tag selected=move || selected_esp32_tag.get() == sel_tag>{label}</option> }
+                                                    }).collect::<Vec<_>>()}
+                                                </select>
+                                            }.into_any()
+                                        }}
+                                    </div>
+                                    <div class="row dg-dev">
+                                        <label class="dg-check">
+                                            <input type="checkbox"
+                                                prop:checked=move || update_rp2040.get()
+                                                on:change=move |ev| update_rp2040.set(event_target_checked(&ev))
+                                            />
+                                            <span>
+                                                <span class="row-label">"RP2040 HAT"</span>
+                                                <span class="row-hint dg-mono">{move || {
+                                                    let v = rp2040_current.get();
+                                                    if v.is_empty() { "installed: unknown".to_string() } else { format!("installed: v{}", v) }
+                                                }}</span>
+                                            </span>
+                                        </label>
+                                        {if rp_releases.is_empty() {
+                                            view! { <span class="subtle text-footnote">"No releases available"</span> }.into_any()
+                                        } else {
+                                            view! {
+                                                <select class="dropdown dg-wide dg-mono" aria-label="RP2040 release"
+                                                    on:change=move |ev| selected_rp2040_tag.set(event_target_value(&ev))
+                                                >
+                                                    {rp_releases.into_iter().map(|r| {
+                                                        let tag = r.tag.clone();
+                                                        let sel_tag = tag.clone();
+                                                        let label = if r.rp2040_version.is_empty() {
+                                                            tag.clone()
+                                                        } else {
+                                                            format!("{} (v{})", tag, r.rp2040_version)
+                                                        };
+                                                        view! { <option value=tag selected=move || selected_rp2040_tag.get() == sel_tag>{label}</option> }
+                                                    }).collect::<Vec<_>>()}
+                                                </select>
+                                            }.into_any()
+                                        }}
+                                    </div>
                                 </div>
                             }.into_any()
                         }
                     }}
-                    {move || {
-                        if ota_active.get() {
-                            let prog = ota_progress.get();
-                            let uploading = prog.stage == "uploading";
-                            view! {
-                                <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px; background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.15); border-radius: 6px">
-                                    <div style="display: flex; justify-content: space-between; font-size: 10px; font-family: 'JetBrains Mono', monospace">
-                                        <span style="color: var(--text-muted); text-transform: uppercase">{prog.stage}</span>
-                                        <span style="color: var(--green); font-weight: 700">{format!("{:.1}%", prog.percent)}</span>
-                                    </div>
-                                    <div style="width: 100%; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden">
-                                        <div
-                                            style:width=move || format!("{}%", ota_progress.get().percent)
-                                            style=move || if uploading {
-                                                "height: 100%; background: linear-gradient(90deg, #10b981, #34d399, #6ee7b7, #34d399, #10b981); background-size: 200% 100%; animation: progress-shimmer 1.4s linear infinite; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                                            } else {
-                                                "height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s ease; box-shadow: 0 0 8px rgba(16,185,129,0.5)".to_string()
-                                            }
-                                        ></div>
-                                    </div>
-                                    <div style="font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; line-height: 1.4">
-                                        {prog.message}
-                                    </div>
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! { <></> }.into_any()
-                        }
-                    }}
+                    <button class="btn btn-sm btn-primary btn-block"
+                        disabled=move || ota_active.get() || (!update_esp32.get() && !update_rp2040.get()) || (update_esp32.get() && selected_esp32_release().is_none()) || (update_rp2040.get() && selected_rp2040_release().is_none())
+                        title=move || if !update_esp32.get() && !update_rp2040.get() { "Tick at least one device" } else { "" }
+                        on:click=on_start_git_ota
+                    >
+                        {move || if ota_active.get() { "Update in progress..." } else { "Perform update" }}
+                    </button>
+                    {move || (!ota_active.get() && !update_esp32.get() && !update_rp2040.get()).then(|| view! {
+                        <p class="dg-hint">"Tick at least one device to enable the update."</p>
+                    })}
+                    {move || ota_active.get().then(|| view! { <OtaProgressBar ota_progress=ota_progress /> })}
                 </div>
             </div>
 
-            <div class="alert-panel" style="margin-top: 16px">
-                <div class="alert-panel-header">
-                    <div class="alert-panel-title">"DAQ HAT (P4/C6) UPDATE"</div>
+            // SPIFFS
+            <div class="group">
+                <div class="group-header">
+                    <span class="group-title"><Icon name="hard-drive" size=16 />"SPIFFS update (GitHub)"</span>
                 </div>
-                <div class="alert-panel-scanline supply-scanline"></div>
-                <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px">
-                    <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
-                        "Push a locally built P4 or C6 image straight to the DAQ HAT over HTTP. Progress below is the device's own byte count from the upload stream, not an estimate — the HTTP response commits before the device knows the outcome, so only the final status line is authoritative."
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center">
-                        <button class="btn btn-sm btn-primary"
-                            disabled=move || ota_active.get()
-                            style="flex: 1"
-                            on:click=move |_| {
-                                set_ota_active.set(true);
-                                set_ota_success.set(false);
-                                set_ota_error.set(None);
-                                set_ota_progress.set(OtaProgress {
-                                    stage: "starting".to_string(),
-                                    percent: 0.0,
-                                    message: "Selecting P4 image...".to_string(),
-                                });
-                                leptos::task::spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({
-                                            "title": "Select P4 Firmware Image",
-                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
-                                        })
-                                    ).unwrap();
-                                    let result = try_invoke("plugin:dialog|open", args).await;
-                                    let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
-                                    let Some(path) = path else {
-                                        set_ota_active.set(false);
-                                        return;
-                                    };
-                                    if let Err(e) = upload_daq_image("p4", &path).await {
-                                        set_ota_active.set(false);
-                                        set_ota_error.set(Some(e));
-                                    }
-                                });
-                            }
-                        >
-                            {move || if ota_active.get() { "Uploading..." } else { "Push P4 Image" }}
-                        </button>
-                        <button class="btn btn-sm btn-primary"
-                            disabled=move || ota_active.get()
-                            style="flex: 1"
-                            on:click=move |_| {
-                                set_ota_active.set(true);
-                                set_ota_success.set(false);
-                                set_ota_error.set(None);
-                                set_ota_progress.set(OtaProgress {
-                                    stage: "starting".to_string(),
-                                    percent: 0.0,
-                                    message: "Selecting C6 image...".to_string(),
-                                });
-                                leptos::task::spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(
-                                        &serde_json::json!({
-                                            "title": "Select C6 Merged Firmware Image",
-                                            "filters": [{"name": "Firmware", "extensions": ["bin"]}]
-                                        })
-                                    ).unwrap();
-                                    let result = try_invoke("plugin:dialog|open", args).await;
-                                    let path: Option<String> = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok().flatten());
-                                    let Some(path) = path else {
-                                        set_ota_active.set(false);
-                                        return;
-                                    };
-                                    if let Err(e) = upload_daq_image("c6", &path).await {
-                                        set_ota_active.set(false);
-                                        set_ota_error.set(Some(e));
-                                    }
-                                });
-                            }
-                        >
-                            {move || if ota_active.get() { "Uploading..." } else { "Push C6 Image (merged)" }}
-                        </button>
-                    </div>
-                    {move || {
-                        if ota_active.get() {
-                            view! { <OtaProgressBar ota_progress=ota_progress /> }.into_any()
-                        } else {
-                            view! { <></> }.into_any()
-                        }
-                    }}
-                </div>
+                <p class="dg-hint">"Updates the ESP32 SPIFFS partition used by the web UI. The image comes from the ESP32 release assets and is applied over WiFi or USB."</p>
+                {move || {
+                    let releases = git_releases.get();
+                    let spiffs_releases: Vec<_> = releases.iter().filter(|r| !r.spiffs_url.is_empty()).cloned().collect();
+                    if spiffs_releases.is_empty() {
+                        view! {
+                            <div class="dg-status subtle">"No SPIFFS images available in the current release set."</div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="dg-release-row">
+                                <select class="dropdown dg-wide dg-mono" aria-label="SPIFFS release"
+                                    on:change=move |ev| selected_spiffs_tag.set(event_target_value(&ev))
+                                >
+                                    {spiffs_releases.into_iter().map(|r| {
+                                        let tag = r.tag.clone();
+                                        let sel_tag = tag.clone();
+                                        let label = if r.spiffs_version.is_empty() {
+                                            tag.clone()
+                                        } else {
+                                            format!("{} (v{})", tag, r.spiffs_version)
+                                        };
+                                        view! { <option value=tag selected=move || selected_spiffs_tag.get() == sel_tag>{label}</option> }
+                                    }).collect::<Vec<_>>()}
+                                </select>
+                                <button class="btn btn-sm btn-primary"
+                                    disabled=move || ota_active.get() || selected_spiffs_release().is_none()
+                                    on:click=on_start_spiffs_ota
+                                >
+                                    {move || if ota_active.get() { "Updating..." } else { "Update SPIFFS" }}
+                                </button>
+                            </div>
+                        }.into_any()
+                    }
+                }}
+                {move || ota_active.get().then(|| view! { <OtaProgressBar ota_progress=ota_progress /> })}
             </div>
 
-            // Collapsible Manual upload fallback
-            <div style="margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--glass); overflow: hidden">
-                <button class="btn btn-ghost"
-                    style="width: 100%; text-align: left; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 0; font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; font-family: 'JetBrains Mono', monospace; border: none; background: transparent; cursor: pointer"
+            // DAQ HAT
+            <div class="group">
+                <div class="group-header">
+                    <span class="group-title"><Icon name="upload" size=16 />"DAQ HAT (P4 / C6) update"</span>
+                </div>
+                <p class="dg-hint">"Push a locally built P4 or C6 image straight to the DAQ HAT over HTTP. Progress is the device's own byte count from the upload stream, not an estimate. The HTTP response commits before the device knows the outcome, so only the final status line is authoritative."</p>
+                <div class="dg-actions">
+                    <button class="btn btn-sm"
+                        disabled=move || ota_active.get()
+                        on:click=move |_| push_daq("p4", "Select P4 Firmware Image", "Selecting P4 image...")
+                    >
+                        <Icon name="file-up" size=14 />
+                        {move || if ota_active.get() { "Uploading..." } else { "Push P4 image" }}
+                    </button>
+                    <button class="btn btn-sm"
+                        disabled=move || ota_active.get()
+                        title="The C6 needs a merged image that starts at flash offset 0"
+                        on:click=move |_| push_daq("c6", "Select C6 Merged Firmware Image", "Selecting C6 image...")
+                    >
+                        <Icon name="file-up" size=14 />
+                        {move || if ota_active.get() { "Uploading..." } else { "Push C6 image (merged)" }}
+                    </button>
+                </div>
+                {move || ota_active.get().then(|| view! { <OtaProgressBar ota_progress=ota_progress /> })}
+            </div>
+
+            // Manual upload fallback
+            <div class="group dg-manual">
+                <button class="dg-disclose" type="button"
+                    aria-expanded=move || if show_manual.get() { "true" } else { "false" }
                     on:click=move |_| show_manual.set(!show_manual.get())
                 >
-                    <span>"Advanced: Manual File Upload (Fallback)"</span>
-                    <span>{move || if show_manual.get() { "▲" } else { "▼" }}</span>
+                    <Icon name="chevron-right" size=14 class="dg-chev" />
+                    <span>"Advanced: manual file upload (fallback)"</span>
                 </button>
-
                 <Show when=move || show_manual.get()>
-                    <div style="padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px">
-                        <div style="font-size: 10px; color: var(--text-dim); line-height: 1.6; font-family: 'JetBrains Mono', monospace">
-                            "Directly upload a compiled firmware.bin (ESP32) over WiFi or USB. Choose this only for custom development builds."
-                        </div>
-                        <div style="display: flex; gap: 8px; align-items: center">
-                            <button class="btn btn-sm btn-ghost"
+                    <div class="dg-manual-body">
+                        <p class="dg-hint">"Directly upload a compiled firmware.bin (ESP32) over WiFi or USB. Choose this only for custom development builds."</p>
+                        <div class="dg-actions">
+                            <button class="btn btn-sm"
                                 disabled=move || manual_uploading.get()
                                 on:click=move |_| {
                                     manual_uploading.set(true);
                                     manual_status.set("Selecting file...".to_string());
                                     leptos::task::spawn_local(async move {
-                                        #[derive(serde::Deserialize)]
-                                        struct DialogResult { path: Option<String> }
-
                                         let args = serde_wasm_bindgen::to_value(
                                             &serde_json::json!({
                                                 "title": "Select Firmware Binary",
@@ -1236,12 +1136,11 @@ fn FirmwareSection() -> impl IntoView {
                                     });
                                 }
                             >
-                                {move || if manual_uploading.get() { "Uploading..." } else { "Select & Upload Local .bin" }}
+                                <Icon name="folder-open" size=14 />
+                                {move || if manual_uploading.get() { "Uploading..." } else { "Select & upload local .bin" }}
                             </button>
                         </div>
-                        <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; min-height: 16px"
-                            style:color=move || if manual_status.get().starts_with("Error") { "var(--rose)" } else { "var(--green)" }
-                        >
+                        <div class=move || if manual_status.get().starts_with("Error") { "dg-msg tone-text-red" } else { "dg-msg tone-text-green" }>
                             {move || manual_status.get()}
                         </div>
                     </div>
@@ -1360,70 +1259,63 @@ fn WifiSection() -> impl IntoView {
     };
 
     view! {
-        <div class="channel-grid" style="grid-template-columns: 1fr 1fr">
-            // AP Mode card
-            <div class="card">
-                <div class="card-header"><span>"Access Point"</span></div>
-                <div class="card-body">
-                    <div class="card-details" style="gap: 0.5rem">
-                        <div>"SSID: "<strong>{move || wifi.get().ap_ssid.clone()}</strong></div>
-                        <div>"IP: "<span class="mono">{move || wifi.get().ap_ip.clone()}</span></div>
-                        <div>"MAC: "<span class="mono">{move || wifi.get().ap_mac.clone()}</span></div>
+        <div class="dg-stack">
+            <p class="dg-desc">"Mainboard WiFi: its own access point, the network it joins as a station, and saved credentials."</p>
+            <div class="dg-cols">
+                // AP Mode card
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="radio" size=16 />"Access point"</span>
                     </div>
+                    <dl class="kv dg-kv">
+                        <dt>"SSID"</dt><dd>{move || wifi.get().ap_ssid.clone()}</dd>
+                        <dt>"IP"</dt><dd class="dg-mono">{move || wifi.get().ap_ip.clone()}</dd>
+                        <dt>"MAC"</dt><dd class="dg-mono">{move || wifi.get().ap_mac.clone()}</dd>
+                    </dl>
                 </div>
-            </div>
 
-            // STA Mode card
-            <div class="card">
-                <div class="card-header">
-                    <span>"Station"</span>
-                    <div class="led"
-                        class:led-on=move || wifi.get().connected
-                        style=move || if wifi.get().connected {
-                            "background: var(--green); box-shadow: 0 0 8px var(--green)".to_string()
-                        } else {
-                            String::new()
-                        }
-                    ></div>
-                </div>
-                <div class="card-body">
-                    <div class="card-details" style="gap: 0.5rem">
-                        <div>"Status: "
-                            <strong style=move || if wifi.get().connected {
-                                "color: var(--green)"
-                            } else { "color: var(--rose)" }>
-                                {move || if wifi.get().connected { "Connected" } else { "Disconnected" }}
-                            </strong>
-                        </div>
-                        <div>"SSID: "<strong>{move || wifi.get().sta_ssid.clone()}</strong></div>
-                        <div>"IP: "<span class="mono">{move || wifi.get().sta_ip.clone()}</span></div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem">
-                            "RSSI: "<span class="mono">{move || format!("{} dBm", wifi.get().rssi)}</span>
-                            <div class="bar-gauge" style="flex: 1; --bar-color: var(--blue)">
-                                <div class="bar-fill-dynamic" style=move || {
+                // STA Mode card
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="wifi" size=16 />"Station"</span>
+                        <span class=move || if wifi.get().connected { "badge tone-green" } else { "badge tone-red" }>
+                            {move || if wifi.get().connected {
+                                view! { <Icon name="check" size=12 /> }.into_any()
+                            } else {
+                                view! { <Icon name="x" size=12 /> }.into_any()
+                            }}
+                            {move || if wifi.get().connected { "Connected" } else { "Disconnected" }}
+                        </span>
+                    </div>
+                    <dl class="kv dg-kv">
+                        <dt>"SSID"</dt><dd>{move || wifi.get().sta_ssid.clone()}</dd>
+                        <dt>"IP"</dt><dd class="dg-mono">{move || wifi.get().sta_ip.clone()}</dd>
+                        <dt>"RSSI"</dt>
+                        <dd class="dg-rssi">
+                            <span class="dg-mono">{move || format!("{} dBm", wifi.get().rssi)}</span>
+                            <div class="progress dg-rssi-bar" role="presentation">
+                                <span style=move || {
                                     let rssi = wifi.get().rssi;
                                     let pct = (((rssi + 100) as f32 / 60.0) * 100.0).clamp(0.0, 100.0);
                                     format!("width: {}%", pct)
-                                }></div>
+                                }></span>
                             </div>
-                        </div>
-                    </div>
+                        </dd>
+                    </dl>
                 </div>
             </div>
-        </div>
 
-        // Connect form
-        <div class="card" style="margin-top: 0.5rem">
-            <div class="card-header"><span>"Connect to Network"</span></div>
-            <div class="card-body">
-                <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap">
-                    <button class="btn btn-sm btn-primary"
+            // Connect form
+            <div class="group">
+                <div class="group-header">
+                    <span class="group-title"><Icon name="plug" size=16 />"Connect to a network"</span>
+                </div>
+                <div class="dg-form">
+                    <button class="btn btn-sm"
                         disabled=move || scanning.get()
                         on:click=do_scan
-                        style="white-space: nowrap"
-                    >{move || if scanning.get() { "Scanning..." } else { "Scan" }}</button>
-                    <select class="input"
-                        style="flex: 1; min-width: 160px; max-width: none"
+                    ><Icon name="search" size=14 />{move || if scanning.get() { "Scanning..." } else { "Scan" }}</button>
+                    <select class="input dg-grow" aria-label="Network"
                         prop:value=move || connect_ssid.get()
                         on:change=move |e| connect_ssid.set(event_target_value(&e))
                     >
@@ -1436,12 +1328,11 @@ fn WifiSection() -> impl IntoView {
                             }).collect::<Vec<_>>()
                         }}
                     </select>
-                    <input type="password" class="input" placeholder="Password"
-                        style="flex: 1; min-width: 120px"
+                    <input type="password" class="input dg-grow" placeholder="Password" aria-label="Network password"
                         prop:value=move || connect_pass.get()
                         on:input=move |e| connect_pass.set(event_target_value(&e))
                     />
-                    <button class="btn btn-sm" style="background: rgba(16,185,129,0.7); border-color: rgba(16,185,129,0.3)"
+                    <button class="btn btn-sm btn-primary"
                         on:click=move |_| {
                             let ssid = connect_ssid.get();
                             let pass = connect_pass.get();
@@ -1467,36 +1358,39 @@ fn WifiSection() -> impl IntoView {
                         }
                     >"Connect"</button>
                 </div>
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.5rem; gap: 0.5rem">
-                    <div class="text-xs" style=move || {
+                <div class="dg-form-foot">
+                    <div class=move || {
                         let s = connect_status.get();
-                        let color = if s == "No networks found" || s.starts_with("Failed") {
-                            "color: var(--rose)"
+                        if s == "No networks found" || s.starts_with("Failed") {
+                            "dg-msg tone-text-red"
                         } else if s.starts_with("Found") || s.starts_with("Connected to") || s == "Credentials cleared" {
-                            "color: var(--green)"
+                            "dg-msg tone-text-green"
                         } else {
-                            "color: var(--text-dim)"
-                        };
-                        color.to_string()
-                    }>
+                            "dg-msg"
+                        }
+                    } role="status">
                         {move || connect_status.get()}
                     </div>
-                    <button class="btn btn-sm"
-                        style="white-space: nowrap; background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: var(--rose); font-size: 0.7rem"
-                        on:click=do_forget
-                    >"Clear Saved Credentials"</button>
+                    <button class="btn btn-sm btn-tinted tone-red" on:click=do_forget
+                        title="Erase the WiFi credentials stored on the mainboard">
+                        <Icon name="trash-2" size=14 />"Clear saved credentials"
+                    </button>
                 </div>
-                <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem">
-                    <input type="password" class="input" placeholder="New AP password (8-63)"
-                        style="flex: 1; min-width: 120px"
+            </div>
+
+            <div class="group">
+                <div class="group-header">
+                    <span class="group-title"><Icon name="lock" size=16 />"Access point password"</span>
+                    <span class="group-subtitle">"WPA2, 8-63 characters"</span>
+                </div>
+                <div class="dg-form">
+                    <input type="password" class="input dg-grow" placeholder="New AP password (8-63)" aria-label="New access point password"
                         prop:value=move || ap_pass.get()
                         on:input=move |e| ap_pass.set(event_target_value(&e))
                     />
-                    <button class="btn btn-sm" on:click=set_ap_password>"Set AP Password"</button>
+                    <button class="btn btn-sm" on:click=set_ap_password>"Set AP password"</button>
                 </div>
-                <div class="text-xs" style="color: var(--text-dim); margin-top: 0.25rem">
-                    {move || ap_status.get()}
-                </div>
+                <div class="dg-msg" role="status">{move || ap_status.get()}</div>
             </div>
         </div>
     }

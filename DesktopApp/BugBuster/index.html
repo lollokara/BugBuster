@@ -3,6 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <title>BugBuster</title>
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      // Apply the saved appearance before first paint (theme.rs keeps it in sync).
+      (function() {
+        var p = 'system';
+        try { p = localStorage.getItem('bb-theme') || 'system'; } catch (e) {}
+        var dark = p === 'dark' || (p === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      })();
+    </script>
     <script>
       (function() {
         function logToTauri(msg) {
@@ -35,17 +45,12 @@
         window.addEventListener('keydown', async (e) => {
           if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 's') {
             console.log("[SCREENSHOT_SEQUENCE] Starting automated navigation...");
-            const categories = Array.from(document.querySelectorAll('.category-item'));
-            if (categories.length === 0) {
-              console.log("[SCREENSHOT_SEQUENCE] Warning: No categories found. Please connect to a device first!");
+            const tabs = Array.from(document.querySelectorAll('.nav-item[data-nav-view]'));
+            if (tabs.length === 0) {
+              console.log("[SCREENSHOT_SEQUENCE] Warning: No views found. Please connect to a device first!");
               return;
             }
-            for (let cat of categories) {
-              console.log("[SCREENSHOT_SEQUENCE] Clicking category: " + cat.textContent.trim());
-              cat.click();
-              await new Promise(r => setTimeout(r, 1500));
-              
-              const tabs = Array.from(document.querySelectorAll('.tab-item'));
+            {
               for (let tab of tabs) {
                 console.log("[SCREENSHOT_SEQUENCE] Clicking tab: " + tab.textContent.trim());
                 tab.click();
@@ -150,7 +155,20 @@
         });
       })();
     </script>
-    <link data-trunk rel="css" href="styles.css" />
+    <link data-trunk rel="css" href="styles/tokens.css" />
+    <link data-trunk rel="css" href="styles/base.css" />
+    <link data-trunk rel="css" href="styles/legacy.css" />
+    <link data-trunk rel="css" href="styles/components.css" />
+    <link data-trunk rel="css" href="styles/shell.css" />
+    <link data-trunk rel="css" href="styles/views/welcome.css" />
+    <link data-trunk rel="css" href="styles/views/overview.css" />
+    <link data-trunk rel="css" href="styles/views/diag.css" />
+    <link data-trunk rel="css" href="styles/views/board.css" />
+    <link data-trunk rel="css" href="styles/views/io.css" />
+    <link data-trunk rel="css" href="styles/views/scope.css" />
+    <link data-trunk rel="css" href="styles/views/la.css" />
+    <link data-trunk rel="css" href="styles/views/daq.css" />
+    <link data-trunk rel="css" href="styles/views/system.css" />
     <link data-trunk rel="copy-dir" href="public" />
     <link data-trunk rel="rust" data-wasm-opt="z" />
     <script type="importmap">

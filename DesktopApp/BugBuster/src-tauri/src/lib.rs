@@ -215,6 +215,7 @@ pub fn run() {
             daq_commands::daq_set_fft,
             daq_commands::daq_reset_energy,
             daq_commands::daq_reset_stats,
+            daq_commands::daq_clear_capture,
             daq_commands::daq_cfg_set,
             daq_commands::daq_cal_start,
             daq_commands::daq_cal_ack,

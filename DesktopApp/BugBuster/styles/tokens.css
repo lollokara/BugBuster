@@ -1,0 +1,216 @@
+/* BugBuster design tokens. Light is the base; [data-theme="dark"] overrides.
+   Components must use these variables, never raw hex. */
+
+@font-face {
+    font-family: 'Inter';
+    src: url('./public/fonts/inter-latin-wght-normal.woff2') format('woff2');
+    font-weight: 100 900; font-style: normal; font-display: swap;
+}
+@font-face {
+    font-family: 'Inter';
+    src: url('./public/fonts/inter-latin-wght-italic.woff2') format('woff2');
+    font-weight: 100 900; font-style: italic; font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('./public/fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2');
+    font-weight: 100 900; font-style: normal; font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('./public/fonts/jetbrains-mono-latin-wght-italic.woff2') format('woff2');
+    font-weight: 100 900; font-style: italic; font-display: swap;
+}
+
+:root {
+    color-scheme: light;
+
+    /* Typography */
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+    --fs-caption: 11px;
+    --fs-footnote: 12px;
+    --fs-body: 13px;
+    --fs-callout: 14px;
+    --fs-headline: 15px;
+    --fs-title3: 17px;
+    --fs-title2: 20px;
+    --fs-title1: 26px;
+    --fs-display: 34px;
+    --fw-regular: 400;
+    --fw-medium: 500;
+    --fw-semibold: 600;
+    --fw-bold: 700;
+
+    /* Spacing (4 px grid) */
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+    --s-5: 20px; --s-6: 24px; --s-8: 32px; --s-10: 40px;
+
+    /* Radii */
+    --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+
+    /* Control metrics */
+    --ctl-h-sm: 24px;
+    --ctl-h: 28px;
+    --ctl-h-lg: 34px;
+    --sidebar-w: 232px;
+    --sidebar-w-collapsed: 60px;
+    --toolbar-h: 52px;
+    --inspector-w: 300px;
+
+    /* Motion */
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+    --dur-1: 120ms;
+    --dur-2: 200ms;
+    --dur-3: 320ms;
+
+    /* Surfaces (light) */
+    --surface-0: #f5f5f7;          /* window / content background */
+    --surface-1: #ffffff;          /* groups, cards */
+    --surface-2: #f2f2f4;          /* inset wells, segmented tracks, inputs */
+    --surface-3: #e8e8ed;          /* pressed / strong wells */
+    --surface-plot: #ffffff;       /* chart canvases */
+    --material-sidebar: rgba(236, 236, 240, 0.78);
+    --material-bar: rgba(245, 245, 247, 0.82);
+    --material-pop: rgba(252, 252, 253, 0.92);
+
+    --fill-1: rgba(120, 120, 128, 0.08);
+    --fill-2: rgba(120, 120, 128, 0.14);
+    --fill-3: rgba(120, 120, 128, 0.22);
+
+    --sep: rgba(60, 60, 67, 0.13);
+    --sep-strong: rgba(60, 60, 67, 0.24);
+    --grid-line: rgba(60, 60, 67, 0.09);
+
+    --label-1: #1d1d1f;
+    --label-2: #5c5c62;
+    --label-3: #8a8a90;
+    --label-4: #b4b4ba;
+
+    /* System colors: --c-* for fills/graphics, --c-*-text for text on surfaces */
+    --c-blue: #007aff;    --c-blue-text: #0066d6;
+    --c-green: #34c759;   --c-green-text: #1f8a3c;
+    --c-red: #ff3b30;     --c-red-text: #d70015;
+    --c-orange: #ff9500;  --c-orange-text: #c45500;
+    --c-yellow: #ffcc00;  --c-yellow-text: #9a6a00;
+    --c-teal: #30b0c7;    --c-teal-text: #0a7d94;
+    --c-indigo: #5856d6;  --c-indigo-text: #4644c0;
+    --c-purple: #af52de;  --c-purple-text: #8944ab;
+    --c-pink: #ff2d55;    --c-pink-text: #d30f45;
+    --c-gray: #8e8e93;    --c-gray-text: #6c6c70;
+
+    --accent: var(--c-blue);
+    --accent-text: var(--c-blue-text);
+    --accent-fg: #ffffff;
+    --accent-tint: rgba(0, 122, 255, 0.12);
+    --accent-tint-strong: rgba(0, 122, 255, 0.2);
+
+    --tint-green: rgba(52, 199, 89, 0.14);
+    --tint-red: rgba(255, 59, 48, 0.12);
+    --tint-orange: rgba(255, 149, 0, 0.14);
+    --tint-yellow: rgba(255, 204, 0, 0.18);
+    --tint-teal: rgba(48, 176, 199, 0.14);
+    --tint-purple: rgba(175, 82, 222, 0.12);
+    --tint-gray: rgba(142, 142, 147, 0.14);
+
+    /* Instrument channels (A-D) and data series */
+    --ch-a: #007aff;
+    --ch-b: #28a745;
+    --ch-c: #e07b00;
+    --ch-d: #a347d1;
+    --series-current: #e07b00;
+    --series-voltage: #1f9d55;
+    --series-power: #a347d1;
+    --series-marker: #d30f45;
+
+    /* Elevation */
+    --shadow-1: 0 0 0 0.5px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-2: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 12px 40px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+    --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.35);
+
+    /* ---- Legacy aliases (pre-redesign view CSS). Remove once unused. ---- */
+    --bg0: var(--surface-0);
+    --bg1: var(--surface-1);
+    --bg2: var(--surface-2);
+    --surface: var(--surface-1);
+    --glass: var(--surface-1);
+    --glass-bright: var(--surface-1);
+    --border: var(--sep);
+    --border-bright: var(--sep-strong);
+    --glow-subtle: transparent;
+    --text: var(--label-1);
+    --text-dim: var(--label-2);
+    --text-muted: var(--label-3);
+    --blue: var(--c-blue-text);
+    --green: var(--c-green-text);
+    --amber: var(--c-orange-text);
+    --rose: var(--c-red-text);
+    --purple: var(--c-purple-text);
+    --cyan: var(--c-teal-text);
+    --radius: var(--r-lg);
+    --radius-sm: var(--r-md);
+}
+
+[data-theme="dark"] {
+    color-scheme: dark;
+
+    --surface-0: #141416;
+    --surface-1: #1d1d20;
+    --surface-2: #26262a;
+    --surface-3: #313136;
+    --surface-plot: #111113;
+    --material-sidebar: rgba(30, 30, 33, 0.82);
+    --material-bar: rgba(22, 22, 24, 0.82);
+    --material-pop: rgba(40, 40, 44, 0.94);
+
+    --fill-1: rgba(120, 120, 128, 0.14);
+    --fill-2: rgba(120, 120, 128, 0.22);
+    --fill-3: rgba(120, 120, 128, 0.32);
+
+    --sep: rgba(255, 255, 255, 0.09);
+    --sep-strong: rgba(255, 255, 255, 0.16);
+    --grid-line: rgba(255, 255, 255, 0.07);
+
+    --label-1: #f5f5f7;
+    --label-2: #a8a8ae;
+    --label-3: #7c7c82;
+    --label-4: #55555a;
+
+    --c-blue: #0a84ff;    --c-blue-text: #4ba3ff;
+    --c-green: #30d158;   --c-green-text: #30d158;
+    --c-red: #ff453a;     --c-red-text: #ff6961;
+    --c-orange: #ff9f0a;  --c-orange-text: #ffb340;
+    --c-yellow: #ffd60a;  --c-yellow-text: #ffd60a;
+    --c-teal: #40c8e0;    --c-teal-text: #5dd3e8;
+    --c-indigo: #5e5ce6;  --c-indigo-text: #8e8cf0;
+    --c-purple: #bf5af2;  --c-purple-text: #d08bf5;
+    --c-pink: #ff375f;    --c-pink-text: #ff6482;
+    --c-gray: #8e8e93;    --c-gray-text: #a1a1a6;
+
+    --accent-tint: rgba(10, 132, 255, 0.18);
+    --accent-tint-strong: rgba(10, 132, 255, 0.3);
+
+    --tint-green: rgba(48, 209, 88, 0.16);
+    --tint-red: rgba(255, 69, 58, 0.16);
+    --tint-orange: rgba(255, 159, 10, 0.16);
+    --tint-yellow: rgba(255, 214, 10, 0.16);
+    --tint-teal: rgba(64, 200, 224, 0.16);
+    --tint-purple: rgba(191, 90, 242, 0.16);
+    --tint-gray: rgba(142, 142, 147, 0.2);
+
+    --ch-a: #0a84ff;
+    --ch-b: #30d158;
+    --ch-c: #ff9f0a;
+    --ch-d: #bf5af2;
+    --series-current: #ff9f0a;
+    --series-voltage: #30d158;
+    --series-power: #bf5af2;
+    --series-marker: #ff375f;
+
+    --shadow-1: 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+    --shadow-2: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 16px 48px rgba(0, 0, 0, 0.55);
+    --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.45);
+}

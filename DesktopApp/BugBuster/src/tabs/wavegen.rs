@@ -1,4 +1,7 @@
+use crate::components::icons::Icon;
+use crate::components::ui::*;
 use crate::tauri_bridge::*;
+use crate::theme::{css_var, use_theme};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
@@ -105,11 +108,16 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let unit = move || if mode.get() == "current" { "mA" } else { "V" };
     let max_amp = move || if mode.get() == "current" { 25.0 } else { 12.0 };
 
+    let theme = use_theme();
+
     // Draw preview
     Effect::new(move || {
         let wf = waveform.get();
         let amp = amplitude.get();
         let off = offset.get();
+        let ch = channel.get() as usize;
+        let is_current = mode.get() == "current";
+        let _ = theme.resolved.get();
         let Some(canvas) = preview_ref.get() else {
             return;
         };
@@ -132,26 +140,44 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             .unwrap();
         ctx.scale(dpr, dpr).unwrap();
 
-        ctx.set_fill_style_str("#0f1729");
+        let c_bg = css_var("--surface-plot");
+        let c_grid = css_var("--grid-line");
+        let c_zero = css_var("--sep-strong");
+        let c_label = css_var("--label-2");
+        let c_trace = css_var(["--ch-a", "--ch-b", "--ch-c", "--ch-d"][ch.min(3)]);
+
+        ctx.set_fill_style_str(&c_bg);
         ctx.fill_rect(0.0, 0.0, w, h);
 
-        // Zero line
-        ctx.set_stroke_style_str("rgba(148,163,184,0.12)");
+        // Grid: 8 divisions across, 4 down.
+        ctx.set_stroke_style_str(&c_grid);
         ctx.set_line_width(1.0);
+        for i in 1..8 {
+            let x = (w * i as f64 / 8.0).round() + 0.5;
+            ctx.begin_path();
+            ctx.move_to(x, 0.0);
+            ctx.line_to(x, h);
+            ctx.stroke();
+        }
+        for i in 1..4 {
+            let y = (h * i as f64 / 4.0).round() + 0.5;
+            ctx.begin_path();
+            ctx.move_to(0.0, y);
+            ctx.line_to(w, y);
+            ctx.stroke();
+        }
+
+        // Zero line
+        ctx.set_stroke_style_str(&c_zero);
         ctx.begin_path();
         ctx.move_to(0.0, h / 2.0);
         ctx.line_to(w, h / 2.0);
         ctx.stroke();
 
-        let y_range = (amp.abs() + off.abs()) * 1.3;
-        let y_range = y_range.max(0.1);
+        let y_range = ((amp.abs() + off.abs()) * 1.3).max(0.1);
+        let y_of = |v: f64| h / 2.0 - (v / y_range) * (h / 2.0 - 14.0);
 
-        let color = if mode.get() == "current" {
-            "#a855f7"
-        } else {
-            "#3b82f6"
-        };
-        ctx.set_stroke_style_str(color);
+        ctx.set_stroke_style_str(&c_trace);
         ctx.set_line_width(2.0);
         ctx.begin_path();
 
@@ -174,7 +200,7 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 "sawtooth" => off + amp * (2.0 * t - 1.0),
                 _ => 0.0,
             };
-            let y = h / 2.0 - (v / y_range) * (h / 2.0 - 10.0);
+            let y = y_of(v);
             if px == 0 {
                 ctx.move_to(px as f64, y);
             } else {
@@ -183,12 +209,14 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
         ctx.stroke();
 
-        ctx.set_fill_style_str("#64748b");
-        ctx.set_font("10px monospace");
+        ctx.set_fill_style_str(&c_label);
+        ctx.set_font("11px Inter, system-ui, sans-serif");
         ctx.set_text_align("left");
-        let u = if mode.get() == "current" { "mA" } else { "V" };
-        let _ = ctx.fill_text(&format!("+{:.1}{}", amp + off, u), 4.0, 14.0);
-        let _ = ctx.fill_text(&format!("{:.1}{}", -amp + off, u), 4.0, h - 4.0);
+        let u = if is_current { "mA" } else { "V" };
+        let top = amp + off;
+        let bot = -amp + off;
+        let _ = ctx.fill_text(&format!("{:+.1} {}", top, u), 6.0, (y_of(top) - 5.0).max(12.0));
+        let _ = ctx.fill_text(&format!("{:+.1} {}", bot, u), 6.0, (y_of(bot) + 14.0).min(h - 4.0));
     });
 
     let commit_freq = move || {
@@ -288,123 +316,202 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     };
 
+    let wf_options = vec![
+        ("sine".to_string(), "Sine"),
+        ("square".to_string(), "Square"),
+        ("triangle".to_string(), "Triangle"),
+        ("sawtooth".to_string(), "Sawtooth"),
+    ];
+    let mode_options = vec![
+        ("voltage".to_string(), "Voltage"),
+        ("current".to_string(), "Current"),
+    ];
+    let freq_invalid = move || edit_freq.get().trim().parse::<f64>().is_err();
+    let amp_invalid = move || edit_amp.get().trim().parse::<f64>().is_err();
+    let off_invalid = move || edit_off.get().trim().parse::<f64>().is_err();
+    let period_label = move || {
+        let f = freq_hz.get().max(0.001);
+        let p = 1.0 / f;
+        if p < 1.0 {
+            format!("{:.1} ms", p * 1000.0)
+        } else {
+            format!("{:.2} s", p)
+        }
+    };
+
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"Waveform generator. Outputs sine, square, triangle, or sawtooth waveforms through the DAC. Select a channel, set frequency (0.1-100 Hz), amplitude, and offset. The channel is automatically set to VOUT or IOUT mode."</div>
-            <div class="wavegen-layout">
-                <div class="card wavegen-controls">
-                    <div class="card-header"><span>"Waveform Generator"</span></div>
-                    <div class="card-body">
+        <div class="view view-narrow wg-root">
+            <div class="wg-grid">
+                // ============ LEFT: waveform ============
+                <section class="group wg-wave" aria-label="Waveform">
+                    <div class="group-header">
+                        <h3 class="group-title">"Waveform"</h3>
+                        <div class="group-actions">
+                            <span class="badge num">{move || format!("{:.1} Hz", freq_hz.get())}</span>
+                        </div>
+                    </div>
+                    <div class="wg-preview">
+                        <canvas node_ref=preview_ref class="wg-canvas" aria-label="Waveform preview"></canvas>
+                    </div>
+                    <SegmentedControl
+                        options=wf_options
+                        value=waveform
+                        on_change=Callback::new(move |v: String| set_waveform.set(v))
+                        block=true
+                        aria_label="Waveform shape"
+                    />
+                    <div class="wg-readouts">
+                        <Readout label="Period" value=Signal::derive(period_label) size="sm" />
+                        <Readout label="Peak to peak"
+                            value=Signal::derive(move || format!("{:.1} {}", amplitude.get() * 2.0, unit()))
+                            size="sm" />
+                        <Readout label="Swing"
+                            value=Signal::derive(move || format!("{:+.1} to {:+.1} {}", offset.get() - amplitude.get(), offset.get() + amplitude.get(), unit()))
+                            size="sm" />
+                    </div>
+                </section>
+
+                // ============ RIGHT: output ============
+                <section class="group wg-output" aria-label="Output">
+                    <div class="group-header">
+                        <h3 class="group-title">"Output"</h3>
+                        <div class="group-actions">
+                            {move || if running.get() {
+                                let ch_name = CH_NAMES[active_channel.get().unwrap_or(channel.get()) as usize];
+                                view! {
+                                    <span class="badge tone-green"><span class="dot tone-green live"></span>{format!("Running on CH {}", ch_name)}</span>
+                                }.into_any()
+                            } else {
+                                view! { <span class="badge"><span class="dot"></span>"Stopped"</span> }.into_any()
+                            }}
+                        </div>
+                    </div>
+                    <div class="wg-rows">
                         <div class="config-row">
-                            <label>"Channel"</label>
-                            <select class="dropdown" on:change=move |e| { set_channel.set(event_target_value(&e).parse().unwrap_or(0)); }>
-                                {(0..4).map(|i| view! { <option value=i.to_string()>{format!("CH {}", CH_NAMES[i])}</option> }).collect::<Vec<_>>()}
+                            <label for="wg-channel">"Channel"</label>
+                            <select id="wg-channel" class="dropdown" on:change=move |e| { set_channel.set(event_target_value(&e).parse().unwrap_or(0)); }>
+                                {(0..4).map(|i| view! {
+                                    <option value=i.to_string() selected=move || channel.get() == i as u8>{format!("CH {}", CH_NAMES[i])}</option>
+                                }).collect::<Vec<_>>()}
                             </select>
                         </div>
                         <div class="config-row">
-                            <label>"Output"</label>
-                            <label class="toggle-wrap">
-                                <span class="toggle-off-label">"Voltage"</span>
-                                <div class="toggle" class:active={move || mode.get() == "current"}
-                                    on:click=move |_| {
-                                        let new = if mode.get_untracked() == "voltage" { "current" } else { "voltage" };
-                                        set_mode.set(new.to_string());
-                                        // Reset amplitude to safe value for new mode
-                                        let m = if new == "current" { 12.5 } else { 5.0 };
-                                        set_amplitude.set(m);
-                                        set_edit_amp.set(format!("{:.1}", m));
+                            <label id="wg-output-lbl">"Output"</label>
+                            <SegmentedControl
+                                options=mode_options
+                                value=mode
+                                on_change=Callback::new(move |new: String| {
+                                    if mode.get_untracked() == new { return; }
+                                    set_mode.set(new.clone());
+                                    // Reset amplitude to safe value for new mode
+                                    let m = if new == "current" { 12.5 } else { 5.0 };
+                                    set_amplitude.set(m);
+                                    set_edit_amp.set(format!("{:.1}", m));
+                                })
+                                aria_label="Output mode"
+                            />
+                        </div>
+                        <div class="config-row">
+                            <div class="wg-label">
+                                <label for="wg-freq">"Frequency"</label>
+                                <span class="row-hint">"0.1 to 100 Hz"</span>
+                            </div>
+                            <div class="number-input-wrap">
+                                <input id="wg-freq" type="text" inputmode="decimal" class="number-input"
+                                    aria-invalid=move || if freq_invalid() { "true" } else { "false" }
+                                    prop:value=move || edit_freq.get()
+                                    on:input=move |e| set_edit_freq.set(event_target_value(&e))
+                                    on:blur=move |_| commit_freq()
+                                    on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_freq(); } }
+                                />
+                                <span class="number-unit">"Hz"</span>
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="wg-label">
+                                <label for="wg-amp">"Amplitude"</label>
+                                <span class="row-hint">{move || format!("0 to {:.0} {}", max_amp(), unit())}</span>
+                            </div>
+                            <div class="number-input-wrap">
+                                <input id="wg-amp" type="text" inputmode="decimal" class="number-input"
+                                    aria-invalid=move || if amp_invalid() { "true" } else { "false" }
+                                    prop:value=move || edit_amp.get()
+                                    on:input=move |e| set_edit_amp.set(event_target_value(&e))
+                                    on:blur=move |_| commit_amp()
+                                    on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_amp(); } }
+                                />
+                                <span class="number-unit">{unit}</span>
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="wg-label">
+                                <label for="wg-off">"Offset"</label>
+                                <span class="row-hint">{move || format!("-{:.0} to {:.0} {}", max_amp(), max_amp(), unit())}</span>
+                            </div>
+                            <div class="number-input-wrap">
+                                <input id="wg-off" type="text" inputmode="decimal" class="number-input"
+                                    aria-invalid=move || if off_invalid() { "true" } else { "false" }
+                                    prop:value=move || edit_off.get()
+                                    on:input=move |e| set_edit_off.set(event_target_value(&e))
+                                    on:blur=move |_| commit_off()
+                                    on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_off(); } }
+                                />
+                                <span class="number-unit">{unit}</span>
+                            </div>
+                        </div>
+                        <div class="config-row">
+                            <div class="wg-label">
+                                <span class="row-label">"Faults"</span>
+                                <span class="row-hint">"Alert flags of the selected channel"</span>
+                            </div>
+                            <div class="wg-fault-actions">
+                                {move || {
+                                    let ch_idx = channel.get() as usize;
+                                    let ds = state.get();
+                                    let alert = ds.channels.get(ch_idx).map(|c| c.channel_alert).unwrap_or(0);
+                                    if alert != 0 {
+                                        view! { <span class="badge tone-red wg-fault-code">{decode_channel_alert(alert)}</span> }.into_any()
+                                    } else {
+                                        view! { <span class="badge tone-green">"None"</span> }.into_any()
                                     }
-                                ><div class="toggle-thumb"></div></div>
-                                <span class="toggle-on-label">"Current"</span>
-                            </label>
+                                }}
+                                // Clear faults for the active wavegen channel.
+                                <button class="btn btn-sm"
+                                    on:click=move |_| {
+                                        let ch_idx = channel.get_untracked();
+                                        #[derive(Serialize)]
+                                        struct Args { channel: u8 }
+                                        let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx }).unwrap();
+                                        let label = format!("Clear faults on CH {}", CH_NAMES[ch_idx as usize]);
+                                        invoke_with_feedback("clear_channel_alert", args, &label);
+                                    }
+                                >"Clear faults"</button>
+                            </div>
                         </div>
-                        <div class="config-row">
-                            <label>"Waveform"</label>
-                            <select class="dropdown" on:change=move |e| set_waveform.set(event_target_value(&e))>
-                                <option value="sine">"Sine"</option>
-                                <option value="square">"Square"</option>
-                                <option value="triangle">"Triangle"</option>
-                                <option value="sawtooth">"Sawtooth"</option>
-                            </select>
-                        </div>
-                        <div class="config-row">
-                            <label>"Freq (Hz)"</label>
-                            <input type="text" class="number-input"
-                                prop:value=move || edit_freq.get()
-                                on:input=move |e| set_edit_freq.set(event_target_value(&e))
-                                on:blur=move |_| commit_freq()
-                                on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_freq(); } }
-                            />
-                        </div>
-                        <div class="config-row">
-                            <label>{move || format!("Amp ({})", unit())}</label>
-                            <input type="text" class="number-input"
-                                prop:value=move || edit_amp.get()
-                                on:input=move |e| set_edit_amp.set(event_target_value(&e))
-                                on:blur=move |_| commit_amp()
-                                on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_amp(); } }
-                            />
-                        </div>
-                        <div class="config-row">
-                            <label>{move || format!("Offset ({})", unit())}</label>
-                            <input type="text" class="number-input"
-                                prop:value=move || edit_off.get()
-                                on:input=move |e| set_edit_off.set(event_target_value(&e))
-                                on:blur=move |_| commit_off()
-                                on:keydown=move |e: leptos::ev::KeyboardEvent| { if e.key() == "Enter" { commit_off(); } }
-                            />
-                        </div>
-                        <button class="btn wavegen-start-btn"
+                    </div>
+
+                    <div class="wg-actions">
+                        <button class="btn btn-lg btn-block wavegen-start-btn"
+                            class:btn-primary=move || !running.get()
+                            class:btn-danger=move || running.get()
                             class:wavegen-running=move || running.get()
                             prop:disabled=move || sending.get()
                             on:click=toggle>
-                            <span class="scope-btn-dot" class:running=move || running.get()></span>
-                            {move || if sending.get() { "Sending..." } else if running.get() { "Stop Generator" } else { "Start Generator" }}
+                            {move || if running.get() {
+                                view! { <Icon name="square" size=14 /> }.into_any()
+                            } else {
+                                view! { <Icon name="play" size=14 /> }.into_any()
+                            }}
+                            {move || if sending.get() { "Sending..." } else if running.get() { "Stop generator" } else { "Start generator" }}
                         </button>
-
-                        // Fault badge for the active wavegen channel (Fix 3).
-                        {move || {
-                            let ch_idx = channel.get() as usize;
-                            let ds = state.get();
-                            let alert = ds.channels.get(ch_idx).map(|c| c.channel_alert).unwrap_or(0);
-                            if alert != 0 {
-                                let decoded = decode_channel_alert(alert);
-                                Some(view! {
-                                    <div style="margin-top: 8px; padding: 6px 10px; background: #ef444425; color: #ef4444; border: 1px solid #ef444480; border-radius: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace">
-                                        {format!("FAULT: {}", decoded)}
-                                    </div>
-                                })
-                            } else { None }
-                        }}
-
-                        // Clear faults for the active wavegen channel (Fix 3).
-                        <button class="btn btn-sm" style="margin-top: 6px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b50"
-                            on:click=move |_| {
-                                let ch_idx = channel.get_untracked();
-                                #[derive(Serialize)]
-                                struct Args { channel: u8 }
-                                let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx }).unwrap();
-                                let label = format!("Clear faults on CH {}", CH_NAMES[ch_idx as usize]);
-                                invoke_with_feedback("clear_channel_alert", args, &label);
-                            }
-                        >"Clear faults"</button>
-                        <p class="wavegen-hint">
+                        <p class="wg-hint">
                             {move || format!("Will set CH {} to {} mode on start",
                                 CH_NAMES[channel.get() as usize],
                                 if mode.get() == "current" { "IOUT" } else { "VOUT" }
                             )}
                         </p>
                     </div>
-                </div>
-
-                <div class="card wavegen-preview">
-                    <div class="card-header"><span>"Preview"</span>
-                        <span class="badge-hex">{move || format!("{} @ {:.1} Hz", waveform.get(), freq_hz.get())}</span>
-                    </div>
-                    <div class="card-body" style="padding: 0;">
-                        <canvas node_ref=preview_ref class="wavegen-canvas"></canvas>
-                    </div>
-                </div>
+                </section>
             </div>
         </div>
     }

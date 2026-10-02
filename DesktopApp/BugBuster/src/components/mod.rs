@@ -1,6 +1,9 @@
 pub mod channel_sparkline;
 pub mod connection;
 pub mod controls;
+pub mod command_palette;
 pub mod display;
+pub mod icons;
 pub mod io_blocked_banner;
 pub mod layout;
+pub mod ui;

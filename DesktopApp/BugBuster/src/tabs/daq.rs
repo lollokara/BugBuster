@@ -17,10 +17,13 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
+use crate::components::icons::Icon;
+use crate::components::ui::{Callout, SegmentedControl, Switch};
 use crate::tabs::daq_gl::{GlRenderer, Lane};
 use crate::tabs::daq_cal::CalibrationWizard;
 use crate::tabs::daq_trigger_panel::TriggerPanel;
 use crate::tauri_bridge::*;
+use crate::theme::{css_var, use_theme};
 
 const LABEL_W: f64 = 70.0;
 const RULER_H: f64 = 20.0;
@@ -60,19 +63,16 @@ fn fmt_time(s: f64) -> String {
     }
 }
 
-/// Style for a collapsible-menu toggle button. Each panel toggle carries a
-/// distinct accent contour so it's clear which panel it opens; when the panel
-/// is open the button is filled with a tint of that accent and highlighted.
-fn menu_btn_style(open: bool, accent: &str) -> String {
-    if open {
-        format!(
-            "border:1px solid {a};background:{a}26;color:{a};font-weight:700;box-shadow:0 0 0 1px {a}40 inset;",
-            a = accent
-        )
-    } else {
-        format!("border:1px solid {a}59;color:{a};background:transparent;", a = accent)
+/// Split an engineering-formatted reading ("12.300 mA") into value and unit.
+fn split_val(s: String) -> (String, String) {
+    match s.split_once(' ') {
+        Some((v, u)) => (v.to_string(), u.to_string()),
+        None => (s, String::new()),
     }
 }
+
+/// Placeholder for a reading that is not available yet.
+const NO_VALUE: &str = "\u{2013}";
 
 fn nice_range(lo: f32, hi: f32) -> (f32, f32) {
     let mut lo = lo;
@@ -96,28 +96,123 @@ fn nice_range(lo: f32, hi: f32) -> (f32, f32) {
 struct TrackInfo {
     name: &'static str,
     unit: &'static str,
-    color: &'static str,
-    color_gl: [f32; 3],
+    /// Suffix of the `.dq-dot.s-*` class that carries the series colour.
+    key: &'static str,
 }
 
-const TRACK_I: TrackInfo = TrackInfo {
-    name: "Current",
-    unit: "A",
-    color: "#3b82f6",
-    color_gl: [0.23, 0.51, 0.96],
-};
-const TRACK_V: TrackInfo = TrackInfo {
-    name: "Voltage",
-    unit: "V",
-    color: "#10b981",
-    color_gl: [0.06, 0.73, 0.51],
-};
-const TRACK_P: TrackInfo = TrackInfo {
-    name: "Power",
-    unit: "W",
-    color: "#f59e0b",
-    color_gl: [0.96, 0.62, 0.04],
-};
+const TRACK_I: TrackInfo = TrackInfo { name: "Current", unit: "A", key: "current" };
+const TRACK_V: TrackInfo = TrackInfo { name: "Voltage", unit: "V", key: "voltage" };
+const TRACK_P: TrackInfo = TrackInfo { name: "Power", unit: "W", key: "power" };
+
+/// Canvas colours resolved from the active theme's CSS tokens.
+#[derive(Clone)]
+struct Palette {
+    font: String,
+    bg: String,
+    grid: String,
+    axis: String,
+    text: String,
+    surface: String,
+    sep: String,
+    accent: String,
+    accent_tint: String,
+    accent_tint_strong: String,
+    marker: String,
+    warn: String,
+    current: String,
+    voltage: String,
+    power: String,
+    coarse: String,
+    blend: String,
+}
+
+fn tok(name: &str) -> String {
+    let v = css_var(name);
+    if v.is_empty() {
+        "gray".to_string()
+    } else {
+        v
+    }
+}
+
+impl Palette {
+    fn read() -> Self {
+        let font = css_var("--font-ui");
+        Palette {
+            font: if font.is_empty() { "sans-serif".to_string() } else { font },
+            bg: tok("--surface-plot"),
+            grid: tok("--grid-line"),
+            axis: tok("--label-2"),
+            text: tok("--label-1"),
+            surface: tok("--surface-1"),
+            sep: tok("--sep-strong"),
+            accent: tok("--accent"),
+            accent_tint: tok("--accent-tint"),
+            accent_tint_strong: tok("--accent-tint-strong"),
+            marker: tok("--series-marker"),
+            warn: tok("--c-orange-text"),
+            current: tok("--series-current"),
+            voltage: tok("--series-voltage"),
+            power: tok("--series-power"),
+            coarse: tok("--c-blue"),
+            blend: tok("--c-teal"),
+        }
+    }
+
+    fn series(&self, name: &str) -> &str {
+        match name {
+            "Current" => &self.current,
+            "Voltage" => &self.voltage,
+            _ => &self.power,
+        }
+    }
+
+    fn font(&self, size: u32) -> String {
+        format!("{}px {}", size, self.font)
+    }
+}
+
+thread_local! {
+    static PALETTE: RefCell<Option<(String, Palette)>> = RefCell::new(None);
+}
+
+/// Theme palette, re-read from CSS only when `data-theme` changes.
+fn palette() -> Palette {
+    let theme = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+        .and_then(|e| e.get_attribute("data-theme"))
+        .unwrap_or_default();
+    PALETTE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((t, p)) = c.as_ref() {
+            if *t == theme {
+                return p.clone();
+            }
+        }
+        let p = Palette::read();
+        *c = Some((theme, p.clone()));
+        p
+    })
+}
+
+/// `#rrggbb` / `#rgb` token value to 0..1 floats for WebGL.
+fn hex_rgb(c: &str) -> [f32; 3] {
+    let h = c.trim().trim_start_matches('#');
+    let p = |s: &str| {
+        u8::from_str_radix(s, 16)
+            .map(|v| v as f32 / 255.0)
+            .unwrap_or(0.5)
+    };
+    match h.len() {
+        6 | 8 => [p(&h[0..2]), p(&h[2..4]), p(&h[4..6])],
+        3 => {
+            let d = |i: usize| p(&format!("{0}{0}", &h[i..i + 1]));
+            [d(0), d(1), d(2)]
+        }
+        _ => [0.5, 0.5, 0.5],
+    }
+}
 
 #[component]
 pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoView {
@@ -162,14 +257,13 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let drag_moved = RwSignal::new(false);
 
     // ---- Panels -------------------------------------------------------------
-    let fft_open = RwSignal::new(false);
-    let settings_open = RwSignal::new(true);
+    // Right inspector content: 0 = closed, 1 = settings, 2 = FFT, 3 = triggers.
+    let inspector = RwSignal::new(1u8);
     // Performance metrics overlay.
     let perf_open = RwSignal::new(false);
     let fps = RwSignal::new(0.0f64);
     let fetch_ms = RwSignal::new(0.0f64);
     let cal_open = RwSignal::new(false);
-    let trig_open = RwSignal::new(false);
 
     // ---- Acquisition / source settings -------------------------------------
     let sample_rate_idx = RwSignal::new(3u8);    // 250 kSPS default
@@ -181,7 +275,23 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let range_lock_idx = RwSignal::new(0u8); // 0 = Auto, 1..3 = HI/MID/LO+1
     let vdut_mv = RwSignal::new(3300u32);
     let ilimit_ma = RwSignal::new(500u32);
-    let source_enable = RwSignal::new(true);
+    let source_enable = RwSignal::new(false);
+    // Device-reported output state, adopted on first status and whenever the device changes it.
+    let source_dev_last = RwSignal::new(Option::<bool>::None);
+    Effect::new(move |_| {
+        let Some(st) = snapshots.with(|s| s.as_ref().and_then(|s| s.status)) else { return };
+        let first = source_dev_last.get_untracked().is_none();
+        if source_dev_last.get_untracked() != Some(st.source_enabled) {
+            source_dev_last.set(Some(st.source_enabled));
+            source_enable.set(st.source_enabled);
+        }
+        if first && st.vdut_set > 0.0 {
+            vdut_mv.set(((st.vdut_set * 1000.0).round() as u32).clamp(1800, 19940));
+            if st.ilimit_set > 0.0 {
+                ilimit_ma.set(((st.ilimit_set * 1000.0).round() as u32).clamp(100, 2500));
+            }
+        }
+    });
     let fft_nbins = RwSignal::new(256u16);
     let fft_window = RwSignal::new(1u8);
     let fft_source = RwSignal::new(0u8);
@@ -219,9 +329,14 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     // GL trace pass — heavier; only re-runs on data / track / layout changes.
     let render_gl = {
         let renderer = renderer.clone();
+        let alive = alive.clone();
         Rc::new(move || {
-            let Some(gl_c) = gl_canvas.get() else { return };
-            let Some(ov_c) = overlay.get() else { return };
+            // The window resize listener outlives the tab; never touch disposed refs.
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Some(gl_c) = gl_canvas.get_untracked() else { return };
+            let Some(ov_c) = overlay.get_untracked() else { return };
             let gl_canvas_el: HtmlCanvasElement = gl_c.unchecked_into();
             let ov_canvas: HtmlCanvasElement = ov_c.unchecked_into();
             let dpr = web_sys::window()
@@ -244,9 +359,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             }
             let x0 = (LABEL_W * dpr) as f32;
             let x1 = (css_w * dpr) as f32;
+            let pal = palette();
+            let bg = hex_rgb(&pal.bg);
             let Some(raw) = view_data.get_untracked() else {
                 if let Some(rr) = renderer.borrow().as_ref() {
-                    rr.render(pw as f32, ph as f32, x0, x1, &[]);
+                    rr.render(pw as f32, ph as f32, x0, x1, bg, &[]);
                 }
                 return;
             };
@@ -293,19 +410,26 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     gap: gap_slice,
                     lo,
                     hi,
-                    color: t.color_gl,
+                    color: hex_rgb(pal.series(t.name)),
+                    coarse: hex_rgb(&pal.coarse),
+                    blend: hex_rgb(&pal.blend),
                     tint,
                 });
             }
             if let Some(rr) = renderer.borrow().as_ref() {
-                rr.render(pw as f32, ph as f32, x0, x1, &gl_lanes);
+                rr.render(pw as f32, ph as f32, x0, x1, bg, &gl_lanes);
             }
         })
     };
 
     // Overlay (2D) pass — cheap; re-runs on hover / selection too.
-    let paint_overlay = Rc::new(move || {
-        let Some(ov_c) = overlay.get() else { return };
+    let paint_overlay = {
+        let alive = alive.clone();
+        Rc::new(move || {
+        if !alive.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(ov_c) = overlay.get_untracked() else { return };
         let ov_canvas: HtmlCanvasElement = ov_c.unchecked_into();
         let dpr = web_sys::window()
             .map(|w| w.device_pixel_ratio())
@@ -357,7 +481,8 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             hover.get_untracked(),
             drag_mode.get_untracked() != 0,
         );
-    });
+        })
+    };
 
     let render_all = {
         let g = render_gl.clone();
@@ -402,6 +527,21 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             paint();
         });
     }
+    // A theme flip or inspector toggle changes colours / plot width without new
+    // data; repaint once the new CSS (data-theme, layout) has applied.
+    {
+        let render_all = render_all.clone();
+        let theme = use_theme();
+        Effect::new(move |_| {
+            theme.resolved.track();
+            inspector.track();
+            let render_all = render_all.clone();
+            spawn_local(async move {
+                slp(40).await;
+                render_all();
+            });
+        });
+    }
     // Repaint on window resize.
     {
         let render_all = render_all.clone();
@@ -423,6 +563,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let refresh_view = {
         let g = view_inflight.clone();
         let key = view_key.clone();
+        let alive = alive.clone();
         Rc::new(move || {
             if g.get() {
                 return;
@@ -446,20 +587,26 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             g.set(true);
             let g2 = g.clone();
             let key2 = key.clone();
+            let alive = alive.clone();
             let t0 = js_sys::Date::now();
             spawn_local(async move {
-                if let Some(vd) = daq_get_view(vs, ve, 1800, bs, bf).await {
+                let vd = daq_get_view(vs, ve, 1800, bs, bf).await;
+                g2.set(false);
+                if !alive.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Some(vd) = vd {
                     view_data.set(Some(vd));
                     key2.set(k);
                 }
                 fetch_ms.set(js_sys::Date::now() - t0);
-                g2.set(false);
             });
         })
     };
     let ov_inflight = Rc::new(Cell::new(false));
     let refresh_overview = {
         let g = ov_inflight.clone();
+        let alive = alive.clone();
         Rc::new(move || {
             if g.get() {
                 return;
@@ -470,11 +617,16 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             }
             g.set(true);
             let g2 = g.clone();
+            let alive = alive.clone();
             spawn_local(async move {
-                if let Some(vd) = daq_get_view(0, total, 1000, 1, 0).await {
+                let vd = daq_get_view(0, total, 1000, 1, 0).await;
+                g2.set(false);
+                if !alive.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Some(vd) = vd {
                     overview_data.set(Some(vd));
                 }
-                g2.set(false);
             });
         })
     };
@@ -500,8 +652,14 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     break;
                 }
                 // Status + aggregate snapshots at ~5 Hz (cheaper than the view).
+                // Every await below can outlive the tab, after which the signals
+                // are disposed: re-check `alive` before touching them.
                 if tick % 4 == 0 {
-                    if let Some(st) = daq_stream_status().await {
+                    let st = daq_stream_status().await;
+                    if !alive.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Some(st) = st {
                         total_samples.set(st.total_samples);
                         streaming.set(st.active);
                         if st.sample_rate_hz > 0 {
@@ -509,7 +667,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         }
                         status.set(Some(st));
                     }
-                    if let Some(snap) = daq_get_snapshots().await {
+                    let snap = daq_get_snapshots().await;
+                    if !alive.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Some(snap) = snap {
                         if snap.sample_rate_hz > 0 {
                             rate_hz.set(snap.sample_rate_hz);
                         }
@@ -582,20 +744,28 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     }
 
     // Fetch integral whenever the selection changes.
-    Effect::new(move |_| {
-        let (s, e) = (sel_start.get(), sel_end.get());
-        if let (Some(s), Some(e)) = (s, e) {
-            if e > s {
-                spawn_local(async move {
-                    if let Some(r) = daq_get_integral(s, e).await {
-                        integral.set(Some(r));
-                    }
-                });
-                return;
+    {
+        let alive = alive.clone();
+        Effect::new(move |_| {
+            let (s, e) = (sel_start.get(), sel_end.get());
+            if let (Some(s), Some(e)) = (s, e) {
+                if e > s {
+                    let alive = alive.clone();
+                    spawn_local(async move {
+                        let r = daq_get_integral(s, e).await;
+                        if !alive.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        if let Some(r) = r {
+                            integral.set(Some(r));
+                        }
+                    });
+                    return;
+                }
             }
-        }
-        integral.set(None);
-    });
+            integral.set(None);
+        });
+    }
 
     // ---- Control actions ----------------------------------------------------
     // DAQ_K_SAMPLE_RATE_IDX key = DAQ_KEY(GRP_ACQ=0x01, idx=0x03) = 0x0103.
@@ -630,6 +800,21 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             daq_stream_stop().await;
         });
     };
+    let clear_capture = move |_| {
+        if autofocus.get_untracked() == -1 {
+            autofocus.set(-2);
+        }
+        sel_start.set(None);
+        sel_end.set(None);
+        sel_anchor.set(None);
+        view_start.set(0);
+        view_end.set(0);
+        spawn_local(async move {
+            if daq_clear_capture().await {
+                show_toast("Capture cleared", "ok");
+            }
+        });
+    };
 
     let apply_source = move || {
         let (v, il, en) = (
@@ -647,12 +832,12 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     let ok = pd.attached && pd.voltage_v >= 9.0 && pd.current_a >= 3.0;
                     if !ok {
                         let msg = if !pd.present {
-                            "\u{26a0} Blocked: USB-PD controller (HUSB238) not detected on I2C".to_string()
+                            "Blocked: USB-PD controller (HUSB238) not detected on I2C".to_string()
                         } else if !pd.attached {
-                            "\u{26a0} Blocked: No USB-PD source connected \u{2014} plug in a USB-C PD adapter (\u{2265} 9 V / 3 A)".to_string()
+                            "Blocked: no USB-PD source connected. Plug in a USB-C PD adapter (at least 9 V / 3 A)".to_string()
                         } else {
                             format!(
-                                "\u{26a0} Blocked: USB-PD source too weak ({:.1} V / {:.1} A) \u{2014} need \u{2265} 9 V / 3 A",
+                                "Blocked: USB-PD source too weak ({:.1} V / {:.1} A). Need at least 9 V / 3 A",
                                 pd.voltage_v, pd.current_a
                             )
                         };
@@ -691,7 +876,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             if cfg_ok {
                 show_toast(&format!("Rate set: {} SPS (restart stream to apply)", label), "ok");
             } else {
-                show_toast("Rate: USB command sent; BBP config unavailable — retry", "err");
+                show_toast("Rate: USB command sent; BBP config unavailable - retry", "err");
             }
         });
     };
@@ -700,7 +885,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             fft_nbins.get_untracked(),
             fft_window.get_untracked(),
             fft_source.get_untracked(),
-            fft_open.get_untracked(),
+            inspector.get_untracked() == 2,
         );
         spawn_local(async move {
             daq_set_fft(n, s, w, en).await;
@@ -856,17 +1041,59 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         }
     };
 
+    // Toggle an inspector panel; selecting the open one closes the inspector.
+    // The FFT engine only runs while its panel is showing.
+    let toggle_panel = move |p: u8| {
+        inspector.update(|c| *c = if *c == p { 0 } else { p });
+    };
+    {
+        let alive = alive.clone();
+        Effect::new(move |prev: Option<bool>| {
+            let open = inspector.get() == 2;
+            if prev.is_some() || open {
+                if prev != Some(open) {
+                    let (n, w, s) = (
+                        fft_nbins.get_untracked(),
+                        fft_window.get_untracked(),
+                        fft_source.get_untracked(),
+                    );
+                    let alive = alive.clone();
+                    spawn_local(async move {
+                        if alive.load(Ordering::SeqCst) {
+                            daq_set_fft(n, s, w, open).await;
+                        }
+                    });
+                }
+            }
+            open
+        });
+    }
+    let fft_panel_open = Signal::derive(move || inspector.get() == 2);
+    let trig_panel_open = Signal::derive(move || inspector.get() == 3);
+
     view! {
-        <div class="daq-tab" style="display:flex;flex-direction:column;gap:8px;">
-            // Toolbar
-            <div class="daq-toolbar" style="display:flex;align-items:center;gap:10px;flex-wrap:nowrap;overflow-x:auto;padding:6px 8px;background:#0f172a;border-radius:8px;">
+        <div class="dq-root">
+            // Control bar
+            <div class="dq-bar" role="toolbar" aria-label="Acquisition controls">
                 {move || if streaming.get() {
-                    view!{ <button class="btn btn-danger btn-sm" on:click=stop_stream>"■ Stop"</button> }.into_any()
+                    view!{
+                        <button class="btn btn-sm btn-tinted tone-red dq-run" title="Stop streaming" on:click=stop_stream>
+                            <Icon name="square" size=13 />"Stop"
+                        </button>
+                    }.into_any()
                 } else {
-                    view!{ <button class="btn btn-primary btn-sm" on:click=start_stream>"▶ Start"</button> }.into_any()
+                    view!{
+                        <button class="btn btn-sm btn-primary dq-run" title="Start streaming" on:click=start_stream>
+                            <Icon name="play" size=13 />"Run"
+                        </button>
+                    }.into_any()
                 }}
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px;">"Rate"
-                    <select class="select select-sm" on:change=move |ev| {
+                <button class="btn btn-sm" title="Clear the captured waveforms" aria-label="Clear capture" on:click=clear_capture>
+                    <Icon name="trash-2" size=13 />"Clear"
+                </button>
+                <label class="dq-ctl" title="Sample rate for the next run">
+                    <span class="dq-ctl-label">"Rate"</span>
+                    <select class="dropdown dropdown-sm" aria-label="Sample rate" on:change=move |ev| {
                         let v: u8 = event_target_value(&ev).parse().unwrap_or(3);
                         sample_rate_idx.set(v);
                     }>
@@ -875,8 +1102,9 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         }).collect::<Vec<_>>()}
                     </select>
                 </label>
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px;" title="Autofocus the view on the most recent data, or show the whole capture">"Autofocus"
-                    <select class="select select-sm" on:change=move |ev| {
+                <label class="dq-ctl" title="Autofocus the view on the most recent data, or show the whole capture">
+                    <span class="dq-ctl-label">"Focus"</span>
+                    <select class="dropdown dropdown-sm" aria-label="Autofocus" on:change=move |ev| {
                         let v: i64 = event_target_value(&ev).parse().unwrap_or(-2);
                         autofocus.set(v);
                     }>
@@ -888,63 +1116,78 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         <option value="-1" selected=move || autofocus.get() == -1>"Manual"</option>
                     </select>
                 </label>
-                <span style="width:1px;height:20px;background:#334155;"></span>
-                // Track toggles
-                <TrackToggle sig=show_i info=TRACK_I/>
-                <TrackToggle sig=show_v info=TRACK_V/>
-                <TrackToggle sig=show_p info=TRACK_P/>
-                <label style="display:flex;align-items:center;gap:4px;font-size:12px;" title="Tint current by fusion source (FINE/COARSE/BLEND)">
-                    <input type="checkbox" prop:checked=move || tint_source.get()
-                        on:change=move |ev| tint_source.set(event_target_checked(&ev)) />
+                <span class="dq-sep" aria-hidden="true"></span>
+                // Series visibility
+                <div class="dq-chips" role="group" aria-label="Visible traces">
+                    <SeriesChip sig=show_i info=TRACK_I/>
+                    <SeriesChip sig=show_v info=TRACK_V/>
+                    <SeriesChip sig=show_p info=TRACK_P/>
+                </div>
+                <button type="button" class="dq-chip" class:on=move || tint_source.get()
+                    aria-pressed=move || if tint_source.get() { "true" } else { "false" }
+                    title="Tint the current trace by fusion source (fine, coarse, blend)"
+                    on:click=move |_| tint_source.update(|t| *t = !*t)>
                     "Source tint"
-                </label>
-                {move || tint_source.get().then(|| view!{
-                    <span style="display:flex;align-items:center;gap:8px;font-size:10px;color:#94a3b8;"
-                        title="The current trace is coloured by the autorange source: Fine = low-current precision path, Coarse = high-current path, Blend = transition.">
-                        <span style="display:flex;align-items:center;gap:3px;"><span style="width:9px;height:9px;border-radius:2px;background:#3b82f6;"></span>"Fine"</span>
-                        <span style="display:flex;align-items:center;gap:3px;"><span style="width:9px;height:9px;border-radius:2px;background:#f59e0b;"></span>"Coarse"</span>
-                        <span style="display:flex;align-items:center;gap:3px;"><span style="width:9px;height:9px;border-radius:2px;background:#a855f7;"></span>"Blend"</span>
-                    </span>
-                })}
-                <button class="btn btn-ghost btn-sm" title="Toggle stacked lanes vs. all signals overlaid in one view"
-                    on:click=move |_| combined.update(|c| *c = !*c)>
-                    {move || if combined.get() { "⊞ Stacked" } else { "⊟ Combined" }}
                 </button>
-                <span style="flex:1;min-width:8px;"></span>
-                <span style="font-size:11px;color:#64748b;flex-shrink:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">"Drag: select · Wheel: zoom · Drag timeline: navigate"</span>
-                <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-                    <button class="btn btn-ghost btn-sm" title="Toggle performance metrics overlay"
-                        style=move || menu_btn_style(perf_open.get(), "#f59e0b")
-                        on:click=move |_| perf_open.update(|o| *o = !*o)>
-                        {move || if perf_open.get() { "⏱ Perf ✓" } else { "⏱ Perf" }}
-                    </button>
-                    <button class="btn btn-ghost btn-sm" title="Continuous FFT spectrum panel"
-                        style=move || menu_btn_style(fft_open.get(), "#a855f7")
+                <SegmentedControl
+                    options=vec![(false, "Stacked"), (true, "Combined")]
+                    value=combined
+                    on_change=Callback::new(move |v: bool| combined.set(v))
+                    small=true
+                    aria_label="Trace layout"
+                />
+                <span class="dq-spacer"></span>
+                <div class="dq-vdut" role="group" aria-label="DUT supply">
+                    <Icon name="plug-zap" size=14 />
+                    <span class="dq-vdut-label">"VDUT"</span>
+                    <span class="dq-vdut-val num" title="DUT supply setpoint (change it in Settings)">
+                        {move || format!("{:.2} V", vdut_mv.get() as f64 / 1000.0)}
+                    </span>
+                    <button type="button" role="switch" class="switch switch-sm" class:on=move || source_enable.get()
+                        aria-checked=move || if source_enable.get() { "true" } else { "false" }
+                        aria-label="DUT supply output"
+                        title=move || if source_enable.get() { "DUT supply on - click to turn off" } else { "DUT supply off - click to turn on" }
                         on:click=move |_| {
-                            let open = !fft_open.get_untracked();
-                            fft_open.set(open);
-                            let (n,w,s) = (fft_nbins.get_untracked(), fft_window.get_untracked(), fft_source.get_untracked());
-                            spawn_local(async move { daq_set_fft(n, s, w, open).await; });
-                        }>{move || if fft_open.get() { "📈 FFT ◀" } else { "📈 FFT ▶" }}</button>
-                    <button class="btn btn-ghost btn-sm" title="Acquisition + source settings"
-                        style=move || menu_btn_style(settings_open.get(), "#38bdf8")
-                        on:click=move |_| settings_open.update(|o| *o = !*o)>
-                        {move || if settings_open.get() { "⚙ Settings ◀" } else { "⚙ Settings ▶" }}
+                            source_enable.update(|e| *e = !*e);
+                            apply_source();
+                        }></button>
+                </div>
+                <div class="dq-tools" role="group" aria-label="Panels">
+                    <button type="button" class=move || tgl_class(perf_open.get())
+                        aria-pressed=move || if perf_open.get() { "true" } else { "false" }
+                        aria-label="Performance" title="Performance metrics overlay"
+                        on:click=move |_| perf_open.update(|o| *o = !*o)>
+                        <Icon name="gauge" size=15 /><span class="dq-tgl-text">"Perf"</span>
                     </button>
-                    <button class="btn btn-ghost btn-sm" title="Trigger / flag IO configuration"
-                        style=move || menu_btn_style(trig_open.get(), "#22d3ee")
-                        on:click=move |_| trig_open.update(|o| *o = !*o)>
-                        {move || if trig_open.get() { "⚑ Triggers ◀" } else { "⚑ Triggers ▶" }}
+                    <button type="button" class=move || tgl_class(inspector.get() == 2)
+                        aria-pressed=move || if inspector.get() == 2 { "true" } else { "false" }
+                        aria-label="FFT" title="Continuous FFT spectrum panel"
+                        on:click=move |_| toggle_panel(2)>
+                        <Icon name="activity" size=15 /><span class="dq-tgl-text">"FFT"</span>
                     </button>
-                    <button class="btn btn-ghost btn-sm" title="SMU calibration wizard"
-                        style=move || menu_btn_style(cal_open.get(), "#34d399")
+                    <button type="button" class=move || tgl_class(inspector.get() == 1)
+                        aria-pressed=move || if inspector.get() == 1 { "true" } else { "false" }
+                        aria-label="Settings" title="Acquisition and source settings"
+                        on:click=move |_| toggle_panel(1)>
+                        <Icon name="sliders-horizontal" size=15 /><span class="dq-tgl-text">"Settings"</span>
+                    </button>
+                    <button type="button" class=move || tgl_class(inspector.get() == 3)
+                        aria-pressed=move || if inspector.get() == 3 { "true" } else { "false" }
+                        aria-label="Triggers" title="Trigger and flag IO configuration"
+                        on:click=move |_| toggle_panel(3)>
+                        <Icon name="flag" size=15 /><span class="dq-tgl-text">"Triggers"</span>
+                    </button>
+                    <button type="button" class=move || tgl_class(cal_open.get())
+                        aria-pressed=move || if cal_open.get() { "true" } else { "false" }
+                        aria-label="Calibrate" title="SMU calibration wizard"
                         on:click=move |_| cal_open.set(true)>
-                        "🔧 Calibrate"
+                        <Icon name="ruler" size=15 /><span class="dq-tgl-text">"Calibrate"</span>
                     </button>
                 </div>
             </div>
 
-            // Live readouts
+            // Live readouts + stream status
+            <div class="dq-strip">
             {move || {
                 let snap = snapshots.get();
                 let st = snap.as_ref().and_then(|s| s.status);
@@ -972,73 +1215,84 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                          Check SPI3 bus, ADAQ reset line (GPIO2), and analog \
                          rail power sequence."
                     } else if s.fine_diag_sticky & (1 << 4) != 0 {
-                        "FINE ADAQ: ERR_EXT_CLK_QUAL — external MCLK absent \
+                        "FINE ADAQ: ERR_EXT_CLK_QUAL - external MCLK absent \
                          or out of spec. Check SiT8208 oscillator and \
                          CDCLVC1104 clock distribution (3V3 PG gate)."
                     } else if s.fine_diag_sticky & (1 << 6) != 0 {
-                        "FINE ADAQ: ADC_ERROR — converter self-test fault. \
+                        "FINE ADAQ: ADC_ERROR - converter self-test fault. \
                          May indicate front-end power issue or damaged device."
                     } else if s.fine_diag_sticky & (1 << 2) != 0 {
-                        "FINE ADAQ: FILT_NOT_SETTLED — filter settling fault. \
+                        "FINE ADAQ: FILT_NOT_SETTLED - filter settling fault. \
                          Check MCLK continuity and SPI config (MODE 3, \
                          ≤20 MHz)."
                     } else if s.fine_diag_sticky & (1 << 1) != 0 {
-                        "FINE ADAQ: SPI_ERROR — communication fault on SPI3 \
+                        "FINE ADAQ: SPI_ERROR - communication fault on SPI3 \
                          bus. Check SCLK20/MOSI13/MISO21/CS12 routing."
                     } else if s.fine_diag_sticky & (1 << 3) != 0 {
-                        "FINE ADAQ: FILT_SATURATED — input out of range. \
+                        "FINE ADAQ: FILT_SATURATED - input out of range. \
                          Fine trust window exceeded or shunt mux misconfigured."
                     } else {
-                        "FINE ADAQ has status errors — fused current is \
+                        "FINE ADAQ has status errors - fused current is \
                          COARSE-only."
                     };
                     if !fine_ok || s.fine_err_pct >= 90 {
-                        Some(("FINE N/A", "#ef4444", cause))
+                        Some(("FINE N/A", "red", cause))
                     } else if s.fine_err_pct > 0 {
-                        Some(("FINE ERR", "#f59e0b", cause))
+                        Some(("FINE ERR", "orange", cause))
                     } else {
                         None
                     }
                 });
+                let val = |v: Option<String>| v.unwrap_or_else(|| NO_VALUE.to_string());
                 view!{
-                    <div class="daq-readouts" style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;padding:4px 8px;align-items:center;">
-                        <Readout label="V" value=en.map(|e| fmt_eng(e.last_v as f64, "V")).unwrap_or("—".into()) color=TRACK_V.color/>
-                        <Readout label="I" value=en.map(|e| fmt_eng(e.last_i as f64, "A")).unwrap_or("—".into()) color=TRACK_I.color/>
-                        <Readout label="P" value=en.map(|e| fmt_eng(e.last_p as f64, "W")).unwrap_or("—".into()) color=TRACK_P.color/>
-                        <Readout label="Energy" value=en.map(|e| format!("{:.3} mWh", e.energy_mwh)).unwrap_or("—".into()) color="#e2e8f0"/>
-                        <Readout label="Charge" value=en.map(|e| format!("{:.3} mAh", e.charge_mah)).unwrap_or("—".into()) color="#e2e8f0"/>
-                        <Readout label="Range" value=st.map(|s| range_name(s.range)).unwrap_or("—".into()) color="#94a3b8"/>
-                        {fine_badge.map(|(label, color, tip)| view!{
-                            <span
-                                title=tip
-                                style=format!(
-                                    "font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;\
-                                     color:{c};border:1px solid {c}66;background:{c}1a;cursor:help;",
-                                    c = color
-                                )
-                            >{label}</span>
+                    <div class="dq-readouts" role="group" aria-label="Live readings">
+                        <Tile label="Voltage" dot="voltage" value=val(en.map(|e| fmt_eng(e.last_v as f64, "V")))/>
+                        <Tile label="Current" dot="current" value=val(en.map(|e| fmt_eng(e.last_i as f64, "A")))/>
+                        <Tile label="Power" dot="power" value=val(en.map(|e| fmt_eng(e.last_p as f64, "W")))/>
+                        <Tile label="Energy" dot="" value=val(en.map(|e| format!("{:.3} mWh", e.energy_mwh)))/>
+                        <Tile label="Charge" dot="" value=val(en.map(|e| format!("{:.3} mAh", e.charge_mah)))/>
+                        <Tile label="Range" dot="" value=val(st.map(|s| range_name(s.range)))/>
+                        {fine_badge.map(|(label, tone, tip)| view!{
+                            <span class=format!("badge tone-{tone} dq-health") title=tip>{label}</span>
                         })}
                         {st.filter(|s| (s.adaq_ok_bits & 1) != 0 && s.drop_fine > 500).map(|s| view!{
-                            <span
-                                title=format!("Sequence-pairing resync drops — FINE: {}, COARSE: {}. \
+                            <span class="badge tone-orange dq-health"
+                                title=format!("Sequence-pairing resync drops - FINE: {}, COARSE: {}. \
                                     High counts indicate FINE/COARSE ring overflow or ODR mismatch.",
                                     s.drop_fine, s.drop_coarse)
-                                style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:8px;\
-                                       color:#f59e0b;border:1px solid #f59e0b66;background:#f59e0b1a;cursor:help;"
-                            >"DROPS"</span>
+                            >"Drops"</span>
                         })}
                     </div>
                 }
             }}
+            <div class="dq-status" role="status">
+                {move || tint_source.get().then(|| view!{
+                    <span class="dq-legend"
+                        title="The current trace is coloured by the autorange source: Fine = low-current precision path, Coarse = high-current path, Blend = transition.">
+                        "Current source"
+                        <span class="dq-legend-item"><span class="dq-sw sw-fine"></span>"Fine"</span>
+                        <span class="dq-legend-item"><span class="dq-sw sw-coarse"></span>"Coarse"</span>
+                        <span class="dq-legend-item"><span class="dq-sw sw-blend"></span>"Blend"</span>
+                    </span>
+                })}
+                <span class="dq-hint">"Drag to select, scroll to zoom, drag the timeline to navigate"</span>
+                <span class=move || if streaming.get() { "dot tone-green live" } else { "dot" }></span>
+                <span>{move || if streaming.get() { "Streaming" } else { "Stopped" }}</span>
+                <span class="dq-status-meta">
+                    {move || format!("{:.1} s", total_samples.get() as f64 / rate_hz.get().max(1) as f64)}
+                </span>
+            </div>
+            </div>
 
-            // Main split: plot + (optional) FFT panel + (optional) settings
-            <div style="display:flex;flex:1;min-height:0;gap:8px;">
+            // Main split: plot column + right inspector
+            <div class="dq-main">
                 // Plot column
-                <div style="flex:1;min-width:0;display:flex;flex-direction:column;position:relative;">
-                    <div style="flex:1;position:relative;min-height:200px;border:1px solid #1e293b;border-radius:8px;overflow:hidden;">
-                        <canvas node_ref=gl_canvas style="position:absolute;inset:0;width:100%;height:100%;"></canvas>
-                        <canvas node_ref=overlay
-                            style="position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;"
+                <div class="dq-plot-col">
+                    <div class="dq-plot">
+                        <canvas node_ref=gl_canvas class="dq-canvas" aria-hidden="true"></canvas>
+                        <canvas node_ref=overlay class="dq-canvas dq-canvas-top"
+                            role="img" aria-label="Current, voltage and power traces"
+                            title="Drag to select, scroll to zoom, drag the timeline to navigate"
                             on:mousedown=on_mousedown
                             on:mousemove=on_mousemove
                             on:mouseup=on_mouseup
@@ -1068,11 +1322,11 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             let fill = if cap > 0 { (tot as f64 / cap as f64 * 100.0).min(100.0) } else { 0.0 };
                             let raw_held = tot.min(raw_cap);
                             view!{
-                                <div style="position:absolute;top:8px;right:8px;z-index:6;background:rgba(2,6,23,0.88);border:1px solid #1e293b;border-radius:8px;padding:8px 10px;font-size:11px;font-variant-numeric:tabular-nums;color:#cbd5e1;min-width:198px;pointer-events:none;">
-                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:12px;">
-                                        <strong style="color:#22d3ee;letter-spacing:0.5px;">"PERFORMANCE"</strong>
-                                        <span style=format!("font-size:9px;font-weight:800;padding:1px 7px;border-radius:8px;color:{c};border:1px solid {c}66;background:{c}1a;", c = if keepup { "#10b981" } else { "#ef4444" })>
-                                            {if keepup { "KEEPING UP" } else { "BEHIND" }}
+                                <div class="dq-perf" role="status" aria-label="Performance metrics">
+                                    <div class="dq-perf-head">
+                                        <strong>"Performance"</strong>
+                                        <span class=if keepup { "badge tone-green" } else { "badge tone-red" }>
+                                            {if keepup { "Keeping up" } else { "Behind" }}
                                         </span>
                                     </div>
                                     <PerfRow label="Ingest" value=format!("{:.2} MSa/s", ing / 1e6)/>
@@ -1082,7 +1336,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                                     <PerfRow label="Store" value=format!("{:.0} MB", mem)/>
                                     <PerfRow label="Raw window" value=format!("{:.1} M", raw_held as f64 / 1e6)/>
                                     <PerfRow label="History cap" value=format!("{} M ({:.0}%)", cap / 1_000_000, fill)/>
-                                    <PerfRow label="Actual rate" value={if actual_rate > 0.0 { format!("{:.3} kSPS", actual_rate / 1e3) } else { "\u{2014}".to_string() }}/>
+                                    <PerfRow label="Actual rate" value={if actual_rate > 0.0 { format!("{:.3} kSPS", actual_rate / 1e3) } else { NO_VALUE.to_string() }}/>
                                     <PerfRow label="Dropped" value=format!("{}", dropped)/>
                                     <PerfRow label="USB drops" value=format!("{}", fifo_drops)/>
                                     <PerfRow label="Throughput" value=format!("{:.2} MB/s", bps as f64 / 1e6)/>
@@ -1090,19 +1344,19 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             }
                         })}
                     </div>
-                    // Selection integral panel
+                    // Selection integral strip
                     {move || {
                         integral.get().map(|r| {
                             view!{
-                                <div class="daq-integral" style="margin-top:6px;padding:8px 12px;background:#0f172a;border-radius:8px;display:flex;gap:20px;flex-wrap:wrap;font-size:12px;">
-                                    <strong style="color:#a855f7;">"Selection"</strong>
-                                    <span>"Δt: "{fmt_time(r.duration_s)}</span>
-                                    <span>"Charge: "{format!("{:.4} mAh", r.charge_mah)}</span>
-                                    <span>"Energy: "{format!("{:.4} mWh", r.energy_mwh)}</span>
-                                    <span>"Avg I: "{fmt_eng(r.avg_i, "A")}</span>
-                                    <span>"Avg P: "{fmt_eng(r.avg_p, "W")}</span>
-                                    <span style="color:#f59e0b;" title="Projected consumption if this pattern ran for one hour">
-                                        "→ 1h: "{format!("{:.2} mWh", r.projected_mwh_per_hour)}
+                                <div class="dq-integral" role="status" aria-label="Selection summary">
+                                    <span class="badge tone-blue">"Selection"</span>
+                                    <Kv label="Duration" value=fmt_time(r.duration_s)/>
+                                    <Kv label="Charge" value=format!("{:.4} mAh", r.charge_mah)/>
+                                    <Kv label="Energy" value=format!("{:.4} mWh", r.energy_mwh)/>
+                                    <Kv label="Avg current" value=fmt_eng(r.avg_i, "A")/>
+                                    <Kv label="Avg power" value=fmt_eng(r.avg_p, "W")/>
+                                    <span title="Projected consumption if this pattern ran for one hour">
+                                        <Kv label="Per hour" value=format!("{:.2} mWh", r.projected_mwh_per_hour)/>
                                     </span>
                                 </div>
                             }
@@ -1110,20 +1364,21 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     }}
                 </div>
 
-                // FFT slide-in panel
-                <div class="daq-fft-panel"
-                    style=move || format!(
-                        "width:{};min-width:0;overflow:hidden;transition:width 0.3s ease;background:#0f172a;border-radius:8px;",
-                        if fft_open.get() { "320px" } else { "0px" })
-                >
-                    <div style="padding:12px;width:320px;font-size:13px;">
-                        <FftPanel snapshots=snapshots fft_nbins=fft_nbins fft_window=fft_window fft_source=fft_source apply=Rc::new(apply_fft.clone())/>
+                // Inspector: one panel at a time, all kept mounted so state survives.
+                <aside class="inspector dq-inspector" aria-label="Inspector" prop:hidden=move || inspector.get() == 0>
+                    <div class="inspector-header">
+                        <span>{move || match inspector.get() {
+                            1 => "Settings",
+                            2 => "Spectrum",
+                            3 => "Triggers and flags",
+                            _ => "",
+                        }}</span>
+                        <button type="button" class="btn btn-plain btn-sm btn-icon" aria-label="Close inspector" title="Close inspector"
+                            on:click=move |_| inspector.set(0)>
+                            <Icon name="x" size=15 />
+                        </button>
                     </div>
-                </div>
-
-                // Settings panel
-                <Show when=move || settings_open.get()>
-                    <div class="daq-settings" style="width:332px;overflow-y:auto;background:#0f172a;border-radius:8px;padding:12px;font-size:13px;">
+                    <div class="dq-panel" prop:hidden=move || inspector.get() != 1>
                         <SettingsPanel
                             sample_rate_idx=sample_rate_idx voltage_rate_idx=voltage_rate_idx
                             decimation=decimation hw_filter_idx=hw_filter_idx hw_decim_idx=hw_decim_idx sr_mode=sr_mode
@@ -1136,14 +1391,17 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                             apply_rate=Rc::new(apply_rate.clone())
                         />
                     </div>
-                </Show>
-
-                // SMU calibration wizard (modal; control plane via S3 BBP).
-                <CalibrationWizard open=cal_open/>
-
-                // Trigger / flag configuration slide-in panel.
-                <TriggerPanel open=trig_open/>
+                    <div class="dq-panel" prop:hidden=move || inspector.get() != 2>
+                        <FftPanel open=fft_panel_open snapshots=snapshots fft_nbins=fft_nbins fft_window=fft_window fft_source=fft_source apply=Rc::new(apply_fft.clone())/>
+                    </div>
+                    <div class="dq-panel" prop:hidden=move || inspector.get() != 3>
+                        <TriggerPanel open=trig_panel_open/>
+                    </div>
+                </aside>
             </div>
+
+            // SMU calibration wizard (modal; control plane via S3 BBP).
+            <CalibrationWizard open=cal_open/>
         </div>
     }
 }
@@ -1153,7 +1411,7 @@ fn range_name(r: u8) -> String {
         0 => "HI 51Ω".into(),
         1 => "MID 2Ω".into(),
         2 => "LO 50mΩ".into(),
-        _ => "—".into(),
+        _ => NO_VALUE.into(),
     }
 }
 
@@ -1419,6 +1677,7 @@ fn draw_overlay(
     _dragging: bool,
 ) {
     let Some(ctx) = ov2d(canvas) else { return };
+    let pal = palette();
     ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
     ctx.clear_rect(0.0, 0.0, css_w, css_h);
 
@@ -1429,9 +1688,9 @@ fn draw_overlay(
     let hm_top = css_h - HEATMAP_H;
 
     let Some(vd) = vd else {
-        ctx.set_fill_style_str("#64748b");
-        ctx.set_font("13px sans-serif");
-        let _ = ctx.fill_text("Waiting for stream…", plot_x0 + 16.0, css_h / 2.0);
+        ctx.set_fill_style_str(&pal.axis);
+        ctx.set_font(&pal.font(13));
+        let _ = ctx.fill_text("Waiting for stream...", plot_x0 + 16.0, css_h / 2.0);
         return;
     };
 
@@ -1447,25 +1706,31 @@ fn draw_overlay(
     let cols = vd.i_min.len();
     let sample_to_x = |s: u64| plot_x0 + ((s.saturating_sub(vs)) as f64 / span) * plot_w;
 
-    // Lane frames + labels.
-    ctx.set_font("11px sans-serif");
+    // Lane frames + labels. Series identity is a small dot; the name stays neutral.
+    let dot = |x: f64, y: f64, color: &str| {
+        ctx.set_fill_style_str(color);
+        ctx.begin_path();
+        let _ = ctx.arc(x, y, 3.5, 0.0, std::f64::consts::TAU);
+        ctx.fill();
+    };
+    ctx.set_font(&pal.font(11));
     if combined {
-        ctx.set_stroke_style_str("#1e293b");
+        ctx.set_stroke_style_str(&pal.grid);
         ctx.set_line_width(1.0);
         ctx.stroke_rect(plot_x0, trace_top, plot_w, trace_bottom - trace_top);
         let mut ly = trace_top + 14.0;
         for t in tracks {
-            ctx.set_fill_style_str(t.color);
-            let _ = ctx.fill_text(t.name, plot_x0 + 8.0, ly);
+            dot(plot_x0 + 12.0, ly - 4.0, pal.series(t.name));
+            ctx.set_fill_style_str(&pal.text);
+            let _ = ctx.fill_text(t.name, plot_x0 + 21.0, ly);
             ly += 14.0;
         }
     } else {
         for (i, t) in tracks.iter().enumerate() {
             let (y_top, y_bottom) = regions[i];
-            ctx.set_stroke_style_str("#1e293b");
+            ctx.set_stroke_style_str(&pal.grid);
             ctx.set_line_width(1.0);
             ctx.stroke_rect(plot_x0, y_top, plot_w, y_bottom - y_top);
-            ctx.set_stroke_style_str("#13203a");
             ctx.begin_path();
             ctx.move_to(plot_x0, (y_top + y_bottom) / 2.0);
             ctx.line_to(plot_x0 + plot_w, (y_top + y_bottom) / 2.0);
@@ -1481,9 +1746,10 @@ fn draw_overlay(
                 };
                 col_range_gapped(t.name, vmin, vmax, gap_slice)
             };
-            ctx.set_fill_style_str(t.color);
-            let _ = ctx.fill_text(t.name, 6.0, y_top + 14.0);
-            ctx.set_fill_style_str("#64748b");
+            dot(12.0, y_top + 10.0, pal.series(t.name));
+            ctx.set_fill_style_str(&pal.text);
+            let _ = ctx.fill_text(t.name, 21.0, y_top + 14.0);
+            ctx.set_fill_style_str(&pal.axis);
             let _ = ctx.fill_text(&fmt_eng(hi as f64, t.unit), 6.0, y_top + 28.0);
             let _ = ctx.fill_text(&fmt_eng(lo as f64, t.unit), 6.0, y_bottom - 4.0);
         }
@@ -1494,9 +1760,9 @@ fn draw_overlay(
         if e > s {
             let x0 = sample_to_x(s).max(plot_x0);
             let x1 = sample_to_x(e).min(plot_x0 + plot_w);
-            ctx.set_fill_style_str("rgba(168,85,247,0.18)");
+            ctx.set_fill_style_str(&pal.accent_tint);
             ctx.fill_rect(x0, trace_top, (x1 - x0).max(0.0), trace_bottom - trace_top);
-            ctx.set_stroke_style_str("#a855f7");
+            ctx.set_stroke_style_str(&pal.accent);
             ctx.set_line_width(1.0);
             ctx.begin_path();
             ctx.move_to(x0, trace_top);
@@ -1508,53 +1774,60 @@ fn draw_overlay(
     }
 
     // Time ruler.
-    ctx.set_font("10px sans-serif");
+    ctx.set_font(&pal.font(10));
     for k in 0..=5 {
         let frac = k as f64 / 5.0;
         let x = plot_x0 + frac * plot_w;
         let t = (vs as f64 + frac * span) / rate;
-        ctx.set_stroke_style_str("#16233d");
+        ctx.set_stroke_style_str(&pal.grid);
         ctx.begin_path();
         ctx.move_to(x, trace_top);
         ctx.line_to(x, trace_bottom);
         ctx.stroke();
-        ctx.set_fill_style_str("#94a3b8");
+        ctx.set_fill_style_str(&pal.axis);
         let _ = ctx.fill_text(&fmt_time(t), x + 2.0, trace_bottom + 14.0);
     }
 
-    // Event markers (flags + triggers) — vertical lines at exact sample
-    // positions, drawn at full fidelity regardless of decimation. Flags are
-    // pink, triggers cyan; a small tick + IO label sits in the timeline strip.
+    // Event markers (flags + triggers) \u2014 vertical lines at exact sample
+    // positions, drawn at full fidelity regardless of decimation. Triggers are
+    // solid and heavier, flags dashed; both carry a text tag in the timeline strip.
+    let mut last_label_x = f64::NEG_INFINITY;
     for m in &vd.markers {
         if m.sample_index < vs || m.sample_index > ve {
             continue;
         }
         let x = sample_to_x(m.sample_index);
         let is_trig = m.kind == 1;
-        let color = if is_trig { "#22d3ee" } else { "#ec4899" };
-        ctx.set_stroke_style_str(color);
+        ctx.set_stroke_style_str(&pal.marker);
         ctx.set_line_width(if is_trig { 1.6 } else { 1.0 });
+        if !is_trig {
+            let _ = ctx.set_line_dash(&js_sys::Array::of2(&4.0.into(), &3.0.into()));
+        }
         ctx.begin_path();
         ctx.move_to(x, trace_top);
         ctx.line_to(x, trace_bottom);
         ctx.stroke();
+        let _ = ctx.set_line_dash(&js_sys::Array::new());
         // Timeline tick + IO label.
-        ctx.set_fill_style_str(color);
+        ctx.set_fill_style_str(&pal.marker);
         ctx.fill_rect(x - 1.0, trace_bottom, 2.0, RULER_H);
-        ctx.set_font("9px sans-serif");
-        let _ = ctx.fill_text(
-            &format!("{}{}", if is_trig { "▶" } else { "⚑" }, m.channel),
-            x + 2.0,
-            trace_top + 9.0,
-        );
-        ctx.set_font("10px sans-serif");
+        ctx.set_font(&pal.font(10));
+        // Dense markers: label only those with room, the lines still all draw.
+        if x - last_label_x >= 44.0 {
+            let _ = ctx.fill_text(
+                &format!("{} {}", if is_trig { "Trig" } else { "Flag" }, m.channel),
+                x + 3.0,
+                trace_top + 10.0,
+            );
+            last_label_x = x;
+        }
     }
 
     // Hover guide + per-track readout tooltip.
     if let Some((mx, my)) = hover {
         if mx >= plot_x0 && mx <= plot_x0 + plot_w && my >= trace_top && my <= trace_bottom && cols > 0
         {
-            ctx.set_stroke_style_str("#64748b");
+            ctx.set_stroke_style_str(&pal.axis);
             ctx.set_line_width(1.0);
             ctx.begin_path();
             ctx.move_to(mx, trace_top);
@@ -1571,11 +1844,15 @@ fn draw_overlay(
                     0.0
                 }
             };
-            let mut lines: Vec<(String, &str)> =
-                vec![(format!("t = {}", fmt_time(t)), "#cbd5e1")];
+            // (text, series colour for the dot; None = plain line)
+            let mut lines: Vec<(String, Option<&str>)> =
+                vec![(format!("t = {}", fmt_time(t)), None)];
             if combined {
                 for tr in tracks {
-                    lines.push((format!("{}: {}", tr.name, fmt_eng(val_of(tr.name), tr.unit)), tr.color));
+                    lines.push((
+                        format!("{}: {}", tr.name, fmt_eng(val_of(tr.name), tr.unit)),
+                        Some(pal.series(tr.name)),
+                    ));
                 }
             } else {
                 let mut chosen = None;
@@ -1588,11 +1865,14 @@ fn draw_overlay(
                 }
                 if let Some(i) = chosen {
                     let tr = tracks[i];
-                    lines.push((format!("{}: {}", tr.name, fmt_eng(val_of(tr.name), tr.unit)), tr.color));
+                    lines.push((
+                        format!("{}: {}", tr.name, fmt_eng(val_of(tr.name), tr.unit)),
+                        Some(pal.series(tr.name)),
+                    ));
                 }
             }
-            let bw = 160.0;
-            let lh = 15.0;
+            let bw = 168.0;
+            let lh = 16.0;
             let bh = lh * lines.len() as f64 + 8.0;
             let mut bx = mx + 12.0;
             if bx + bw > css_w {
@@ -1605,24 +1885,31 @@ fn draw_overlay(
             if by < trace_top {
                 by = trace_top;
             }
-            ctx.set_fill_style_str("rgba(2,6,23,0.92)");
+            ctx.set_fill_style_str(&pal.surface);
             ctx.fill_rect(bx, by, bw, bh);
-            ctx.set_stroke_style_str("#334155");
+            ctx.set_stroke_style_str(&pal.sep);
             ctx.set_line_width(1.0);
             ctx.stroke_rect(bx, by, bw, bh);
-            ctx.set_font("11px sans-serif");
+            ctx.set_font(&pal.font(11));
             for (k, (txt, color)) in lines.iter().enumerate() {
-                ctx.set_fill_style_str(color);
-                let _ = ctx.fill_text(txt, bx + 8.0, by + 14.0 + k as f64 * lh);
+                let ly = by + 15.0 + k as f64 * lh;
+                let mut tx = bx + 8.0;
+                if let Some(c) = color {
+                    dot(bx + 12.0, ly - 4.0, c);
+                    tx = bx + 21.0;
+                }
+                ctx.set_fill_style_str(&pal.text);
+                let _ = ctx.fill_text(txt, tx, ly);
             }
         }
     }
 
     // Full-capture dI/dt minimap + viewport indicator (click/drag to navigate).
-    ctx.set_fill_style_str("#0b1220");
+    // Intensity is the accent colour's opacity, so it reads in both themes.
+    ctx.set_fill_style_str(&pal.grid);
     ctx.fill_rect(plot_x0, hm_top, plot_w, HEATMAP_H);
-    ctx.set_fill_style_str("#64748b");
-    ctx.set_font("10px sans-serif");
+    ctx.set_fill_style_str(&pal.axis);
+    ctx.set_font(&pal.font(10));
     let _ = ctx.fill_text("dI/dt", 6.0, hm_top + 13.0);
     let _ = ctx.fill_text("(all)", 6.0, hm_top + 26.0);
     if let Some(ov) = overview {
@@ -1630,53 +1917,78 @@ fn draw_overlay(
         if n > 0 {
             let max_d = ov.didt.iter().cloned().fold(0.0f32, f32::max).max(1e-9);
             let cw = plot_w / n as f64;
+            ctx.set_fill_style_str(&pal.accent);
             for (i, &d) in ov.didt.iter().enumerate() {
                 let tt = (d / max_d).clamp(0.0, 1.0) as f64;
-                let r = (40.0 + 215.0 * tt) as u8;
-                let g = (70.0 * (1.0 - tt)) as u8;
-                let b = (170.0 * (1.0 - tt)) as u8;
-                ctx.set_fill_style_str(&format!("rgb({r},{g},{b})"));
+                ctx.set_global_alpha(0.12 + 0.88 * tt);
                 ctx.fill_rect(plot_x0 + i as f64 * cw, hm_top + 2.0, cw.max(1.0), HEATMAP_H - 4.0);
             }
+            ctx.set_global_alpha(1.0);
         }
     }
     let vx0 = plot_x0 + (vs as f64 / total as f64) * plot_w;
     let vx1 = plot_x0 + (ve as f64 / total as f64) * plot_w;
-    ctx.set_fill_style_str("rgba(168,85,247,0.22)");
+    ctx.set_fill_style_str(&pal.accent_tint_strong);
     ctx.fill_rect(vx0, hm_top, (vx1 - vx0).max(2.0), HEATMAP_H);
-    ctx.set_stroke_style_str("#a855f7");
+    ctx.set_stroke_style_str(&pal.text);
     ctx.set_line_width(1.5);
     ctx.stroke_rect(vx0, hm_top, (vx1 - vx0).max(2.0), HEATMAP_H);
 
     if vd.overflow {
-        ctx.set_fill_style_str("#f59e0b");
-        ctx.set_font("11px sans-serif");
-        let _ = ctx.fill_text("ACQUISITION TRUNCATED", plot_x0 + 8.0, trace_top + 12.0);
+        ctx.set_fill_style_str(&pal.warn);
+        ctx.set_font(&pal.font(11));
+        let _ = ctx.fill_text("Acquisition truncated", plot_x0 + 8.0, trace_top + 12.0);
     }
 }
 
 // ---- Sub-components ---------------------------------------------------------
 
+fn tgl_class(on: bool) -> &'static str {
+    if on {
+        "btn btn-sm btn-tinted dq-tgl"
+    } else {
+        "btn btn-sm btn-plain dq-tgl"
+    }
+}
+
+/// Series visibility chip: channel-colour dot + name, toggles a trace.
 #[component]
-fn TrackToggle(sig: RwSignal<bool>, info: TrackInfo) -> impl IntoView {
+fn SeriesChip(sig: RwSignal<bool>, info: TrackInfo) -> impl IntoView {
     view! {
-        <label style=move || format!(
-            "display:flex;align-items:center;gap:4px;font-size:12px;color:{};opacity:{};cursor:pointer;",
-            info.color, if sig.get() { "1" } else { "0.45" })
-        >
-            <input type="checkbox" prop:checked=move || sig.get()
-                on:change=move |ev| sig.set(event_target_checked(&ev)) />
+        <button type="button" class="dq-chip" class:on=move || sig.get()
+            aria-pressed=move || if sig.get() { "true" } else { "false" }
+            title=format!("Show {} trace", info.name.to_lowercase())
+            on:click=move |_| sig.update(|v| *v = !*v)>
+            <span class=format!("dq-dot s-{}", info.key)></span>
             {info.name}
-        </label>
+        </button>
+    }
+}
+
+/// Readout tile: label (with optional series dot) above a tabular value + unit.
+#[component]
+fn Tile(label: &'static str, dot: &'static str, value: String) -> impl IntoView {
+    let (v, u) = split_val(value);
+    view! {
+        <div class="readout readout-sm dq-tile">
+            <span class="readout-label">
+                {(!dot.is_empty()).then(|| view!{ <span class=format!("dq-dot s-{dot}")></span> })}
+                {label}
+            </span>
+            <span class="readout-value">
+                {v}
+                {(!u.is_empty()).then(|| view!{ <span class="unit">{u}</span> })}
+            </span>
+        </div>
     }
 }
 
 #[component]
-fn Readout(label: &'static str, value: String, color: &'static str) -> impl IntoView {
+fn Kv(label: &'static str, value: String) -> impl IntoView {
     view! {
-        <span style="display:flex;align-items:baseline;gap:5px;">
-            <span style="color:#64748b;font-size:11px;">{label}</span>
-            <strong style=format!("color:{};font-variant-numeric:tabular-nums;", color)>{value}</strong>
+        <span class="dq-kv">
+            <span class="dq-kv-k">{label}</span>
+            <span class="dq-kv-v">{value}</span>
         </span>
     }
 }
@@ -1684,8 +1996,8 @@ fn Readout(label: &'static str, value: String, color: &'static str) -> impl Into
 #[component]
 fn PerfRow(label: &'static str, value: String) -> impl IntoView {
     view! {
-        <div style="display:flex;justify-content:space-between;gap:16px;line-height:1.55;">
-            <span style="color:#64748b;">{label}</span>
+        <div class="dq-perf-row">
+            <span>{label}</span>
             <span>{value}</span>
         </div>
     }
@@ -1693,6 +2005,7 @@ fn PerfRow(label: &'static str, value: String) -> impl IntoView {
 
 #[component]
 fn FftPanel(
+    open: Signal<bool>,
     snapshots: RwSignal<Option<DaqSnapshots>>,
     fft_nbins: RwSignal<u16>,
     fft_window: RwSignal<u8>,
@@ -1700,29 +2013,48 @@ fn FftPanel(
     apply: Rc<dyn Fn()>,
 ) -> impl IntoView {
     let canvas = NodeRef::<leptos::html::Canvas>::new();
-    // Redraw spectrum on snapshot change.
+    let theme = use_theme();
+    // Redraw spectrum on snapshot / theme change, while the panel is showing.
     Effect::new(move |_| {
         let snap = snapshots.get();
+        theme.resolved.track();
+        if !open.get() {
+            return;
+        }
         let Some(c) = canvas.get() else { return };
         let canvas_el: HtmlCanvasElement = c.unchecked_into();
+        let pal = palette();
         let dpr = web_sys::window().map(|w| w.device_pixel_ratio()).unwrap_or(1.0);
         let css_w = canvas_el.client_width() as f64;
-        let css_h = 220.0_f64;
+        let css_h = canvas_el.client_height() as f64;
+        if css_w < 2.0 || css_h < 2.0 {
+            return;
+        }
         canvas_el.set_width((css_w * dpr) as u32);
         canvas_el.set_height((css_h * dpr) as u32);
         let Some(ctx) = ov2d(&canvas_el) else { return };
         ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0).ok();
-        ctx.set_fill_style_str("#0b1220");
+        ctx.set_fill_style_str(&pal.bg);
         ctx.fill_rect(0.0, 0.0, css_w, css_h);
+        ctx.set_stroke_style_str(&pal.grid);
+        ctx.set_line_width(1.0);
+        for k in 1..4 {
+            let y = css_h * k as f64 / 4.0;
+            ctx.begin_path();
+            ctx.move_to(0.0, y);
+            ctx.line_to(css_w, y);
+            ctx.stroke();
+        }
         let bins = snap.and_then(|s| s.fft).map(|f| f.bins).unwrap_or_default();
         if bins.is_empty() {
-            ctx.set_fill_style_str("#64748b");
+            ctx.set_fill_style_str(&pal.axis);
+            ctx.set_font(&pal.font(12));
             let _ = ctx.fill_text("No spectrum", 10.0, css_h / 2.0);
             return;
         }
         let max = bins.iter().cloned().fold(1e-9_f32, f32::max);
-        ctx.set_stroke_style_str("#22d3ee");
-        ctx.set_line_width(1.0);
+        ctx.set_stroke_style_str(if fft_source.get_untracked() == 1 { &pal.power } else { &pal.current });
+        ctx.set_line_width(1.25);
         ctx.begin_path();
         let n = bins.len();
         for (i, &m) in bins.iter().enumerate() {
@@ -1736,55 +2068,52 @@ fn FftPanel(
     let apply2 = apply.clone();
     let apply3 = apply.clone();
     view! {
-        <div class="daq-set">
-            <div class="daq-panel-head" style="color:#a855f7;">
-                <span class="daq-panel-title">"Spectrum"</span>
+        <section class="inspector-section">
+            <h4>"Spectrum"</h4>
+            <canvas node_ref=canvas class="dq-fft-canvas" role="img" aria-label="FFT magnitude spectrum"></canvas>
+        </section>
+        <section class="inspector-section">
+            <h4>"Analysis"</h4>
+            <div class="dq-field">
+                <span class="row-label">"Length"</span>
+                <div class="seg seg-sm seg-block dq-seg-fit" role="radiogroup" aria-label="FFT length">
+                    {[64u16,128,256,512,1024,2048,4096].iter().map(|n| {
+                        let n=*n;
+                        let a = apply.clone();
+                        view!{
+                            <button class:active=move || fft_nbins.get()==n
+                                on:click=move |_| { fft_nbins.set(n); a(); }>{format!("{n}")}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
             </div>
-            <section class="daq-card">
-                <canvas node_ref=canvas style="width:100%;height:220px;border-radius:8px;background:#0a1322;"></canvas>
-            </section>
-            <section class="daq-card">
-                <div class="daq-field col">
-                    <span>"Length"</span>
-                    <div class="daq-seg neon-purple">
-                        {[64u16,128,256,512,1024,2048,4096].iter().map(|n| {
-                            let n=*n;
-                            let a = apply.clone();
-                            view!{
-                                <button class:active=move || fft_nbins.get()==n
-                                    on:click=move |_| { fft_nbins.set(n); a(); }>{format!("{n}")}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
+            <div class="dq-field">
+                <span class="row-label">"Window"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="FFT window">
+                    {[("Rect",0u8),("Hann",1),("Blackman-Harris",2)].iter().map(|(l,w)| {
+                        let w=*w;
+                        let a = apply2.clone();
+                        view!{
+                            <button class:active=move || fft_window.get()==w
+                                on:click=move |_| { fft_window.set(w); a(); }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
                 </div>
-                <div class="daq-field col">
-                    <span>"Window"</span>
-                    <div class="daq-seg neon-purple">
-                        {[("Rect",0u8),("Hann",1),("Blk-H",2)].iter().map(|(l,w)| {
-                            let w=*w;
-                            let a = apply2.clone();
-                            view!{
-                                <button class:active=move || fft_window.get()==w
-                                    on:click=move |_| { fft_window.set(w); a(); }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
+            </div>
+            <div class="dq-field">
+                <span class="row-label">"Source"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="FFT source">
+                    {[("Current",0u8),("Power",1)].iter().map(|(l,s)| {
+                        let s=*s;
+                        let a = apply3.clone();
+                        view!{
+                            <button class:active=move || fft_source.get()==s
+                                on:click=move |_| { fft_source.set(s); a(); }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
                 </div>
-                <div class="daq-field col">
-                    <span>"Source"</span>
-                    <div class="daq-seg neon-purple">
-                        {[("Current",0u8),("Power",1)].iter().map(|(l,s)| {
-                            let s=*s;
-                            let a = apply3.clone();
-                            view!{
-                                <button class:active=move || fft_source.get()==s
-                                    on:click=move |_| { fft_source.set(s); a(); }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-            </section>
-        </div>
+            </div>
+        </section>
     }
 }
 
@@ -1842,294 +2171,304 @@ fn SettingsPanel(
     let hw_filter_labels = [("Wideband", 0u8), ("Sinc5", 1), ("Sinc3", 2)];
     let hw_decim_labels  = [("x32", 0u8), ("x64", 1), ("x128", 2), ("x256", 3), ("x512", 4), ("x1024", 5)];
     view! {
-        <div class="daq-set">
-            <div class="daq-panel-head" style="color:#38bdf8;">
-                <span class="daq-panel-title">"Settings"</span>
-            </div>
-            <section class="daq-card">
-                <h3>"Acquisition"</h3>
-                <div class="daq-field col">
-                    <span>"Super Resolution"
-                        <em style="color:#64748b;font-style:normal;">" \u{2022} 1 ksps I / 500 sps V, oversampled"</em>
-                    </span>
-                    <div class="daq-seg neon-cyan">
-                        {[("Off", false), ("On", true)].iter().map(|(l, on)| {
-                            let on = *on;
-                            view!{
-                                <button class:active=move || sr_mode.get() == on
-                                    on:click=move |_| {
-                                        sr_mode.set(on);
-                                        spawn_local(async move {
-                                            if daq_cfg_set_bool(SR_MODE_KEY, on).await {
-                                                show_toast(
-                                                    if on { "Super Resolution on — ADC at max decimation + DSP low-pass" }
-                                                    else  { "Super Resolution off — rate/filter controls restored" },
-                                                    "ok");
-                                            } else {
-                                                show_toast("Super Resolution: send failed — BBP busy, retry", "err");
-                                            }
-                                        });
-                                    }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <span>"Current Rate (FINE/COARSE)"</span>
-                    <div class="daq-seg neon-blue">
-                        {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
-                            let i = i as u8;
-                            let ar = apply_rate.clone();
-                            view!{
-                                <button class:active=move || sample_rate_idx.get() == i
-                                    on:click=move |_| { sample_rate_idx.set(i); ar(); }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <span>"Voltage Rate"</span>
-                    <div class="daq-seg neon-blue">
-                        {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
-                            let i = i as u8;
-                            let ar = apply_rate.clone();
-                            view!{
-                                <button class:active=move || voltage_rate_idx.get() == i
-                                    on:click=move |_| { voltage_rate_idx.set(i); ar(); }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field">
-                    <span>"USB Decim " <em style="color:#64748b;font-style:normal;">"(every Nth)"</em></span>
-                    <div class="daq-step">
-                        <button on:click=move |_| { decimation.update(|d| *d = (*d / 2).max(1)); ar_minus(); }>"\u{2212}"</button>
-                        <input class="daq-num" type="number" min="1" max="256"
-                            prop:value=move || decimation.get().to_string()
-                            on:change=move |ev| { decimation.set(event_target_value(&ev).parse().unwrap_or(1).clamp(1, 256)); ar_input(); } />
-                        <button on:click=move |_| { decimation.update(|d| *d = (*d * 2).min(256)); ar_plus(); }>"+"</button>
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <span>"HW Filter (ADC)"</span>
-                    <div class="daq-seg neon-amber">
-                        {hw_filter_labels.iter().map(|(l, t)| {
-                            let t = *t;
-                            let lbl = l.to_string();
-                            view!{
-                                <button class:active=move || hw_filter_idx.get() == t
-                                    on:click=move |_| {
-                                        hw_filter_idx.set(t);
-                                        let lbl2 = lbl.clone();
-                                        spawn_local(async move {
-                                            if daq_cfg_set_enum(HW_FILT_KEY, t).await {
-                                                show_toast(&format!("HW filter: {} (restart stream to apply)", lbl2), "ok");
-                                            } else {
-                                                show_toast("HW filter: send failed — BBP busy, retry", "err");
-                                            }
-                                        });
-                                    }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <span>"HW Decimation (ADC)"</span>
-                    <div class="daq-seg neon-amber">
-                        {hw_decim_labels.iter().map(|(l, t)| {
-                            let t = *t;
-                            let lbl = l.to_string();
-                            view!{
-                                <button class:active=move || hw_decim_idx.get() == t
-                                    on:click=move |_| {
-                                        hw_decim_idx.set(t);
-                                        let lbl2 = lbl.clone();
-                                        spawn_local(async move {
-                                            if daq_cfg_set_enum(HW_DECIM_KEY, t).await {
-                                                show_toast(&format!("HW decim: {} (restart stream to apply)", lbl2), "ok");
-                                            } else {
-                                                show_toast("HW decim: send failed — BBP busy, retry", "err");
-                                            }
-                                        });
-                                    }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field" style="flex-direction:column;gap:4px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
-                        <span style="color:#64748b;font-size:11px;">"ODR \u{2022} Current (FINE/COARSE)"</span>
-                        <strong style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#38bdf8;">
-                            {move || {
-                                // sample_rate_hz comes from the device stream (WaveformRecord.sample_rate)
-                                // which reports the actual ADAQ hardware ODR = fMOD / decimation_factor.
-                                // e.g. Wideband + x1024: 8.192 MHz / 1024 = 8 kSPS
-                                let s = status.get();
-                                let hz = s.as_ref().map(|s| s.sample_rate_hz).unwrap_or(0);
-                                if hz == 0 { "\u{2014}".to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
-                                else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
-                            }}
-                        </strong>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
-                        <span style="color:#64748b;font-size:11px;">"ODR \u{2022} Voltage (requested)"</span>
-                        <strong style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#94a3b8;">
-                            {move || {
-                                // voltage_sps_hz reflects the requested rate; actual voltage ODR
-                                // is the same as current ODR since all ADAQ channels share one clock.
-                                let s = status.get();
-                                let hz = s.as_ref().map(|s| s.voltage_sps_hz).unwrap_or(0);
-                                if hz == 0 { "\u{2014}".to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
-                                else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
-                            }}
-                        </strong>
-                    </div>
-                    <div style="font-size:10px;color:#475569;line-height:1.3;">
-                        "\u{2139} Actual ODR = fMOD / HW Decimation. Use \u{2018}Current Rate\u{2019} to auto-select filter+decimation."
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <span>"Range lock"</span>
-                    <div class="daq-seg neon-amber">
-                        {range_labels.iter().enumerate().map(|(i, l)| {
-                            let i = i as u8;
-                            let ar = apply_range.clone();
-                            view!{
-                                <button class:active=move || range_lock_idx.get() == i
-                                    on:click=move |_| { range_lock_idx.set(i); ar(); }>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-            </section>
-
-            <section class="daq-card">
-                <h3>"Display Filters"</h3>
-                <div class="daq-field col">
-                    <span>"Type"</span>
-                    <div class="daq-seg neon-cyan">
-                        {filter_labels.iter().map(|(l, t)| {
-                            let t = *t;
-                            view!{
-                                <button class:active=move || filter_type.get() == t
-                                    on:click=move |_| filter_type.set(t)>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <div class="daq-field col">
-                    <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
-                        <span>{move || if filter_type.get() == 4 { "Cutoff window" } else { "Window" }}</span>
-                        <strong style="color:#22d3ee;">
-                            {move || {
-                                let w = smooth_window.get();
-                                if filter_type.get() == 0 || w <= 1 { "Off".to_string() } else { format!("{w} smp") }
-                            }}
-                        </strong>
-                    </div>
-                    <input type="range" min="1" max="512" step="1" style="width:100%;accent-color:#22d3ee;"
-                        prop:disabled=move || filter_type.get() == 0
-                        prop:value=move || smooth_window.get().to_string()
-                        on:input=move |ev| smooth_window.set(event_target_value(&ev).parse().unwrap_or(1).clamp(1, 512)) />
-                    <div class="daq-seg neon-cyan">
-                        {[("Min", 4u32), ("8", 8), ("32", 32), ("128", 128), ("512", 512)].iter().map(|(l, w)| {
-                            let w = *w;
-                            view!{
-                                <button class:active=move || smooth_window.get() == w
-                                    on:click=move |_| smooth_window.set(w)>{*l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-                <label class="daq-toggle">
-                    <input type="checkbox" prop:checked=move || raw_filter.get()
-                        prop:disabled=move || filter_type.get() == 0
-                        on:change=move |ev| raw_filter.set(event_target_checked(&ev)) />
-                    <span>"Hi-res (filter raw signal)"</span>
-                </label>
-            </section>
-
-            <section class="daq-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                    <h3 style="margin:0;">"Supply (SMU)"</h3>
-                    {move || {
-                        let snap = snapshots.get();
-                        let st = snap.as_ref().and_then(|s| s.status);
-                        let en = st.map(|s| s.source_enabled).unwrap_or(false);
-                        let iout = snap.as_ref().and_then(|s| s.energy).map(|e| e.last_i as f64).unwrap_or(0.0);
-                        let ilim = st.map(|s| s.ilimit_set as f64).unwrap_or(0.0);
-                        let cc = ilim > 0.0 && iout.abs() >= 0.95 * ilim;
-                        let (txt, color) = if !en { ("OFF", "#64748b") } else if cc { ("CC", "#f59e0b") } else { ("CV", "#10b981") };
+        <section class="inspector-section">
+            <h4>"Acquisition"</h4>
+            <div class="dq-field">
+                <span class="row-label">"Super resolution"
+                    <span class="row-hint">"1 ksps current, 500 sps voltage, oversampled"</span>
+                </span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Super resolution">
+                    {[("Off", false), ("On", true)].iter().map(|(l, on)| {
+                        let on = *on;
                         view!{
-                            <span style=format!("font-size:10px;font-weight:700;padding:2px 9px;border-radius:10px;background:{c}22;color:{c};border:1px solid {c}66;", c = color)>{txt}</span>
+                            <button class:active=move || sr_mode.get() == on
+                                on:click=move |_| {
+                                    sr_mode.set(on);
+                                    spawn_local(async move {
+                                        if daq_cfg_set_bool(SR_MODE_KEY, on).await {
+                                            show_toast(
+                                                if on { "Super Resolution on - ADC at max decimation + DSP low-pass" }
+                                                else  { "Super Resolution off - rate/filter controls restored" },
+                                                "ok");
+                                        } else {
+                                            show_toast("Super Resolution: send failed - BBP busy, retry", "err");
+                                        }
+                                    });
+                                }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="dq-field">
+                <span class="row-label">"Current rate (fine/coarse)"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Current sample rate">
+                    {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
+                        let i = i as u8;
+                        let ar = apply_rate.clone();
+                        view!{
+                            <button class:active=move || sample_rate_idx.get() == i
+                                on:click=move |_| { sample_rate_idx.set(i); ar(); }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="dq-field">
+                <span class="row-label">"Voltage rate"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Voltage sample rate">
+                    {SAMPLE_RATE_SHORT.iter().enumerate().map(|(i, l)| {
+                        let i = i as u8;
+                        let ar = apply_rate.clone();
+                        view!{
+                            <button class:active=move || voltage_rate_idx.get() == i
+                                on:click=move |_| { voltage_rate_idx.set(i); ar(); }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="row">
+                <span class="row-label">"USB decimation"<span class="row-hint">"keep every Nth sample"</span></span>
+                <div class="dq-stepper">
+                    <button type="button" class="btn btn-sm btn-icon" aria-label="Halve USB decimation" title="Halve"
+                        on:click=move |_| { decimation.update(|d| *d = (*d / 2).max(1)); ar_minus(); }>
+                        <Icon name="minus" size=14 />
+                    </button>
+                    <input class="dq-num" type="number" min="1" max="256" aria-label="USB decimation"
+                        prop:value=move || decimation.get().to_string()
+                        on:change=move |ev| { decimation.set(event_target_value(&ev).parse().unwrap_or(1).clamp(1, 256)); ar_input(); } />
+                    <button type="button" class="btn btn-sm btn-icon" aria-label="Double USB decimation" title="Double"
+                        on:click=move |_| { decimation.update(|d| *d = (*d * 2).min(256)); ar_plus(); }>
+                        <Icon name="plus" size=14 />
+                    </button>
+                </div>
+            </div>
+            <div class="dq-field">
+                <span class="row-label">"Hardware filter (ADC)"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Hardware filter">
+                    {hw_filter_labels.iter().map(|(l, t)| {
+                        let t = *t;
+                        let lbl = l.to_string();
+                        view!{
+                            <button class:active=move || hw_filter_idx.get() == t
+                                on:click=move |_| {
+                                    hw_filter_idx.set(t);
+                                    let lbl2 = lbl.clone();
+                                    spawn_local(async move {
+                                        if daq_cfg_set_enum(HW_FILT_KEY, t).await {
+                                            show_toast(&format!("HW filter: {} (restart stream to apply)", lbl2), "ok");
+                                        } else {
+                                            show_toast("HW filter: send failed - BBP busy, retry", "err");
+                                        }
+                                    });
+                                }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="dq-field">
+                <span class="row-label">"Hardware decimation (ADC)"</span>
+                <div class="seg seg-sm seg-block dq-seg-fit" role="radiogroup" aria-label="Hardware decimation">
+                    {hw_decim_labels.iter().map(|(l, t)| {
+                        let t = *t;
+                        let lbl = l.to_string();
+                        view!{
+                            <button class:active=move || hw_decim_idx.get() == t
+                                on:click=move |_| {
+                                    hw_decim_idx.set(t);
+                                    let lbl2 = lbl.clone();
+                                    spawn_local(async move {
+                                        if daq_cfg_set_enum(HW_DECIM_KEY, t).await {
+                                            show_toast(&format!("HW decim: {} (restart stream to apply)", lbl2), "ok");
+                                        } else {
+                                            show_toast("HW decim: send failed - BBP busy, retry", "err");
+                                        }
+                                    });
+                                }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <dl class="kv dq-odr">
+                <dt>"ODR, current (fine/coarse)"</dt>
+                <dd>
+                    {move || {
+                        // sample_rate_hz comes from the device stream (WaveformRecord.sample_rate)
+                        // which reports the actual ADAQ hardware ODR = fMOD / decimation_factor.
+                        // e.g. Wideband + x1024: 8.192 MHz / 1024 = 8 kSPS
+                        let s = status.get();
+                        let hz = s.as_ref().map(|s| s.sample_rate_hz).unwrap_or(0);
+                        if hz == 0 { NO_VALUE.to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
+                        else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
+                    }}
+                </dd>
+                <dt>"ODR, voltage (requested)"</dt>
+                <dd>
+                    {move || {
+                        // voltage_sps_hz reflects the requested rate; actual voltage ODR
+                        // is the same as current ODR since all ADAQ channels share one clock.
+                        let s = status.get();
+                        let hz = s.as_ref().map(|s| s.voltage_sps_hz).unwrap_or(0);
+                        if hz == 0 { NO_VALUE.to_string() } else if hz >= 1_000_000 { format!("{} MSPS", hz / 1_000_000) }
+                        else if hz >= 1_000 { format!("{} kSPS", hz / 1_000) } else { format!("{} SPS", hz) }
+                    }}
+                </dd>
+            </dl>
+            <p class="row-hint">
+                "Actual ODR = fMOD / hardware decimation. Use Current rate to auto-select filter and decimation."
+            </p>
+            <div class="dq-field">
+                <span class="row-label">"Range lock"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Range lock">
+                    {range_labels.iter().enumerate().map(|(i, l)| {
+                        let i = i as u8;
+                        let ar = apply_range.clone();
+                        view!{
+                            <button class:active=move || range_lock_idx.get() == i
+                                on:click=move |_| { range_lock_idx.set(i); ar(); }>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+        </section>
+
+        <section class="inspector-section">
+            <h4>"Display filters"</h4>
+            <div class="dq-field">
+                <span class="row-label">"Type"</span>
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Display filter type">
+                    {filter_labels.iter().map(|(l, t)| {
+                        let t = *t;
+                        view!{
+                            <button class:active=move || filter_type.get() == t
+                                on:click=move |_| filter_type.set(t)>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="dq-field">
+                <div class="dq-field-head">
+                    <span class="row-label">{move || if filter_type.get() == 4 { "Cutoff window" } else { "Window" }}</span>
+                    <span class="row-value">
+                        {move || {
+                            let w = smooth_window.get();
+                            if filter_type.get() == 0 || w <= 1 { "Off".to_string() } else { format!("{w} smp") }
+                        }}
+                    </span>
+                </div>
+                <input type="range" min="1" max="512" step="1" aria-label="Filter window in samples"
+                    prop:disabled=move || filter_type.get() == 0
+                    prop:value=move || smooth_window.get().to_string()
+                    on:input=move |ev| smooth_window.set(event_target_value(&ev).parse().unwrap_or(1).clamp(1, 512)) />
+                <div class="seg seg-sm seg-block" role="radiogroup" aria-label="Filter window presets">
+                    {[("Min", 4u32), ("8", 8), ("32", 32), ("128", 128), ("512", 512)].iter().map(|(l, w)| {
+                        let w = *w;
+                        view!{
+                            <button class:active=move || smooth_window.get() == w
+                                on:click=move |_| smooth_window.set(w)>{*l}</button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div class="row">
+                <span class="row-label">"Hi-res"<span class="row-hint">"filter the raw signal, not the envelope"</span></span>
+                <Switch
+                    checked=raw_filter
+                    on_change=Callback::new(move |v: bool| raw_filter.set(v))
+                    aria_label="Hi-res filtering"
+                    disabled=Signal::derive(move || filter_type.get() == 0)
+                />
+            </div>
+        </section>
+
+        <section class="inspector-section">
+            <div class="dq-section-head">
+                <h4>"DUT supply"</h4>
+                {move || {
+                    let snap = snapshots.get();
+                    let st = snap.as_ref().and_then(|s| s.status);
+                    let en = st.map(|s| s.source_enabled).unwrap_or(false);
+                    let iout = snap.as_ref().and_then(|s| s.energy).map(|e| e.last_i as f64).unwrap_or(0.0);
+                    let ilim = st.map(|s| s.ilimit_set as f64).unwrap_or(0.0);
+                    let cc = ilim > 0.0 && iout.abs() >= 0.95 * ilim;
+                    let (txt, tone, tip) = if !en {
+                        ("Off", "gray", "Supply output is off")
+                    } else if cc {
+                        ("CC", "orange", "Constant current: the current limit is active")
+                    } else {
+                        ("CV", "green", "Constant voltage: regulating to the set voltage")
+                    };
+                    view!{ <span class=format!("badge tone-{tone}") title=tip>{txt}</span> }
+                }}
+            </div>
+            <div class="row">
+                <span class="row-label">"Output"
+                    <span class="row-hint">{move || if source_enable.get() { "Powering the DUT" } else { "Disconnected from the DUT" }}</span>
+                </span>
+                <span class="dq-switch-state">
+                    <span>{move || if source_enable.get() { "On" } else { "Off" }}</span>
+                    <button type="button" role="switch" class="switch" class:on=move || source_enable.get()
+                        aria-checked=move || if source_enable.get() { "true" } else { "false" }
+                        aria-label="DUT supply output"
+                        on:click=move |_| { source_enable.update(|e| *e = !*e); apply_source(); }></button>
+                </span>
+            </div>
+            {move || (!pd_warn.get().is_empty()).then(|| view!{
+                <Callout tone="red">{move || pd_warn.get()}</Callout>
+            })}
+            <div class="dq-field">
+                <div class="dq-field-head">
+                    <span class="row-label">"Output voltage"</span>
+                    <span class="row-value">{move || format!("{:.3} V", vdut_mv.get() as f64 / 1000.0)}</span>
+                </div>
+                <input type="range" min="1800" max="19940" step="50" aria-label="DUT voltage in millivolts"
+                    prop:value=move || vdut_mv.get().to_string()
+                    on:input=move |ev| vdut_mv.set(event_target_value(&ev).parse().unwrap_or(3300).clamp(1800, 19940)) />
+            </div>
+            <div class="dq-field">
+                <div class="dq-field-head">
+                    <span class="row-label">"Current limit"</span>
+                    <span class="row-value">{move || format!("{} mA", ilimit_ma.get())}</span>
+                </div>
+                <input type="range" min="100" max="2500" step="10" aria-label="DUT current limit in milliamps"
+                    prop:value=move || ilimit_ma.get().to_string()
+                    on:input=move |ev| ilimit_ma.set(event_target_value(&ev).parse().unwrap_or(500).clamp(100, 2500)) />
+            </div>
+            <button class="btn btn-primary btn-sm btn-block" on:click=move |_| apply_supply()>"Apply"</button>
+        </section>
+
+        <section class="inspector-section">
+            <h4>"Measured"</h4>
+            <div class="dq-io-grid">
+                <div class="dq-io">
+                    <div class="dq-io-title">"Output (DUT)"</div>
+                    {move || {
+                        let en = snapshots.get().and_then(|s| s.energy);
+                        view!{
+                            <dl class="kv">
+                                <dt>"V"</dt><dd>{en.map(|e| fmt_eng(e.last_v as f64, "V")).unwrap_or_else(|| NO_VALUE.into())}</dd>
+                                <dt>"I"</dt><dd>{en.map(|e| fmt_eng(e.last_i as f64, "A")).unwrap_or_else(|| NO_VALUE.into())}</dd>
+                                <dt>"P"</dt><dd>{en.map(|e| fmt_eng(e.last_p as f64, "W")).unwrap_or_else(|| NO_VALUE.into())}</dd>
+                            </dl>
                         }
                     }}
                 </div>
-                <button
-                    class=move || if source_enable.get() { "daq-power-btn on" } else { "daq-power-btn off" }
-                    on:click=move |_| { source_enable.update(|e| *e = !*e); apply_source(); }>
-                    <span class="dot"></span>
-                    {move || if source_enable.get() { "Output ON" } else { "Output OFF" }}
-                </button>
-                {move || (!pd_warn.get().is_empty()).then(|| view!{
-                    <div style="font-size:11px;font-weight:600;color:#fca5a5;background:#7f1d1d33;border:1px solid #ef444488;border-radius:6px;padding:4px 8px;margin:2px 0;">
-                        {move || pd_warn.get()}
-                    </div>
-                })}
-                <div class="daq-field col">
-                    <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
-                        <span>"V_DUT"</span>
-                        <strong style="color:#10b981;">{move || format!("{:.3} V", vdut_mv.get() as f64 / 1000.0)}</strong>
-                    </div>
-                    <input type="range" min="1800" max="19940" step="50" style="width:100%;accent-color:#10b981;"
-                        prop:value=move || vdut_mv.get().to_string()
-                        on:input=move |ev| vdut_mv.set(event_target_value(&ev).parse().unwrap_or(3300).clamp(1800, 19940)) />
+                <div class="dq-io">
+                    <div class="dq-io-title">"Input (rail)"</div>
+                    {move || {
+                        let st = snapshots.get().and_then(|s| s.status);
+                        let vin = st.map(|s| s.in_voltage as f64).unwrap_or(0.0);
+                        let iin = st.map(|s| s.in_current as f64).unwrap_or(0.0);
+                        let pin = vin * iin;
+                        view!{
+                            <dl class="kv">
+                                <dt>"V"</dt><dd>{if vin > 0.0 { fmt_eng(vin, "V") } else { NO_VALUE.into() }}</dd>
+                                <dt>"I"</dt><dd>{if iin > 0.0 { fmt_eng(iin, "A") } else { NO_VALUE.into() }}</dd>
+                                <dt>"P"</dt><dd>{if pin > 0.0 { fmt_eng(pin, "W") } else { NO_VALUE.into() }}</dd>
+                            </dl>
+                        }
+                    }}
                 </div>
-                <div class="daq-field col">
-                    <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
-                        <span>"I limit"</span>
-                        <strong style="color:#f59e0b;">{move || format!("{} mA", ilimit_ma.get())}</strong>
-                    </div>
-                    <input type="range" min="100" max="2500" step="10" style="width:100%;accent-color:#f59e0b;"
-                        prop:value=move || ilimit_ma.get().to_string()
-                        on:input=move |ev| ilimit_ma.set(event_target_value(&ev).parse().unwrap_or(500).clamp(100, 2500)) />
-                </div>
-                <button class="btn btn-primary btn-sm" style="width:100%;margin-top:2px;"
-                    on:click=move |_| apply_supply()>"Apply"</button>
-
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;">
-                    <div class="daq-tile">
-                        <div class="daq-tile-title">"Output (DUT)"</div>
-                        {move || {
-                            let en = snapshots.get().and_then(|s| s.energy);
-                            view!{
-                                <div style="display:flex;flex-direction:column;gap:3px;font-size:12px;font-variant-numeric:tabular-nums;color:#cbd5e1;">
-                                    <span><span style="color:#64748b;">"V "</span>{en.map(|e| fmt_eng(e.last_v as f64, "V")).unwrap_or_else(|| "—".into())}</span>
-                                    <span><span style="color:#64748b;">"I "</span>{en.map(|e| fmt_eng(e.last_i as f64, "A")).unwrap_or_else(|| "—".into())}</span>
-                                    <span><span style="color:#64748b;">"P "</span>{en.map(|e| fmt_eng(e.last_p as f64, "W")).unwrap_or_else(|| "—".into())}</span>
-                                </div>
-                            }
-                        }}
-                    </div>
-                    <div class="daq-tile">
-                        <div class="daq-tile-title">"Input (rail)"</div>
-                        {move || {
-                            let st = snapshots.get().and_then(|s| s.status);
-                            let vin = st.map(|s| s.in_voltage as f64).unwrap_or(0.0);
-                            let iin = st.map(|s| s.in_current as f64).unwrap_or(0.0);
-                            let pin = vin * iin;
-                            view!{
-                                <div style="display:flex;flex-direction:column;gap:3px;font-size:12px;font-variant-numeric:tabular-nums;color:#cbd5e1;">
-                                    <span><span style="color:#64748b;">"V "</span>{if vin > 0.0 { fmt_eng(vin, "V") } else { "—".into() }}</span>
-                                    <span><span style="color:#64748b;">"I "</span>{if iin > 0.0 { fmt_eng(iin, "A") } else { "—".into() }}</span>
-                                    <span><span style="color:#64748b;">"P "</span>{if pin > 0.0 { fmt_eng(pin, "W") } else { "—".into() }}</span>
-                                </div>
-                            }
-                        }}
-                    </div>
-                </div>
-            </section>
-        </div>
+            </div>
+        </section>
     }
 }
 

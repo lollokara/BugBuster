@@ -1,3 +1,5 @@
+use crate::components::icons::Icon;
+use crate::components::ui::{EmptyState, Readout};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 
@@ -17,139 +19,104 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     );
 
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"USB Power Delivery status from the HUSB238 controller. Shows the negotiated voltage/current contract and available source PDOs. The board is powered at 20V even without I2C communication."</div>
+        <div class="view sy-pd">
+            <p class="sy-lead">
+                "USB Power Delivery status from the HUSB238 controller: the negotiated contract and the PDOs offered by the source. The board is powered at 20 V even without I2C communication."
+            </p>
 
-            {move || {
-                let st = pd.get();
-                if !st.present {
-                    return view! {
-                        <div class="card">
-                            <div class="card-header">
-                                <span class="channel-func">"HUSB238 USB PD"</span>
-                            </div>
-                            <div class="card-body">
-                                <div class="mode-warning">
-                                    <span class="mode-warning-icon">"!"</span>
-                                    <span>"HUSB238 not detected on I2C bus. Check hardware connection."</span>
-                                </div>
-                            </div>
-                        </div>
-                    }.into_any();
-                }
-
-                let attached = st.attached;
-                let voltage_v = st.voltage_v;
-                let current_a = st.current_a;
-                let power_w = st.power_w;
-                let cc = st.cc.clone();
-                let pdos = st.source_pdos.clone();
-
+            {move || if !pd.get().present {
                 view! {
-                    <div>
-                        // Status + readings in a 2-column grid
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px">
-                            // Left card: PD contract info
-                            <div class="card">
-                                <div class="card-header" style="display: flex; align-items: center; justify-content: space-between">
-                                    <span style="font-size: 14px; font-weight: 700">"USB Power Delivery"</span>
-                                    <div style="display: flex; align-items: center; gap: 8px">
-                                        <div style=format!("width: 10px; height: 10px; border-radius: 50%; transition: all 0.3s; {}",
-                                            if attached { "background: #10b981; box-shadow: 0 0 6px #10b981" } else { "background: var(--text-dim)" }
-                                        )></div>
-                                        <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace">
-                                            {if attached { "Attached" } else { "Not attached" }}
-                                        </span>
-                                    </div>
-                                </div>
-                                <div class="card-body">
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
-                                        // Voltage
-                                        <div style="text-align: center; padding: 12px; border-radius: 8px; background: var(--bg-secondary, #1a1a2e)">
-                                            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Voltage"</div>
-                                            <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #3b82f6">
-                                                {format!("{:.1}V", voltage_v)}
-                                            </div>
-                                        </div>
-                                        // Current
-                                        <div style="text-align: center; padding: 12px; border-radius: 8px; background: var(--bg-secondary, #1a1a2e)">
-                                            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Current"</div>
-                                            <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #10b981">
-                                                {format!("{:.2}A", current_a)}
-                                            </div>
-                                        </div>
-                                        // Power
-                                        <div style="text-align: center; padding: 12px; border-radius: 8px; background: var(--bg-secondary, #1a1a2e)">
-                                            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"Power"</div>
-                                            <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #f59e0b">
-                                                {format!("{:.1}W", power_w)}
-                                            </div>
-                                        </div>
-                                        // CC Direction
-                                        <div style="text-align: center; padding: 12px; border-radius: 8px; background: var(--bg-secondary, #1a1a2e)">
-                                            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px">"CC Dir"</div>
-                                            <div style="font-size: 24px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #a855f7">
-                                                {cc}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            // Right card: Source PDOs table
-                            <div class="card">
-                                <div class="card-header">
-                                    <span style="font-size: 14px; font-weight: 700">"Source PDOs"</span>
-                                </div>
-                                <div class="card-body" style="padding: 0">
-                                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'JetBrains Mono', monospace">
-                                        <thead>
-                                            <tr style="color: var(--text-dim); border-bottom: 1px solid var(--border)">
-                                                <th style="text-align: left; padding: 8px 12px">"Voltage"</th>
-                                                <th style="text-align: left; padding: 8px 6px">"Detected"</th>
-                                                <th style="text-align: left; padding: 8px 6px">"Max A"</th>
-                                                <th style="text-align: left; padding: 8px 6px">"Max W"</th>
-                                                <th style="padding: 8px 12px"></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {pdos.into_iter().enumerate().map(|(i, pdo)| {
-                                                let detected = pdo.detected;
-                                                let voltage_idx = (i + 1) as u8; // 1=5V, 2=9V, ...
-                                                view! {
-                                                    <tr style="border-top: 1px solid var(--border)">
-                                                        <td style="padding: 8px 12px; font-weight: 700">{pdo.voltage.clone()}</td>
-                                                        <td style="padding: 8px 6px">
-                                                            <div style=format!("width: 8px; height: 8px; border-radius: 50%; {}",
-                                                                if detected { "background: #10b981; box-shadow: 0 0 4px #10b981" } else { "background: #1e293b" }
-                                                            )></div>
-                                                        </td>
-                                                        <td style="padding: 8px 6px">{format!("{:.1}A", pdo.max_current_a)}</td>
-                                                        <td style="padding: 8px 6px">{format!("{:.0}W", pdo.max_power_w)}</td>
-                                                        <td style="padding: 8px 12px">
-                                                            {if detected {
-                                                                view! {
-                                                                    <button class="scope-btn" style="font-size: 10px; padding: 4px 10px"
-                                                                        on:click=move |_| {
-                                                                            send_usbpd_select_pdo(voltage_idx);
-                                                                        }
-                                                                    >"Select"</button>
-                                                                }.into_any()
-                                                            } else {
-                                                                view! { <span></span> }.into_any()
-                                                            }}
-                                                        </td>
-                                                    </tr>
-                                                }
-                                            }).collect::<Vec<_>>()}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="group">
+                        <EmptyState icon="plug-zap" title="HUSB238 not detected"
+                            message="The USB PD controller did not answer on the I2C bus. Check the hardware connection." />
                     </div>
                 }.into_any()
+            } else {
+                ().into_any()
             }}
+
+            <Show when=move || pd.get().present>
+                // ── Contract ──────────────────────────────────────────────────
+                <div class="group sy-pd-contract">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="usb" size=15 />"Contract"</span>
+                        <span class="sy-status">
+                            <span class=move || if pd.get().attached { "dot tone-green" } else { "dot" }></span>
+                            <span>{move || if pd.get().attached { "Attached" } else { "Not attached" }}</span>
+                        </span>
+                    </div>
+                    <div class="sy-pd-readouts">
+                        <Readout label="Voltage" size="lg" unit="V"
+                            value=Signal::derive(move || format!("{:.1}", pd.get().voltage_v)) />
+                        <Readout label="Current" size="lg" unit="A"
+                            value=Signal::derive(move || format!("{:.2}", pd.get().current_a)) />
+                        <Readout label="Power" size="lg" unit="W"
+                            value=Signal::derive(move || format!("{:.1}", pd.get().power_w)) />
+                        <Readout label="CC direction" size="lg"
+                            value=Signal::derive(move || pd.get().cc) />
+                    </div>
+                </div>
+
+                // ── Source PDOs ───────────────────────────────────────────────
+                <div class="group group-flush sy-pd-pdos">
+                    <div class="group-header">
+                        <span class="group-title">"Source PDOs"</span>
+                        <span class="group-subtitle">"Select a detected profile to request it from the source"</span>
+                    </div>
+                    <table class="table sy-pd-table">
+                        <thead>
+                            <tr>
+                                <th>"Voltage"</th>
+                                <th>"Availability"</th>
+                                <th class="sy-num">"Max current"</th>
+                                <th class="sy-num">"Max power"</th>
+                                <th class="sy-act"><span class="sy-sr">"Action"</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {move || {
+                                let st = pd.get();
+                                let selected = st.selected_pdo;
+                                st.source_pdos.into_iter().enumerate().map(|(i, pdo)| {
+                                    let detected = pdo.detected;
+                                    let voltage_idx = (i + 1) as u8; // 1=5V, 2=9V, ...
+                                    let is_sel = selected == voltage_idx;
+                                    let aria = format!("Select {} PDO", pdo.voltage);
+                                    view! {
+                                        <tr class:is-selected=is_sel class:is-unavailable=!detected>
+                                            <td class="sy-pdo-v">
+                                                {pdo.voltage.clone()}
+                                                {is_sel.then(|| view! { <span class="badge tone-blue">"Selected"</span> })}
+                                            </td>
+                                            <td>
+                                                <span class=if detected { "badge tone-green" } else { "badge" }>
+                                                    {if detected { "Available" } else { "Not offered" }}
+                                                </span>
+                                            </td>
+                                            <td class="sy-num">{format!("{:.1}", pdo.max_current_a)}<span class="sy-unit">" A"</span></td>
+                                            <td class="sy-num">{format!("{:.0}", pdo.max_power_w)}<span class="sy-unit">" W"</span></td>
+                                            <td class="sy-act">
+                                                {if detected {
+                                                    view! {
+                                                        <button class=if is_sel { "btn btn-sm" } else { "btn btn-sm btn-tinted" }
+                                                            aria-label=aria
+                                                            on:click=move |_| {
+                                                                send_usbpd_select_pdo(voltage_idx);
+                                                            }
+                                                        >"Select"</button>
+                                                    }.into_any()
+                                                } else {
+                                                    ().into_any()
+                                                }}
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect::<Vec<_>>()
+                            }}
+                        </tbody>
+                    </table>
+                </div>
+            </Show>
         </div>
     }
 }
