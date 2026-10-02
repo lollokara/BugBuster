@@ -9,7 +9,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.scripting import register
@@ -46,18 +45,17 @@ class TestScriptingTools(unittest.TestCase):
         s.start()
         self.addCleanup(s.stop)
 
-    @pytest.mark.xfail(strict=True, reason="MCP-5")
     def test_wait_collects_logs_until_the_script_ends(self):
         self.bb.script_eval.return_value = _status(True)
         # running, running, done; logs arrive while running and after the first empty read
         self.bb.script_status.side_effect = [_status(True), _status(True), _status(False), _status(False)]
-        self.bb.script_logs.side_effect = ["a\n", "", "b\n", "c\n", "", ""]
+        logs = iter(["a\n", "", "b\n", "c\n", ""])
+        self.bb.script_logs.side_effect = lambda: next(logs, "")
         r = self.mcp.tools["run_device_script"](src="print(1)", wait=True, timeout_s=5)
         self.assertTrue(r["success"])
         self.assertEqual(r["logs"], "a\nb\nc\n")
         self.assertFalse(r["timed_out"])
 
-    @pytest.mark.xfail(strict=True, reason="MCP-5")
     def test_wait_times_out(self):
         self.bb.script_eval.return_value = _status(True)
         self.bb.script_status.return_value = _status(True)
@@ -65,7 +63,6 @@ class TestScriptingTools(unittest.TestCase):
         r = self.mcp.tools["run_device_script"](src="while True: pass", wait=True, timeout_s=0)
         self.assertTrue(r["timed_out"])
 
-    @pytest.mark.xfail(strict=True, reason="PLT-08")
     def test_script_file_tools(self):
         t = self.mcp.tools
         self.bb.script_list.return_value = ["a.py"]
