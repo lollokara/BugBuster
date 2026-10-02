@@ -36,6 +36,16 @@
 
 ### Fixed
 
+- **BLE pairing survives reboots.** The S3 now stores NimBLE bonds in NVS (up
+  to 4 devices), requests security on connect so iOS shows its passkey prompt
+  straight away, and accepts re-pairing after "Forget This Device". A wrong
+  admin token is reported as write-not-permitted instead of insufficient
+  authentication. The iOS app keeps the 6-digit code on screen during the
+  system prompt, retries the auth write while pairing completes, skips the
+  code sheet for a bonded device, and explains stale bonds.
+- **iOS Diagnostics crash.** Opening the tab overflowed the main-thread stack
+  in debug builds (EXC_BAD_ACCESS at `selfTestCard`); the cards are now
+  type-erased.
 - **MicroPython power pulse.** Native `bugbuster.rail_power_up` and
   `bugbuster.efuse_set` bindings call the existing sequenced rail-up and
   guarded e-fuse gate; the VADJ1 pulse example no longer requires loopback
