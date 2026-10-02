@@ -1,3 +1,5 @@
+use crate::components::icons::Icon;
+use crate::components::ui::{Callout, Switch};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
@@ -65,133 +67,160 @@ pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
         invoke_with_feedback("set_uart_config", args, &label);
     };
 
+    // Inline validation (advisory; Apply behaviour is unchanged).
+    let same_pin = move || {
+        let c = uart_config.get();
+        c.tx_pin == c.rx_pin
+    };
+    let stop_mismatch = move || {
+        let c = uart_config.get();
+        c.stop_bits == 1 && c.data_bits != 5
+    };
+
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"UART bridge configuration. Bridge is disabled by default and can be routed to any PCB IO (IO1..IO12)."</div>
-            <div class="uart-layout">
-                <div class="card uart-card">
-                    <div class="card-header">
-                        <span>"UART Bridge #0"</span>
-                        <div class={move || if uart_config.get().enabled { "uart-status uart-active" } else { "uart-status" }}>
+        <div class="view sy-uart">
+            <p class="sy-lead">"UART bridge configuration. The bridge is disabled by default and can be routed to any PCB IO (IO1 to IO12)."</p>
+            <div class="sy-uart-layout">
+                <div class="group sy-uart-config">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="terminal" size=15 />"UART Bridge #0"</span>
+                        <span class=move || if uart_config.get().enabled { "badge tone-green" } else { "badge" }>
                             {move || if uart_config.get().enabled { "Active" } else { "Disabled" }}
+                        </span>
+                    </div>
+                    <p class="sy-uart-note">"Transparent bridge: USB CDC #1 ↔ ESP32 UART"</p>
+
+                    <div class="sy-form-section">"Pins"</div>
+                    <div class="rows">
+                        <div class="row">
+                            <label class="row-label" for="uart-tx">"TX IO"<span class="row-hint">"Device output to your target's RX"</span></label>
+                            <select id="uart-tx" class="dropdown"
+                                aria-invalid=move || if same_pin() { "true" } else { "false" }
+                                prop:value={move || uart_config.get().tx_pin.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.tx_pin = event_target_value(&e).parse().unwrap_or(1))
+                            >
+                                {UART_IO_MAP.iter().map(|(io, gpio)| {
+                                    view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
+                        </div>
+                        <div class="row">
+                            <label class="row-label" for="uart-rx">"RX IO"<span class="row-hint">"Device input from your target's TX"</span></label>
+                            <select id="uart-rx" class="dropdown"
+                                aria-invalid=move || if same_pin() { "true" } else { "false" }
+                                prop:value={move || uart_config.get().rx_pin.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.rx_pin = event_target_value(&e).parse().unwrap_or(2))
+                            >
+                                {UART_IO_MAP.iter().map(|(io, gpio)| {
+                                    view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
                         </div>
                     </div>
-                    <div class="card-body">
-                        <p class="uart-desc">"Transparent bridge: USB CDC #1 ↔ ESP32 UART"</p>
+                    {move || same_pin().then(|| view! {
+                        <div class="sy-field-msg"><Callout tone="orange">"TX and RX are routed to the same IO. Pick two different pins."</Callout></div>
+                    })}
 
-                        <div class="config-section">
-                            <div class="config-row">
-                                <label>"TX IO"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().tx_pin.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.tx_pin = event_target_value(&e).parse().unwrap_or(1))
-                                >
-                                    {UART_IO_MAP.iter().map(|(io, gpio)| {
-                                        view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"RX IO"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().rx_pin.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.rx_pin = event_target_value(&e).parse().unwrap_or(2))
-                                >
-                                    {UART_IO_MAP.iter().map(|(io, gpio)| {
-                                        view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"Baud Rate"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().baud.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.baud = event_target_value(&e).parse().unwrap_or(115200))
-                                >
-                                    {BAUD_OPTIONS.iter().map(|b| {
-                                        view! { <option value=b.to_string()>{format!("{}", b)}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"Data Bits"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().data_bits.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.data_bits = event_target_value(&e).parse().unwrap_or(8))
-                                >
-                                    {[5u8, 6, 7, 8].iter().map(|b| {
-                                        view! { <option value=b.to_string()>{format!("{}", b)}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"Parity"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().parity.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.parity = event_target_value(&e).parse().unwrap_or(0))
-                                >
-                                    {PARITY_OPTIONS.iter().map(|(c, n)| {
-                                        view! { <option value=c.to_string()>{*n}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"Stop Bits"</label>
-                                <select class="dropdown"
-                                    prop:value={move || uart_config.get().stop_bits.to_string()}
-                                    on:change=move |e| uart_config.update(|c| c.stop_bits = event_target_value(&e).parse().unwrap_or(0))
-                                >
-                                    {STOP_BITS_OPTIONS.iter().map(|(c, n)| {
-                                        view! { <option value=c.to_string()>{*n}</option> }
-                                    }).collect::<Vec<_>>()}
-                                </select>
-                            </div>
-                            <div class="config-row">
-                                <label>"Enabled"</label>
-                                <label class="toggle-wrap">
-                                    <div class="toggle" class:active={move || uart_config.get().enabled}
-                                        on:click=move |_| uart_config.update(|c| c.enabled = !c.enabled)
-                                    ><div class="toggle-thumb"></div></div>
-                                </label>
-                            </div>
+                    <div class="sy-form-section">"Line settings"</div>
+                    <div class="rows">
+                        <div class="row">
+                            <label class="row-label" for="uart-baud">"Baud rate"</label>
+                            <select id="uart-baud" class="dropdown"
+                                prop:value={move || uart_config.get().baud.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.baud = event_target_value(&e).parse().unwrap_or(115200))
+                            >
+                                {BAUD_OPTIONS.iter().map(|b| {
+                                    view! { <option value=b.to_string()>{format!("{}", b)}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
                         </div>
-
-                        <div class="uart-summary">
-                            <span class="uart-config-str">
-                                {move || {
-                                    let c = uart_config.get();
-                                    format!("{} → {} | {} {}{}{}",
-                                        io_label_for_gpio(c.tx_pin),
-                                        io_label_for_gpio(c.rx_pin),
-                                        c.baud, c.data_bits,
-                                        match c.parity { 1 => "O", 2 => "E", _ => "N" },
-                                        match c.stop_bits { 1 => "1.5", 2 => "2", _ => "1" })
-                                }}
-                            </span>
+                        <div class="row">
+                            <label class="row-label" for="uart-bits">"Data bits"</label>
+                            <select id="uart-bits" class="dropdown"
+                                prop:value={move || uart_config.get().data_bits.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.data_bits = event_target_value(&e).parse().unwrap_or(8))
+                            >
+                                {[5u8, 6, 7, 8].iter().map(|b| {
+                                    view! { <option value=b.to_string()>{format!("{}", b)}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
                         </div>
-
-                        <button class="btn btn-primary" style="width: 100%; margin-top: 12px;" on:click=apply>
-                            "Apply Configuration"
-                        </button>
+                        <div class="row">
+                            <label class="row-label" for="uart-parity">"Parity"</label>
+                            <select id="uart-parity" class="dropdown"
+                                prop:value={move || uart_config.get().parity.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.parity = event_target_value(&e).parse().unwrap_or(0))
+                            >
+                                {PARITY_OPTIONS.iter().map(|(c, n)| {
+                                    view! { <option value=c.to_string()>{*n}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
+                        </div>
+                        <div class="row">
+                            <label class="row-label" for="uart-stop">"Stop bits"</label>
+                            <select id="uart-stop" class="dropdown"
+                                aria-invalid=move || if stop_mismatch() { "true" } else { "false" }
+                                prop:value={move || uart_config.get().stop_bits.to_string()}
+                                on:change=move |e| uart_config.update(|c| c.stop_bits = event_target_value(&e).parse().unwrap_or(0))
+                            >
+                                {STOP_BITS_OPTIONS.iter().map(|(c, n)| {
+                                    view! { <option value=c.to_string()>{*n}</option> }
+                                }).collect::<Vec<_>>()}
+                            </select>
+                        </div>
                     </div>
+                    {move || stop_mismatch().then(|| view! {
+                        <div class="sy-field-msg"><Callout tone="orange">"1.5 stop bits is normally only valid with 5 data bits."</Callout></div>
+                    })}
+
+                    <div class="sy-form-section">"Bridge"</div>
+                    <div class="rows">
+                        <div class="row">
+                            <span class="row-label">"Enabled"<span class="row-hint">"Routes the pins to USB CDC #1 once applied"</span></span>
+                            <Switch
+                                checked=Signal::derive(move || uart_config.get().enabled)
+                                aria_label="Enable UART bridge"
+                                on_change=Callback::new(move |_: bool| uart_config.update(|c| c.enabled = !c.enabled))
+                            />
+                        </div>
+                    </div>
+
+                    <div class="sy-uart-summary">
+                        <span class="sy-uart-summary-label">"Configuration"</span>
+                        <span class="uart-config-str sy-uart-config-str">
+                            {move || {
+                                let c = uart_config.get();
+                                format!("{} → {} | {} {}{}{}",
+                                    io_label_for_gpio(c.tx_pin),
+                                    io_label_for_gpio(c.rx_pin),
+                                    c.baud, c.data_bits,
+                                    match c.parity { 1 => "O", 2 => "E", _ => "N" },
+                                    match c.stop_bits { 1 => "1.5", 2 => "2", _ => "1" })
+                            }}
+                        </span>
+                    </div>
+
+                    <button class="btn btn-primary btn-lg btn-block" on:click=apply>
+                        "Apply Configuration"
+                    </button>
                 </div>
 
-                <div class="card uart-info-card">
-                    <div class="card-header"><span>"Connection Info"</span></div>
-                    <div class="card-body">
-                        <div class="uart-info-item">
-                            <span class="uart-info-label">"Host Side"</span>
-                            <span class="uart-info-value">"USB CDC #1 (second serial port)"</span>
+                <div class="group sy-uart-info">
+                    <div class="group-header"><span class="group-title">"Connection info"</span></div>
+                    <dl class="sy-info">
+                        <div class="sy-info-item">
+                            <dt>"Host side"</dt>
+                            <dd>"USB CDC #1 (second serial port)"</dd>
                         </div>
-                        <div class="uart-info-item">
-                            <span class="uart-info-label">"Device Side"</span>
-                            <span class="uart-info-value">{move || format!("ESP32 UART1 (TX: {}, RX: {})", io_label_for_gpio(uart_config.get().tx_pin), io_label_for_gpio(uart_config.get().rx_pin))}</span>
+                        <div class="sy-info-item">
+                            <dt>"Device side"</dt>
+                            <dd>{move || format!("ESP32 UART1 (TX: {}, RX: {})", io_label_for_gpio(uart_config.get().tx_pin), io_label_for_gpio(uart_config.get().rx_pin))}</dd>
                         </div>
-                        <div class="uart-info-item">
-                            <span class="uart-info-label">"Usage"</span>
-                            <span class="uart-info-value">"Opens as a standard COM port. Connect your external device's TX to the RX pin and vice versa."</span>
+                        <div class="sy-info-item">
+                            <dt>"Usage"</dt>
+                            <dd>"Opens as a standard COM port. Connect your external device's TX to the RX pin and vice versa."</dd>
                         </div>
-                    </div>
+                    </dl>
                 </div>
             </div>
         </div>

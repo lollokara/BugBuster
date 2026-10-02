@@ -1,10 +1,24 @@
+use crate::components::icons::Icon;
 use crate::tauri_bridge::{log, show_toast, try_invoke, DiscoveredDevice};
 use leptos::ev;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
-/// Floating particle network background for the connection screen.
+/// Reads a CSS custom property from :root (theme-aware canvas colours).
+fn css_var(name: &str, fallback: &str) -> String {
+    web_sys::window()
+        .and_then(|w| {
+            let root = w.document()?.document_element()?;
+            let cs = w.get_computed_style(&root).ok().flatten()?;
+            let v = cs.get_property_value(name).ok()?;
+            let v = v.trim().to_string();
+            (!v.is_empty()).then_some(v)
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Quiet particle network behind the welcome screen; colours follow the theme tokens.
 #[component]
 fn ParticleBackground() -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -42,9 +56,9 @@ fn ParticleBackground() -> impl IntoView {
         };
 
         // Particle state
-        const NUM: usize = 80;
+        const NUM: usize = 56;
         const CONNECT_DIST: f64 = 140.0;
-        const SPEED: f64 = 0.3;
+        const SPEED: f64 = 0.25;
 
         struct P {
             x: f64,
@@ -53,6 +67,13 @@ fn ParticleBackground() -> impl IntoView {
             vy: f64,
             r: f64,
         }
+
+        let reduced_motion = window
+            .match_media("(prefers-reduced-motion: reduce)")
+            .ok()
+            .flatten()
+            .map(|m| m.matches())
+            .unwrap_or(false);
 
         let mut particles: Vec<P> = Vec::with_capacity(NUM);
         // Seed with pseudo-random using simple LCG
@@ -70,9 +91,13 @@ fn ParticleBackground() -> impl IntoView {
                 y: rng() * h0,
                 vx: (rng() - 0.5) * SPEED * 2.0,
                 vy: (rng() - 0.5) * SPEED * 2.0,
-                r: 1.2 + rng() * 1.8,
+                r: 1.0 + rng() * 1.4,
             });
         }
+
+        let mut frame: u32 = 0;
+        let mut line_col = css_var("--label-4", "#b4b4ba");
+        let mut dot_col = css_var("--label-3", "#8a8a90");
 
         loop {
             // Check if the canvas has been unmounted to prevent leaks
@@ -80,7 +105,14 @@ fn ParticleBackground() -> impl IntoView {
                 break;
             }
 
-            slp(16).await; // ~60fps
+            slp(if reduced_motion { 250 } else { 16 }).await; // ~60fps
+
+            // Pick up theme switches without querying styles every frame.
+            frame = frame.wrapping_add(1);
+            if frame % 30 == 0 {
+                line_col = css_var("--label-4", "#b4b4ba");
+                dot_col = css_var("--label-3", "#8a8a90");
+            }
 
             let dp = window.device_pixel_ratio();
             let w = window.inner_width().unwrap().as_f64().unwrap();
@@ -89,38 +121,38 @@ fn ParticleBackground() -> impl IntoView {
             canvas.set_height((h * dp) as u32);
             let _ = ctx.scale(dp, dp);
 
-            // Clear
-            ctx.set_fill_style_str("rgba(6,10,20,0.85)");
-            ctx.fill_rect(0.0, 0.0, w, h);
+            ctx.clear_rect(0.0, 0.0, w, h);
 
             // Update positions
-            for p in particles.iter_mut() {
-                p.x += p.vx;
-                p.y += p.vy;
-                if p.x < 0.0 {
-                    p.x = w;
-                }
-                if p.x > w {
-                    p.x = 0.0;
-                }
-                if p.y < 0.0 {
-                    p.y = h;
-                }
-                if p.y > h {
-                    p.y = 0.0;
+            if !reduced_motion {
+                for p in particles.iter_mut() {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    if p.x < 0.0 {
+                        p.x = w;
+                    }
+                    if p.x > w {
+                        p.x = 0.0;
+                    }
+                    if p.y < 0.0 {
+                        p.y = h;
+                    }
+                    if p.y > h {
+                        p.y = 0.0;
+                    }
                 }
             }
 
             // Draw connections
+            ctx.set_stroke_style_str(&line_col);
+            ctx.set_line_width(0.6);
             for i in 0..particles.len() {
                 for j in (i + 1)..particles.len() {
                     let dx = particles[i].x - particles[j].x;
                     let dy = particles[i].y - particles[j].y;
                     let dist = (dx * dx + dy * dy).sqrt();
                     if dist < CONNECT_DIST {
-                        let alpha = (1.0 - dist / CONNECT_DIST) * 0.35;
-                        ctx.set_stroke_style_str(&format!("rgba(59,130,246,{:.3})", alpha));
-                        ctx.set_line_width(0.6);
+                        ctx.set_global_alpha((1.0 - dist / CONNECT_DIST) * 0.5);
                         ctx.begin_path();
                         ctx.move_to(particles[i].x, particles[i].y);
                         ctx.line_to(particles[j].x, particles[j].y);
@@ -130,18 +162,14 @@ fn ParticleBackground() -> impl IntoView {
             }
 
             // Draw particles
+            ctx.set_global_alpha(0.45);
+            ctx.set_fill_style_str(&dot_col);
             for p in &particles {
-                // Glow
-                ctx.set_fill_style_str("rgba(59,130,246,0.15)");
-                ctx.begin_path();
-                let _ = ctx.arc(p.x, p.y, p.r * 3.0, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-                // Core
-                ctx.set_fill_style_str("rgba(139,170,220,0.6)");
                 ctx.begin_path();
                 let _ = ctx.arc(p.x, p.y, p.r, 0.0, std::f64::consts::TAU);
                 ctx.fill();
             }
+            ctx.set_global_alpha(1.0);
 
             // Reset transform for next frame
             ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0).ok();
@@ -149,7 +177,7 @@ fn ParticleBackground() -> impl IntoView {
     });
 
     view! {
-        <canvas node_ref=canvas_ref
+        <canvas node_ref=canvas_ref class="wl-particles" aria-hidden="true"
             style="position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;"
         />
     }
@@ -241,6 +269,7 @@ pub fn ConnectionPanel(
             // UI controls at z-index 2
             <div class="connection-ui-side fade-in-center">
                 <div class="connection-header-group">
+                    <div class="wl-mark" aria-hidden="true"><Icon name="bug" size=30 /></div>
                     <h1 class="logo-title">"BugBuster"</h1>
                     <p class="subtitle-desc">"CMSIS-DAP Probe & Debug Suite"</p>
                 </div>
@@ -248,16 +277,24 @@ pub fn ConnectionPanel(
                 <div class="card connection-card">
                     {move || if !scan_completed.get() {
                         view! {
-                            <div class="scanning-loader-wrap">
-                                <div class="scanning-glow-ring"></div>
+                            <div class="scanning-loader-wrap" role="status">
+                                <div class="spinner" aria-hidden="true"></div>
                                 <p class="scanning-status">"Initializing..."</p>
                             </div>
                         }.into_any()
                     } else {
                         view! {
-                            <button class="btn btn-primary btn-scan" on:click=move |e| on_scan.run(e) disabled=move || scanning.get()>
-                                {move || if scanning.get() { "Scanning..." } else { "Scan for Devices" }}
-                            </button>
+                            <div class="wl-toolbar">
+                                <span class="wl-toolbar-title">"Devices"</span>
+                                <span class="wl-toolbar-count">
+                                    {move || {
+                                        let n = devices.get().len();
+                                        if scanning.get() { "Scanning…".to_string() }
+                                        else if n == 1 { "1 found".to_string() }
+                                        else { format!("{n} found") }
+                                    }}
+                                </span>
+                            </div>
 
                             <div class="device-list-container">
                                 <div class="device-list">
@@ -266,36 +303,60 @@ pub fn ConnectionPanel(
                                         key=|dev| dev.id.clone()
                                         children=move |dev: DiscoveredDevice| {
                                             let id = dev.id.clone();
-                                            let icon = if dev.transport == "usb" { "🔌" } else { "📡" };
+                                            let is_usb = dev.transport == "usb";
                                             let name = dev.name.clone();
                                             let addr = dev.address.clone();
                                             let tbadge = dev.transport.to_uppercase();
                                             let id_click = id.clone();
+                                            let aria = format!("Connect to {} ({})", dev.name, dev.address);
                                             view! {
-                                                <button class="device-item" on:click=move |_| {
+                                                <button class="device-item" aria-label=aria on:click=move |_| {
                                                     connect(id_click.clone());
                                                 }>
-                                                    <span class="device-icon">{icon}</span>
+                                                    <span class="device-icon">
+                                                        <Icon name=if is_usb { "usb" } else { "wifi" } size=18 />
+                                                    </span>
                                                     <div class="device-info">
                                                         <span class="device-name">{name}</span>
                                                         <span class="device-addr">{addr}</span>
                                                     </div>
                                                     <span class="device-transport">{tbadge}</span>
+                                                    <span class="device-connect">"Connect"<Icon name="chevron-right" size=13 /></span>
                                                 </button>
                                             }
                                         }
                                     />
+                                    <Show when=move || devices.get().is_empty()>
+                                        <div class="wl-empty">
+                                            {move || if scanning.get() {
+                                                "Looking for BugBuster devices…"
+                                            } else {
+                                                "No devices found. Plug in a BugBuster over USB or join its network, then scan again."
+                                            }}
+                                        </div>
+                                    </Show>
                                     // Synthetic device — runs the app with no hardware.
-                                    <button class="device-item" on:click=move |e| on_mock.run(e)>
-                                        <span class="device-icon">"🧪"</span>
+                                    <div class="wl-section">"No hardware?"</div>
+                                    <button class="device-item" aria-label="Connect to the demo device" on:click=move |e| on_mock.run(e)>
+                                        <span class="device-icon"><Icon name="activity" size=18 /></span>
                                         <div class="device-info">
                                             <span class="device-name">"Demo / Mock device (DAQ)"</span>
                                             <span class="device-addr">"Synthetic power-analyzer stream"</span>
                                         </div>
                                         <span class="device-transport">"DEMO"</span>
+                                        <span class="device-connect">"Connect"<Icon name="chevron-right" size=13 /></span>
                                     </button>
                                 </div>
                             </div>
+
+                            <button class="btn btn-primary btn-scan"
+                                class:wl-quiet=move || !devices.get().is_empty()
+                                class:is-scanning=move || scanning.get()
+                                on:click=move |e| on_scan.run(e) disabled=move || scanning.get()>
+                                <Icon name="refresh-cw" size=14 />
+                                {move || if scanning.get() { "Scanning..." } else { "Scan for Devices" }}
+                            </button>
+                            <p class="hint">"USB and Wi-Fi (mDNS) devices are discovered automatically."</p>
                         }.into_any()
                     }}
                 </div>
