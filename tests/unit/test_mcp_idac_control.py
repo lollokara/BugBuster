@@ -49,7 +49,6 @@ def test_in_range_vadj_voltage_is_written(env):
     bb.idac_set_voltage.assert_called_once_with(1, 5.0)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-15")
 @pytest.mark.parametrize("channel", [0, 3])
 def test_set_voltage_refuses_vlogic_and_unconnected(env, channel):
     idac, bb, _ = env
@@ -58,7 +57,6 @@ def test_set_voltage_refuses_vlogic_and_unconnected(env, channel):
     bb.idac_set_voltage.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="AN-15")
 @pytest.mark.parametrize("voltage", [16.0, 2.0, 13.0])
 def test_set_voltage_applies_vadj_limits(env, voltage):
     idac, bb, _ = env
@@ -67,7 +65,6 @@ def test_set_voltage_applies_vadj_limits(env, voltage):
     bb.idac_set_voltage.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="AN-15")
 def test_set_voltage_respects_a_locked_profile(env):
     idac, bb, prof = env
     prof.return_value = {"name": "dut", "vadj1": {"value": 3.3, "locked": True}}
@@ -76,14 +73,12 @@ def test_set_voltage_respects_a_locked_profile(env):
     bb.idac_set_voltage.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="AN-15")
 def test_set_code_accepts_signed_sink_codes(env):
     idac, bb, _ = env
     idac("set_code", channel=1, code=-20, i_understand_the_risk=True)
     bb.idac_set_code.assert_called_once_with(1, -20)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-15")
 def test_set_code_refuses_vlogic_and_locked_rails(env):
     idac, bb, prof = env
     with pytest.raises(ValueError):

@@ -10,7 +10,29 @@ damage connected devices or put the BugBuster in an inconsistent state.
 from __future__ import annotations
 from typing import Optional
 from .. import session
+from ..safety import validate_vadj_voltage
 from ..tool_wrappers import require_usb_transport, with_error_context
+
+
+def _require_vadj_channel(channel: int, action: str) -> None:
+    """AN-15: raw IDAC writes only on VADJ1/VADJ2, like set_supply_voltage."""
+    if channel == 0:
+        raise ValueError(
+            f"idac_control {action} refuses channel 0: VLOGIC cannot be changed by AI tools. "
+            f"It is fixed at {session.get_vlogic():.1f} V (set via --vlogic at server startup)."
+        )
+    if channel not in (1, 2):
+        raise ValueError(f"idac_control {action}: channel must be 1 (VADJ1) or 2 (VADJ2), got {channel}.")
+
+
+def _require_unlocked(channel: int) -> None:
+    profile = session.get_active_board_profile()
+    rail = (profile or {}).get(f"vadj{channel}", {})
+    if rail.get("locked"):
+        raise ValueError(
+            f"VADJ{channel} is locked to {rail.get('value', 0):.1f} V for the active board profile "
+            f"('{profile.get('name', '?')}'); raw code writes are refused."
+        )
 
 
 def register(mcp) -> None:
@@ -133,6 +155,7 @@ def register(mcp) -> None:
         voltage: Optional[float] = None,
         code:    Optional[int]   = None,
         i_understand_the_risk: bool = False,
+        confirm: bool = False,
     ) -> dict:
         """
         WARNING: Raw IDAC writes can retrim VADJ1, VADJ2, and VLOGIC, drifting supply voltages unpredictably.
@@ -150,10 +173,14 @@ def register(mcp) -> None:
         Parameters:
         - action: "status" to read state, "set_voltage" to set by voltage,
                   "set_code" to write raw DAC code.
-        - channel: IDAC channel (0=VLOGIC, 1=VADJ1, 2=VADJ2, 3=unused).
-        - voltage: Target voltage for set_voltage action.
-        - code: Raw DAC code (0-127) for set_code action.
+        - channel: IDAC channel (0=VLOGIC, 1=VADJ1, 2=VADJ2, 3=unused). Writes are
+                   only allowed on 1 and 2; VLOGIC is fixed by --vlogic.
+        - voltage: Target voltage for set_voltage action (same limits, board-profile
+                   locks and 12 V confirm gate as set_supply_voltage).
+        - code: Raw signed DAC code (-127..127) for set_code action. Negative codes
+                sink current and RAISE the rail; refused on a locked rail.
         - i_understand_the_risk: Must be True for set_voltage/set_code.
+        - confirm: Must be True for set_voltage above 12 V.
 
         Returns: action, channel, status/result.
         """
@@ -172,6 +199,8 @@ def register(mcp) -> None:
                 )
             if voltage is None:
                 raise ValueError("set_voltage requires voltage parameter.")
+            _require_vadj_channel(channel, "set_voltage")
+            validate_vadj_voltage(voltage, index=channel, confirm=confirm)
             bb.idac_set_voltage(channel, voltage)
             return {"action": "set_voltage", "channel": channel, "voltage": voltage, "success": True}
         elif action_lower == "set_code":
@@ -182,9 +211,11 @@ def register(mcp) -> None:
                     "drift VADJ1, VADJ2, or VLOGIC unpredictably. Use set_supply_voltage for normal operation."
                 )
             if code is None:
-                raise ValueError("set_code requires code parameter (0-127).")
-            if not (0 <= code <= 127):
-                raise ValueError(f"IDAC code must be 0-127, got {code}.")
+                raise ValueError("set_code requires code parameter (-127..127).")
+            if not (-127 <= code <= 127):
+                raise ValueError(f"IDAC code must be -127..127, got {code}.")
+            _require_vadj_channel(channel, "set_code")
+            _require_unlocked(channel)
             bb.idac_set_code(channel, code)
             return {"action": "set_code", "channel": channel, "code": code, "success": True}
         else:
