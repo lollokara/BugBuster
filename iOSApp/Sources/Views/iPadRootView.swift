@@ -30,6 +30,7 @@ struct iPadRootView: View {
                             case 2:  ScopeTab()
                             case 3:  DiagnosticsTab()
                             case 4:  ScriptsTab()
+                            case 5:  BatterySimTab()
                             default: OverviewTab()
                             }
                         }
@@ -47,6 +48,9 @@ struct iPadRootView: View {
                 .navigationSplitViewStyle(.balanced)
                 .onAppear { noteInteraction() }
                 .onChange(of: selectedSection) { _, _ in noteInteraction() }
+                .onChange(of: connectionManager.lastHatStatus?.isDaqHat ?? false) { _, daq in
+                    if !daq && selectedSection == 5 { selectedSection = 0 }
+                }
                 .onChange(of: columnVisibility) { _, new in
                     // Reopening restarts the countdown; collapsing stops it so a
                     // cancelled task can't re-collapse an already-collapsed pane.

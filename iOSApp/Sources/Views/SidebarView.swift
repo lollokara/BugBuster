@@ -8,11 +8,12 @@ import SwiftUI
 /// `.ultraThinMaterial` on top would violate the "one glass layer per chrome
 /// element" rule (see `.mex/patterns/ios-glass-shell.md`).
 struct SidebarView: View {
+    @EnvironmentObject var connectionManager: ConnectionManager
     @Binding var selection: Int?
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(AppSections.all) { section in
+            ForEach(AppSections.visible(daqHat: connectionManager.lastHatStatus?.isDaqHat ?? false)) { section in
                 Label(section.name, systemImage: section.icon)
                     .tag(section.id)
             }

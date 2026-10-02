@@ -25,6 +25,7 @@ def register_all(mcp) -> None:
     from .daq_cal    import register as reg_daq_cal
     from .daq_power  import register as reg_daq_power
     from .onboarding import register as reg_onboarding
+    from .battsim    import register as reg_battsim
 
     reg_discovery(mcp)
     reg_io_config(mcp)
@@ -44,3 +45,4 @@ def register_all(mcp) -> None:
     reg_daq_cal(mcp)
     reg_daq_power(mcp)
     reg_onboarding(mcp)
+    reg_battsim(mcp)

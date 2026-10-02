@@ -2,6 +2,7 @@
  "GPIO_COUNT": "int",
  "HAT_CACHE_TTL_S": "float",
  "adc_leds_set_mode": "(self, manual: bool) -> bool",
+ "battsim": "property",
  "bus": "property",
  "bus_plan": "(self, kind: str, **kwargs) -> dict",
  "check_faults": "(self) -> list[dict]",

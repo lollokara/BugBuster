@@ -1371,6 +1371,11 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    /// POST JSON and decode the reply over HTTP or the BLE tunnel (nil on transport failure).
+    public func postJSON<T: Decodable>(_ type: T.Type, path: String, json: [String: Any]) async -> T? {
+        await postDecoded(type, path: path, json: json)
+    }
+
     /// Select the monitored e-fuse (0 = off, 1...4). Returns the parsed response, nil on transport failure.
     public func setEfuseImon(_ efuse: Int, confirm: Bool) async -> EFuseImonStatus? {
         let res: EFuseImonStatus? = await postDecoded(

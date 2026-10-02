@@ -9,15 +9,22 @@ enum AppSections {
         let id: Int
         let icon: String
         let name: String
+        var daqOnly = false
     }
 
+    // DAQ-only sections stay at the end so array index == id for the tab bar.
     static let all: [Section] = [
         Section(id: 0, icon: "waveform.path.ecg", name: "Overview"),
         Section(id: 1, icon: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left", name: "Signal Path"),
         Section(id: 2, icon: "waveform", name: "Scope"),
         Section(id: 3, icon: "cpu", name: "Diagnostics"),
-        Section(id: 4, icon: "doc.text.magnifyingglass", name: "Scripts")
+        Section(id: 4, icon: "doc.text.magnifyingglass", name: "Scripts"),
+        Section(id: 5, icon: "battery.75percent", name: "Battery", daqOnly: true)
     ]
+
+    static func visible(daqHat: Bool) -> [Section] {
+        all.filter { !$0.daqOnly || daqHat }
+    }
 
     /// Debug-only: jump straight to a section on launch (`BB_INITIAL_SECTION=<id>`),
     /// for scripted screenshotting without simulator UI automation.

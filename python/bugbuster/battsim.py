@@ -20,6 +20,7 @@ Usage::
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import math
 import os
@@ -417,7 +418,8 @@ class RunHistory:
             "rows": [[r.t_s, r.dt_s, r.v_avg, r.v_min, r.v_max, r.soc_pct, r.i_avg, r.i_min,
                       r.i_max, r.flags, r.q_dut_c, r.q_used_c, r.e_dut_j, r.tier]
                      for r in self.records],
-            "stats": self.stats(),
+            "stats": {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+                      for k, v in self.stats().items()},
         }
 
 
@@ -545,12 +547,12 @@ class BattSim:
             elif len(local) > f.size:
                 local = b""
             if len(local) < f.size:
-                tail = self.read_file(run, f.file_id, len(local), f.size - len(local),
-                                      (lambda n, nm=name, base=len(local), tot=f.size:
-                                       progress(nm, base + n, tot)) if progress else None)
+                cb = (functools.partial(_offset_progress, progress, name, len(local), f.size)
+                      if progress is not None else None)
+                tail = self.read_file(run, f.file_id, len(local), f.size - len(local), cb)
                 local += tail
-            with open(path, "wb") as fh:
-                fh.write(local)
+            with open(path, "wb") as out:
+                out.write(local)
         return d
 
     def history(self, run: int, cache_dir: Optional[str] = None) -> RunHistory:
@@ -626,6 +628,11 @@ class BattSim:
         self._act(DaqAction.BS_PROFILE_DELETE, slot=slot)
 
 
+def _offset_progress(report: Callable[[str, int, int], None], name: str, base: int,
+                     total: int, n: int) -> None:
+    report(name, base + n, total)
+
+
 def history_from_blobs(blobs: Dict[str, bytes]) -> RunHistory:
     """Build a merged series from raw run files keyed by on-device file name."""
     meta = parse_meta(blobs["meta.bin"])
@@ -660,3 +667,12 @@ def load_history_dir(path: str) -> RunHistory:
 def export_json(history: RunHistory, path: str) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(history.to_json(), fh, allow_nan=False, default=lambda o: None)
+
+
+def export_csv(history: RunHistory, path: str) -> None:
+    import csv
+    doc = history.to_json()
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(doc["columns"])
+        w.writerows(doc["rows"])

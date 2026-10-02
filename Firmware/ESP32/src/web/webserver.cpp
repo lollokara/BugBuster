@@ -2613,10 +2613,17 @@ static esp_err_t handle_post_daq_acq_config(httpd_req_t *req)
 static esp_err_t handle_post_daq_bs(httpd_req_t *req)
 {
     cJSON *body = recv_json_body(req);
-    const char *path = strcmp(req->uri, "/api/daq/bs/read") == 0 ? "/api/daq/bs/read" : "/api/daq/bs";
-    char *resp = api_core_handle("POST", path, body);
+    char *resp = api_core_handle("POST", "/api/daq/bs", body);
     if (body) cJSON_Delete(body);
     return send_api_core_result(req, resp, "battsim request failed");
+}
+
+static esp_err_t handle_post_daq_bs_read(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", "/api/daq/bs/read", body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "battsim read failed");
 }
 
 // POST /api/daq/config  body: {"op": 0..4, "args": hex}. SET (1) and ACTION (4)
@@ -5531,7 +5538,7 @@ bool initWebServer(void)
     };
     httpd_register_uri_handler(s_server, &uri_daq_bs);
     httpd_uri_t uri_daq_bs_read = {
-        .uri = "/api/daq/bs/read", .method = HTTP_POST, .handler = handle_post_daq_bs, .user_ctx = NULL
+        .uri = "/api/daq/bs/read", .method = HTTP_POST, .handler = handle_post_daq_bs_read, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_bs_read);
     httpd_uri_t uri_daq_config = {

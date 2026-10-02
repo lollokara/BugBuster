@@ -567,14 +567,14 @@ struct OverviewTab: View {
                     // Rollback on failure
                     DispatchQueue.main.async {
                         self.connectionManager.lastHatRails = originalRails
-                        self.showToast("Failed to toggle rail", type: .error)
+                        self.connectionManager.showToast("Failed to toggle rail", type: .error)
                     }
                 }
             } catch {
                 // Rollback on error
                 DispatchQueue.main.async {
                     self.connectionManager.lastHatRails = originalRails
-                    self.showToast("Error: \(error.localizedDescription)", type: .error)
+                    self.connectionManager.showToast("Error: \(error.localizedDescription)", type: .error)
                 }
             }
         }
@@ -601,14 +601,14 @@ struct OverviewTab: View {
                     // Rollback on failure
                     DispatchQueue.main.async {
                         self.connectionManager.lastOverview = originalOverview
-                        self.showToast("Failed to toggle \(ctrl)", type: .error)
+                        self.connectionManager.showToast("Failed to toggle \(ctrl)", type: .error)
                     }
                 }
             } catch {
                 // Rollback on error
                 DispatchQueue.main.async {
                     self.connectionManager.lastOverview = originalOverview
-                    self.showToast("Error: \(error.localizedDescription)", type: .error)
+                    self.connectionManager.showToast("Error: \(error.localizedDescription)", type: .error)
                 }
             }
         }

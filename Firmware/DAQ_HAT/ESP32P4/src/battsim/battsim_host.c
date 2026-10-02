@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "battsim.h"
 #include "battsim_store.h"
 
@@ -105,6 +106,16 @@ static int op_run_dir(const uint8_t *a, uint8_t n, uint8_t *out)
     return len;
 }
 
+// Hosts read files sequentially in 236 B chunks; one LittleFS open per chunk
+// dominated the transfer, so each open prefetches READ_CACHE bytes.
+#define READ_CACHE     8192
+#define READ_CACHE_MS  2000
+
+static uint8_t   *s_rc;
+static uint16_t   s_rc_run, s_rc_file;
+static uint32_t   s_rc_off, s_rc_len;
+static TickType_t s_rc_at;
+
 static int op_read(const uint8_t *a, uint8_t n, uint8_t *out)
 {
     if (n < 9) return -1;
@@ -112,8 +123,26 @@ static int op_read(const uint8_t *a, uint8_t n, uint8_t *out)
     uint32_t off = rd32(a + 4);
     uint32_t want = a[8];
     if (want > BS_HOST_READ_MAX) want = BS_HOST_READ_MAX;
-    int32_t got = bs_store_file_read(run, file, off, out, want);
-    return got < 0 ? -1 : (int)got;
+    if (!s_rc) s_rc = heap_caps_malloc(READ_CACHE, MALLOC_CAP_SPIRAM);
+    if (!s_rc) {
+        int32_t got = bs_store_file_read(run, file, off, out, want);
+        return got < 0 ? -1 : (int)got;
+    }
+    bool hit = s_rc_len > 0 && run == s_rc_run && file == s_rc_file &&
+               off >= s_rc_off && off <= s_rc_off + s_rc_len &&
+               (off + want <= s_rc_off + s_rc_len || s_rc_len < READ_CACHE) &&
+               (xTaskGetTickCount() - s_rc_at) < pdMS_TO_TICKS(READ_CACHE_MS);
+    if (!hit) {
+        int32_t got = bs_store_file_read(run, file, off, s_rc, READ_CACHE);
+        if (got < 0) { s_rc_len = 0; return -1; }
+        s_rc_run = run; s_rc_file = file; s_rc_off = off; s_rc_len = (uint32_t)got;
+        s_rc_at = xTaskGetTickCount();
+    }
+    uint32_t rel = off - s_rc_off;
+    uint32_t avail = s_rc_len - rel;
+    uint32_t n_out = want < avail ? want : avail;
+    memcpy(out, s_rc + rel, n_out);
+    return (int)n_out;
 }
 
 static int op_profile(const uint8_t *a, uint8_t n, uint8_t *out)

@@ -88,7 +88,9 @@ struct MainTabView: View {
     @ObservedObject private var scopeOrientation = ScopeOrientationState.shared
     @State private var selectedTab = AppSections.initialSectionFromEnvironment
 
-    let tabs = AppSections.all.map { (icon: $0.icon, name: $0.name) }
+    var tabs: [(icon: String, name: String)] {
+        AppSections.visible(daqHat: connectionManager.lastHatStatus?.isDaqHat ?? false).map { (icon: $0.icon, name: $0.name) }
+    }
 
     var body: some View {
         Group {
@@ -103,10 +105,14 @@ struct MainTabView: View {
                         case 2:  ScopeTab()
                         case 3:  DiagnosticsTab()
                         case 4:  ScriptsTab()
+                        case 5:  BatterySimTab()
                         default: OverviewTab()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onChange(of: connectionManager.lastHatStatus?.isDaqHat ?? false) { _, daq in
+                        if !daq && selectedTab == 5 { selectedTab = 0 }
+                    }
 
                     // Toast overlay
                     if let toast = connectionManager.toastMessage {
