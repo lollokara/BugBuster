@@ -56,6 +56,17 @@ class TestScriptingTools(unittest.TestCase):
         self.assertEqual(r["logs"], "a\nb\nc\n")
         self.assertFalse(r["timed_out"])
 
+    def test_wait_waits_for_a_queued_script_to_start(self):
+        # Bench: right after eval the engine still reports the previous script
+        # (idle), so treating "not running" as "finished" lost every log line.
+        self.bb.script_eval.return_value = _status(False, sid=8)
+        self.bb.script_status.side_effect = [_status(False, sid=7), _status(True, sid=8),
+                                             _status(False, sid=8), _status(False, sid=8)]
+        logs = iter(["", "", "x\n", ""])
+        self.bb.script_logs.side_effect = lambda: next(logs, "")
+        r = self.mcp.tools["run_device_script"](src="print(1)", wait=True, timeout_s=5)
+        self.assertEqual(r["logs"], "x\n")
+
     def test_wait_times_out(self):
         self.bb.script_eval.return_value = _status(True)
         self.bb.script_status.return_value = _status(True)

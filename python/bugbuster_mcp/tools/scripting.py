@@ -90,7 +90,12 @@ def register(mcp) -> None:
                 deadline = time.monotonic() + max(0.0, timeout_s)
                 while True:
                     parts.append(_drain(bb))
-                    if not bb.script_status().is_running:
+                    st = bb.script_status()
+                    # The eval is queued: until the engine reports OUR id the
+                    # script may not have started yet (bench: is_running was
+                    # false right after eval and every log line was lost).
+                    started = not script_id or st.script_id == script_id
+                    if started and not st.is_running:
                         parts.append(_drain(bb))
                         break
                     if time.monotonic() >= deadline:
