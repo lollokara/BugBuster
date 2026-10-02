@@ -26,6 +26,14 @@
 
 ### Fixed
 
+- **Desktop HS DAQ:** the DUT supply switch started as On while the SMU
+  boots Off, so enabling it took an off/on cycle; it now starts Off and
+  follows the device-reported state and setpoints. A VDUT switch and setpoint
+  readout sit in the toolbar, and a Clear button drops the captured
+  waveforms (new Tauri command `daq_clear_capture`, host-side only).
+- **Desktop Scope:** Y-axis tick labels were fixed at two decimals, so a
+  millivolt-level signal showed identical labels on every tick and looked
+  frozen; precision now follows the visible span.
 - **Desktop:** Logic Analyzer Clear (and Run All with no capture) passed
   `u64::MAX` to the bridge and panicked the WASM app; UART selects showed the
   first option instead of the stored setting; Diagnostics release-notes

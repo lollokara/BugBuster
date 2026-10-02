@@ -275,7 +275,23 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
     let range_lock_idx = RwSignal::new(0u8); // 0 = Auto, 1..3 = HI/MID/LO+1
     let vdut_mv = RwSignal::new(3300u32);
     let ilimit_ma = RwSignal::new(500u32);
-    let source_enable = RwSignal::new(true);
+    let source_enable = RwSignal::new(false);
+    // Device-reported output state, adopted on first status and whenever the device changes it.
+    let source_dev_last = RwSignal::new(Option::<bool>::None);
+    Effect::new(move |_| {
+        let Some(st) = snapshots.with(|s| s.as_ref().and_then(|s| s.status)) else { return };
+        let first = source_dev_last.get_untracked().is_none();
+        if source_dev_last.get_untracked() != Some(st.source_enabled) {
+            source_dev_last.set(Some(st.source_enabled));
+            source_enable.set(st.source_enabled);
+        }
+        if first && st.vdut_set > 0.0 {
+            vdut_mv.set(((st.vdut_set * 1000.0).round() as u32).clamp(1800, 19940));
+            if st.ilimit_set > 0.0 {
+                ilimit_ma.set(((st.ilimit_set * 1000.0).round() as u32).clamp(100, 2500));
+            }
+        }
+    });
     let fft_nbins = RwSignal::new(256u16);
     let fft_window = RwSignal::new(1u8);
     let fft_source = RwSignal::new(0u8);
@@ -784,6 +800,21 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             daq_stream_stop().await;
         });
     };
+    let clear_capture = move |_| {
+        if autofocus.get_untracked() == -1 {
+            autofocus.set(-2);
+        }
+        sel_start.set(None);
+        sel_end.set(None);
+        sel_anchor.set(None);
+        view_start.set(0);
+        view_end.set(0);
+        spawn_local(async move {
+            if daq_clear_capture().await {
+                show_toast("Capture cleared", "ok");
+            }
+        });
+    };
 
     let apply_source = move || {
         let (v, il, en) = (
@@ -1057,6 +1088,9 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                         </button>
                     }.into_any()
                 }}
+                <button class="btn btn-sm" title="Clear the captured waveforms" aria-label="Clear capture" on:click=clear_capture>
+                    <Icon name="trash-2" size=13 />"Clear"
+                </button>
                 <label class="dq-ctl" title="Sample rate for the next run">
                     <span class="dq-ctl-label">"Rate"</span>
                     <select class="dropdown dropdown-sm" aria-label="Sample rate" on:change=move |ev| {
@@ -1103,6 +1137,21 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
                     aria_label="Trace layout"
                 />
                 <span class="dq-spacer"></span>
+                <div class="dq-vdut" role="group" aria-label="DUT supply">
+                    <Icon name="plug-zap" size=14 />
+                    <span class="dq-vdut-label">"VDUT"</span>
+                    <span class="dq-vdut-val num" title="DUT supply setpoint (change it in Settings)">
+                        {move || format!("{:.2} V", vdut_mv.get() as f64 / 1000.0)}
+                    </span>
+                    <button type="button" role="switch" class="switch switch-sm" class:on=move || source_enable.get()
+                        aria-checked=move || if source_enable.get() { "true" } else { "false" }
+                        aria-label="DUT supply output"
+                        title=move || if source_enable.get() { "DUT supply on - click to turn off" } else { "DUT supply off - click to turn on" }
+                        on:click=move |_| {
+                            source_enable.update(|e| *e = !*e);
+                            apply_source();
+                        }></button>
+                </div>
                 <div class="dq-tools" role="group" aria-label="Panels">
                     <button type="button" class=move || tgl_class(perf_open.get())
                         aria-pressed=move || if perf_open.get() { "true" } else { "false" }

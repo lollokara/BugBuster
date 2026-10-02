@@ -53,6 +53,18 @@
 .dq-chip .dq-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dot-c); }
 .dq-chip.on .dq-dot { background: var(--dot-c); }
 .dq-tools { display: inline-flex; align-items: center; gap: 2px; }
+.dq-vdut {
+    display: inline-flex; align-items: center; gap: var(--s-2);
+    height: var(--ctl-h-sm); padding: 0 var(--s-1) 0 var(--s-3);
+    border: 0.5px solid var(--sep-strong); border-radius: var(--r-full);
+    color: var(--label-2); font-size: var(--fs-footnote);
+}
+.dq-vdut svg { color: var(--label-3); }
+.dq-vdut-label { font-weight: var(--fw-medium); }
+.dq-vdut-val { color: var(--label-1); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.switch.switch-sm { width: 30px; height: 18px; }
+.switch.switch-sm::after { width: 14px; height: 14px; }
+.switch.switch-sm.on::after, .switch.switch-sm[aria-checked="true"]::after { transform: translateX(12px); }
 .dq-tgl { gap: 6px; padding: 0 var(--s-2); }
 .dq-tgl-text { line-height: 1; }
 

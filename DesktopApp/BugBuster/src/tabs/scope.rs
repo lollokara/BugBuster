@@ -85,6 +85,17 @@ fn rate_label(rate_code: u8) -> String {
     "– SPS".to_string()
 }
 
+/// Format an axis tick with enough decimals that adjacent ticks differ.
+fn fmt_tick(v: f64, span: f64, divisions: usize) -> String {
+    let step = (span / divisions.max(1) as f64).abs();
+    let dec = if step > 0.0 && step.is_finite() {
+        ((-step.log10()).ceil() as i32 + 1).clamp(2, 6) as usize
+    } else {
+        2
+    };
+    format!("{:.*}", dec, v)
+}
+
 /// Infer unit (V or mA) from ADC range code.
 fn range_unit(range_code: u8) -> &'static str {
     // Ranges 0-7 in tauri_bridge are all voltage. But user may pick 0-25mA externally.
@@ -994,7 +1005,7 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let frac = j as f64 / h_majors as f64;
                         let y = mt + frac * ph;
                         let val = y_max_all - frac * y_span;
-                        let _ = ctx.fill_text(&format!("{:.2}", val), ml - 8.0, y + 4.0);
+                        let _ = ctx.fill_text(&fmt_tick(val, y_span, h_majors as usize), ml - 8.0, y + 4.0);
                     }
                 }
                 PlotMode::Stacked => {
@@ -1030,13 +1041,14 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let band_bot = band_top + band_h;
                         // Label at band top + middle + bottom
                         ctx.set_fill_style_str(&colors[c]);
-                        let _ = ctx.fill_text(&format!("{:.2}", bmax), ml - 8.0, band_top + 10.0);
+                        let bspan = bmax - bmin;
+                        let _ = ctx.fill_text(&fmt_tick(bmax, bspan, 2), ml - 8.0, band_top + 10.0);
                         let _ = ctx.fill_text(
-                            &format!("{:.2}", (bmin + bmax) / 2.0),
+                            &fmt_tick((bmin + bmax) / 2.0, bspan, 2),
                             ml - 8.0,
                             (band_top + band_bot) / 2.0,
                         );
-                        let _ = ctx.fill_text(&format!("{:.2}", bmin), ml - 8.0, band_bot - 4.0);
+                        let _ = ctx.fill_text(&fmt_tick(bmin, bspan, 2), ml - 8.0, band_bot - 4.0);
                     }
                 }
             }
