@@ -352,11 +352,7 @@ impl Transport for UsbTransport {
             Ok(Ok(msg)) => {
                 if msg.is_error() {
                     let err_code = msg.error_code().unwrap_or(0);
-                    Err(anyhow!(
-                        "Device error 0x{:02X} for cmd 0x{:02X}",
-                        err_code,
-                        cmd_id
-                    ))
+                    Err(anyhow!(device_error_message(err_code, cmd_id)))
                 } else {
                     Ok(msg.payload)
                 }
@@ -415,6 +411,24 @@ impl Drop for UsbTransport {
         if let Ok(mut writer_lock) = self.writer.lock() {
             *writer_lock = None;
         }
+    }
+}
+
+/// DESK-33: user-facing text for a BBP ERR reply (the UI shows this string).
+fn device_error_message(code: u8, cmd_id: u8) -> String {
+    format!("Device error 0x{:02X} for cmd 0x{:02X}", code, cmd_id)
+}
+
+#[cfg(test)]
+mod device_error_tests {
+    /// DESK-33: UI messages carried only a hex code; the generated
+    /// `bbp::error_to_string` table was never used.
+    #[test]
+    #[ignore = "DESK-33"]
+    fn device_errors_read_as_text() {
+        let m = super::device_error_message(crate::bbp::ERR_BUSY, 0x10);
+        assert!(m.contains("busy"), "{m}");
+        assert!(m.contains("0x10"), "{m}");
     }
 }
 
