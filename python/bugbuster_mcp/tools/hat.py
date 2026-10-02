@@ -8,7 +8,7 @@ Tools: hat_get_caps, hat_get_rail_status, hat_health_summary,
 
 from __future__ import annotations
 from .. import session
-from ..safety import require_hat
+from ..safety import require_confirm, require_hat
 from ..tool_wrappers import with_error_context, require_hat_type
 
 
@@ -449,15 +449,20 @@ def register(mcp) -> None:
     @mcp.tool()
     def hat_calibrate_start(
         rail_id: int,
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Sweeps the rail and overwrites its stored HAT calibration.
+
         Start HAT auto-calibration on a specific rail.
 
         Parameters:
         - rail_id: Rail ID (1 = VADJ3, 2 = VADJ4).
+        - confirm: Must be True to proceed.
 
         Returns: starting state.
         """
+        require_confirm(confirm, "hat_calibrate_start", "sweeps the rail and overwrites its calibration")
         if rail_id not in (1, 2):
             raise ValueError(f"Invalid rail_id {rail_id}. Valid values: 1 (VADJ3), 2 (VADJ4)")
         bb = session.get_client()
@@ -480,17 +485,22 @@ def register(mcp) -> None:
     def hat_calibrate_import(
         rail_id: int,
         points: list[dict],
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Overwrites the rail's stored HAT calibration.
+
         Import calibration data (max 6 points) to the HAT.
 
         Parameters:
         - rail_id: Rail ID (0 = 3V3_ADJ, 1 = VADJ3, 2 = VADJ4).
         - points: List of calibration points, each point containing 'dac_code' (int) and 'measured_v' (float).
                   Example: [{"dac_code": -8, "measured_v": 3.4}, ...]
+        - confirm: Must be True to proceed.
 
         Returns: success.
         """
+        require_confirm(confirm, "hat_calibrate_import", "overwrites the rail calibration")
         if rail_id not in (0, 1, 2):
             raise ValueError(f"Invalid rail_id {rail_id}. Valid values: 0 (3V3_ADJ), 1 (VADJ3), 2 (VADJ4)")
         bb = session.get_client()

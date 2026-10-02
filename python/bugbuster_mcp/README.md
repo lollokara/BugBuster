@@ -173,9 +173,10 @@ past these. Constants live in [config.py](config.py); the checks are in
 | MUX exclusivity | `configure_io` sets exactly one signal path per IO. Analog or digital, never both. Enforced in the HAL. |
 | E-fuse auto-arm | Configuring an IO as an output enables overcurrent protection for its IO block. |
 | Current ceiling | `write_current` caps at 8 mA. `allow_full_range=True` unlocks the full 25 mA. |
-| Voltage confirmation | `set_supply_voltage` above 12 V requires `confirm=True`. Hard maximum 15 V. |
-| VLOGIC lock | Not settable by any tool. `--vlogic` at startup only. |
-| Risk gates | `mux_control` and `register_access` require `i_understand_the_risk=True`. |
+| Voltage confirmation | `set_supply_voltage` and `idac_control set_voltage` above 12 V require `confirm=True`. Hard maximum 15 V. |
+| VLOGIC lock | Not settable by any tool, `idac_control` included. `--vlogic` at startup only. |
+| Risk gates | `mux_control`, `register_access` and `idac_control` writes require `i_understand_the_risk=True`. |
+| Flash / calibration gates | Every `ota_upload_*` tool, `ota_rollback`, `ota_apply_update`, `daq_cal_start`, `hat_calibrate_start` and `hat_calibrate_import` require `confirm=True`. |
 | Rail lock | An active board profile can mark VLOGIC / VADJ1 / VADJ2 `locked`; changes are then rejected. |
 | Post-action fault check | After every output-driving call, e-fuse and power-good state is read back and warnings are attached to the response. |
 

@@ -41,7 +41,6 @@ def _registered(module_name: str, tool_name: str):
     return tools[tool_name]
 
 
-@pytest.mark.xfail(strict=True, reason="MCP-25")
 @pytest.mark.parametrize("module_name,tool_name,params", MCP25_GATED)
 def test_mcp25_tools_refuse_without_confirm(module_name, tool_name, params):
     tool_fn = _registered(module_name, tool_name)
@@ -51,7 +50,6 @@ def test_mcp25_tools_refuse_without_confirm(module_name, tool_name, params):
         get_client.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="MCP-25")
 @pytest.mark.parametrize("module_name,tool_name,params", MCP25_GATED)
 def test_mcp25_docstring_starts_with_warning(module_name, tool_name, params):
     doc = _registered(module_name, tool_name).__doc__ or ""

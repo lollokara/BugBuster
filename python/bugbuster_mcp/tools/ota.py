@@ -25,6 +25,7 @@ from bugbuster.transport import HTTPTransport
 from bugbuster.ota import OTAClient, OTAError
 
 from .. import session
+from ..safety import require_confirm
 
 log = logging.getLogger(__name__)
 
@@ -182,8 +183,11 @@ def register(mcp) -> None:
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
         transport: str = "http",
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Erases and rewrites the SPIFFS partition (the on-device web UI).
+
         Upload a SPIFFS filesystem image (the on-device web UI) to the
         ``spiffs`` partition. Erase + write of a 4 MB partition takes ~30 s.
 
@@ -193,9 +197,11 @@ def register(mcp) -> None:
           ``.pio/build/esp32s3/spiffs.bin``.
         - host, admin_token: as in ota_get_info.
         - transport: "http" (default) or "usb" (BBP 0x77, no WiFi needed).
+        - confirm: Must be True to proceed.
 
         Returns: success and any extra fields the firmware reports.
         """
+        require_confirm(confirm, "ota_upload_spiffs", "erases and rewrites the web UI filesystem")
         if not os.path.isfile(path):
             raise ValueError(f"SPIFFS image not found: {path}")
         if transport == "usb":
@@ -222,8 +228,11 @@ def register(mcp) -> None:
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
         transport: str = "http",
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Reflashes and resets the DAQ HAT P4; the DUT supply comes back OFF.
+
         Push a locally built ESP32-P4 image to the DAQ HAT.
 
         transport="http" (default): through the S3 over WiFi. transport="usb":
@@ -234,7 +243,11 @@ def register(mcp) -> None:
         running. Takes 60-90 s. The DAQ stream drops briefly during the reset.
         The reset turns the DUT supply OFF; if it was on, the result has a
         ``warnings`` list saying so - re-enable it afterwards if needed.
+        confirm must be True to proceed.
         """
+        require_confirm(confirm, "ota_upload_p4", "reflashes the P4 and turns the DUT supply off")
+        if not os.path.isfile(path):
+            raise ValueError(f"P4 image not found: {path}")
         if transport == "usb":
             return _usb_upload(path, "p4")
         ota = _make_ota(host, admin_token)
@@ -249,15 +262,22 @@ def register(mcp) -> None:
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
         transport: str = "http",
+        confirm: bool = False,
     ) -> dict:
         """
+        WARNING: Reflashes the whole DAQ HAT C6 flash (~3 min); a wrong image can brick it.
+
         Push a locally built ESP32-C6 image to the DAQ HAT.
 
         `path` must be a MERGED image from flash offset 0 (bootloader +
         partition table + app); an app-only binary is rejected by the device
         because it would brick the C6. Takes ~3 minutes. transport="usb"
-        stages it over the P4's own USB port instead of WiFi.
+        stages it over the P4's own USB port instead of WiFi. confirm must be
+        True to proceed.
         """
+        require_confirm(confirm, "ota_upload_c6", "rewrites the C6 flash from offset 0")
+        if not os.path.isfile(path):
+            raise ValueError(f"C6 image not found: {path}")
         if transport == "usb":
             return _usb_upload(path, "c6")
         ota = _make_ota(host, admin_token)

@@ -65,6 +65,12 @@ def require_hal_initialized(hal) -> None:
         )
 
 
+def require_confirm(confirm: bool, tool: str, consequence: str) -> None:
+    """MCP-25: one gate for tools that flash an MCU or write calibration."""
+    if not confirm:
+        raise ValueError(f"{tool} requires confirm=True: it {consequence}. Pass confirm=True to proceed.")
+
+
 # ---------------------------------------------------------------------------
 # Voltage / current limits
 # ---------------------------------------------------------------------------

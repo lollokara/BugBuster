@@ -12,7 +12,7 @@ routines run on the HAT:
 
 Typical flow::
 
-    daq_cal_start(mode="voltage")     # -> prompt: disconnect_load
+    daq_cal_start(mode="voltage", confirm=True)  # -> prompt: disconnect_load
     # operator disconnects the load
     daq_cal_ack()
     daq_cal_status()                  # poll until phase == success/failed
@@ -20,6 +20,7 @@ Typical flow::
 
 from __future__ import annotations
 from .. import session
+from ..safety import require_confirm
 
 
 _CAL_MODE_MAP = {
@@ -33,8 +34,10 @@ _CAL_MODE_MAP = {
 def register(mcp) -> None:
 
     @mcp.tool()
-    def daq_cal_start(mode: str) -> dict:
+    def daq_cal_start(mode: str, confirm: bool = False) -> dict:
         """
+        WARNING: Overwrites the DAQ HAT SMU calibration table in NVM.
+
         Start an SMU factory-calibration run on the DAQ HAT.
 
         The run pauses on an operator prompt before touching the supply:
@@ -49,9 +52,11 @@ def register(mcp) -> None:
 
         Parameters:
         - mode: "voltage" or "current".
+        - confirm: Must be True to proceed.
 
         Returns: success, mode, message. Poll daq_cal_status() for progress.
         """
+        require_confirm(confirm, "daq_cal_start", "overwrites the SMU calibration stored on the DAQ HAT")
         key = mode.strip().lower()
         if key not in _CAL_MODE_MAP:
             raise ValueError("mode must be 'voltage' or 'current'")
