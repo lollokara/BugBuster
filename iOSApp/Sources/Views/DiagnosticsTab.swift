@@ -117,16 +117,18 @@ struct DiagnosticsTab: View {
         updateEsp32 || updateHat || (daqHatPresent && (updateP4 || updateC6))
     }
 
+    // AnyView boxes each card on the heap: the fully nested static type overflowed the
+    // main-thread stack in debug builds (EXC_BAD_ACCESS code 2 at selfTestCard).
     @ViewBuilder
     private var diagnosticsCards: some View {
-        selfTestCard
-        internalSuppliesCard
-        registersCard
-        usbPdCard
-        calibrationCard
-        wifiCard
-        otaCard
-        spiffsCard
+        AnyView(selfTestCard)
+        AnyView(internalSuppliesCard)
+        AnyView(registersCard)
+        AnyView(usbPdCard)
+        AnyView(calibrationCard)
+        AnyView(wifiCard)
+        AnyView(otaCard)
+        AnyView(spiffsCard)
     }
 
     var body: some View {
@@ -226,7 +228,23 @@ struct DiagnosticsTab: View {
 
     // MARK: - Self-Test Card
 
+    // Split into sections: one giant ViewBuilder overflowed the main-thread stack in debug builds.
     var selfTestCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AnyView(selfTestHeader)
+            Divider().background(Color.white.opacity(0.1))
+            AnyView(bootSelfTestSection)
+            Divider().background(Color.white.opacity(0.1))
+            AnyView(supplyMonitorSection)
+            Divider().background(Color.white.opacity(0.1))
+            AnyView(calibrationEngineSection)
+            Divider().background(Color.white.opacity(0.1))
+            AnyView(resetChannelsButton)
+        }
+        .cardStyle()
+    }
+
+    private var selfTestHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Self-Test & Calibration")
@@ -266,11 +284,12 @@ struct DiagnosticsTab: View {
                 }
                 Spacer()
             }
+        }
+    }
 
-            Divider().background(Color.white.opacity(0.1))
-
-            // ── Boot Self-Test Results ──
-            VStack(alignment: .leading, spacing: 8) {
+    private var bootSelfTestSection: some View {
+        let selftest = connectionManager.lastSelftest
+        return VStack(alignment: .leading, spacing: 8) {
                 Text("BOOT SELF-TEST")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.secondary)
@@ -305,10 +324,9 @@ struct DiagnosticsTab: View {
                 }
                 .padding(.top, 4)
             }
+    }
 
-            Divider().background(Color.white.opacity(0.1))
-
-            // ── Live Supply Monitor Readings ──
+    private var supplyMonitorSection: some View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("SUPPLY MONITOR (LIVE)")
                     .font(.system(size: 10, weight: .bold))
@@ -335,11 +353,11 @@ struct DiagnosticsTab: View {
                         .italic()
                 }
             }
+    }
 
-            Divider().background(Color.white.opacity(0.1))
-
-            // ── Calibration Engine ──
-            VStack(alignment: .leading, spacing: 8) {
+    private var calibrationEngineSection: some View {
+        let selftest = connectionManager.lastSelftest
+        return VStack(alignment: .leading, spacing: 8) {
                 Text("CALIBRATION ENGINE")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.secondary)
@@ -426,9 +444,9 @@ struct DiagnosticsTab: View {
                         .foregroundColor(result.contains("Error") || result.contains("blocked") ? .red : .green)
                 }
             }
+    }
 
-            Divider().background(Color.white.opacity(0.1))
-
+    private var resetChannelsButton: some View {
             Button(action: { showResetConfirmation = true }) {
                 HStack {
                     Image(systemName: "arrow.counterclockwise.circle.fill")
@@ -440,8 +458,6 @@ struct DiagnosticsTab: View {
                 .padding(.vertical, 10)
                 .glassEffect(.regular.tint(.red.opacity(0.6)), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-        }
-        .cardStyle()
     }
 
     // MARK: - Internal Supplies Card
