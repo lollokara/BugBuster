@@ -1,4 +1,7 @@
-use crate::components::channel_sparkline::ChannelSparkline;
+use crate::components::channel_sparkline::{
+    ch_key, ch_var, set_channel_function, ChannelEmpty, ChannelHead, ChannelSparkline,
+};
+use crate::components::ui::{Readout, SegmentedControl};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -70,9 +73,9 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"Voltage output control. Set each channel to VOUT mode to output a programmable voltage (0-12V unipolar or +/-12V bipolar). Use the slider or type a value and click SET."</div>
-            <div class="channel-grid-wide">
+        <div class="view">
+            <p class="group-subtitle">"Programmable voltage outputs, 0 to 12 V or ±12 V per channel. Drag the slider or type a value and press Set."</p>
+            <div class="grid-2">
                 {move || {
                     let ds = state.get();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
@@ -82,7 +85,6 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let max_v: f64 = 12.0;
                         let min_v: f64 = if is_bipolar { -12.0 } else { 0.0 };
                         let span = max_v - min_v;
-                        let color = CH_COLORS[i];
 
                         if !dirty[i].get() {
                             slider_vals[i].set(ch.dac_value as f64);
@@ -91,110 +93,112 @@ pub fn VdacTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let display_v = if dirty[i].get() { slider_vals[i].get() } else { ch.dac_value as f64 };
                         let pct = if span > 0.0 { ((display_v - min_v) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
 
-                        view! {
-                            <div class="card channel-card" class:ch-disabled=!is_vout>
-                                <div class="card-header">
-                                    <div class="ch-badge" style=format!("background: {}22; color: {}; border: 1px solid {}44", color, color, color)>
-                                        {format!("CH {}", CH_NAMES[i])}
+                        let body = if !is_vout {
+                            view! {
+                                <ChannelEmpty icon="arrow-up-from-line" message="Set the channel to voltage output to drive it.">
+                                    <button class="btn btn-sm" on:click=move |_| set_channel_function(ch_idx, 1)>"Voltage out"</button>
+                                </ChannelEmpty>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div class="io-body">
+                                    <div class="io-primary">
+                                        <Readout
+                                            label="Output"
+                                            value=Signal::derive(move || format!("{:.3}", display_v))
+                                            unit="V"
+                                            size="lg"
+                                        />
+                                        <div class="io-meta">
+                                            <span>"DAC code "{format!("{}", ch.dac_code)}</span>
+                                            <span>{format!("ADC (ext) {:.3} V", ch.adc_value)}</span>
+                                        </div>
                                     </div>
-                                    <span class="channel-func">{if is_vout { "VOUT" } else { func_name(ch.function) }}</span>
-                                </div>
-                                <div class="card-body">
-                                    {if !is_vout {
-                                        view! {
-                                            <div class="mode-warning">
-                                                <span class="mode-warning-icon">"ℹ"</span>
-                                                <span>"Set channel to VOUT mode to control voltage output"</span>
-                                            </div>
-                                        }.into_any()
-                                    } else {
-                                        view! {
-                                            <div>
-                                                <div class="big-value">{format!("{:.3}", display_v)}<span class="unit">"V"</span></div>
-                                                <div class="card-details"><span>"DAC Code: "{format!("{}", ch.dac_code)}</span></div>
-                                                <div class="bar-gauge" style=format!("--bar-color: {}", color)>
-                                                    <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
-                                                </div>
+                                    <div class="meter io-meter" aria-hidden="true">
+                                        <span style=format!("width: {}%", pct)></span>
+                                    </div>
 
-                                                <div class="card-details" style="margin-top: 4px;">
-                                                    <span>{format!("Readback (DAC): {:.3} V", ch.dac_value)}</span>
-                                                </div>
-                                                <div class="card-details" style="margin-top: 2px;">
-                                                    <span>{format!("ADC (ext): {:.3} V", ch.adc_value)}</span>
-                                                </div>
-                                                <ChannelSparkline
-                                                    values=Signal::from(history[i])
-                                                    min=Signal::derive(move || min_v as f32)
-                                                    max=Signal::derive(move || max_v as f32)
-                                                    color=color.to_string()
+                                    <ChannelSparkline
+                                        values=Signal::from(history[i])
+                                        min=Signal::derive(move || min_v as f32)
+                                        max=Signal::derive(move || max_v as f32)
+                                        color_var=ch_var(i)
+                                    />
+
+                                    <div class="rows io-rows">
+                                        <div class="row">
+                                            <span class="row-label">"Range"</span>
+                                            <SegmentedControl
+                                                options=vec![(false, "0 to 12 V"), (true, "±12 V")]
+                                                value=Signal::derive(move || bipolar[i].get())
+                                                on_change=Callback::new(move |new_val: bool| {
+                                                    bipolar[i].set(new_val);
+                                                    send_vout_range(ch_idx, new_val);
+                                                })
+                                                aria_label="Output range"
+                                            />
+                                        </div>
+                                        <div class="row io-setpoint-row">
+                                            <span class="row-label">
+                                                "Setpoint"
+                                                <span class="row-hint">{format!("Readback {:.3} V", ch.dac_value)}</span>
+                                            </span>
+                                            <div class="number-input-wrap">
+                                                <input type="number" class="number-input"
+                                                    aria-label="Setpoint in volts"
+                                                    min=min_v max=max_v step="0.001"
+                                                    prop:value=move || format!("{:.3}", slider_vals[i].get())
+                                                    on:input=move |e| {
+                                                        if let Ok(v) = event_target_value(&e).parse::<f64>() {
+                                                            slider_vals[i].set(v);
+                                                            dirty[i].set(true);
+                                                        }
+                                                    }
                                                 />
-
-                                                <div class="config-row">
-                                                    <label>"Range"</label>
-                                                    <label class="toggle-wrap">
-                                                        <span class="toggle-off-label">"0–12V"</span>
-                                                        <div class="toggle" class:active=move || bipolar[i].get()
-                                                            on:click=move |_| {
-                                                                let new_val = !bipolar[i].get_untracked();
-                                                                bipolar[i].set(new_val);
-                                                                send_vout_range(ch_idx, new_val);
-                                                            }
-                                                        ><div class="toggle-thumb"></div></div>
-                                                        <span class="toggle-on-label">"±12V"</span>
-                                                    </label>
-                                                </div>
-
-                                                <div class="slider-section">
-                                                    <input type="range" class="slider slider-colored"
-                                                        style=format!("--slider-color: {}", color)
-                                                        min=min_v * 1000.0 max=max_v * 1000.0 step="1"
-                                                        prop:value=move || (slider_vals[i].get() * 1000.0) as i64
-                                                        on:input=move |e| {
-                                                            if let Ok(v) = event_target_value(&e).parse::<f64>() {
-                                                                slider_vals[i].set(v / 1000.0);
-                                                                dirty[i].set(true);
-                                                            }
-                                                        }
-                                                        on:change=move |e| {
-                                                            if let Ok(v) = event_target_value(&e).parse::<f64>() {
-                                                                send_dac_voltage(ch_idx, (v / 1000.0) as f32, bipolar[i].get_untracked());
-                                                                dirty[i].set(false);
-                                                            }
-                                                        }
-                                                    />
-                                                    <div class="slider-labels">
-                                                        <span>{format!("{:.0}V", min_v)}</span>
-                                                        <span>{format!("{:.0}V", max_v)}</span>
-                                                    </div>
-                                                </div>
-
-                                                <div class="config-row">
-                                                    <label>"Set V"</label>
-                                                    <div class="number-input-wrap">
-                                                        <input type="number" class="number-input"
-                                                            min=min_v max=max_v step="0.001"
-                                                            prop:value=move || format!("{:.3}", slider_vals[i].get())
-                                                            on:input=move |e| {
-                                                                if let Ok(v) = event_target_value(&e).parse::<f64>() {
-                                                                    slider_vals[i].set(v);
-                                                                    dirty[i].set(true);
-                                                                }
-                                                            }
-                                                        />
-                                                        <span class="number-unit">"V"</span>
-                                                        <button class="btn btn-sm btn-primary"
-                                                            on:click=move |_| {
-                                                                send_dac_voltage(ch_idx, slider_vals[i].get_untracked() as f32, bipolar[i].get_untracked());
-                                                                dirty[i].set(false);
-                                                            }
-                                                        >"Set"</button>
-                                                    </div>
-                                                </div>
+                                                <span class="number-unit">"V"</span>
+                                                <button class="btn btn-sm btn-primary"
+                                                    on:click=move |_| {
+                                                        send_dac_voltage(ch_idx, slider_vals[i].get_untracked() as f32, bipolar[i].get_untracked());
+                                                        dirty[i].set(false);
+                                                    }
+                                                >"Set"</button>
                                             </div>
-                                        }.into_any()
-                                    }}
+                                        </div>
+                                    </div>
+
+                                    <div class="slider-section io-slider">
+                                        <input type="range"
+                                            aria-label="Setpoint slider"
+                                            style=move || format!("--fill: {}%", ((slider_vals[i].get() - min_v) / span * 100.0).clamp(0.0, 100.0))
+                                            min=min_v * 1000.0 max=max_v * 1000.0 step="1"
+                                            prop:value=move || (slider_vals[i].get() * 1000.0) as i64
+                                            on:input=move |e| {
+                                                if let Ok(v) = event_target_value(&e).parse::<f64>() {
+                                                    slider_vals[i].set(v / 1000.0);
+                                                    dirty[i].set(true);
+                                                }
+                                            }
+                                            on:change=move |e| {
+                                                if let Ok(v) = event_target_value(&e).parse::<f64>() {
+                                                    send_dac_voltage(ch_idx, (v / 1000.0) as f32, bipolar[i].get_untracked());
+                                                    dirty[i].set(false);
+                                                }
+                                            }
+                                        />
+                                        <div class="slider-labels">
+                                            <span>{format!("{:.0} V", min_v)}</span>
+                                            <span>{format!("{:.0} V", max_v)}</span>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
+                            }.into_any()
+                        };
+
+                        view! {
+                            <section class="group io-card" data-ch=ch_key(i)>
+                                <ChannelHead idx=i func=if is_vout { "VOUT" } else { func_name(ch.function) } />
+                                {body}
+                            </section>
                         }
                     }).collect::<Vec<_>>()
                 }}
