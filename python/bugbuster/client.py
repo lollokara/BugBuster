@@ -1503,13 +1503,13 @@ class BugBuster:
                 self._usb_cmd(CmdId.SET_DIN_CONFIG, payload)
             else:
                 self._http_post(f"/channel/{channel}/din/config", {
-                    "thresh":      threshold,
-                    "thresh_mode": thresh_mode,
-                    "debounce":    debounce,
-                    "sink":        sink,
-                    "sink_range":  sink_range,
-                    "oc_det":      oc_detect,
-                    "sc_det":      sc_detect,
+                    "thresh":     threshold,
+                    "threshMode": bool(thresh_mode),
+                    "debounce":   debounce,
+                    "sink":       sink,
+                    "sinkRange":  bool(sink_range),
+                    "ocDet":      bool(oc_detect),
+                    "scDet":      bool(sc_detect),
                 })
         self._auto_claim_wrap([channel + 12], _body)
 
@@ -4143,7 +4143,7 @@ class BugBuster:
             self._usb_cmd(CmdId.SET_ALERT_MASK, payload)
         else:
             self._http_post("/faults/mask", {
-                "alert_mask": alert_mask, "supply_mask": supply_mask,
+                "alertMask": alert_mask & 0xFFFF, "supplyMask": supply_mask & 0xFFFF,
             })
 
     def check_faults(self) -> list[dict]:

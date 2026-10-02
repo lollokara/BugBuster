@@ -26,7 +26,6 @@ def _http_client() -> bb.BugBuster:
     return client
 
 
-@pytest.mark.xfail(strict=True, reason="IO-17")
 @pytest.mark.parametrize("call, route", [
     (lambda c: c.set_alert_mask(0x1234, 0x0056), "/faults/mask"),
     (lambda c: c.set_din_config(1, 64, thresh_mode=True, debounce=3, sink=5,
@@ -42,7 +41,6 @@ def test_http_body_keys_are_read_by_the_firmware(call, route):
     assert unread == [], f"firmware never reads {unread}"
 
 
-@pytest.mark.xfail(strict=True, reason="IO-17")
 def test_alert_mask_values_reach_the_firmware_keys():
     client = _http_client()
     client.set_alert_mask(0x1234, 0x0056)
