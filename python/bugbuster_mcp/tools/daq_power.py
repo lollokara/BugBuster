@@ -680,6 +680,7 @@ def register(mcp) -> None:
                      if s <= (m.sample_index - base) < e],
             start_index=base + s,
             start_timestamp_us=cap.start_timestamp_us,
+            device_status=getattr(cap, "device_status", None),
         )
         report = analyze(sub, preview_points=max(0, min(int(preview_points), 1000)))
         report["capture_id"] = capture_id
@@ -708,7 +709,7 @@ def register(mcp) -> None:
         rb = integrate(cb.current, cb.voltage, cb.sample_rate)
 
         def _norm(r):
-            d = r.get("duration_s") or 0.0
+            d = r.get("duration_total_s") or r.get("duration_s") or 0.0
             return {
                 "duration_s": d,
                 "energy_j": r.get("energy_j", 0.0),
@@ -752,7 +753,7 @@ def register(mcp) -> None:
         cap = _get_capture(capture_id)
         if cap.sample_rate <= 0:
             raise ValueError("Capture has no valid sample rate.")
-        n = min(cap.sample_count, int(max_rows))
+        n = max(0, min(cap.sample_count, int(max_rows)))
         dt = 1.0 / cap.sample_rate
         with open(path, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)

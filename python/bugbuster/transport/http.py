@@ -155,11 +155,16 @@ class HTTPTransport:
             timeout=self._timeout,
         )
         r.raise_for_status()
-        return r.json()
+        try:
+            return r.json()
+        except ValueError:
+            return r.text  # e.g. /scripts/files/get answers text/x-python
 
-    def post(self, path: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
+    def post(self, path: str, body: Optional[dict | bytes | str] = None,
+             headers: Optional[dict] = None) -> Any:
         """
-        HTTP POST ``/api{path}`` with a JSON body.
+        HTTP POST ``/api{path}`` with a JSON body (``bytes``/``str`` bodies
+        are sent raw, e.g. a script source).
         Returns parsed JSON (or ``{}`` for empty responses).
 
         Injects the admin token header automatically if one has been set.
@@ -171,11 +176,14 @@ class HTTPTransport:
         if headers:
             merged_headers.update(headers)
         log.debug("POST %s body=%s", url, body)
+        payload: dict[str, Any] = (
+            {"data": body} if isinstance(body, (bytes, str)) else {"json": body or {}}
+        )
         r = self._session.post(
             url,
-            json=body or {},
             headers=merged_headers or None,
             timeout=self._timeout,
+            **payload,
         )
         return _check_action(r)
 

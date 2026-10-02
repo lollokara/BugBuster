@@ -894,7 +894,7 @@ def device(request, _session_admin_token):
     if not _sim_mode:
         try:
             held = [i for i, s in enumerate(dev.io_owner_status())
-                    if s and s.get("kind")]
+                    if s and s.get("kind") and s.get("kind") != 5]
         except Exception:
             held = []
         for slot in held:
@@ -920,7 +920,7 @@ def device(request, _session_admin_token):
     if not _sim_mode:
         try:
             held = [i for i, s in enumerate(dev.io_owner_status())
-                    if s and s.get("kind")]
+                    if s and s.get("kind") and s.get("kind") != 5]
         except Exception:
             held = []
         for slot in held:
@@ -1121,8 +1121,18 @@ def _session_io_safety_net(request, _session_admin_token):
             yield
             return
 
-        # Try to force-release all slots
+        # Try to force-release all client slots. INTERNAL (kind 5) is the
+        # supply monitor mid-measurement; releasing it lets a client claim the
+        # slot under the monitor and the monitor's restore then wipes it.
+        internal = set()
+        if getattr(dev, "_usb", False):
+            try:
+                internal = {i for i, s in enumerate(dev.io_owner_status()) if s and s.get("kind") == 5}
+            except Exception:
+                internal = set()
         for slot in range(16):
+            if slot in internal:
+                continue
             try:
                 if getattr(dev, "_usb", False):
                     if _session_admin_token:

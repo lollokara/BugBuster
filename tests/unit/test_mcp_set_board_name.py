@@ -35,18 +35,23 @@ def set_board():
     session._active_board = previous
 
 
-def _outside_profile(tmp_path) -> str:
-    profile_dir = os.path.join(os.path.dirname(discovery.__file__), os.pardir, "board_profiles")
+def _outside_profile(tmp_path, monkeypatch) -> str:
+    # Point the tool's package root into tmp_path so the traversal stays on one
+    # drive (CI checks out on D: while tmp_path lives on C:).
+    monkeypatch.setattr(discovery, "__file__", str(tmp_path / "pkg" / "tools" / "discovery.py"))
+    (tmp_path / "pkg" / "board_profiles").mkdir(parents=True)
     target = tmp_path / "evil.json"
     target.write_text('{"name": "evil", "description": "outside"}', encoding="utf-8")
-    return os.path.splitext(os.path.relpath(target, os.path.abspath(profile_dir)))[0]
+    return "../../evil"
 
 
-def test_relative_traversal_is_rejected(set_board, tmp_path):
-    name = _outside_profile(tmp_path)
+def test_relative_traversal_is_rejected(set_board, tmp_path, monkeypatch):
+    name = _outside_profile(tmp_path, monkeypatch)
+    assert os.path.exists(os.path.join(tmp_path, "pkg", "board_profiles", name + ".json"))
     result = set_board(name)
     assert result.startswith("Error"), result
     assert "outside" not in result
+    assert session._active_board != name
 
 
 def test_absolute_path_is_rejected(set_board, tmp_path):

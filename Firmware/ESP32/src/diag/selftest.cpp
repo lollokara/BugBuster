@@ -515,7 +515,11 @@ static float measure_via_u23_locked(uint8_t source_sw, uint8_t adc_range, bool f
     // (IO12 analog path), there is no longer a supply-rail path on HW D to
     // cause contention.
     AD74416H *dev = tasks_get_device();
-    tasks_apply_channel_function(SELFTEST_LOGICAL_CH, prev_func);
+    // read_channel_d() already left HW D in HIGH_IMP; re-applying HIGH_IMP would
+    // only re-route channel C's MUX and undo raw MUX writes made meanwhile (IO-24).
+    if (prev_func != CH_FUNC_HIGH_IMP) {
+        tasks_apply_channel_function(SELFTEST_LOGICAL_CH, prev_func);
+    }
     if (dev && have_prev_cfg &&
         prev_func != CH_FUNC_HIGH_IMP &&
         prev_func != CH_FUNC_DIN_LOGIC &&

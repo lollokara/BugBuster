@@ -21,6 +21,10 @@ extern "C" {
 
 #define IO_OWNER_NUM_SLOTS  16
 
+// An external claim on a slot held by IO_OWNER_INTERNAL (the supply monitor
+// holds slot 14 for ~0.5 s every 5 s) waits this long before being refused.
+#define IO_OWNER_INTERNAL_WAIT_MS  700u
+
 // Ceiling applied to IO_OWNER_INTERNAL claims that ask for an infinite lease.
 //
 // INTERNAL is the one kind that io_owner_release_all_except() deliberately

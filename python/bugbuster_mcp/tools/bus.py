@@ -389,7 +389,7 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def i2c_read(address: int, length: int, timeout_ms: int = 100) -> dict:
-        """Read ``length`` (1-256) bytes from a 7-bit I2C address on the configured bus."""
+        """Read ``length`` (1-255) bytes from a 7-bit I2C address on the configured bus."""
         _check_addr(address)
         _check_len(length)
         rx = session.get_client().bus.i2c_read(address, length, timeout_ms=timeout_ms)
@@ -400,7 +400,7 @@ def register(mcp) -> None:
                        timeout_ms: int = 100) -> dict:
         """
         Register-style transaction: write ``write_data`` (e.g. a register
-        pointer), repeated start, read ``read_length`` (1-256) bytes.
+        pointer), repeated start, read ``read_length`` (1-255) bytes.
         """
         _check_addr(address)
         _check_bytes(write_data, "write_data")
@@ -415,7 +415,7 @@ def register(mcp) -> None:
     def i2c_dump_registers(address: int, start_reg: int = 0, count: int = 16,
                            timeout_ms: int = 100) -> dict:
         """
-        Read ``count`` (1-256) consecutive 8-bit registers from an I2C device
+        Read ``count`` (1-255) consecutive 8-bit registers from an I2C device
         with an auto-incrementing 1-byte register pointer (most sensors and
         EEPROM-style parts). One write_read transaction.
         """
@@ -437,7 +437,7 @@ def register(mcp) -> None:
         """
         if not 0 <= address <= 0xFFFFFF:
             raise ValueError("address must be a 24-bit value")
-        _check_len(length)
+        _check_len(length, 256)
         tx = [0x03, (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF] + [0] * length
         rx = session.get_client().bus.spi_transfer(tx, timeout_ms=timeout_ms)
         return {"success": True, "address": f"0x{address:06X}", "data": list(rx[4:])}
@@ -448,9 +448,9 @@ def _check_addr(address: int) -> None:
         raise ValueError("address must be a 7-bit I2C address 0x08-0x77")
 
 
-def _check_len(length: int) -> None:
-    if not isinstance(length, int) or not 1 <= length <= 256:
-        raise ValueError("length must be 1-256")
+def _check_len(length: int, maximum: int = 255) -> None:
+    if not isinstance(length, int) or not 1 <= length <= maximum:
+        raise ValueError(f"length must be 1-{maximum}")
 
 
 def _check_bytes(data: list[int], name: str) -> None:

@@ -2714,6 +2714,14 @@ static esp_err_t handle_hat_post_dispatch(httpd_req_t *req)
     if (strstr(req->uri, "/api/hat/config")) return handle_post_hat_config(req);
     if (strstr(req->uri, "/api/hat/reset")) return handle_post_hat_reset(req);
     if (strstr(req->uri, "/api/hat/detect")) return handle_post_hat_detect(req);
+    if (strstr(req->uri, "/api/hat/v2/swd/detect")) {
+        if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+        char *resp = api_core_handle("POST", "/api/hat/v2/swd/detect", NULL);
+        if (!resp) return send_error(req, 500, "SWD detect failed");
+        esp_err_t rc = send_raw_json(req, resp);
+        cJSON_free(resp);
+        return rc;
+    }
     return send_error(req, 404, "Unknown HAT endpoint");
 }
 

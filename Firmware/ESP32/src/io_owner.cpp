@@ -11,6 +11,14 @@
 
 #include <string.h>
 
+#ifdef IO_OWNER_HOST_TEST
+extern "C" { void (*io_owner_test_sleep_hook)(uint32_t ms) = nullptr; }
+static void io_owner_sleep_ms(uint32_t ms) { if (io_owner_test_sleep_hook) io_owner_test_sleep_hook(ms); }
+#else
+#include "freertos/task.h"
+static void io_owner_sleep_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
+#endif
+
 static const char *TAG = "io_owner";
 
 static_assert(IO_OWNER_NUM_SLOTS == 16, "IO owner table must have exactly 16 slots");
@@ -44,6 +52,21 @@ void io_owner_init(void)
     ESP_LOGI(TAG, "IO ownership table initialised (%d slots)", IO_OWNER_NUM_SLOTS);
 }
 
+// Block (outside the lock) while an INTERNAL holder - normally the supply
+// monitor mid-measurement - keeps the slot, up to IO_OWNER_INTERNAL_WAIT_MS.
+static void wait_out_internal_holder(uint8_t slot_idx, io_owner_kind_t kind)
+{
+    if (kind == IO_OWNER_INTERNAL) return;
+    const uint32_t step_ms = 20;
+    for (uint32_t waited = 0; waited < IO_OWNER_INTERNAL_WAIT_MS; waited += step_ms) {
+        portENTER_CRITICAL(&s_mux);
+        bool internal = (s_slots[slot_idx].kind == IO_OWNER_INTERNAL);
+        portEXIT_CRITICAL(&s_mux);
+        if (!internal) return;
+        io_owner_sleep_ms(step_ms);
+    }
+}
+
 void io_owner_tick(uint64_t now_ms)
 {
     portENTER_CRITICAL(&s_mux);
@@ -72,6 +95,8 @@ bool io_owner_acquire(uint8_t slot_idx, io_owner_kind_t kind,
         (lease_ms == 0 || lease_ms > IO_OWNER_INTERNAL_MAX_LEASE_MS)) {
         lease_ms = IO_OWNER_INTERNAL_MAX_LEASE_MS;
     }
+
+    wait_out_internal_holder(slot_idx, kind);
 
     bool ok = false;
     portENTER_CRITICAL(&s_mux);
@@ -249,6 +274,8 @@ int io_owner_guard_or_auto(uint8_t slot_idx, io_owner_kind_t kind,
                             uint64_t now_ms)
 {
     if (slot_idx >= IO_OWNER_NUM_SLOTS) return 0;  // invalid slot → don't block
+
+    wait_out_internal_holder(slot_idx, kind);
 
     portENTER_CRITICAL(&s_mux);
     io_owner_slot_t *sl = &s_slots[slot_idx];

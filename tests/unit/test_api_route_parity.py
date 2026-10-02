@@ -27,9 +27,6 @@ WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
 #                                    recognizes .../config, .../reset and
 #                                    .../detect substrings, so these 404 through
 #                                    it rather than reaching a handler.
-#   /api/hat/v2/swd/detect       -- no registration, and it does not match any
-#                                    substring the /api/hat/* wildcard checks
-#                                    for (only /api/hat/v2/swd/setup exists).
 #   /api/ota/apply                -- webserver.cpp instead registers
 #   /api/ota/status                  /api/update/apply and /api/update/status,
 #                                     which are a *different* operation, not a
@@ -49,7 +46,6 @@ WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
 KNOWN_HTTP_MISSING = {
     "/api/hat/rail/enable",
     "/api/hat/rail/voltage",
-    "/api/hat/v2/swd/detect",
     "/api/ota/apply",
     "/api/ota/status",
     "/api/ota/releases",
