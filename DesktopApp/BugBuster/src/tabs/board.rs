@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use leptos::either::Either;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 
+use crate::components::icons::Icon;
+use crate::components::ui::{Callout, Switch};
 use crate::tauri_bridge::*;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -30,6 +30,7 @@ impl PinMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_badge(&self) -> &'static str {
         match self {
             PinMode::NC => "·",
@@ -236,14 +237,469 @@ impl Default for BoardConfig {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Board map helpers
+// -----------------------------------------------------------------------------
+
+/// Pins 1-6 sit on VADJ1, 7-12 on VADJ2.
+fn pin_domain(i: usize) -> (&'static str, &'static str) {
+    if i < 6 {
+        ("VADJ1", "vadj1")
+    } else {
+        ("VADJ2", "vadj2")
+    }
+}
+
+/// Each VADJ has two e-fuses covering three pins each:
+/// IO1-3 -> 0 (VADJ1-A), IO4-6 -> 1 (VADJ1-B), IO7-9 -> 2 (VADJ2-A), IO10-12 -> 3 (VADJ2-B).
+fn pin_efuse(i: usize) -> usize {
+    i / 3
+}
+
+fn efuse_label(e: usize) -> &'static str {
+    match e {
+        0 => "VADJ1-A",
+        1 => "VADJ1-B",
+        2 => "VADJ2-A",
+        _ => "VADJ2-B",
+    }
+}
+
+/// Only IO3/IO6/IO9/IO12 are wired to the AD74416H analog channels A-D.
+fn is_analog_capable(i: usize) -> bool {
+    matches!(i, 2 | 5 | 8 | 11)
+}
+
+fn io_range(e: usize) -> String {
+    format!("IO{}\u{2013}{}", e * 3 + 1, e * 3 + 3)
+}
+
+/// (function, value, unit) read back from the AD74416H channel behind an analog-capable IO.
+/// Digital IOs have no live readback in the device state.
+fn live_io(ds: &DeviceState, i: usize) -> Option<(&'static str, String, &'static str)> {
+    if !is_analog_capable(i) {
+        return None;
+    }
+    let ch = ds.channels.get(i / 3)?;
+    Some(match ch.function {
+        0 => ("High impedance", "Hi-Z".to_string(), ""),
+        1 => ("Voltage out", format!("{:.3}", ch.dac_value), "V"),
+        2 | 10 => ("Current out", format!("{:.3}", ch.dac_value), "mA"),
+        3 => ("Voltage in", format!("{:.4}", ch.adc_value), "V"),
+        4 | 11 => ("Current in", format!("{:.3}", ch.adc_value), "mA"),
+        5 | 12 => ("Current in (loop)", format!("{:.3}", ch.adc_value), "mA"),
+        7 => ("Resistance", format!("{:.1}", ch.adc_value), "\u{3a9}"),
+        8 | 9 => (
+            "Digital in",
+            if ch.din_state { "High" } else { "Low" }.to_string(),
+            "",
+        ),
+        _ => ("Unknown", "\u{2014}".to_string(), ""),
+    })
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct OwnerRow {
+    #[serde(default)]
+    kind: u8,
+}
+
+/// Owner of an IO: its own slot, or the analog channel slot (12..15) behind it.
+fn owner_name(owners: RwSignal<Vec<OwnerRow>>, i: usize) -> Option<&'static str> {
+    let kind = owners.with(|o| {
+        let direct = o.get(i).map(|s| s.kind).unwrap_or(0);
+        if direct != 0 || !is_analog_capable(i) {
+            direct
+        } else {
+            o.get(12 + i / 3).map(|s| s.kind).unwrap_or(0)
+        }
+    });
+    match kind {
+        0 => None,
+        1 => Some("USB"),
+        2 => Some("HTTP"),
+        3 => Some("Script"),
+        4 => Some("CLI"),
+        5 => Some("Internal"),
+        _ => Some("Other"),
+    }
+}
+
+/// Push e-fuse config. The firmware does not enforce a SW limit, so only the
+/// enable toggle surfaces that to the user.
+fn push_efuse(efuse: u8, sw_limit_ma: u16, enabled: bool) {
+    #[derive(Serialize)]
+    struct Args {
+        efuse: u8,
+        sw_limit_ma: u16,
+        enabled: bool,
+    }
+    let args = serde_wasm_bindgen::to_value(&Args {
+        efuse,
+        sw_limit_ma,
+        enabled,
+    })
+    .unwrap();
+    spawn_local(async move {
+        if try_invoke("set_efuse_config", args).await.is_none() && enabled {
+            show_toast(
+                "SW current limit is not enforced by the firmware (saved to profile only)",
+                "err",
+            );
+        }
+    });
+}
+
+/// Push drive strength to the backend (stub command until firmware wiring lands).
+fn push_drive(pin: u8, drive: DriveStrength) {
+    #[derive(Serialize)]
+    struct Args {
+        pin: u8,
+        drive: u8,
+    }
+    let payload = Args {
+        pin,
+        drive: drive.to_u8(),
+    };
+    let args = serde_wasm_bindgen::to_value(&payload).unwrap();
+    spawn_local(async move {
+        let _ = try_invoke("set_pin_drive_strength", args).await;
+    });
+}
+
+// -----------------------------------------------------------------------------
+// Components
+// -----------------------------------------------------------------------------
+
+/// One supply rail of the board profile: voltage input plus AI lockout switch.
+#[component]
+fn RailCell(
+    label: &'static str,
+    cls: &'static str,
+    lock_label: &'static str,
+    dflt: f32,
+    config: ReadSignal<BoardConfig>,
+    set_config: WriteSignal<BoardConfig>,
+    get_v: fn(&BoardConfig) -> f32,
+    set_v: fn(&mut BoardConfig, f32),
+    get_lock: fn(&BoardConfig) -> bool,
+    set_lock: fn(&mut BoardConfig, bool),
+) -> impl IntoView {
+    view! {
+        <div class=format!("bm-rail {cls}")>
+            <div class="bm-rail-top">
+                <span class="bm-rail-dot" aria-hidden="true"></span>
+                <span class="bm-rail-name">{label}</span>
+            </div>
+            <div class="bm-rail-ctl">
+                <input type="number" step="0.1" class="bm-rail-input"
+                    aria-label=format!("{label} voltage (V)")
+                    prop:value=move || format!("{:.1}", config.with(get_v))
+                    on:change=move |e| {
+                        let v = event_target_value(&e).parse().unwrap_or(dflt);
+                        set_config.update(|c| set_v(c, v));
+                    } />
+                <span class="bm-unit">"V"</span>
+                <span class="spacer"></span>
+                <label class="bm-lock"
+                    title="When locked, AI assistants cannot modify this supply voltage.">
+                    <Switch
+                        checked=Signal::derive(move || config.with(get_lock))
+                        aria_label=lock_label
+                        on_change=Callback::new(move |v: bool| set_config.update(|c| set_lock(c, v)))
+                    />
+                    <span>"AI lockout"</span>
+                </label>
+            </div>
+        </div>
+    }
+}
+
+/// A pad on the board diagram: name, mode, owner and live value of one IO.
+#[component]
+fn PinTile(
+    i: usize,
+    config: ReadSignal<BoardConfig>,
+    selected: RwSignal<usize>,
+    state: ReadSignal<DeviceState>,
+    owners: RwSignal<Vec<OwnerRow>>,
+) -> impl IntoView {
+    let analog = is_analog_capable(i);
+    let mode = move || config.with(|c| c.pins[i]);
+    let live = move || state.with(|ds| live_io(ds, i));
+    view! {
+        <button type="button" class="bm-pin"
+            class:sel=move || selected.get() == i
+            aria-pressed=move || if selected.get() == i { "true" } else { "false" }
+            aria-label=move || format!("IO{} {}", i + 1, config.with(|c| c.pin_names[i].clone()))
+            on:click=move |_| selected.set(i)
+        >
+            <span class="bm-pad" aria-hidden="true">{i + 1}</span>
+            <span class="bm-pin-id">
+                <span class="bm-pin-name">{move || config.with(|c| c.pin_names[i].clone())}</span>
+                <span class="bm-pin-sub">
+                    {format!("IO{:02}", i + 1)}
+                    {analog.then(|| view! { <span class="bm-cap" title="Analog capable (AD74416H channel)">"ADC"</span> })}
+                    {move || owner_name(owners, i).map(|k| view! {
+                        <span class="bm-own" title=format!("Owned by {k}")>
+                            <Icon name="lock" size=11 />{k}
+                        </span>
+                    })}
+                </span>
+            </span>
+            <span class="bm-pin-mode"
+                class:set=move || mode() != PinMode::NC
+                class:weak=move || config.with(|c| c.pin_drive[i] == DriveStrength::Weak2k)
+                title=move || if config.with(|c| c.pin_drive[i] == DriveStrength::Weak2k) { "Weak drive (2k series)" } else { "" }
+            >{move || mode().to_str()}</span>
+            <span class="bm-pin-val">
+                {move || match live() {
+                    Some((_, v, u)) => view! { {v}<span class="bm-unit">{u}</span> }.into_any(),
+                    None => view! { <span class="bm-dash">"\u{2014}"</span> }.into_any(),
+                }}
+            </span>
+        </button>
+    }
+}
+
+/// Selection inspector: live state, profile configuration and properties of one IO.
+#[component]
+fn PinInspector(
+    config: ReadSignal<BoardConfig>,
+    set_config: WriteSignal<BoardConfig>,
+    selected: RwSignal<usize>,
+    state: ReadSignal<DeviceState>,
+    owners: RwSignal<Vec<OwnerRow>>,
+) -> impl IntoView {
+    let mode = move || config.with(|c| c.pins[selected.get()]);
+    let drive = move || config.with(|c| c.pin_drive[selected.get()]);
+    let analog = move || is_analog_capable(selected.get());
+    let digital = move || mode().is_digital();
+    let dom_v = move || {
+        let i = selected.get();
+        config.with(|c| if i < 6 { c.vadj1 } else { c.vadj2 })
+    };
+    let live = move || state.with(|ds| live_io(ds, selected.get()));
+
+    view! {
+        <div class="bm-insp-head">
+            <span class="bm-insp-io">{move || format!("IO{:02}", selected.get() + 1)}</span>
+            <span class="badge"
+                class:tone-blue={move || selected.get() < 6}
+                class:tone-purple={move || selected.get() >= 6}
+            >{move || pin_domain(selected.get()).0}</span>
+            <span class="spacer"></span>
+            <span class="bm-insp-v">{move || format!("{:.1}", dom_v())}<span class="bm-unit">"V"</span></span>
+        </div>
+
+        <section class="bm-insp-sec">
+            <h4>"Live"</h4>
+            <div class="bm-live">
+                <span class="bm-live-val">
+                    {move || live().map(|l| l.1).unwrap_or_else(|| "\u{2014}".to_string())}
+                </span>
+                <span class="bm-live-unit">{move || live().map(|l| l.2).unwrap_or("")}</span>
+            </div>
+            <dl class="kv">
+                <dt>"Function"</dt>
+                <dd>{move || live().map(|l| l.0).unwrap_or("Digital IO")}</dd>
+                <dt>"Channel"</dt>
+                <dd>{move || if analog() { format!("CH {}", CH_NAMES[selected.get() / 3]) } else { "\u{2014}".to_string() }}</dd>
+                <dt>"Owner"</dt>
+                <dd>
+                    {move || {
+                        let known = owners.with(|o| !o.is_empty());
+                        match owner_name(owners, selected.get()) {
+                            Some(k) => view! { <span class="bm-owner"><span class="dot tone-orange"></span>{k}</span> }.into_any(),
+                            None if known => view! { <span class="bm-owner"><span class="dot"></span>"Free"</span> }.into_any(),
+                            None => view! { <span class="subtle">"Unknown"</span> }.into_any(),
+                        }
+                    }}
+                </dd>
+            </dl>
+            <Show when=move || !analog()>
+                <p class="bm-note">"Digital IO levels are not reported in the device state. Use the digital IO tabs for a live level."</p>
+            </Show>
+        </section>
+
+        <section class="bm-insp-sec">
+            <h4>"Profile"</h4>
+            <div class="row">
+                <label class="row-label" for="bm-pin-name">"Name"</label>
+                <input id="bm-pin-name" type="text" class="bm-field"
+                    prop:value=move || config.with(|c| c.pin_names[selected.get()].clone())
+                    on:input=move |e| {
+                        let i = selected.get_untracked();
+                        set_config.update(|c| c.pin_names[i] = event_target_value(&e));
+                    } />
+            </div>
+            <div class="row">
+                <label class="row-label" for="bm-pin-mode">"Mode"</label>
+                <select id="bm-pin-mode" class="dropdown bm-field"
+                    on:change=move |e| {
+                        let new_mode = match event_target_value(&e).as_str() {
+                            "GPIO" => PinMode::GPIO,
+                            "GPI" => PinMode::GPI,
+                            "GPO" => PinMode::GPO,
+                            "Analog" => PinMode::Analog,
+                            _ => PinMode::NC,
+                        };
+                        let i = selected.get_untracked();
+                        set_config.update(|c| c.pins[i] = new_mode);
+                    }
+                >
+                    <option value="NC" prop:selected=move || mode() == PinMode::NC>"NC \u{2014} Not connected"</option>
+                    <option value="GPIO" prop:selected=move || mode() == PinMode::GPIO>"GPIO \u{2014} Digital bidir"</option>
+                    <option value="GPI" prop:selected=move || mode() == PinMode::GPI>"GPI \u{2014} Digital input"</option>
+                    <option value="GPO" prop:selected=move || mode() == PinMode::GPO>"GPO \u{2014} Digital output"</option>
+                    {move || analog().then(|| view! {
+                        <option value="Analog" prop:selected=move || mode() == PinMode::Analog>"ADC \u{2014} Analog input"</option>
+                    })}
+                </select>
+            </div>
+            <div class="row" class:bm-row-off=move || !digital()>
+                <label class="row-label" for="bm-pin-drive"
+                    title="2k series resistor limits peak current for protected driving into unknown loads">"Drive"</label>
+                <select id="bm-pin-drive" class="dropdown bm-field"
+                    prop:disabled=move || !digital()
+                    title=move || if digital() { "" } else { "Drive strength applies to digital modes only" }
+                    on:change=move |e| {
+                        let d = match event_target_value(&e).as_str() {
+                            "weak_2k" => DriveStrength::Weak2k,
+                            _ => DriveStrength::Standard,
+                        };
+                        let i = selected.get_untracked();
+                        set_config.update(|c| c.pin_drive[i] = d);
+                        push_drive(i as u8, d);
+                    }
+                >
+                    <option value="standard" prop:selected=move || drive() == DriveStrength::Standard>"Standard"</option>
+                    <option value="weak_2k" prop:selected=move || drive() == DriveStrength::Weak2k>"Weak (2k series)"</option>
+                </select>
+            </div>
+        </section>
+
+        <section class="bm-insp-sec">
+            <h4>"Properties"</h4>
+            <dl class="kv">
+                <dt>"Power domain"</dt>
+                <dd>{move || pin_domain(selected.get()).0}</dd>
+                <dt>"Rail voltage"</dt>
+                <dd>{move || format!("{:.1} V", dom_v())}</dd>
+                <dt>"eFuse"</dt>
+                <dd>{move || efuse_label(pin_efuse(selected.get()))}</dd>
+                <dt>"Analog capable"</dt>
+                <dd>{move || if analog() { "Yes" } else { "No" }}</dd>
+                <dt>"Drive limit"</dt>
+                <dd>{move || if digital() { drive().to_str() } else { "\u{2014}" }}</dd>
+            </dl>
+        </section>
+
+        <Show when=move || matches!(mode(), PinMode::Analog) && !analog()>
+            <div class="bm-insp-warn">
+                <Callout tone="orange">"Analog function not available on this pin. Only IO3/IO6/IO9/IO12 support analog."</Callout>
+            </div>
+        </Show>
+    }
+}
+
+/// One e-fuse block: live current, software limit and enable.
+#[component]
+fn FuseCard(
+    e: usize,
+    config: ReadSignal<BoardConfig>,
+    set_config: WriteSignal<BoardConfig>,
+    imon: RwSignal<EfuseImonStatus>,
+) -> impl IntoView {
+    let dom = if e < 2 { "bm-d-vadj1" } else { "bm-d-vadj2" };
+    let monitored = move || imon.with(|s| s.efuse as usize == e + 1);
+    view! {
+        <div class=format!("bm-fuse group {dom}")>
+            <div class="bm-fuse-head">
+                <span class="bm-fuse-dot" aria-hidden="true"></span>
+                <span class="bm-fuse-name">{format!("eFuse {}", efuse_label(e))}</span>
+                <span class="subtle bm-fuse-io">{io_range(e)}</span>
+            </div>
+            <div class="bm-fuse-cur"
+                class:tone-text-red=move || imon.with(|s| s.efuse as usize == e + 1 && s.valid && s.saturated)
+                title="Only the e-fuse selected in the current monitor reports a live current."
+            >
+                {move || if monitored() {
+                    let (text, _) = imon.with(|s| efuse_imon_display(s));
+                    text
+                } else {
+                    "\u{2014}".to_string()
+                }}
+            </div>
+            <div class="row">
+                <label class="row-label" for=format!("bm-fuse-lim-{e}")
+                    title="Software current limit (100 - 1200 mA). Saved to the board profile; not enforced by the firmware.">"SW limit"</label>
+                <span class="bm-fuse-in">
+                    <input id=format!("bm-fuse-lim-{e}") type="number" class="bm-num"
+                        min="100" max="1200" step="50"
+                        prop:value=move || config.with(|c| c.efuses[e].sw_limit_ma.to_string())
+                        on:input=move |ev| {
+                            let v: u16 = event_target_value(&ev).parse().unwrap_or(500);
+                            let v = v.clamp(100, 1200);
+                            set_config.update(|c| c.efuses[e].sw_limit_ma = v);
+                            let en = config.get_untracked().efuses[e].sw_limit_enabled;
+                            push_efuse(e as u8, v, en);
+                        } />
+                    <span class="bm-unit">"mA"</span>
+                </span>
+            </div>
+            <div class="row">
+                <span class="row-label">"Enable SW limit"</span>
+                <Switch
+                    checked=Signal::derive(move || config.with(|c| c.efuses[e].sw_limit_enabled))
+                    aria_label="Enable software current limit"
+                    on_change=Callback::new(move |checked: bool| {
+                        set_config.update(|c| c.efuses[e].sw_limit_enabled = checked);
+                        let lim = config.get_untracked().efuses[e].sw_limit_ma;
+                        push_efuse(e as u8, lim, checked);
+                    })
+                />
+            </div>
+        </div>
+    }
+}
+
 #[component]
 pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
-    let _ = state; // reserved for future live-pin state readouts
     let (config, set_config) = signal(BoardConfig::default());
     // Currently-selected pin for the inspector (defaults to IO 1).
     let selected_pin = RwSignal::new(0usize);
     let imon = RwSignal::new(EfuseImonStatus::default());
     start_efuse_imon_poll(imon);
+
+    let owners = RwSignal::new(Vec::<OwnerRow>::new());
+    start_tab_poll(
+        move || async move {
+            if let Some(rows) = try_invoke("io_owner_status", JsValue::NULL)
+                .await
+                .and_then(|r| serde_wasm_bindgen::from_value::<Vec<OwnerRow>>(r).ok())
+            {
+                owners.try_set(rows);
+            }
+        },
+        || 3000,
+    );
+
+    let hat = RwSignal::new(HatStatus::default());
+    start_tab_poll(
+        move || async move {
+            if let Some(h) = fetch_hat_status().await {
+                hat.try_set(h);
+            }
+        },
+        move || {
+            if hat.try_get_untracked().is_some_and(|h| h.detected) {
+                HAT_POLL_MS
+            } else {
+                HAT_ABSENT_POLL_MS
+            }
+        },
+    );
 
     let export_json = move |_| {
         let cfg = config.get();
@@ -299,381 +755,123 @@ pub fn BoardTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         show_toast("Board profile reset", "ok");
     };
 
-    // Pin→power-domain helper. Pins 1-6 → VADJ1, 7-12 → VADJ2.
-    let pin_domain = |i: usize| -> (&'static str, &'static str) {
-        if i < 6 {
-            ("VADJ1", "vadj1")
+    let hat_line = move || {
+        let h = hat.get();
+        if !h.detected {
+            ("tone-gray", "No HAT", "No HAT fitted. The HAT connectors are empty.")
+        } else if h.hat_type == 0x10 {
+            ("tone-green", "DAQ HAT", "DUT supply and power analyzer on the HAT connector.")
         } else {
-            ("VADJ2", "vadj2")
+            ("tone-green", "LA HAT", "4-channel logic analyzer and SWD probe on the HAT connectors.")
         }
-    };
-    // Pin→efuse-block index. Each VADJ has two efuses covering 3 pins each:
-    // IO1-3 → efuse 0 (VADJ1-A), IO4-6 → efuse 1 (VADJ1-B),
-    // IO7-9 → efuse 2 (VADJ2-A), IO10-12 → efuse 3 (VADJ2-B).
-    let pin_efuse = |i: usize| -> usize { i / 3 };
-    let efuse_label = |e: usize| -> &'static str {
-        match e {
-            0 => "VADJ1-A",
-            1 => "VADJ1-B",
-            2 => "VADJ2-A",
-            _ => "VADJ2-B",
-        }
-    };
-    let efuse_domain_cls = |e: usize| -> &'static str {
-        if e < 2 {
-            "vadj1"
-        } else {
-            "vadj2"
-        }
-    };
-    let is_analog_capable = |i: usize| matches!(i, 2 | 5 | 8 | 11);
-
-    // Push efuse config. The backend refuses (no firmware enforces a SW
-    // limit), so only the enable toggle surfaces that to the user.
-    let push_efuse = move |efuse: u8, sw_limit_ma: u16, enabled: bool| {
-        #[derive(Serialize)]
-        struct Args {
-            efuse: u8,
-            sw_limit_ma: u16,
-            enabled: bool,
-        }
-        let args = serde_wasm_bindgen::to_value(&Args {
-            efuse,
-            sw_limit_ma,
-            enabled,
-        })
-        .unwrap();
-        spawn_local(async move {
-            if try_invoke("set_efuse_config", args).await.is_none() && enabled {
-                show_toast("SW current limit is not enforced by the firmware (saved to profile only)", "err");
-            }
-        });
-    };
-
-    // Push drive-strength to backend (stub command — logs and returns Ok on
-    // the Rust side until firmware wiring lands).
-    let push_drive = move |pin: u8, drive: DriveStrength| {
-        #[derive(Serialize)]
-        struct Args {
-            pin: u8,
-            drive: u8,
-        }
-        let payload = Args {
-            pin,
-            drive: drive.to_u8(),
-        };
-        let args = serde_wasm_bindgen::to_value(&payload).unwrap();
-        spawn_local(async move {
-            let _ = try_invoke("set_pin_drive_strength", args).await;
-        });
     };
 
     view! {
-        <div class="tab-content board-tab-pro">
-            // ============ TOP BAR: name / desc / power readouts / export ============
-            <div class="board-topbar">
-                <div class="board-id">
-                    <div class="board-id-badge">"BUGBUSTER_S3_V4"</div>
-                    <input class="board-name-input" type="text"
-                        prop:value=move || config.get().name
-                        on:input=move |e| set_config.update(|c| c.name = event_target_value(&e))
-                    />
-                    <input class="board-desc-input" type="text" placeholder="Description…"
-                        prop:value=move || config.get().description
-                        on:input=move |e| set_config.update(|c| c.description = event_target_value(&e))
-                    />
-                </div>
-                <div class="board-power-row">
-                    <div class="board-rail">
-                        <span class="board-rail-label">"VLOGIC"</span>
-                        <input type="number" step="0.1" class="board-rail-input"
-                            prop:value=move || format!("{:.1}", config.get().vlogic)
-                            on:input=move |e| set_config.update(|c| c.vlogic = event_target_value(&e).parse().unwrap_or(3.3)) />
-                        <span class="board-rail-unit">"V"</span>
-                        <label class="board-ai-lockout"
-                            title="When locked, AI assistants cannot modify this supply voltage.">
-                            <input type="checkbox"
-                                prop:checked=move || config.get().vlogic_locked
-                                on:change=move |e| {
-                                    let checked: bool = e.target().unwrap().unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                    set_config.update(|c| c.vlogic_locked = checked);
-                                }
-                            />
-                            <span>"AI Lockout"</span>
-                        </label>
-                    </div>
-                    <div class="board-rail board-rail-vadj1">
-                        <span class="board-rail-label">"VADJ1"</span>
-                        <input type="number" step="0.1" class="board-rail-input"
-                            prop:value=move || format!("{:.1}", config.get().vadj1)
-                            on:input=move |e| set_config.update(|c| c.vadj1 = event_target_value(&e).parse().unwrap_or(3.3)) />
-                        <span class="board-rail-unit">"V"</span>
-                        <label class="board-ai-lockout"
-                            title="When locked, AI assistants cannot modify this supply voltage.">
-                            <input type="checkbox"
-                                prop:checked=move || config.get().vadj1_locked
-                                on:change=move |e| {
-                                    let checked: bool = e.target().unwrap().unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                    set_config.update(|c| c.vadj1_locked = checked);
-                                }
-                            />
-                            <span>"AI Lockout"</span>
-                        </label>
-                    </div>
-                    <div class="board-rail board-rail-vadj2">
-                        <span class="board-rail-label">"VADJ2"</span>
-                        <input type="number" step="0.1" class="board-rail-input"
-                            prop:value=move || format!("{:.1}", config.get().vadj2)
-                            on:input=move |e| set_config.update(|c| c.vadj2 = event_target_value(&e).parse().unwrap_or(5.0)) />
-                        <span class="board-rail-unit">"V"</span>
-                        <label class="board-ai-lockout"
-                            title="When locked, AI assistants cannot modify this supply voltage.">
-                            <input type="checkbox"
-                                prop:checked=move || config.get().vadj2_locked
-                                on:change=move |e| {
-                                    let checked: bool = e.target().unwrap().unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                    set_config.update(|c| c.vadj2_locked = checked);
-                                }
-                            />
-                            <span>"AI Lockout"</span>
-                        </label>
-                    </div>
-                </div>
-                <div class="board-actions">
-                    <button class="scope-btn" on:click=export_json>"Export…"</button>
-                    <button class="scope-btn" on:click=reset_defaults title="Reset all pins to default">"Reset"</button>
-                </div>
+        <div class="view bm">
+            // ============ HEADER: identity, HAT, export ============
+            <div class="bm-head">
+                <span class="chip bm-badge">"BUGBUSTER_S3_V4"</span>
+                <input class="bm-name" type="text" aria-label="Board name"
+                    prop:value=move || config.with(|c| c.name.clone())
+                    on:input=move |e| set_config.update(|c| c.name = event_target_value(&e))
+                />
+                <input class="bm-desc" type="text" placeholder="Description\u{2026}" aria-label="Board description"
+                    prop:value=move || config.with(|c| c.description.clone())
+                    on:input=move |e| set_config.update(|c| c.description = event_target_value(&e))
+                />
+                <span class="spacer"></span>
+                <span class="badge" class:tone-green=move || hat_line().0 == "tone-green">
+                    <span class=move || format!("dot {}", hat_line().0)></span>
+                    {move || hat_line().1}
+                </span>
+                <button class="btn btn-sm" title="Reset all pins to default" on:click=reset_defaults>
+                    <Icon name="rotate-ccw" size=14 />"Reset"
+                </button>
+                <button class="btn btn-sm btn-primary" on:click=export_json>
+                    <Icon name="file-down" size=14 />"Export\u{2026}"
+                </button>
             </div>
 
-            // ============ MAIN LAYOUT: pin map + inspector ============
-            <div class="board-main">
-                // ---- LEFT: pin map (12 tiles, 2 rows of 6) ----
-                <div class="board-pinmap card">
-                    <div class="board-pinmap-head">
-                        <span class="channel-label">"Pin Map"</span>
-                        <span class="board-pinmap-sub">"Click a pin to configure"</span>
+            // ============ POWER DOMAINS ============
+            <div class="bm-rails">
+                <RailCell label="VLOGIC" cls="bm-r-logic" lock_label="AI lockout VLOGIC" dflt=3.3
+                    config=config set_config=set_config
+                    get_v=|c| c.vlogic set_v=|c, v| c.vlogic = v
+                    get_lock=|c| c.vlogic_locked set_lock=|c, v| c.vlogic_locked = v />
+                <RailCell label="VADJ1" cls="bm-r-vadj1" lock_label="AI lockout VADJ1" dflt=3.3
+                    config=config set_config=set_config
+                    get_v=|c| c.vadj1 set_v=|c, v| c.vadj1 = v
+                    get_lock=|c| c.vadj1_locked set_lock=|c, v| c.vadj1_locked = v />
+                <RailCell label="VADJ2" cls="bm-r-vadj2" lock_label="AI lockout VADJ2" dflt=5.0
+                    config=config set_config=set_config
+                    get_v=|c| c.vadj2 set_v=|c, v| c.vadj2 = v
+                    get_lock=|c| c.vadj2_locked set_lock=|c, v| c.vadj2_locked = v />
+            </div>
+
+            // ============ BOARD DIAGRAM + INSPECTOR ============
+            <div class="bm-main">
+                <section class="bm-board group" aria-label="Board map">
+                    <div class="group-header">
+                        <div class="group-title"><Icon name="circuit-board" size=16 />"Board map"</div>
+                        <span class="group-subtitle">"Select an IO to inspect and configure it"</span>
                     </div>
-                    <div class="board-pinmap-domains">
-                        {(0..4).map(|row| {
-                            let (dom_cls_str, dom_label) = if row < 2 {
-                                ("board-domain-vadj1", "VADJ1")
-                            } else {
-                                ("board-domain-vadj2", "VADJ2")
-                            };
-                            let sub = efuse_label(row);
-                            let pin_range_start = row * 3;
-                            let pin_range_end = pin_range_start + 3;
+                    <div class="bm-pcb">
+                        {(0..4).map(|e| {
+                            let dom = if e < 2 { "bm-d-vadj1" } else { "bm-d-vadj2" };
+                            let rail = if e < 2 { "VADJ1" } else { "VADJ2" };
                             view! {
-                                <div class=format!("board-domain-row {}", dom_cls_str)>
-                                    <div class="board-domain-tag">
-                                        <span>{dom_label}</span>
-                                        <span class="board-domain-sub">{sub}</span>
-                                        <span class="board-domain-sub-io">
-                                            {format!("IO{}-{}", pin_range_start + 1, pin_range_end)}
-                                        </span>
+                                <div class=format!("bm-block {dom}")>
+                                    <div class="bm-block-head">
+                                        <span class="bm-block-rail">{rail}</span>
+                                        <span class="bm-block-title">{format!("eFuse {}", efuse_label(e))}</span>
+                                        <span class="spacer"></span>
+                                        <span class="bm-block-io">{io_range(e)}</span>
                                     </div>
-                                    <div class="board-pin-row">
-                                        {(pin_range_start..pin_range_end).map(|i| {
-                                            let analog_cap = is_analog_capable(i);
-                                            let tile_cls = format!("board-pin-tile {}", dom_cls_str);
-                                            view! {
-                                                <button class=tile_cls
-                                                    class:board-pin-selected=move || selected_pin.get() == i
-                                                    on:click=move |_| selected_pin.set(i)
-                                                >
-                                                    <span class="board-pin-num">{format!("IO{:02}", i + 1)}</span>
-                                                    <div class="board-pin-main">
-                                                        <span class="board-pin-badge"
-                                                            class:board-badge-set=move || config.get().pins[i] != PinMode::NC
-                                                            class:board-badge-weak=move || config.get().pin_drive[i] == DriveStrength::Weak2k
-                                                        >
-                                                            {move || config.get().pins[i].to_badge()}
-                                                        </span>
-                                                    </div>
-                                                    <span class="board-pin-name">{move || config.get().pin_names[i].clone()}</span>
-                                                    {if analog_cap { Either::Left(view! { <span class="board-pin-cap" title="Analog capable">"~"</span> }) } else { Either::Right(()) }}
-                                                    {move || if selected_pin.get() == i { Either::Left(view! { <span class="board-pin-arrow"></span> }) } else { Either::Right(()) }}
-                                                </button>
-                                            }
+                                    <div class="bm-pins">
+                                        {(e * 3..e * 3 + 3).map(|i| view! {
+                                            <PinTile i=i config=config selected=selected_pin state=state owners=owners />
                                         }).collect::<Vec<_>>()}
                                     </div>
                                 </div>
                             }
                         }).collect::<Vec<_>>()}
                     </div>
-                </div>
+                    <div class="bm-hatbar">
+                        <Icon name="cpu" size=14 />
+                        <span class="bm-hat-name">{move || hat_line().1}</span>
+                        <span class="subtle">{move || hat_line().2}</span>
+                    </div>
+                </section>
 
-                // ---- RIGHT: inspector ----
-                <div class="board-inspector card">
-                    {move || {
-                        let i = selected_pin.get();
-                        let cfg = config.get();
-                        let mode = cfg.pins[i];
-                        let drive = cfg.pin_drive[i];
-                        let pin_name = cfg.pin_names[i].clone();
-                        let (dom_label, dom_cls) = pin_domain(i);
-                        let analog_cap = is_analog_capable(i);
-                        let dom_v = if dom_label == "VADJ1" { cfg.vadj1 } else { cfg.vadj2 };
-                        let digital = mode.is_digital();
-                        let warn = matches!(mode, PinMode::Analog) && !analog_cap;
-                        view! {
-                            <div class="board-inspector-head">
-                                <span class="board-inspector-io">{format!("IO{:02}", i + 1)}</span>
-                                <span class=format!("board-inspector-domain board-{}", dom_cls)>{dom_label}</span>
-                                <span class="board-inspector-voltage">{format!("{:.1} V", dom_v)}</span>
-                            </div>
-                            <div class="board-inspector-row">
-                                <label>"Name"</label>
-                                <input type="text" class="dropdown"
-                                    prop:value=pin_name.clone()
-                                    on:input=move |e| set_config.update(|c| c.pin_names[i] = event_target_value(&e)) />
-                            </div>
-                            <div class="board-inspector-row">
-                                <label>"Mode"</label>
-                                <select class="dropdown"
-                                    prop:value=mode.to_str().to_string()
-                                    on:change=move |e| {
-                                        let v = event_target_value(&e);
-                                        let new_mode = match v.as_str() {
-                                            "GPIO" => PinMode::GPIO, "GPI" => PinMode::GPI, "GPO" => PinMode::GPO,
-                                            "Analog" => PinMode::Analog, _ => PinMode::NC,
-                                        };
-                                        set_config.update(|c| c.pins[i] = new_mode);
-                                    }
-                                >
-                                    <option value="NC" selected=matches!(mode, PinMode::NC)>"NC — Not connected"</option>
-                                    <option value="GPIO" selected=matches!(mode, PinMode::GPIO)>"GPIO — Digital bidir"</option>
-                                    <option value="GPI" selected=matches!(mode, PinMode::GPI)>"GPI — Digital input"</option>
-                                    <option value="GPO" selected=matches!(mode, PinMode::GPO)>"GPO — Digital output"</option>
-                                    {if analog_cap {
-                                        Either::Left(view! { <option value="Analog" selected=matches!(mode, PinMode::Analog)>"ADC"</option> })
-                                    } else { Either::Right(()) }}
-                                </select>
-                            </div>
-                            <div class="board-inspector-row" class:board-row-disabled=move || !config.get().pins[selected_pin.get()].is_digital()>
-                                <label title="2k series resistor limits peak current for protected driving into unknown loads">"Drive"</label>
-                                <select class="dropdown"
-                                    prop:disabled=move || !config.get().pins[selected_pin.get()].is_digital()
-                                    on:change=move |e| {
-                                        let v = event_target_value(&e);
-                                        let d = match v.as_str() { "weak_2k" => DriveStrength::Weak2k, _ => DriveStrength::Standard };
-                                        set_config.update(|c| c.pin_drive[i] = d);
-                                        push_drive(i as u8, d);
-                                    }
-                                >
-                                    <option value="standard" selected=matches!(drive, DriveStrength::Standard)>"Standard"</option>
-                                    <option value="weak_2k" selected=matches!(drive, DriveStrength::Weak2k)>"Weak (2k series)"</option>
-                                </select>
-                            </div>
-                            <div class="board-inspector-info">
-                                <div class="board-inspector-info-row">
-                                    <span>"Power domain"</span>
-                                    <b class=format!("board-{}", dom_cls)>{dom_label}</b>
-                                </div>
-                                <div class="board-inspector-info-row">
-                                    <span>"Rail voltage"</span>
-                                    <b>{format!("{:.1} V", dom_v)}</b>
-                                </div>
-                                <div class="board-inspector-info-row">
-                                    <span>"Analog capable"</span>
-                                    <b>{if analog_cap { "yes" } else { "no" }}</b>
-                                </div>
-                                <div class="board-inspector-info-row">
-                                    <span>"Drive limit"</span>
-                                    <b>{if digital { drive.to_str() } else { "—" }}</b>
-                                </div>
-                                <div class="board-inspector-info-row">
-                                    <span>"eFuse"</span>
-                                    <b>{efuse_label(pin_efuse(i))}</b>
-                                </div>
-                            </div>
-                            {if warn {
-                                Either::Left(view! {
-                                    <div class="board-inspector-warn">
-                                        "Analog function not available on this pin. Only IO3/IO6/IO9/IO12 support analog."
-                                    </div>
-                                })
-                            } else { Either::Right(()) }}
-                        }
-                    }}
-                </div>
+                <aside class="bm-insp group group-flush" aria-label="IO inspector">
+                    <PinInspector config=config set_config=set_config selected=selected_pin state=state owners=owners />
+                </aside>
             </div>
 
             // ============ EFUSE PANEL ============
-            <div class="board-efuse-panel">
-                {(0..4).map(|e| {
-                    let label = efuse_label(e);
-                    let dom_cls = efuse_domain_cls(e);
-                    view! {
-                        <div class=format!("board-efuse-card board-efuse-{}", dom_cls)>
-                            <div class="board-efuse-head">
-                                <span class="board-efuse-label">{format!("eFuse {}", label)}</span>
-                                <span class="board-efuse-current"
-                                    style=move || {
-                                        let st = imon.get();
-                                        if st.efuse as usize == e + 1 && st.valid && st.saturated { "color: #ef4444" } else { "" }
-                                    }
-                                >{move || {
-                                    let st = imon.get();
-                                    if st.efuse as usize == e + 1 {
-                                        efuse_imon_display(&st).0
-                                    } else {
-                                        "—mA".to_string()
-                                    }
-                                }}</span>
-                                <span class="board-efuse-fault"
-                                    title="SW current limit is not enforced by the firmware"
-                                ></span>
-                            </div>
-                            <div class="board-efuse-row">
-                                <label title="Software current limit (100 – 1200 mA). Saved to the board profile; not enforced by the firmware.">"SW Limit"</label>
-                                <input type="number" class="board-efuse-input"
-                                    min="100" max="1200" step="50"
-                                    prop:value=move || config.get().efuses[e].sw_limit_ma.to_string()
-                                    on:input=move |ev| {
-                                        let v: u16 = event_target_value(&ev).parse().unwrap_or(500);
-                                        let v = v.clamp(100, 1200);
-                                        set_config.update(|c| c.efuses[e].sw_limit_ma = v);
-                                        let en = config.get_untracked().efuses[e].sw_limit_enabled;
-                                        push_efuse(e as u8, v, en);
-                                    }
-                                />
-                                <span class="board-efuse-unit">"mA"</span>
-                            </div>
-                            <div class="board-efuse-row">
-                                <label class="board-efuse-toggle">
-                                    <input type="checkbox"
-                                        prop:checked=move || config.get().efuses[e].sw_limit_enabled
-                                        on:change=move |ev| {
-                                            let checked: bool = ev.target().unwrap()
-                                                .unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                            set_config.update(|c| c.efuses[e].sw_limit_enabled = checked);
-                                            let lim = config.get_untracked().efuses[e].sw_limit_ma;
-                                            push_efuse(e as u8, lim, checked);
-                                        }
-                                    />
-                                    <span>"EN SW Lim"</span>
-                                </label>
-                            </div>
-                        </div>
-                    }
+            <div class="section-label">"eFuse current limits"</div>
+            <Callout tone="blue">
+                "The software current limit is saved to the board profile only. The firmware does not enforce it; each e-fuse trips on its hardware limit."
+            </Callout>
+            <div class="bm-fuses">
+                {(0..4).map(|e| view! {
+                    <FuseCard e=e config=config set_config=set_config imon=imon />
                 }).collect::<Vec<_>>()}
             </div>
 
-            // ============ BOTTOM STATUS STRIP ============
-            <div class="board-status">
+            // ============ STATUS STRIP ============
+            <div class="bm-status">
                 {move || {
-                    let cfg = config.get();
-                    let configured = cfg.pins.iter().filter(|m| !matches!(m, PinMode::NC)).count();
+                    let configured = config.with(|c| c.pins.iter().filter(|m| !matches!(m, PinMode::NC)).count());
                     let unset = 12 - configured;
                     view! {
-                        <span class="board-status-chip">"Configured: "<b>{configured}</b></span>
-                        <span class="board-status-chip">"Unset: "<b>{unset}</b></span>
-                        <span class="board-status-chip">"Total: "<b>"12"</b></span>
+                        <span class="chip">"Configured "<b>{configured}</b></span>
+                        <span class="chip">"Unset "<b>{unset}</b></span>
+                        <span class="chip">"Total "<b>"12"</b></span>
                     }
                 }}
-                <span class="board-status-spacer"></span>
-                <span class="board-status-hint">"Click a pin above, then use the inspector to configure mode, name and drive."</span>
+                <span class="spacer"></span>
+                <span class="bm-hint">"Select an IO, then use the inspector to configure mode, name and drive."</span>
             </div>
         </div>
     }
