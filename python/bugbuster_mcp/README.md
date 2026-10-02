@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**121 tools in 18 groups, 6 resources, 4 prompt workflows.**
+**128 tools in 18 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -119,7 +119,7 @@ Claude Code, or your client's tool inspector. The groups:
 | `analog` | 5 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current` |
 | `digital` | 2 | `read_digital`, `write_digital` |
 | `waveform` | 10 | Waveform generation, ADC snapshots, logic-analyzer capture - each with a blocking form and an async `_start` / `_status` / `_result` form |
-| `bus` | 9 | I²C and SPI: `plan_*` dry runs, `scan_i2c_bus`, `spi_transfer`, `spi_jedec_id`, deferred queued transactions |
+| `bus` | 16 | I²C and SPI: `plan_*` dry runs, `setup_i2c_bus`, `scan_i2c_bus`, `i2c_write` / `i2c_read` / `i2c_write_read`, `i2c_dump_registers`, `spi_transfer`, `spi_jedec_id`, `spi_flash_read`, `bus_status`, deferred queued transactions |
 | `debug` | 3 | `setup_serial_bridge`, `setup_swd`, `uart_config` |
 | `target` | 3 | `target_power_up`, `enter_bootloader`, `release_bootloader` |
 | `power` | 5 | USB-PD status and selection, rail/e-fuse control, WiFi status and AP password |

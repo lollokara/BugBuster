@@ -2,7 +2,9 @@
 BugBuster MCP — External I2C/SPI bus planning tools.
 
 Tools: plan_i2c_bus, plan_spi_bus, scan_i2c_bus, spi_transfer, spi_jedec_id,
-defer_i2c_read, defer_i2c_write_read, defer_spi_transfer, get_deferred_bus_result
+defer_i2c_read, defer_i2c_write_read, defer_spi_transfer, get_deferred_bus_result,
+setup_i2c_bus, bus_status, i2c_write, i2c_read, i2c_write_read,
+i2c_dump_registers, spi_flash_read
 """
 
 from __future__ import annotations
@@ -337,3 +339,120 @@ def register(mcp) -> None:
         result = session.get_client().bus.deferred_result(job_id)
         result["success"] = True
         return result
+
+    # ---- BUS-011: direct transactions on an already-configured bus --------
+
+    @mcp.tool()
+    def setup_i2c_bus(
+        sda_io: int,
+        scl_io: int,
+        supply_voltage: float,
+        frequency_hz: int = 400_000,
+        pullups: str = "external",
+        allow_split_supplies: bool = False,
+        confirm: bool = False,
+    ) -> dict:
+        """
+        Configure (route + bind) an external I2C bus without scanning it.
+
+        Same side effects as scan_i2c_bus: VADJ rail/e-fuse, VLOGIC, level
+        shifter OE, MUX paths, ESP32 I2C peripheral. Then use i2c_write,
+        i2c_read, i2c_write_read or i2c_dump_registers.
+        """
+        require_valid_io(sda_io)
+        require_valid_io(scl_io)
+        validate_vadj_voltage(supply_voltage, confirm=confirm)
+        plan = session.get_client().bus.setup_i2c(
+            sda=sda_io, scl=scl_io, io_voltage=session.get_vlogic(),
+            supply_voltage=supply_voltage, frequency_hz=frequency_hz,
+            pullups=pullups, allow_split_supplies=allow_split_supplies,
+        )
+        return {"success": True, "plan": plan.as_dict()}
+
+    @mcp.tool()
+    def bus_status() -> dict:
+        """Active external I2C/SPI bindings (read-only)."""
+        result = session.get_client().bus.status()
+        result["success"] = True
+        return result
+
+    @mcp.tool()
+    def i2c_write(address: int, data: list[int], timeout_ms: int = 100) -> dict:
+        """
+        Write bytes to a 7-bit I2C address on the configured external bus
+        (setup_i2c_bus or scan_i2c_bus first). Returns the bytes written.
+        """
+        _check_addr(address)
+        _check_bytes(data, "data")
+        n = session.get_client().bus.i2c_write(address, data, timeout_ms=timeout_ms)
+        return {"success": True, "address": f"0x{address:02X}", "written": int(n)}
+
+    @mcp.tool()
+    def i2c_read(address: int, length: int, timeout_ms: int = 100) -> dict:
+        """Read ``length`` (1-256) bytes from a 7-bit I2C address on the configured bus."""
+        _check_addr(address)
+        _check_len(length)
+        rx = session.get_client().bus.i2c_read(address, length, timeout_ms=timeout_ms)
+        return {"success": True, "address": f"0x{address:02X}", "data": list(rx)}
+
+    @mcp.tool()
+    def i2c_write_read(address: int, write_data: list[int], read_length: int,
+                       timeout_ms: int = 100) -> dict:
+        """
+        Register-style transaction: write ``write_data`` (e.g. a register
+        pointer), repeated start, read ``read_length`` (1-256) bytes.
+        """
+        _check_addr(address)
+        _check_bytes(write_data, "write_data")
+        _check_len(read_length)
+        rx = session.get_client().bus.i2c_write_read(address, write_data, read_length,
+                                                     timeout_ms=timeout_ms)
+        return {"success": True, "address": f"0x{address:02X}", "data": list(rx)}
+
+    # ---- BUS-016: helpers -------------------------------------------------
+
+    @mcp.tool()
+    def i2c_dump_registers(address: int, start_reg: int = 0, count: int = 16,
+                           timeout_ms: int = 100) -> dict:
+        """
+        Read ``count`` (1-256) consecutive 8-bit registers from an I2C device
+        with an auto-incrementing 1-byte register pointer (most sensors and
+        EEPROM-style parts). One write_read transaction.
+        """
+        _check_addr(address)
+        if not 0 <= start_reg <= 0xFF:
+            raise ValueError("start_reg must be 0-255")
+        _check_len(count)
+        rx = session.get_client().bus.i2c_write_read(address, [start_reg], count,
+                                                     timeout_ms=timeout_ms)
+        regs = {f"0x{(start_reg + i) & 0xFF:02X}": b for i, b in enumerate(rx)}
+        return {"success": True, "address": f"0x{address:02X}", "registers": regs}
+
+    @mcp.tool()
+    def spi_flash_read(address: int, length: int, timeout_ms: int = 100) -> dict:
+        """
+        Read ``length`` (1-256) bytes from a SPI NOR flash with the standard
+        READ command (0x03 + 24-bit address) on the configured SPI bus
+        (spi_transfer / spi_jedec_id set it up). CS must be wired.
+        """
+        if not 0 <= address <= 0xFFFFFF:
+            raise ValueError("address must be a 24-bit value")
+        _check_len(length)
+        tx = [0x03, (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF] + [0] * length
+        rx = session.get_client().bus.spi_transfer(tx, timeout_ms=timeout_ms)
+        return {"success": True, "address": f"0x{address:06X}", "data": list(rx[4:])}
+
+
+def _check_addr(address: int) -> None:
+    if not isinstance(address, int) or not 0x08 <= address <= 0x77:
+        raise ValueError("address must be a 7-bit I2C address 0x08-0x77")
+
+
+def _check_len(length: int) -> None:
+    if not isinstance(length, int) or not 1 <= length <= 256:
+        raise ValueError("length must be 1-256")
+
+
+def _check_bytes(data: list[int], name: str) -> None:
+    if not data or len(data) > 256 or any((not isinstance(b, int)) or b < 0 or b > 255 for b in data):
+        raise ValueError(f"{name} must be 1-256 byte values in range 0-255")
