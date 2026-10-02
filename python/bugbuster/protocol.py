@@ -20,7 +20,7 @@ HANDSHAKE_MAGIC = bytes([0xBB, 0x42, 0x55, 0x47])
 BBP_PROTO_VERSION = 12
 # Mirrors BBP_FW_VERSION_* in bbp.h (the simulator reports it). Bumped with
 # bbp.h by Notebooks/release_version_bump.ipynb; test_protocol_constants gates it.
-ESP32_FW_VERSION = (5, 1, 0)
+ESP32_FW_VERSION = (6, 0, 0)
 
 # Maximum payload size the device will accept (see Firmware/ESP32/src/bbp/bbp.h).
 # A decoded frame exceeding this is rejected as malformed before allocating.

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+Versions set for the next release (MAJOR, 2026-10 audit; not tagged yet):
+ESP32 `6.0.0` (`esp-fw-v6.0.0`), DAQ HAT P4 / C6 `3.0.0` (`daq-fw-v3.0.0`),
+desktop `3.0.0` (`desktop-v3.0.0`). RP2040 HAT stays `5.0`. Breaking for
+clients: BBP `PROTO_VERSION` 12, DAQ USB stream v2 / DDP v9, HTTP failed
+actions answer 400, camelCase-only JSON keys, MCP OTA/calibration tools need
+`confirm=True`.
+
 ### Added
 
 - **E-fuse current monitor (one e-fuse at a time).** The TPS1641 IMON pin of a

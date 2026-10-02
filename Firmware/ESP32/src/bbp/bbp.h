@@ -28,8 +28,8 @@ extern "C" {
 // optional trailing bytes on PCA_SET_PORT (flags) and HAT_LA_CONFIG (rle).
 #define BBP_PROTO_VERSION       12
 
-#define BBP_FW_VERSION_MAJOR    5
-#define BBP_FW_VERSION_MINOR    1
+#define BBP_FW_VERSION_MAJOR    6
+#define BBP_FW_VERSION_MINOR    0
 #define BBP_FW_VERSION_PATCH    0
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
