@@ -1105,7 +1105,10 @@ class BugBuster:
                             "raw": raw, "value": value})
             return out
         raw = self._http_get("/diagnostics")
-        items = raw.get("diagnostics", raw) if isinstance(raw, dict) else raw
+        if isinstance(raw, dict):
+            items = _first_present(raw, "slots", "diagnostics", default=[])
+        else:
+            items = raw
         out = []
         for i, d in enumerate(items or []):
             out.append({
@@ -2068,7 +2071,13 @@ class BugBuster:
             }
         else:
             r = self._http_post("/selftest/calibrate", {"channel": idac_channel})
-            return r
+            return {
+                **r,
+                "status":   r.get("status", 0),
+                "channel":  r.get("channel", idac_channel),
+                "points":   r.get("points", 0),
+                "error_mv": _first_present(r, "errorMv", "error_mv", default=0.0),
+            }
 
     def selftest_internal_supplies(self) -> dict:
         """
@@ -3064,6 +3073,8 @@ class BugBuster:
         self._require_hat_present()
         if not self._usb:
             j = self._http_get("/hat/v2/rails")
+            if j.get("ok") is False:
+                raise RuntimeError(f"HAT rail status unavailable: {j.get('error', 'unknown error')}")
             rails = [
                 {
                     "rail_id": r.get("railId", i),
@@ -3230,7 +3241,7 @@ class BugBuster:
             self._usb_cmd(CmdId.HAT_LA_SET_ROUTE, payload)
             return True
         else:
-            resp = self._http_post("/hat/la/route", {"route": route_id})
+            resp = self._http_post("/hat/v2/la/route", {"route": route_id})
             return resp.get("ok", False)
 
     def hat_calibrate_start(self, rail_id: int) -> int:
@@ -4435,7 +4446,9 @@ class BugBuster:
         else:
             try:
                 result = self._http_get(f"/quicksetup/{slot}")
-                return result if isinstance(result, dict) else None
+                if not isinstance(result, dict) or result.get("ok") is False:
+                    return None
+                return result
             except Exception:
                 return None
 

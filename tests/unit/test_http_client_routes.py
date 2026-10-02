@@ -130,10 +130,6 @@ def test_set_diag_config_body():
     client._http_post.assert_called_once_with("/diagnostics/config", {"slot": 2, "source": 13})
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: handle_get_diagnostics (webserver.cpp) replies {\"slots\": [...]} but "
-    "client.get_diagnostics() (client.py) looks for \"diagnostics\", falls back to "
-    "iterating the outer dict and crashes on its key string"))
 def test_get_diagnostics_parses_slots_reply():
     slots = [{"slot": i, "source": i + 1, "sourceName": "X", "raw": 100 + i,
               "value": 1.5 + i, "unit": "V"} for i in range(4)]
@@ -285,10 +281,6 @@ def test_hat_get_rail_status_maps_fields():
     client._http_get.assert_called_once_with("/hat/v2/rails")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: api_hat_v2_rails() (api_core.cpp) answers GET /api/hat/v2/rails with "
-    "200 {\"ok\": false, \"error\": ...} when the HAT is absent or silent; "
-    "client.hat_get_rail_status() (client.py) ignores it and reports zero rails"))
 def test_hat_get_rail_status_surfaces_error_reply():
     client = _client(get={"ok": False, "error": "HAT not responding"})
     with pytest.raises(RuntimeError, match="HAT not responding"):
@@ -355,10 +347,6 @@ def test_hat_calibrate_import_caps_points_at_six():
     client._http_post.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: client.hat_la_set_route() (client.py) posts /hat/la/route; the firmware "
-    "route is /api/hat/v2/la/route (handle_post_hat_v2_la_route) and "
-    "handle_hat_post_dispatch 404s the old path"))
 def test_hat_la_set_route_posts_v2_path():
     client = _client(post={"ok": True, "route": 1})
     assert client.hat_la_set_route(1) is True
@@ -417,10 +405,6 @@ def test_selftest_calibrate_body():
     client._http_post.assert_called_once_with("/selftest/calibrate", {"channel": 1})
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: selftest_auto_calibrate() (client.py) documents {status, channel, points, "
-    "error_mv} and returns that over USB, but over HTTP it returns the raw "
-    "api_selftest_calibrate() reply whose field is errorMv"))
 def test_selftest_calibrate_reply_matches_documented_shape():
     client = _client(post={"ok": True, "status": 1, "channel": 2, "points": 3,
                            "lastVoltageV": 5.0, "errorMv": 1.5})
@@ -453,10 +437,6 @@ def test_quicksetup_get_transport_error_is_none():
     assert client.quicksetup_get(0) is None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: api_quicksetup_get() (api_core.cpp) answers an empty slot with 200 "
-    "{\"ok\": false, \"error\": \"quick setup slot empty\"}; client.quicksetup_get() "
-    "(client.py) returns that error dict instead of the documented None"))
 def test_quicksetup_get_empty_slot_is_none():
     client = _client(get={"ok": False, "error": "quick setup slot empty"})
     assert client.quicksetup_get(1) is None
@@ -666,11 +646,6 @@ def _http_bb() -> bb.BugBuster:
     return client
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: script_eval() (client.py) passes the UTF-8 source bytes to "
-    "HTTPTransport.post(), which sends them as json= (transport/http.py); "
-    "handle_post_scripts_eval reads a raw text/plain body, and requests cannot "
-    "JSON-encode bytes"))
 def test_script_eval_sends_raw_source_body():
     client = _http_bb()
     client._t._session.post.return_value = _resp(200, {"ok": True, "id": 3})
@@ -680,10 +655,6 @@ def test_script_eval_sends_raw_source_body():
     assert "json" not in kwargs
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: script_get() (client.py) goes through HTTPTransport.get(), which always "
-    "returns r.json(); handle_get_scripts_file replies text/x-python, so the "
-    "download raises instead of returning the source"))
 def test_script_get_returns_python_text():
     client = _http_bb()
     client._t._session.get.return_value = _resp(200, ValueError("not json"), text="print(1)\n")

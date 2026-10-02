@@ -89,7 +89,7 @@ class HttpTransportProtocol(Transport, Protocol):
             headers: Optional[dict] = None) -> Any:
         ...
 
-    def post(self, path: str, body: Optional[dict] = None,
+    def post(self, path: str, body: Optional[dict | bytes | str] = None,
              headers: Optional[dict] = None) -> Any:
         ...
 

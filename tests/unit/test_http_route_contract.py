@@ -52,16 +52,7 @@ SAMPLE_PARAM = "0"
 # ---------------------------------------------------------------------------
 
 # (METHOD, path template) -> reason. Path resolves to no leaf handler.
-KNOWN_UNRESOLVED_BUGS: dict[tuple[str, str], str] = {
-    ("POST", "/api/hat/la/route"): (
-        "BUG: client.hat_la_set_route() posts /hat/la/route; firmware registers "
-        "/api/hat/v2/la/route and the POST /api/hat/* dispatcher "
-        "(handle_hat_post_dispatch) only knows config/reset/detect -> 404"),
-    ("POST", "/api/hat/v2/swd/detect"): (
-        "BUG: client.hat_detect_target() posts /hat/v2/swd/detect; api_core "
-        "dispatches it (api_hat_swd_detect) but webserver.cpp registers no "
-        "handler and handle_hat_post_dispatch does not route it -> 404"),
-}
+KNOWN_UNRESOLVED_BUGS: dict[tuple[str, str], str] = {}
 
 # (METHOD, path template, key) -> reason. Key sent but never read (real bug).
 KNOWN_UNREAD_KEY_BUGS: dict[tuple[str, str, str], str] = {}
@@ -512,7 +503,6 @@ AUDITED_ROUTES = [
 NO_PYTHON_CALLER = {
     "/api/adgs/routes",
     "/api/hat/calibration",
-    "/api/hat/v2/la/route",      # client posts the wrong path, see KNOWN_UNRESOLVED_BUGS
     "/api/ota/upload_rp2040",
     "/api/pairing/rotate",
     "/api/scripts/lint",
