@@ -23,10 +23,20 @@ from typing import Callable, Optional
 
 import serial  # pyserial
 
-from ..protocol import HANDSHAKE_MAGIC, build_frame, parse_frame, ProtocolError
+from ..protocol import BBP_PROTO_VERSION, HANDSHAKE_MAGIC, build_frame, parse_frame, ProtocolError
 from ..constants import CmdId, MsgType, ErrorCode, CMD_TIMEOUTS_S
 
 log = logging.getLogger(__name__)
+
+
+def check_proto_version(device_proto: int) -> Optional[str]:
+    """Warn (do not fail) when the device speaks a different BBP version."""
+    if device_proto == BBP_PROTO_VERSION:
+        return None
+    msg = (f"BBP protocol mismatch: device v{device_proto}, library v{BBP_PROTO_VERSION}. "
+           "Some commands may fail; update the firmware or the library.")
+    log.warning(msg)
+    return msg
 
 
 class DeviceError(Exception):
@@ -228,6 +238,7 @@ class USBTransport:
 
         self.proto_version = resp[4]
         self.fw_version    = (resp[5], resp[6], resp[7])
+        check_proto_version(self.proto_version)
         if len(resp) >= 14:
             self.mac = bytes(resp[8:14])
             mac_str  = ":".join(f"{b:02x}" for b in self.mac)
