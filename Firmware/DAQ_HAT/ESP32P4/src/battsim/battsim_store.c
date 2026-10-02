@@ -110,7 +110,7 @@ static void profile_path(uint8_t slot, char *out, size_t cap)
 bool bs_store_profile_save(uint8_t slot, const char *name, const bs_params_t *p)
 {
     if (!s_ok || slot >= BS_MAX_PROFILES) return false;
-    bs_profile_file_t f = { .magic = BS_MAGIC_PROFILE, .version = BS_FMT_VERSION };
+    bs_profile_file_t f = { .magic = BS_MAGIC_PROFILE, .version = BS_PROFILE_VERSION };
     if (name) strncpy(f.name, name, BS_NAME_LEN - 1);
     f.params = *p;
     f.crc = crc_of(&f, offsetof(bs_profile_file_t, crc));
@@ -183,7 +183,8 @@ bool bs_store_meta_write(const bs_run_meta_t *meta)
     if (!s_ok) return false;
     bs_run_meta_t m = *meta;
     m.magic = BS_MAGIC_META;
-    m.version = BS_FMT_VERSION;
+    // The format is fixed at creation: a v1 run stays v1 when rewritten.
+    if (m.version == 0) m.version = BS_FMT_VERSION;
     m.crc = crc_of(&m, offsetof(bs_run_meta_t, crc));
     char path[40];
     run_path(m.run_id, "meta.bin", path, sizeof(path));
@@ -211,6 +212,7 @@ bool bs_store_run_create(bs_run_meta_t *meta)
     run_dir(next, dir, sizeof(dir));
     if (mkdir(dir, 0775) != 0) return false;
     meta->run_id = next;
+    meta->version = BS_FMT_VERSION;
     return bs_store_meta_write(meta);
 }
 
@@ -224,32 +226,52 @@ bool bs_store_meta_read(uint16_t run_id, bs_run_meta_t *meta)
            meta->crc == crc_of(meta, offsetof(bs_run_meta_t, crc));
 }
 
-static bool ckpt_valid(const bs_ckpt_t *ck)
+// Reads a v2 checkpoint, or a 352 B v1 one (energy fields come back as 0).
+static bool ckpt_load(const char *path, bs_ckpt_t *ck)
 {
-    return ck->magic == BS_MAGIC_CKPT &&
-           ck->crc == crc_of(ck, offsetof(bs_ckpt_t, crc));
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    size_t n = fread(ck, 1, sizeof(*ck), f);
+    fclose(f);
+    if (n == sizeof(bs_ckpt_t)) {
+        return ck->magic == BS_MAGIC_CKPT &&
+               ck->crc == crc_of(ck, offsetof(bs_ckpt_t, crc));
+    }
+    if (n != BS_CKPT_V1_SIZE) return false;
+    const size_t crc_off = BS_CKPT_V1_SIZE - 8;
+    uint32_t crc;
+    memcpy(&crc, (const uint8_t *)ck + crc_off, sizeof(crc));
+    if (ck->magic != BS_MAGIC_CKPT || crc != crc_of(ck, crc_off)) return false;
+    memset((uint8_t *)ck + crc_off, 0, sizeof(*ck) - crc_off);
+    return true;
+}
+
+// Newest valid checkpoint: 'a' for ck_a, 'b' for ck_b, 0 if neither.
+static char ckpt_pick(uint16_t run_id, bs_ckpt_t *out)
+{
+    bs_ckpt_t a, b;
+    char pa[40], pb[40];
+    run_path(run_id, "ck_a", pa, sizeof(pa));
+    run_path(run_id, "ck_b", pb, sizeof(pb));
+    bool va = ckpt_load(pa, &a);
+    bool vb = ckpt_load(pb, &b);
+    if (!va && !vb) return 0;
+    bool use_a = va && (!vb || (int32_t)(a.seq - b.seq) > 0);
+    if (out) *out = use_a ? a : b;
+    return use_a ? 'a' : 'b';
 }
 
 bool bs_store_ckpt_read(uint16_t run_id, bs_ckpt_t *ck)
 {
     if (!s_ok) return false;
-    bs_ckpt_t a, b;
-    char pa[40], pb[40];
-    run_path(run_id, "ck_a", pa, sizeof(pa));
-    run_path(run_id, "ck_b", pb, sizeof(pb));
-    bool va = read_file(pa, &a, sizeof(a)) && ckpt_valid(&a);
-    bool vb = read_file(pb, &b, sizeof(b)) && ckpt_valid(&b);
-    if (!va && !vb) return false;
-    if (va && (!vb || (int32_t)(a.seq - b.seq) > 0)) *ck = a;
-    else *ck = b;
-    return true;
+    return ckpt_pick(run_id, ck) != 0;
 }
 
 bool bs_store_ckpt_write(uint16_t run_id, bs_ckpt_t *ck)
 {
     if (!s_ok) return false;
     ck->magic = BS_MAGIC_CKPT;
-    ck->version = BS_FMT_VERSION;
+    ck->version = BS_CKPT_VERSION;
     ck->seq++;
     ck->crc = crc_of(ck, offsetof(bs_ckpt_t, crc));
     char path[40];
@@ -266,7 +288,7 @@ bool bs_store_event(uint16_t run_id, const bs_event_t *ev)
     return append_file(path, ev, sizeof(*ev));
 }
 
-bool bs_store_m1_append(uint16_t run_id, const bs_hist_rec_t *r)
+bool bs_store_m1_append(uint16_t run_id, const bs_hist_rec_v2_t *r)
 {
     if (!s_ok) return false;
     uint32_t day = r->t_s / 86400u;
@@ -302,19 +324,16 @@ static bool q15_compact(uint16_t run_id, bs_ckpt_t *ck)
     if (!in) return false;
     FILE *out = fopen(tmp, "wb");
     if (!out) { fclose(in); return false; }
-    bs_hist_rec_t a, b;
+    bs_hist_rec_v2_t a, b;
     uint32_t written = 0;
     bool ok = true;
     while (fread(&a, sizeof(a), 1, in) == 1) {
         if (fread(&b, sizeof(b), 1, in) == 1) {
-            uint32_t ta = (a.t_s >= ck->q15_interval_s) ? ck->q15_interval_s : a.t_s;
-            uint32_t tb = b.t_s - a.t_s;
-            uint64_t tt = (uint64_t)ta + tb;
-            bs_hist_rec_t m = b;   // end time, SOC and cumulative charge of b
-            if (tt) {
-                m.v_avg_mv = (uint16_t)(((uint64_t)a.v_avg_mv * ta + (uint64_t)b.v_avg_mv * tb) / tt);
-                m.i_avg_na = (int32_t)(((int64_t)a.i_avg_na * ta + (int64_t)b.i_avg_na * tb) / (int64_t)tt);
-            }
+            uint64_t ta = a.dt_s, tb = b.dt_s, tt = ta + tb;
+            bs_hist_rec_v2_t m = b;   // t_s, SOC and cumulative fields of b
+            if (tt) m.v_avg_mv = (uint16_t)(((uint64_t)a.v_avg_mv * ta + (uint64_t)b.v_avg_mv * tb) / tt);
+            m.dt_s = (uint16_t)(tt > 65535u ? 65535u : tt);
+            m.flags = (uint16_t)(a.flags | b.flags);
             if (a.v_min_mv < m.v_min_mv) m.v_min_mv = a.v_min_mv;
             if (a.v_max_mv > m.v_max_mv) m.v_max_mv = a.v_max_mv;
             if (a.i_min_na < m.i_min_na) m.i_min_na = a.i_min_na;
@@ -334,7 +353,7 @@ static bool q15_compact(uint16_t run_id, bs_ckpt_t *ck)
     return true;
 }
 
-bool bs_store_q15_append(uint16_t run_id, const bs_hist_rec_t *r, bs_ckpt_t *ck)
+bool bs_store_q15_append(uint16_t run_id, const bs_hist_rec_v2_t *r, bs_ckpt_t *ck)
 {
     if (!s_ok) return false;
     char path[40];
@@ -345,7 +364,7 @@ bool bs_store_q15_append(uint16_t run_id, const bs_hist_rec_t *r, bs_ckpt_t *ck)
     return true;
 }
 
-bool bs_store_s1_write(uint16_t run_id, const bs_hist_rec_t *recs, size_t n)
+bool bs_store_s1_write(uint16_t run_id, const bs_hist_rec_v2_t *recs, size_t n)
 {
     if (!s_ok) return false;
     char path[40];
@@ -416,14 +435,9 @@ static bool file_path(uint16_t run_id, uint16_t file_id, char *out, size_t cap)
     case BS_FILE_S1:     strcpy(leaf, "s1.bin");   break;
     case BS_FILE_CKPT: {
         // Serve whichever checkpoint is newest and valid.
-        bs_ckpt_t a, b;
-        char pa[40], pb[40];
-        run_path(run_id, "ck_a", pa, sizeof(pa));
-        run_path(run_id, "ck_b", pb, sizeof(pb));
-        bool va = read_file(pa, &a, sizeof(a)) && ckpt_valid(&a);
-        bool vb = read_file(pb, &b, sizeof(b)) && ckpt_valid(&b);
-        if (!va && !vb) return false;
-        strcpy(leaf, (va && (!vb || (int32_t)(a.seq - b.seq) > 0)) ? "ck_a" : "ck_b");
+        char which = ckpt_pick(run_id, NULL);
+        if (!which) return false;
+        strcpy(leaf, which == 'a' ? "ck_a" : "ck_b");
         break;
     }
     default:
@@ -481,4 +495,84 @@ int bs_store_m1_days(uint16_t run_id, uint16_t *days, int max)
         days[j + 1] = v;
     }
     return n;
+}
+
+#define ST_CHECK(c, ...) do { if (!(c)) { printf("  FAIL: " __VA_ARGS__); printf("\n"); ok = false; goto out; } } while (0)
+
+bool bs_store_selftest(void)
+{
+    if (!s_ok) { printf("store not mounted\n"); return false; }
+    const uint16_t id = BS_SELFTEST_RUN;
+    char dir[24], path[40];
+    run_dir(id, dir, sizeof(dir));
+    rm_tree(dir);
+    if (mkdir(dir, 0775) != 0) { printf("mkdir %s failed\n", dir); return false; }
+    bool ok = true;
+    bs_hist_rec_v2_t *buf = NULL;
+    uint16_t days[64];
+
+    // Retention: one record per simulated day, days 0..33.
+    for (uint32_t day = 0; day <= 33; day++) {
+        bs_hist_rec_v2_t r = { .t_s = day * 86400u + 60u, .dt_s = 60, .q_dut_nc = day };
+        ST_CHECK(bs_store_m1_append(id, &r), "m1 append day %u", (unsigned)day);
+        int n = bs_store_m1_days(id, days, 64);
+        uint32_t want_n = day < BS_M1_KEEP_DAYS ? day + 1 : BS_M1_KEEP_DAYS;
+        uint32_t want_first = day < BS_M1_KEEP_DAYS ? 0 : day - BS_M1_KEEP_DAYS + 1;
+        ST_CHECK(n == (int)want_n && days[0] == want_first && days[n - 1] == day,
+                 "day %u: %d files, first %u (want %u, first %u)", (unsigned)day, n,
+                 n ? days[0] : 0u, (unsigned)want_n, (unsigned)want_first);
+        if (day == 31 || day == 32 || day == 33) {
+            printf("  day %2u: %d m1 files kept, oldest m%04u\n", (unsigned)day, n, days[0]);
+        }
+    }
+
+    // q15: 8191 records written directly, the 8192nd through the API compacts.
+    run_path(id, "q15.bin", path, sizeof(path));
+    buf = malloc(256 * sizeof(bs_hist_rec_v2_t));
+    ST_CHECK(buf, "alloc");
+    FILE *f = fopen(path, "wb");
+    ST_CHECK(f, "q15 open");
+    for (uint32_t i = 0; i < BS_Q15_MAX_RECS - 1; i += 256) {
+        uint32_t k = 0;
+        for (; k < 256 && i + k < BS_Q15_MAX_RECS - 1; k++) {
+            uint32_t j = i + k;
+            buf[k] = (bs_hist_rec_v2_t){ .t_s = (j + 1) * 900u, .dt_s = 900,
+                                         .v_avg_mv = (uint16_t)(1000 + (j & 1) * 2),
+                                         .v_min_mv = (uint16_t)(900 + j % 7),
+                                         .flags = (uint16_t)((j == 3) ? BS_RF_GAP : 0),
+                                         .q_dut_nc = j + 1, .e_dut_uj = 10 * (j + 1) };
+        }
+        if (fwrite(buf, sizeof(*buf), k, f) != k) { fclose(f); ST_CHECK(false, "q15 write"); }
+    }
+    fclose(f);
+    bs_ckpt_t ck = { .q15_interval_s = 900, .q15_count = BS_Q15_MAX_RECS - 1 };
+    bs_hist_rec_v2_t last = { .t_s = BS_Q15_MAX_RECS * 900u, .dt_s = 900, .v_avg_mv = 1002,
+                              .v_min_mv = 900, .q_dut_nc = BS_Q15_MAX_RECS,
+                              .e_dut_uj = 10 * BS_Q15_MAX_RECS };
+    ST_CHECK(bs_store_q15_append(id, &last, &ck), "q15 append/compact");
+    int32_t sz = bs_store_file_size(id, BS_FILE_Q15);
+    ST_CHECK(ck.q15_count == BS_Q15_MAX_RECS / 2 && ck.q15_interval_s == 1800 &&
+             sz == (int32_t)(BS_Q15_MAX_RECS / 2 * sizeof(bs_hist_rec_v2_t)),
+             "compaction: count %u interval %u size %ld", (unsigned)ck.q15_count,
+             (unsigned)ck.q15_interval_s, (long)sz);
+    bs_hist_rec_v2_t r0, r1, rl;
+    ST_CHECK(bs_store_file_read(id, BS_FILE_Q15, 0, (uint8_t *)&r0, sizeof(r0)) == sizeof(r0) &&
+             bs_store_file_read(id, BS_FILE_Q15, sizeof(r0), (uint8_t *)&r1, sizeof(r1)) == sizeof(r1) &&
+             bs_store_file_read(id, BS_FILE_Q15, (uint32_t)sz - sizeof(rl), (uint8_t *)&rl, sizeof(rl)) == sizeof(rl),
+             "q15 read back");
+    ST_CHECK(r0.t_s == 1800 && r0.dt_s == 1800 && r0.q_dut_nc == 2 && r0.e_dut_uj == 20 &&
+             r0.v_avg_mv == 1001 && r0.v_min_mv == 900 && r0.flags == 0,
+             "rec0 t %u dt %u q %lld e %lld vavg %u vmin %u fl %x", (unsigned)r0.t_s,
+             (unsigned)r0.dt_s, (long long)r0.q_dut_nc, (long long)r0.e_dut_uj,
+             r0.v_avg_mv, r0.v_min_mv, r0.flags);
+    ST_CHECK(r1.t_s == 3600 && r1.flags == BS_RF_GAP, "rec1 t %u flags %x", (unsigned)r1.t_s, r1.flags);
+    ST_CHECK(rl.t_s == BS_Q15_MAX_RECS * 900u && rl.q_dut_nc == BS_Q15_MAX_RECS && rl.dt_s == 1800,
+             "last t %u q %lld dt %u", (unsigned)rl.t_s, (long long)rl.q_dut_nc, (unsigned)rl.dt_s);
+    printf("  q15: 8192 -> %u records, interval %u s, merged dt/v_avg/min/flags/cumulative ok\n",
+           (unsigned)ck.q15_count, (unsigned)ck.q15_interval_s);
+out:
+    free(buf);
+    rm_tree(dir);
+    printf("bs selftest: %s\n", ok ? "PASS" : "FAIL");
+    return ok;
 }

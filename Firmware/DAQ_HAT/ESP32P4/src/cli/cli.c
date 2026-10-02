@@ -62,6 +62,9 @@
 #include "diagnostics.h"
 #include "daq_perf.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
+#include "battsim.h"
+#include "battsim_store.h"
 
 static const char *TAG = "daq_cli";
 
@@ -2804,6 +2807,63 @@ static int cmd_c6flash(int argc, char **argv)
 }
 
 // ---------------------------------------------------------------------------
+// Battery simulator bench tools.
+//   bs status | bs rec <run> <file_id> [n] | bs selftest | bs crash
+static int cmd_bs(int argc, char **argv)
+{
+    const char *sub = argc > 1 ? argv[1] : "status";
+    if (!strcmp(sub, "status")) {
+        battsim_status_t s;
+        battsim_get_status(&s);
+        printf("state %u flags 0x%02x err %u run %u soc %.2f%% t %lu s\n", s.state, s.flags,
+               s.last_error, s.run_id, s.soc_x100 / 100.0, (unsigned long)s.elapsed_s);
+        printf("q_dut %.6f C  e_dut %.6f J  q_used %.6f C  fs %lu/%lu\n", s.q_dut_nc * 1e-9,
+               s.e_dut_uj * 1e-6, s.q_used_nc * 1e-9, (unsigned long)s.fs_used,
+               (unsigned long)s.fs_total);
+        return 0;
+    }
+    if (!strcmp(sub, "rec") && argc >= 4) {
+        uint16_t run = (uint16_t)atoi(argv[2]);
+        uint16_t fid = (uint16_t)strtol(argv[3], NULL, 0);
+        int n = argc > 4 ? atoi(argv[4]) : 5;
+        int32_t sz = bs_store_file_size(run, fid);
+        printf("run %u file 0x%x: %ld B (%ld v2 recs)\n", run, fid, (long)sz,
+               sz > 0 ? (long)(sz / (int32_t)sizeof(bs_hist_rec_v2_t)) : 0L);
+        int32_t cnt = sz > 0 ? sz / (int32_t)sizeof(bs_hist_rec_v2_t) : 0;
+        for (int32_t i = cnt > n ? cnt - n : 0; i < cnt; i++) {
+            bs_hist_rec_v2_t r;
+            if (bs_store_file_read(run, fid, (uint32_t)i * sizeof(r), (uint8_t *)&r, sizeof(r)) != sizeof(r)) break;
+            printf("%5ld t %6lu dt %5u fl %02x V %u/%u/%u soc %u I %ld..%ld q %lld nC qu %lld nC e %lld uJ\n",
+                   (long)i, (unsigned long)r.t_s, r.dt_s, r.flags, r.v_min_mv, r.v_avg_mv, r.v_max_mv,
+                   r.soc_x100, (long)r.i_min_na, (long)r.i_max_na, (long long)r.q_dut_nc,
+                   (long long)r.q_used_nc, (long long)r.e_dut_uj);
+        }
+        return 0;
+    }
+    if (!strcmp(sub, "ev") && argc >= 3) {
+        uint16_t run = (uint16_t)atoi(argv[2]);
+        int32_t sz = bs_store_file_size(run, BS_FILE_EVENTS);
+        int32_t cnt = sz > 0 ? sz / (int32_t)sizeof(bs_event_t) : 0;
+        for (int32_t i = cnt > 12 ? cnt - 12 : 0; i < cnt; i++) {
+            bs_event_t e;
+            if (bs_store_file_read(run, BS_FILE_EVENTS, (uint32_t)i * sizeof(e), (uint8_t *)&e, sizeof(e)) != sizeof(e)) break;
+            printf("ev t %lu code %u a %ld b %ld\n", (unsigned long)e.t_s, e.code, (long)e.a, (long)e.b);
+        }
+        return 0;
+    }
+    if (!strcmp(sub, "selftest")) return bs_store_selftest() ? 0 : 1;
+    if (!strcmp(sub, "crash")) {
+        // Unclean restart (no pause / flush): stands in for a power cut.
+        printf("restarting without flush\n");
+        fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_restart();
+    }
+    printf("usage: bs status | bs rec <run> <file_id> [n] | bs ev <run> | bs selftest | bs crash\n");
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Pulse the C6 RST pin for a clean restart (normal boot, no download mode).
 //   c6reset
 static int cmd_c6reset(int argc, char **argv)
@@ -3871,6 +3931,7 @@ esp_err_t daq_cli_start(daq_board_t *board)
     reg("rangecal","Range threshold calibration: rangecal [status|ack|abort] [r_a_ohm [r_b_ohm]]", cmd_rangecal);
     reg("dwell",  "Autorange stability: dwell [dwell|lock|flap <value>] (us / us / 0|1)", cmd_dwell);
     reg("c6reset", "Pulse C6 RST (normal restart)", cmd_c6reset);
+    reg("bs",      "Battery sim: bs status | rec <run> <file_id> [n] | ev <run> | selftest | crash", cmd_bs);
     reg("c6boot",  "Enter C6 ROM download mode + bridge UART2 to console for esptool", cmd_c6boot);
     reg("c6logs",  "Bridge C6 UART2 to console + reset C6 into normal boot (view its log)", cmd_c6logs);
     reg("c6flash", "Flash C6 via staged binary: c6flash <bytes>  (use flash_via_p4.py)", cmd_c6flash);

@@ -2801,7 +2801,7 @@ static void glitch_filter_reset(void)
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
 {
-    static float    s_bs_isum, s_bs_vsum;   // battsim block sums (daq_fast only)
+    static float    s_bs_isum, s_bs_vsum, s_bs_psum;   // battsim block sums (daq_fast only)
     static uint32_t s_bs_n;
     DAQ_PERF_BEGIN(t_emit);
     DAQ_PERF_BEGIN(t_fus);
@@ -2912,6 +2912,7 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     if (bs_integ_enabled()) {
         s_bs_isum += emit_fo.amps;
         s_bs_vsum += v;
+        s_bs_psum += p;
         s_bs_n++;
     }
     if (++b->dsp_count >= b->dsp_decim) {
@@ -2923,8 +2924,8 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         power_dsp_push_current_n(&b->dsp, emit_fo.amps, periods);
         if (s_bs_n) {
             battsim_fast_push(s_bs_isum / (float)s_bs_n, s_bs_vsum / (float)s_bs_n,
-                              periods * decim);
-            s_bs_isum = s_bs_vsum = 0.0f;
+                              s_bs_psum / (float)s_bs_n, periods * decim);
+            s_bs_isum = s_bs_vsum = s_bs_psum = 0.0f;
             s_bs_n = 0;
         }
         spectrum_push(&b->spectrum,

@@ -574,6 +574,13 @@ what to build, how to prove it. Effort S/M/L.
   missing: HAT-link status/list/read commands (32 B reply cap -> paged), BBP
   + HTTP routes on the S3, Python binary decode + JSON export, MCP tools,
   manifests. Settings/actions already work generically via `DAQ_CONFIG`. L.
+- **BS-3** · P1 · FEATURE · `[REPORTED]` - history v2 (spec
+  `Docs/superpowers/specs/2026-10-02-battsim-history-v2.md`) implemented on
+  `feat/battsim`; P4 builds. **Do:** bench-verify on a merged image (with the
+  `feat/battsim-ui` transport): `bs selftest` (32-day retention, q15
+  compaction), constant load vs `power_dsp` (charge 0.1 %, energy 0.5 %),
+  `bs crash` mid-run then resume (cumulative fields continuous), host decode
+  of real v2 files. M.
 
 ### Wave D - latency
 

@@ -10,11 +10,13 @@
 //   /bs/rNNNNN/ck_a, ck_b    bs_ckpt_t ping-pong, newest valid seq wins
 //   /bs/rNNNNN/ev.bin        bs_event_t, append-only
 //   /bs/rNNNNN/s1.bin        last hour at 1 s (dumped from PSRAM on pause/stop)
-//   /bs/rNNNNN/mDDDD.bin     1-min records for simulated day DDDD, last 7 kept
+//   /bs/rNNNNN/mDDDD.bin     1-min records for simulated day DDDD, last 32 kept
 //   /bs/rNNNNN/q15.bin       whole-run records, 15 min doubling on compaction
 //
 // All structs are little-endian, packed and versioned; hosts decode them from
-// the field lists here (python/bugbuster/battsim.py mirrors them).
+// the field lists here (python/bugbuster/battsim.py mirrors them). History
+// files hold bs_hist_rec_t (meta.version 1) or bs_hist_rec_v2_t (version 2);
+// a run never mixes the two.
 // =============================================================================
 
 #include <stdint.h>
@@ -28,9 +30,13 @@ extern "C" {
 
 #define BS_MAX_PROFILES   16
 #define BS_NAME_LEN       24
-#define BS_M1_KEEP_DAYS   7
+#define BS_M1_KEEP_DAYS   32
 #define BS_Q15_MAX_RECS   8192u
-#define BS_FMT_VERSION    1u
+#define BS_FMT_VERSION    2u     // run format (meta.version): selects the record layout
+#define BS_PROFILE_VERSION 1u
+#define BS_CKPT_VERSION   2u
+#define BS_CKPT_V1_SIZE   352u   // v1 checkpoint: same prefix, crc at offset 344
+#define BS_STORE_LOW_FREE 2600000u   // bytes free below which RUN_NEW flags STORE_LOW
 
 #define BS_MAGIC_PROFILE  0x46505342u   // "BSPF"
 #define BS_MAGIC_META     0x4E525342u   // "BSRN"
@@ -45,7 +51,7 @@ typedef struct __attribute__((packed)) {
     uint32_t    crc;           // CRC32 over everything before it
 } bs_profile_file_t;
 
-// One history record (32 B). t_s is the END of the interval, simulated time.
+// v1 history record (32 B, read-only legacy). t_s is the END of the interval.
 typedef struct __attribute__((packed)) {
     uint32_t t_s;
     uint16_t v_avg_mv, v_min_mv, v_max_mv;
@@ -54,6 +60,28 @@ typedef struct __attribute__((packed)) {
     int64_t  q_used_nc;        // cumulative charge removed (all sources)
 } bs_hist_rec_t;
 _Static_assert(sizeof(bs_hist_rec_t) == 32, "bs_hist_rec_t wire size");
+
+// v2 history record (48 B). Cumulative fields are absolute since run start, so
+// I_avg = dq_dut / dt and P_avg = de_dut / dt between any two records.
+typedef struct __attribute__((packed)) {
+    uint32_t t_s;              // END of interval, simulated seconds since run start
+    uint16_t v_avg_mv;         // time-weighted mean V_DUT, output-on samples only
+    uint16_t v_min_mv, v_max_mv;
+    uint16_t soc_x100;         // 0..10000
+    int32_t  i_min_na, i_max_na;   // saturating, BS_RF_I_CLAMP when hit
+    uint16_t flags;            // BS_RF_*
+    uint16_t dt_s;             // seconds actually integrated in this interval
+    int64_t  q_dut_nc;         // cumulative measured DUT charge
+    int64_t  q_used_nc;        // cumulative all sources incl. initial deficit
+    int64_t  e_dut_uj;         // cumulative DUT energy, sum(V*I*dt)
+} bs_hist_rec_v2_t;
+_Static_assert(sizeof(bs_hist_rec_v2_t) == 48, "bs_hist_rec_v2_t wire size");
+
+#define BS_RF_GAP        0x0001u   // samples dropped / gap-filled in this interval
+#define BS_RF_I_CLAMP    0x0002u   // i_min/i_max saturated
+#define BS_RF_RESUME     0x0004u   // first record after START / reboot resume
+#define BS_RF_OUTPUT_OFF 0x0008u   // output was off for part of the interval
+#define BS_RF_CUTOFF     0x0010u   // below cutoff during the interval
 
 typedef enum {
     BS_EV_CREATED = 1,  BS_EV_START = 2,    BS_EV_PAUSE = 3,   BS_EV_STOP = 4,
@@ -102,10 +130,14 @@ typedef struct {
     uint32_t win_head, win_count;
     uint32_t q15_interval_s;   // grows by doubling on compaction
     uint32_t q15_count;
+    // v2 (absent in a 352 B v1 checkpoint, read back as 0).
+    int64_t  e_dut_nj;         // integrated DUT energy
+    double   e_frac;           // gap-fill fractional nJ carry
     uint32_t crc;
     uint32_t rsv3;
 } bs_ckpt_t;
-_Static_assert(sizeof(bs_ckpt_t) == 352, "bs_ckpt_t wire size");
+_Static_assert(sizeof(bs_ckpt_t) == 368, "bs_ckpt_t wire size");
+_Static_assert(offsetof(bs_ckpt_t, e_dut_nj) == BS_CKPT_V1_SIZE - 8, "v1 prefix");
 
 typedef enum {
     BS_FILE_META = 0, BS_FILE_CKPT = 1, BS_FILE_EVENTS = 2, BS_FILE_Q15 = 3,
@@ -128,9 +160,9 @@ bool bs_store_meta_read(uint16_t run_id, bs_run_meta_t *meta);
 bool bs_store_ckpt_write(uint16_t run_id, bs_ckpt_t *ck);   // sets seq + crc
 bool bs_store_ckpt_read(uint16_t run_id, bs_ckpt_t *ck);
 bool bs_store_event(uint16_t run_id, const bs_event_t *ev);
-bool bs_store_m1_append(uint16_t run_id, const bs_hist_rec_t *r);
-bool bs_store_q15_append(uint16_t run_id, const bs_hist_rec_t *r, bs_ckpt_t *ck);
-bool bs_store_s1_write(uint16_t run_id, const bs_hist_rec_t *recs, size_t n);
+bool bs_store_m1_append(uint16_t run_id, const bs_hist_rec_v2_t *r);
+bool bs_store_q15_append(uint16_t run_id, const bs_hist_rec_v2_t *r, bs_ckpt_t *ck);
+bool bs_store_s1_write(uint16_t run_id, const bs_hist_rec_v2_t *recs, size_t n);
 
 int  bs_store_list_runs(uint16_t *ids, int max);
 bool bs_store_delete_run(uint16_t run_id);
@@ -144,6 +176,11 @@ int32_t bs_store_file_read(uint16_t run_id, uint16_t file_id, uint32_t offset,
                            uint8_t *buf, uint32_t len);
 // 1-min day files present for a run, ascending (returns count).
 int  bs_store_m1_days(uint16_t run_id, uint16_t *days, int max);
+
+// Bench self-test on a scratch run (id BS_SELFTEST_RUN, removed afterwards):
+// 32-day m1 retention and one q15 compaction. Prints to stdout.
+#define BS_SELFTEST_RUN 65000u
+bool bs_store_selftest(void);
 
 #ifdef __cplusplus
 }

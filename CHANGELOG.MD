@@ -84,6 +84,19 @@
   **The P4 partition table changed (OTA slots 5 -> 3 MiB): one wired flash per
   board is required.** Host transport (BBP/HTTP/MCP history download, JSON
   export) is not built yet.
+- Battery simulator history format v2 (`BS_FMT_VERSION` 2): 48 B records with
+  cumulative DUT charge, all-source charge and an exact DUT energy integral
+  (block-mean V*I folded into int64 nJ on the charge tick base), the seconds
+  actually integrated, and GAP / I_CLAMP / RESUME / OUTPUT_OFF / CUTOFF
+  flags. Records are split exactly on second boundaries and partial records
+  are flushed on pause, so per-tier `dt_s` sums to the integrated time.
+  1-min history is now kept for 32 days. Voltage statistics exclude
+  output-off samples. Checkpoints (v2, 368 B, still read 352 B v1) are written
+  on the minute boundary before the m1 append. Lifecycle events carry the host
+  wall clock in `b`; `created_epoch` is stamped on the first SET_EPOCH.
+  Status adds `e_dut_uj` (96 B, version 2) and `BS_FLAG_STORE_LOW`. Runs
+  created by older firmware load read-only (START refused). P4 CLI `bs`
+  (status, rec, ev, selftest, crash).
 
 ## [3.0.0] - 2026-10-02
 
