@@ -54,7 +54,6 @@ def test_unit_names_still_work(set_range, name, idx):
     assert _range_written(bb) == [idx]
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-07")
 @pytest.mark.parametrize("name", ["high", "low", "coarse", "fine"])
 def test_ambiguous_aliases_are_rejected(set_range, name):
     tool, bb = set_range
@@ -63,7 +62,6 @@ def test_ambiguous_aliases_are_rejected(set_range, name):
     assert _range_written(bb) == []
 
 
-@pytest.mark.xfail(strict=True, reason="DAQ-07")
 @pytest.mark.parametrize("name, idx", [("hi", 2), ("lo", 0)])
 def test_report_names_match_the_reports(set_range, name, idx):
     tool, bb = set_range
@@ -75,7 +73,6 @@ def _fake_capture(samples: int):
     return SimpleNamespace(current=range(samples), voltage=range(samples))
 
 
-@pytest.mark.xfail(strict=True, reason="MCP-34")
 def test_store_stays_within_the_byte_budget():
     with patch.dict(daq_power._captures, clear=True):
         ids = [daq_power._store_capture(_fake_capture(daq_power.MAX_CAPTURE_SAMPLES)) for _ in range(8)]
@@ -84,7 +81,6 @@ def test_store_stays_within_the_byte_budget():
         assert ids[-1] in daq_power._captures
 
 
-@pytest.mark.xfail(strict=True, reason="MCP-34")
 def test_a_single_oversize_capture_is_still_kept():
     with patch.dict(daq_power._captures, clear=True):
         cid = daq_power._store_capture(_fake_capture(daq_power.MAX_STORED_BYTES))

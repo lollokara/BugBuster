@@ -42,9 +42,11 @@ _VDUT_MIN_MV, _VDUT_MAX_MV = 1800, 20000
 _ILIMIT_MIN_MA, _ILIMIT_MAX_MA = 100, 2500
 
 # Registry RANGE_IDX options are ("A", "mA", "uA") - NOT the DaqRange enum order.
-_RANGE_NAMES = {"a": 0, "amp": 0, "high": 0, "coarse": 0,
+# DAQ-07: "hi"/"mid"/"lo" are the names reports and CSVs use (hi = 51 ohm);
+# "high"/"low" meant the opposite and "coarse"/"fine" are sample sources.
+_RANGE_NAMES = {"a": 0, "amp": 0, "lo": 0,
                 "ma": 1, "milliamp": 1, "mid": 1,
-                "ua": 2, "microamp": 2, "fine": 2, "low": 2}
+                "ua": 2, "microamp": 2, "hi": 2}
 _RANGE_LABELS = {0: "a (50 mohm shunt, ~50 mA - 3 A)",
                  1: "ma (2 ohm shunt, ~2 - 50 mA)",
                  2: "ua (51 ohm shunt, nA - ~2 mA)"}
@@ -68,6 +70,10 @@ def _rate_index(sps: int) -> int:
 MAX_CAPTURE_DURATION_S = 900.0
 MAX_CAPTURE_SAMPLES = 4_000_000
 MAX_STORED_CAPTURES = 8
+# MCP-34: also bound the whole store by an estimate of its size; the newest
+# capture is always kept.
+_BYTES_PER_SAMPLE = 64
+MAX_STORED_BYTES = 512 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Capture + job stores (in-process, MCP server lifetime)
@@ -77,12 +83,18 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def _capture_bytes(cap) -> int:
+    return len(getattr(cap, "current", ())) * _BYTES_PER_SAMPLE
+
+
 def _store_capture(cap) -> str:
     capture_id = f"cap-{uuid.uuid4().hex[:8]}"
     with _lock:
         _captures[capture_id] = cap
-        while len(_captures) > MAX_STORED_CAPTURES:
-            _captures.pop(next(iter(_captures)))
+        total = sum(_capture_bytes(c) for c in _captures.values())
+        while len(_captures) > 1 and (len(_captures) > MAX_STORED_CAPTURES
+                                      or total > MAX_STORED_BYTES):
+            total -= _capture_bytes(_captures.pop(next(iter(_captures))))
     return capture_id
 
 
@@ -268,7 +280,8 @@ def register(mcp) -> None:
         lock once the DUT's span is known.
 
         Parameters:
-        - range_name: "ua" | "ma" | "a" (ignored when autorange=True).
+        - range_name: "ua" | "ma" | "a", or the report names "hi" | "mid" | "lo"
+          (ignored when autorange=True).
         - autorange: True re-enables the seamless hardware autoranger.
 
         Returns: the resulting range and autorange state.
@@ -284,7 +297,7 @@ def register(mcp) -> None:
         idx = _RANGE_NAMES.get(range_name.strip().lower())
         if idx is None:
             raise ValueError(
-                f"Unknown range {range_name!r}. Use 'ua', 'ma' or 'a'.")
+                f"Unknown range {range_name!r}. Use 'ua' (= 'hi'), 'ma' (= 'mid') or 'a' (= 'lo').")
         bb.daq.set(DaqKey.AUTORANGING, False)
         bb.daq.set(DaqKey.RANGE_IDX, idx)
         return {"autorange": False, "range": _RANGE_LABELS[idx]}
