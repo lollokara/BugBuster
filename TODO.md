@@ -158,6 +158,15 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Gate added, refactor carried over | PY-21 (public API golden snapshot; mixin split not done), TR-11 (USB/HTTP equivalence test, 7 on the board; service layer not done) |
    | Not verified on a client | iOS TR-11b changes (T1 only) |
    | Open, found here | `tests/http_api` mutating tests send no admin token (401 on the board) |
+
+   **Plan M7 status (2026-10-02, branch `audit/2026-10-m7-parity`).**
+
+   | Status | Items |
+   |---|---|
+   | Done, measured on hardware | MCP-5 / PLT-08 (all logs returned), DAQ-10 (current trigger on the live stream) |
+   | Done, host tests | BUS-011, BUS-016, MCP-4, DESK-9 |
+   | Already done | PY-4 (M1) |
+   | Carried over | DESK-3, DESK-4 / WEB-3, IOS-5, DAQ-13 |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,

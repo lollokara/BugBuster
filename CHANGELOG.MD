@@ -400,6 +400,21 @@
   | TR-11 (gate) | no check that USB and HTTP agree | `tests/device/test_transport_equivalence.py` (7 on the board); the per-capability service layer is carried over |
   | BBP-DEVINFO (found by the TR-11 gate) | BBP `GET_DEVICE_INFO` read registers 0x46-0x48, so USB reported silicon rev 114 / IDs 838, 21104 where HTTP said 3 / 40, 1349 | reads `REG_SILICON_*` (0x7B/0x7D/0x7E) |
 
+- **Parity features (2026-10 audit, M7).** MCP tools 121 -> 135.
+
+  | ID | Added | Verified |
+  |---|---|---|
+  | BUS-011 / BUS-016 | MCP `setup_i2c_bus`, `bus_status`, `i2c_write`, `i2c_read`, `i2c_write_read`, `i2c_dump_registers`, `spi_flash_read` | unit tests (no I2C/SPI device wired on the bench) |
+  | MCP-5 / PLT-08 | `run_device_script(wait=True, timeout_s)` returns every log line; `script_list` / `script_get` / `script_put` / `script_delete` / `script_autorun` | board: a 1.5 s script returned all 6 lines (the first cut lost them all: the eval is queued, so "idle" right after it is not "finished") |
+  | MCP-4 | `observe_adc`, `observe_daq`: bounded min/max/mean/std summaries | unit tests |
+  | DAQ-10 | `capture(pre_trigger_s=, trigger_current_a=, trigger_edge=)` in the library and `daq_power_capture[_start]`; `PowerCapture.trigger_offset` | unit tests; board: the current-threshold trigger fired on the live stream |
+  | DESK-9 | desktop WiFi card sets the SoftAP password (USB 0xEF / HTTP `/api/wifi/ap_password`) | build + tests (WiFi changes are off-limits on the bench) |
+  | PY-4 | already done in M1 (`adc_leds_set_mode`, `wifi_forget`) | - |
+
+  Carried over: DESK-3 (scripting tab), DESK-4 / WEB-3 (external I2C/SPI UI),
+  IOS-5 (iOS parity, needs a Mac), DAQ-13 (per-range meter calibration over
+  BBP: writes calibration NVS and needs a bench reference).
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
