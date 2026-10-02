@@ -3,6 +3,7 @@
 // =============================================================================
 
 mod bbp;
+mod battsim;
 mod commands;
 mod connection_manager;
 mod daq_commands;
@@ -43,6 +44,7 @@ pub fn run() {
         .manage(ConnectionManager::new())
         .manage(LaState::new())
         .manage(DaqState::new())
+        .manage(battsim::BattSimState::default())
         .setup(|app| {
             // Start the background USB watcher that polls Espressif ports every
             // 2 s and emits "device-found" events as boards come online.
@@ -223,6 +225,17 @@ pub fn run() {
             daq_commands::daq_cal_status,
             daq_commands::daq_measure,
             daq_commands::daq_vdut_status,
+            battsim::bs_status,
+            battsim::bs_list_runs,
+            battsim::bs_list_cached,
+            battsim::bs_open_run,
+            battsim::bs_open_cached,
+            battsim::bs_view,
+            battsim::bs_export,
+            battsim::bs_set_epoch,
+            battsim::bs_profiles,
+            battsim::bs_configure,
+            battsim::bs_action,
             daq_commands::daq_vdut_set_enable,
             daq_commands::daq_vdut_set_setpoint,
             daq_commands::daq_set_io_role,

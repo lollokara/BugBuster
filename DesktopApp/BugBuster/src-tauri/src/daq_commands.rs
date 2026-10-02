@@ -755,7 +755,7 @@ pub struct VdutStatus {
     pub fault: bool,
 }
 
-async fn vdut_http(mgr: &ConnectionManager) -> Option<(String, reqwest::Client)> {
+pub(crate) async fn vdut_http(mgr: &ConnectionManager) -> Option<(String, reqwest::Client)> {
     let url = mgr.get_base_url().await?;
     let mut headers = reqwest::header::HeaderMap::new();
     if let Some(token) = mgr.get_connection_status().admin_token {
@@ -771,7 +771,7 @@ async fn vdut_http(mgr: &ConnectionManager) -> Option<(String, reqwest::Client)>
     Some((url, client))
 }
 
-async fn http_json(req: reqwest::RequestBuilder, what: &str) -> CmdResult<serde_json::Value> {
+pub(crate) async fn http_json(req: reqwest::RequestBuilder, what: &str) -> CmdResult<serde_json::Value> {
     let resp = req.send().await.map_err(map_err)?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {} from {}", resp.status(), what));

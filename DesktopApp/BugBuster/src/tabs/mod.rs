@@ -1,4 +1,6 @@
 pub mod adc;
+pub mod battsim;
+pub mod battsim_chart;
 pub mod board;
 pub mod daq;
 pub mod daq_cal;

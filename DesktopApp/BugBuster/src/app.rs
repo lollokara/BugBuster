@@ -8,7 +8,7 @@ use crate::components::connection::ConnectionPanel;
 use crate::components::icons::Icon;
 use crate::components::io_blocked_banner::IoBlockedBanner;
 use crate::tabs::{
-    adc::*, board::*, daq::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*,
+    adc::*, battsim::*, board::*, daq::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*,
     idac::*, iin::*, ioexp::*, la::*, overview::*, scope::*, signal_path::*, uart::*, usbpd::*,
     vdac::*, voltages::*, wavegen::*,
 };
@@ -29,7 +29,7 @@ pub enum HatKind {
 fn tab_visible(tab_id: &str, kind: HatKind) -> bool {
     match tab_id {
         "la" => kind == HatKind::La,
-        "daq" => kind == HatKind::Daq,
+        "daq" | "battsim" => kind == HatKind::Daq,
         "hat" => kind != HatKind::None,
         _ => true,
     }
@@ -93,6 +93,7 @@ const CATEGORIES: &[(&str, &str, &[NavEntry])] = &[
             ("scope", "Scope", "activity"),
             ("la", "Logic Analyzer", "binary"),
             ("daq", "HS DAQ", "chart-spline"),
+            ("battsim", "Battery Sim", "battery-charging"),
             ("wavegen", "WaveGen", "waves"),
             ("sigpath", "Signal Path", "route"),
         ],
@@ -110,7 +111,7 @@ const CATEGORIES: &[(&str, &str, &[NavEntry])] = &[
 
 /// Views that own the full content area and manage their own scrolling.
 fn is_fullbleed(tab_id: &str) -> bool {
-    matches!(tab_id, "scope" | "la" | "daq" | "board" | "sigpath")
+    matches!(tab_id, "scope" | "la" | "daq" | "battsim" | "board" | "sigpath")
 }
 
 fn view_meta(tab_id: &str) -> (&'static str, &'static str) {
@@ -1065,6 +1066,7 @@ pub fn App() -> impl IntoView {
                                 "hat" => view! { <HatTab state=device_state hat_kind=hat_kind /> }.into_any(),
                                 "la" => view! { <LaTab state=device_state /> }.into_any(),
                                 "daq" => view! { <DaqTab state=device_state /> }.into_any(),
+                                "battsim" => view! { <BattSimTab state=device_state /> }.into_any(),
                                 _ => view! { <div>"Unknown view"</div> }.into_any(),
                             }}
                         </div>
