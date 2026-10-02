@@ -2209,6 +2209,29 @@ impl Transport for HttpTransport {
 }
 
 #[cfg(test)]
+mod logical_failure_tests {
+    use serde_json::json;
+
+    /// TR-11b: an action answered 200 {"ok":false} (old firmware) or 4xx (new)
+    /// must be an error; a 4xx carries the device's message.
+    #[test]
+    #[ignore = "TR-11b"]
+    fn both_failure_forms_are_errors() {
+        let f = super::logical_failure;
+        assert_eq!(f(200, &json!({"ok": false, "error": "busy"})).as_deref(), Some("busy"));
+        assert_eq!(f(400, &json!({"ok": false, "error": "ch must be 0-3"})).as_deref(), Some("ch must be 0-3"));
+        assert_eq!(f(400, &json!({})).as_deref(), Some("HTTP 400"));
+        assert_eq!(f(200, &json!({"ok": true})), None);
+        assert_eq!(f(200, &json!({"value": 1})), None);
+    }
+}
+
+/// TR-11b: Some(message) when a POST reply means failure.
+fn logical_failure(_status: u16, _json: &Value) -> Option<String> {
+    None
+}
+
+#[cfg(test)]
 mod diag_raw_tests {
     /// DESK-DIAG-RAW: firmware emits `diagnostics[].rawCode`; the desktop read
     /// `raw`, so HTTP diagnostic raw codes were always 0.
