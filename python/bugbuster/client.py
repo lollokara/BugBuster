@@ -1731,7 +1731,7 @@ class BugBuster:
             })
             return int(resp.get("written", 0))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, len(raw)) + raw
-        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE, payload, address)
         return resp[0]
 
     def ext_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> bytes:
@@ -1747,7 +1747,7 @@ class BugBuster:
             })
             return bytes(resp.get("data", []))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, length)
-        resp = self._usb_cmd(CmdId.EXT_I2C_READ, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_READ, payload, address)
         count = resp[0]
         return bytes(resp[1:1 + count])
 
@@ -1775,9 +1775,22 @@ class BugBuster:
             })
             return bytes(resp.get("data", []))
         payload = struct.pack("<BHBB", address & 0x7F, timeout_ms & 0xFFFF, len(raw), read_length) + raw
-        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE_READ, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE_READ, payload, address)
         count = resp[0]
         return bytes(resp[1:1 + count])
+
+    def _ext_i2c_cmd(self, cmd: int, payload: bytes, address: int) -> bytes:
+        """BUS-017: the firmware reports a NACK as a hardware fault, which BBP
+        carries as SPI_FAIL; say what it is. TIMEOUT (stuck bus) and BUSY pass
+        through unchanged."""
+        try:
+            return self._usb_cmd(cmd, payload)
+        except DeviceError as exc:
+            if exc.code != 0x04:  # BBP_ERR_SPI_FAIL
+                raise
+            nack = DeviceError(exc.code, exc.seq)
+            nack.args = (f"I2C NACK: no device acknowledged address 0x{address:02X} (seq={exc.seq})",)
+            raise nack from exc
 
     # ------------------------------------------------------------------
     # ── External target SPI bus (routed IO pins) ───────────────────────

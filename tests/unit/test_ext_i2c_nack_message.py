@@ -30,7 +30,6 @@ CALLS = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-017")
 @pytest.mark.parametrize("call", CALLS)
 def test_nack_names_the_address(call):
     with pytest.raises(DeviceError, match=r"NACK.*0x50") as exc:
