@@ -1,10 +1,16 @@
-// E-fuse output strip with the IMON current monitor (one e-fuse at a time,
+// E-fuse output table with the IMON current monitor (one e-fuse at a time,
 // routed through U23 to AD74416H channel C/physical D). Shown on Overview.
+use crate::components::ui::Switch;
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-const EFUSE_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
+const EFUSE_SWITCH_LABELS: [&str; 4] = [
+    "Toggle P1 power",
+    "Toggle P2 power",
+    "Toggle P3 power",
+    "Toggle P4 power",
+];
 
 #[component]
 pub fn EfuseMonitorStrip(
@@ -38,117 +44,111 @@ pub fn EfuseMonitorStrip(
     };
 
     view! {
-        <div class="card" style="margin-bottom: 16px">
-            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center">
-                <div>
-                    <span class="channel-func">"E-Fuse Outputs"</span>
-                    <div style="font-size: 10px; color: var(--text-dim); margin-top: 2px">
+        <div class="group group-flush ov-fuse">
+            <div class="group-header">
+                <div class="ov-fuse-head">
+                    <span class="group-title">"E-fuse outputs"</span>
+                    <span class="group-subtitle">
                         {move || match imon.get().efuse {
                             0 => "Pick one connector to measure its output current (IMON via CH C).".to_string(),
-                            n => format!("Measuring P{}  ·  CH C reserved  ·  self-test and calibration paused", n),
+                            n => format!("Measuring P{}. CH C reserved, self-test and calibration paused.", n),
                         }}
-                    </div>
+                    </span>
                 </div>
-                <button class="scope-btn" style="font-size: 10px; padding: 4px 10px"
+                <button class="btn btn-sm"
                     disabled=move || imon.get().efuse == 0 || busy.get()
                     on:click=move |_| request(0, false)
                 >"Stop monitor"</button>
             </div>
-            <div class="card-body">
-                <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+            <table class="table ov-fuse-table">
+                <thead>
+                    <tr>
+                        <th>"Output"</th>
+                        <th>"State"</th>
+                        <th class="ov-num">"Current"</th>
+                        <th class="ov-act">"Monitor"</th>
+                    </tr>
+                </thead>
+                <tbody>
                     {(1u8..=4).map(|id| {
-                        let color = EFUSE_COLORS[(id - 1) as usize];
                         let rail = if id <= 2 { "VADJ1" } else { "VADJ2" };
                         let state = move || ioexp.get().efuses.into_iter().find(|e| e.id == id).unwrap_or_default();
                         let monitored = move || imon.get().efuse == id;
                         view! {
-                            <div style=move || format!(
-                                "padding: 12px; border-radius: 10px; transition: all 0.2s; {}",
-                                if monitored() {
-                                    format!("background: {color}12; border: 1px solid {color}80; box-shadow: 0 0 14px {color}30")
-                                } else {
-                                    "background: rgba(100,140,200,0.035); border: 1px solid rgba(100,140,200,0.10)".to_string()
-                                }
-                            )>
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
-                                    <div>
-                                        <span style=format!("font-size: 15px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {color}")>
-                                            {format!("P{}", id)}
-                                        </span>
-                                        <span style="font-size: 10px; color: var(--text-dim); margin-left: 6px">{rail}</span>
+                            <tr class:is-monitored=monitored>
+                                <td>
+                                    <span class="ov-fuse-name">{format!("P{}", id)}</span>
+                                    <span class="chip">{rail}</span>
+                                </td>
+                                <td>
+                                    <div class="hstack">
+                                        <Switch
+                                            checked=Signal::derive(move || state().enabled)
+                                            aria_label=EFUSE_SWITCH_LABELS[(id - 1) as usize]
+                                            on_change=Callback::new(move |_: bool| send_pca_control(4 + id, !state().enabled))
+                                        />
+                                        {move || {
+                                            let s = state();
+                                            if s.fault {
+                                                view! { <span class="badge tone-red">"Fault"</span> }.into_any()
+                                            } else if s.enabled {
+                                                view! { <span class="badge tone-green">"On"</span> }.into_any()
+                                            } else {
+                                                view! { <span class="badge">"Off"</span> }.into_any()
+                                            }
+                                        }}
                                     </div>
-                                    {move || {
-                                        let s = state();
-                                        let (label, c) = if s.fault { ("FAULT", "#ef4444") }
-                                            else if s.enabled { ("ON", "#10b981") }
-                                            else { ("OFF", "var(--text-dim)") };
-                                        view! {
-                                            <button class="scope-btn"
-                                                style=format!("font-size: 10px; padding: 3px 10px; color: {c}; border-color: {c}55")
-                                                title="Toggle connector power"
-                                                on:click=move |_| send_pca_control(4 + id, !s.enabled)
-                                            >{label}</button>
-                                        }
-                                    }}
-                                </div>
-
-                                <div style="text-align: center; min-height: 34px; display: flex; align-items: center; justify-content: center">
+                                </td>
+                                <td class="ov-num">
                                     {move || {
                                         if !monitored() {
-                                            return view! {
-                                                <span style="font-size: 18px; font-weight: 700; color: var(--text-dim); font-family: 'JetBrains Mono', monospace">"— mA"</span>
-                                            }.into_any();
+                                            return view! { <span class="muted">"-"</span> }.into_any();
                                         }
                                         let st = imon.get();
                                         let (text, kind) = efuse_imon_display(&st);
-                                        let c = match kind { "sat" => "#ef4444", "settling" => "var(--text-dim)", _ => color };
-                                        view! {
-                                            <span style=format!("font-size: 24px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {c}")>{text}</span>
-                                        }.into_any()
+                                        let class = match kind { "sat" => "tone-text-red", "settling" => "muted", _ => "" };
+                                        view! { <span class=class>{text}</span> }.into_any()
                                     }}
-                                </div>
-
-                                <button class="scope-btn"
-                                    style=move || format!("width: 100%; margin-top: 8px; font-size: 10px; {}",
-                                        if monitored() { format!("color: {color}; border-color: {color}80") } else { String::new() })
-                                    disabled=move || busy.get()
-                                    on:click=move |_| request(if monitored() { 0 } else { id }, false)
-                                >{move || if monitored() { "Monitoring" } else { "Monitor current" }}</button>
-                            </div>
+                                </td>
+                                <td class="ov-act">
+                                    <button class="btn btn-sm"
+                                        class:btn-tinted=monitored
+                                        disabled=move || busy.get()
+                                        on:click=move |_| request(if monitored() { 0 } else { id }, false)
+                                    >{move || if monitored() { "Monitoring" } else { "Monitor current" }}</button>
+                                </td>
+                            </tr>
                         }
                     }).collect::<Vec<_>>()}
-                </div>
-            </div>
+                </tbody>
+            </table>
+        </div>
 
-            {move || confirm.get().map(|(target, old)| {
-                let msg = if old == 0 {
-                    format!("E-Fuse P{target} is ON. Attaching the current monitor turns it OFF, switches the monitor, then turns it back ON. The output drops for about 0.5 s.")
-                } else if target == 0 {
-                    format!("E-Fuse P{old} is ON. Stopping the monitor turns it OFF, detaches the monitor, then turns it back ON. The output drops for about 0.5 s.")
-                } else {
-                    format!("Moving the monitor from P{old} to P{target} power-cycles whichever of them is ON. The output drops for about 0.5 s.")
-                };
-                view! {
-                    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000"
-                        on:click=move |_| confirm.set(None)
-                    >
-                        <div style="background: var(--bg-secondary); border: 1px solid #f59e0b60; border-radius: 14px; padding: 20px; max-width: 380px; box-shadow: 0 0 40px rgba(0,0,0,0.6)"
-                            on:click=move |e| e.stop_propagation()
-                        >
-                            <div style="font-size: 13px; font-weight: 700; color: #f59e0b; margin-bottom: 8px">"Output will be power-cycled"</div>
-                            <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5">{msg}</div>
-                            <div style="display: flex; gap: 8px; justify-content: flex-end">
-                                <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px"
-                                    on:click=move |_| confirm.set(None)
-                                >"Cancel"</button>
-                                <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b60"
+        {move || confirm.get().map(|(target, old)| {
+            let msg = if old == 0 {
+                format!("E-fuse P{target} is ON. Attaching the current monitor turns it OFF, switches the monitor, then turns it back ON. The output drops for about 0.5 s.")
+            } else if target == 0 {
+                format!("E-fuse P{old} is ON. Stopping the monitor turns it OFF, detaches the monitor, then turns it back ON. The output drops for about 0.5 s.")
+            } else {
+                format!("Moving the monitor from P{old} to P{target} power-cycles whichever of them is ON. The output drops for about 0.5 s.")
+            };
+            view! {
+                <div class="scrim" on:click=move |_| confirm.set(None)></div>
+                <div class="dialog ov-dialog" role="dialog" aria-modal="true" aria-labelledby="ov-fuse-dialog-title">
+                    <div class="group">
+                        <div class="stack">
+                            <div class="text-headline" id="ov-fuse-dialog-title">"Output will be power-cycled"</div>
+                            <div class="muted">{msg}</div>
+                            <div class="hstack ov-dialog-actions">
+                                <button class="btn" on:click=move |_| confirm.set(None)>"Cancel"</button>
+                                <button class="btn btn-tinted tone-orange"
                                     on:click=move |_| { confirm.set(None); request(target, true); }
                                 >"Power-cycle and continue"</button>
                             </div>
                         </div>
                     </div>
-                }
-            })}
-        </div>
+                </div>
+            }
+        })}
     }
 }
