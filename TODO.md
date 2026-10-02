@@ -148,6 +148,16 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Not verified on a client | iOS camelCase decode (IOS-23): T1 only, needs a macOS build by the owner. Desktop UI changes: `cargo check` + tests, no UI run |
    | Refuted / closed | TR-1 (fixed by BBP-TXQ in M2; device test added) |
    | Carried over | DESK-23 for the other tabs (Overview, Diag, Faults rebuild per tick); AN-11 faster path (fewer SPI transactions per sample) |
+
+   **Plan M6 status (2026-10-02, branch `audit/2026-10-m6-refactor`; S3, P4, C6 flashed).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, measured on hardware | C6-26 (kept + fixed; offline OTA for C6, P4, S3 app, SPIFFS all verified), TR-11b (3 invalid actions 200 -> 400), BBP-DEVINFO (new, found by the TR-11 gate) |
+   | Fixed, host tests | DESK-REFAC (25 dead commands removed), DESK-33, FEAT-4 |
+   | Gate added, refactor carried over | PY-21 (public API golden snapshot; mixin split not done), TR-11 (USB/HTTP equivalence test, 7 on the board; service layer not done) |
+   | Not verified on a client | iOS TR-11b changes (T1 only) |
+   | Open, found here | `tests/http_api` mutating tests send no admin token (401 on the board) |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,

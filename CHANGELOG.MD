@@ -381,6 +381,25 @@
   `ota_upload_spiffs` take `transport="usb"`. Also fixed: the Python DAQ reader
   treated a quiet endpoint on Windows (errno 10060) as fatal.
 
+- **HTTP failures are HTTP errors (2026-10 audit, M6, TR-11b).** A failed
+  action (POST/DELETE) whose reply has `"ok": false` is now sent as **400**
+  instead of 200; GET replies keep 200 (there `ok:false` is status data).
+  Clients were changed first to treat both forms as failure: Python
+  `HTTPTransport` raises `HTTPLogicalError` (also a `RuntimeError`), the web
+  `request()` rejects, the desktop `action_json()` errors, iOS `postAction`
+  reads `ok` and `postDecoded` decodes 4xx bodies. Bench: three invalid
+  actions went 200 -> 400 with the same body.
+- **Other M6 items.**
+
+  | ID | Was | Now |
+  |---|---|---|
+  | DESK-REFAC | 25 registered Tauri commands had no frontend caller | removed with their dead helpers (177 -> 152 commands); a test fails if one reappears |
+  | DESK-33 | desktop device errors read "Device error 0x05 for cmd 0x10" | the generated `error_to_string` text plus the code |
+  | FEAT-4 | the client's transport protocol declared only connect/disconnect | `UsbTransportProtocol` / `HttpTransportProtocol` declare every member the client uses; both transports checked |
+  | PY-21 (part) | no guard for a client refactor | golden snapshot of the public `BugBuster` API (173 members); the mixin split itself is carried over |
+  | TR-11 (gate) | no check that USB and HTTP agree | `tests/device/test_transport_equivalence.py` (7 on the board); the per-capability service layer is carried over |
+  | BBP-DEVINFO (found by the TR-11 gate) | BBP `GET_DEVICE_INFO` read registers 0x46-0x48, so USB reported silicon rev 114 / IDs 838, 21104 where HTTP said 3 / 40, 1349 | reads `REG_SILICON_*` (0x7B/0x7D/0x7E) |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
