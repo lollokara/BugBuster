@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
 
 from tests.firmware_host.fwhost import compile_and_run
 from tests.lib.srcread import REPO_ROOT

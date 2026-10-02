@@ -5,7 +5,6 @@ A: every write_digital / configure_io response warned "VADJ1 power-good signal
 lost" whenever VADJ1 was disabled. check_faults already ignores it."""
 from __future__ import annotations
 
-import pytest
 
 from bugbuster_mcp.safety import check_faults_post
 from tests.unit._mock_client import make_client_mock
