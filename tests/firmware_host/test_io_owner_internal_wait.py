@@ -10,7 +10,6 @@ at once.
 from tests.firmware_host.fwhost import compile_and_run
 from tests.lib.srcread import REPO_ROOT
 
-import pytest
 
 SRC = REPO_ROOT / "Firmware/ESP32/src"
 
