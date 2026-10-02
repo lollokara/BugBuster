@@ -34,10 +34,10 @@ command palette that jumps to any view or action. Appearance follows the OS
   <tr>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hs_daq.png" alt="HS DAQ" width="300"/><br/><sub><b>HS DAQ</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hs_daq_light.png" alt="HS DAQ, light appearance" width="300"/><br/><sub><b>HS DAQ (light)</b></sub></td>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_command_palette.png" alt="Command palette" width="300"/><br/><sub><b>Command palette</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_connect.png" alt="Connect" width="300"/><br/><sub><b>Connect</b></sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_connect.png" alt="Connect" width="300"/><br/><sub><b>Connect</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_gpio.png" alt="GPIO" width="300"/><br/><sub><b>GPIO</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_adc.png" alt="ADC" width="300"/><br/><sub><b>ADC</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_scope.png" alt="Scope" width="300"/><br/><sub><b>Scope</b></sub></td>
   </tr>
@@ -55,9 +55,6 @@ command palette that jumps to any view or action. Appearance follows the OS
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_iin.png" alt="IIN" width="300"/><br/><sub><b>IIN</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_din.png" alt="DIN" width="300"/><br/><sub><b>DIN</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dout.png" alt="DOUT" width="300"/><br/><sub><b>DOUT</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_gpio.png" alt="GPIO" width="300"/><br/><sub><b>GPIO</b></sub></td>
   </tr>
   <tr>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_usb_pd.png" alt="USB-PD" width="300"/><br/><sub><b>USB-PD</b></sub></td>
