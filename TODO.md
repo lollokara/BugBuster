@@ -175,6 +175,19 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Done, measured on hardware | IO-17, AN-08, AN-15 (ch3 + MCP), BUS-017 |
    | Done, host tests | IO-23, DAQ-07 (MCP half), MCP-34, MCP-25 (OTA/cal tools), IO-19 |
    | Still open | AN-15 firmware voltage clamp for raw codes (needs calibrated prediction + bench), DAQ-07 USB range lock through the registry (P4), MCP-25 rest (`daq_set_source`/`daq_power_setup`/`daq_set_setting` bounds, `require_hat` HAT type), MCP-26, IO-14/15/16, IO-24, PWR-12/13/15, BUS-007/008/013/014/015, C6-5/24/30/31/35/38/40, PLT-11/18, IOS-22, DESK-29/30, LA-13/14, TEST-3/5/6/7 |
+
+   **Final hardware run (2026-10-02, `tests/device --daq --skip-destructive`,
+   USB + HTTP + DAQ HAT, no DUT wired):** 282 passed, 10 failed, 3 errors in
+   15m48s. Triage:
+
+   | Result | Tests | Cause / action |
+   |---|---|---|
+   | Test bug, fixed (96ff623), passes on the board | 3 equivalence errors | session-scoped `daq_bbp` held COM6 for every later module; now module-scoped |
+   | Test bug, fixed, passes | `test_mux_round_trip[http]`, `test_mux_device2_interlock_reports_correctly`, `test_mux_per_device_control` | since IO-25 the supply monitor holds U23 only for a window every 5 s; tests now wait out / hunt for that window |
+   | Test bug, fixed, passes | `test_vout_set_and_readback[usb]`, `test_vout_range_unipolar[usb]` | 50 ms fixed sleep raced the queued DAC write; now polls |
+   | Test bug, fixed, passes | `test_adc_stream_sample_rate` | streamed a HIGH_IMP channel; samples are pushed only on a conversion (passed before IO-25 by accident) |
+   | Flaky, passed on rerun | `test_large_response_intact`, `test_spectrum_keeps_updating_over_thousands_of_ffts` | open; watch |
+   | Needs a DUT load | `test_source_enable_produces_current_and_disable_removes_it`, `test_current_is_linear_in_vdut`, `test_current_is_monotonic_in_vdut` | bench had nothing on the DUT terminals; should skip without `--daq-load-ohms` |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
