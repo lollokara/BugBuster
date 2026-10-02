@@ -17,7 +17,6 @@ def _bb(status: dict):
     return bb
 
 
-@pytest.mark.xfail(strict=True, reason="IO-19")
 def test_disabled_rails_do_not_warn():
     bb = _bb({"efuse_faults": [False] * 4, "vadj1_en": False, "vadj1_pg": False,
               "vadj2_en": False, "vadj2_pg": False})

@@ -241,9 +241,11 @@ def check_faults_post(bb) -> list[str]:
                     f"E-fuse {i + 1} has tripped (overcurrent on IO_Block {i + 1}). "
                     f"The output has been disabled. Check the connected device and reduce load."
                 )
-        if not status.get("vadj1_pg", True):
+        # IO-19: power-good reads low on a rail that is off; only an enabled
+        # rail without power-good is a fault.
+        if status.get("vadj1_en", True) and not status.get("vadj1_pg", True):
             warnings.append("VADJ1 power-good signal lost. Supply 1 may be overloaded.")
-        if not status.get("vadj2_pg", True):
+        if status.get("vadj2_en", True) and not status.get("vadj2_pg", True):
             warnings.append("VADJ2 power-good signal lost. Supply 2 may be overloaded.")
     except Exception:
         pass
