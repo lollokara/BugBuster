@@ -251,7 +251,7 @@ therefore independent of the control stream.
 
 | Transport | Protocol | Who speaks it | Best for |
 |---|---|---|---|
-| ESP32 USB CDC #0 | BBP v10 (COBS + CRC-16) | MCP · desktop · Python | Full control plane |
+| ESP32 USB CDC #0 | BBP v13 (COBS + CRC-16) | MCP · desktop · Python | Full control plane; chunked MicroPython source transfer |
 | ESP32 HTTP REST | JSON over WiFi | desktop · Python · web UI | Remote access, OTA |
 | RP2040 vendor bulk † | 4-byte framed packets | desktop · Python (libusb) | LA streaming, ~1 MB/s |
 | RP2040 CMSIS-DAP v2 † | standard DAP | OpenOCD / pyOCD / probe-rs | SWD debug, no proxy |

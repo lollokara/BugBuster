@@ -5,6 +5,7 @@
 #include "py/obj.h"
 #include "py/runtime.h"
 #include "py/mphal.h"
+#include "py/mperrno.h"
 
 #include <string.h>
 
@@ -66,10 +67,43 @@ static mp_obj_t bugbuster_vadj_pd_warning(mp_obj_t rail_in, mp_obj_t voltage_in)
 }
 static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_vadj_pd_warning_obj, bugbuster_vadj_pd_warning);
 
+static mp_obj_t bugbuster_rail_power_up(mp_obj_t rail_in, mp_obj_t volts_in, mp_obj_t mask_in)
+{
+    mp_int_t rail = mp_obj_get_int(rail_in);
+    mp_int_t mask = mp_obj_get_int(mask_in);
+    if ((rail != 1 && rail != 2) || mask < 1 || mask > 3) {
+        mp_raise_ValueError(MP_ERROR_TEXT("rail must be 1-2; efuse mask must be 1-3"));
+    }
+    bool pg = false;
+    bool fault = false;
+    int rc = bugbuster_mp_rail_power_up((uint8_t)rail, (float)mp_obj_get_float(volts_in),
+                                       (uint8_t)mask, &pg, &fault);
+    if (rc == 1) mp_raise_ValueError(MP_ERROR_TEXT("voltage must be 3-12 V"));
+    if (rc != 0) mp_raise_OSError(MP_EIO);
+    mp_obj_t result = mp_obj_new_dict(2);
+    mp_obj_dict_store(result, MP_OBJ_NEW_QSTR(MP_QSTR_pg), mp_obj_new_bool(pg));
+    mp_obj_dict_store(result, MP_OBJ_NEW_QSTR(MP_QSTR_fault), mp_obj_new_bool(fault));
+    return result;
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(bugbuster_rail_power_up_obj, bugbuster_rail_power_up);
+
+static mp_obj_t bugbuster_efuse_set(mp_obj_t efuse_in, mp_obj_t on_in)
+{
+    mp_int_t efuse = mp_obj_get_int(efuse_in);
+    if (efuse < 1 || efuse > 4) mp_raise_ValueError(MP_ERROR_TEXT("efuse must be 1-4"));
+    if (!bugbuster_mp_efuse_set((uint8_t)efuse, mp_obj_is_true(on_in))) {
+        mp_raise_OSError(MP_EIO);
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_efuse_set_obj, bugbuster_efuse_set);
+
 static const mp_rom_map_elem_t bugbuster_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_bugbuster) },
     { MP_ROM_QSTR(MP_QSTR_sleep), MP_ROM_PTR(&bugbuster_sleep_obj) },
     { MP_ROM_QSTR(MP_QSTR_vadj_pd_warning), MP_ROM_PTR(&bugbuster_vadj_pd_warning_obj) },
+    { MP_ROM_QSTR(MP_QSTR_rail_power_up), MP_ROM_PTR(&bugbuster_rail_power_up_obj) },
+    { MP_ROM_QSTR(MP_QSTR_efuse_set), MP_ROM_PTR(&bugbuster_efuse_set_obj) },
     { MP_ROM_QSTR(MP_QSTR_Channel), MP_ROM_PTR(&bugbuster_channel_type) },
     { MP_ROM_QSTR(MP_QSTR_I2C), MP_ROM_PTR(&bugbuster_i2c_type) },
     { MP_ROM_QSTR(MP_QSTR_SPI), MP_ROM_PTR(&bugbuster_spi_type) },

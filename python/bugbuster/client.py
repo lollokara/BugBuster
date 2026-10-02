@@ -686,7 +686,10 @@ class BugBuster:
         if self._usb:
             flags = 0x01 if persist else 0x00
             payload = struct.pack('<B', flags) + struct.pack('<H', len(encoded)) + encoded
-            resp = self._usb_cmd(CmdId.SCRIPT_EVAL, payload)
+            if len(payload) > 1018:
+                resp = self._script_transfer(encoded, mode=2 if persist else 1)
+            else:
+                resp = self._usb_cmd(CmdId.SCRIPT_EVAL, payload)
             enqueued = bool(resp[0])
             script_id, = struct.unpack_from('<I', resp, 1)
             if not enqueued:
@@ -814,7 +817,10 @@ class BugBuster:
             name_b = name.encode("utf-8")
             payload = (bytes([len(name_b)]) + name_b +
                        struct.pack('<H', len(encoded)) + encoded)
-            resp = self._usb_cmd(CmdId.SCRIPT_UPLOAD, payload)
+            if len(payload) > 1018:
+                resp = self._script_transfer(encoded, mode=0, name=name_b)
+            else:
+                resp = self._usb_cmd(CmdId.SCRIPT_UPLOAD, payload)
             ok = bool(resp[0])
             err_len = resp[1]
             err_msg = resp[2:2 + err_len].decode("utf-8", errors="replace")
@@ -829,6 +835,22 @@ class BugBuster:
             result = self._t.post(f"/scripts/files?{qs}", encoded, headers=headers)
             if not result.get("ok"):
                 raise RuntimeError(f"script_upload failed: {result.get('err', 'unknown')}")
+
+    def _script_transfer(self, encoded: bytes, mode: int, name: bytes = b"") -> bytes:
+        begin = bytes((0, 0, mode, len(name))) + name + struct.pack('<H', len(encoded))
+        self._usb_cmd(CmdId.SCRIPT_UPLOAD, begin)
+        try:
+            for offset in range(0, len(encoded), 900):
+                chunk = encoded[offset:offset + 900]
+                self._usb_cmd(CmdId.SCRIPT_UPLOAD,
+                              b'\0\1' + struct.pack('<H', offset) + chunk)
+            return self._usb_cmd(CmdId.SCRIPT_UPLOAD, b'\0\2')
+        except Exception:
+            try:
+                self._usb_cmd(CmdId.SCRIPT_UPLOAD, b'\0\3')
+            except Exception:
+                pass
+            raise
 
     def script_list(self) -> list:
         """

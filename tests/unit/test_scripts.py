@@ -7,6 +7,9 @@ and client-level method behaviour.
 """
 
 import struct
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 import bugbuster as bb
@@ -25,6 +28,37 @@ def _usb_client():
     client = bb.BugBuster(transport)
     client.connect()
     return client, device
+
+
+@pytest.mark.parametrize("state", [{"pg": True, "fault": False},
+                                   {"pg": False, "fault": False},
+                                   {"pg": True, "fault": True}])
+def test_vadj_pulse_uses_native_power_binding(monkeypatch, state):
+    script = Path(__file__).resolve().parents[2] / "Docs/MicroPython Examples/31_vadj1_efuse1_pulse.py"
+    calls = []
+
+    class StopAfterPulse(Exception):
+        pass
+
+    def sleep(milliseconds):
+        calls.append(("sleep", milliseconds))
+        if milliseconds != 3000:
+            raise StopAfterPulse
+
+    native = SimpleNamespace(
+        rail_power_up=lambda *args: (calls.append(("rail_power_up", args)) or
+                                     state),
+        efuse_set=lambda *args: calls.append(("efuse_set", args)),
+        sleep=sleep,
+    )
+    monkeypatch.setitem(sys.modules, "bugbuster", native)
+    with pytest.raises(StopAfterPulse if state["pg"] and not state["fault"] else RuntimeError):
+        exec(compile(script.read_bytes(), str(script), "exec"), {"__name__": "__main__"})
+    if state["pg"] and not state["fault"]:
+        assert calls[:3] == [("rail_power_up", (1, 3.0, 1)),
+                             ("sleep", 3000), ("efuse_set", (1, False))]
+    else:
+        assert calls == [("rail_power_up", (1, 3.0, 1)), ("efuse_set", (1, False))]
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +252,26 @@ class TestScriptClientMethods:
             client.script_eval("x" * (32 * 1024 + 1))
         client.disconnect()
 
+    def test_large_script_eval_uses_bounded_frames(self):
+        client, device = _usb_client()
+        original = client._usb_cmd
+
+        def bounded(command, payload=b""):
+            assert len(payload) <= 1018
+            return original(command, payload)
+
+        client._usb_cmd = bounded
+        result = client.script_eval("print('hello')\n" * 150)
+        assert result.script_id == 1
+        assert device.script_running
+        client.disconnect()
+
+    def test_large_persistent_eval(self):
+        client, device = _usb_client()
+        client.script_eval("x = 1\n" * 300, persist=True)
+        assert device.script_mode == 1
+        client.disconnect()
+
     def test_script_eval_multiple_runs_increment_total(self):
         client, device = _usb_client()
         client.script_eval("a = 1")
@@ -387,6 +441,45 @@ class TestScriptStorageClientMethods:
         client.script_upload("hello.py", "print('hi')")
         names = client.script_list()
         assert "hello.py" in names
+        client.disconnect()
+
+    def test_large_script_upload_uses_bounded_frames(self):
+        client, device = _usb_client()
+        original = client._usb_cmd
+
+        def bounded(command, payload=b""):
+            assert len(payload) <= 1018
+            return original(command, payload)
+
+        client._usb_cmd = bounded
+        source = "print('hello')\n" * 150
+        client.script_upload("large.py", source)
+        assert device.script_files["large.py"] == source.encode()
+        client.disconnect()
+
+    def test_upload_boundary_and_maximum(self):
+        client, device = _usb_client()
+        client.script_upload("edge.py", "x" * (1018 - 1 - len("edge.py") - 2))
+        assert device.script_transfer is None
+        client.script_upload("max.py", "x" * (32 * 1024))
+        assert len(device.script_files["max.py"]) == 32 * 1024
+        client.disconnect()
+
+    def test_interrupted_upload_keeps_old_file(self):
+        client, device = _usb_client()
+        client.script_upload("keep.py", "original")
+        original = client._usb_cmd
+
+        def fail_chunk(command, payload=b""):
+            if command == CmdId.SCRIPT_UPLOAD and payload.startswith(b'\0\1'):
+                raise OSError("link lost")
+            return original(command, payload)
+
+        client._usb_cmd = fail_chunk
+        with pytest.raises(OSError, match="link lost"):
+            client.script_upload("keep.py", "x" * 2000)
+        assert device.script_files["keep.py"] == b"original"
+        assert device.script_transfer is None
         client.disconnect()
 
     def test_script_list_empty(self):

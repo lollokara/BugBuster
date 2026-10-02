@@ -26,7 +26,7 @@ extern "C" {
 // v12 (audit M3): IO_RELEASE takes u8 n + slots (n=0 = all of the caller's
 // session); MUX refusals answer 0x13 ROUTE_REJECTED; RAIL_POWER_UP 0x93;
 // optional trailing bytes on PCA_SET_PORT (flags) and HAT_LA_CONFIG (rle).
-#define BBP_PROTO_VERSION       12
+#define BBP_PROTO_VERSION       13
 
 #define BBP_FW_VERSION_MAJOR    6
 #define BBP_FW_VERSION_MINOR    0

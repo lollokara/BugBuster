@@ -10,6 +10,8 @@
 #include "scripting.h"
 #include "io_owner.h"
 #include "pd_vadj_guard.h"
+#include "power/rail_power.h"
+#include "pca9535.h"
 #include "hat.h"
 #include "esp_timer.h"
 
@@ -50,6 +52,24 @@ extern "C" bool bugbuster_mp_vadj_pd_warning(uint8_t rail, float requested_v,
                                              char *warning, size_t warning_len)
 {
     return pd_vadj_guard_warning(rail, requested_v, warning, warning_len);
+}
+
+extern "C" int bugbuster_mp_rail_power_up(uint8_t rail, float volts, uint8_t efuse_mask,
+                                          bool *pg, bool *fault)
+{
+    RailPowerResult result = {};
+    int rc = rail_power_up(rail_power_ops_hw(), rail, volts, 500, 0, efuse_mask, &result);
+    if (rc == 0) {
+        *pg = result.pg;
+        *fault = (efuse_mask & 1 ? result.fault[0] : false) ||
+                 (efuse_mask & 2 ? result.fault[1] : false);
+    }
+    return rc;
+}
+
+extern "C" bool bugbuster_mp_efuse_set(uint8_t efuse, bool on)
+{
+    return pca9535_user_arm_efuse(efuse - 1, on);
 }
 
 // =============================================================================

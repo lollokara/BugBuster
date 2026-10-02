@@ -24,6 +24,12 @@
 // File-scope buffer — EXT_RAM_BSS_ATTR has no effect on function-scope statics
 // in the Xtensa toolchain; must be at file scope to land in .ext_ram.bss.
 static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1];
+static EXT_RAM_BSS_ATTR uint8_t s_transfer_body[SCRIPT_BODY_MAX];
+static char s_transfer_name[SCRIPT_NAME_MAX + 1];
+static size_t s_transfer_total = 0;
+static size_t s_transfer_received = 0;
+static uint8_t s_transfer_mode = 0;
+static bool s_transfer_active = false;
 #include "esp_log.h"
 
 static const char *TAG = "cmd_script";
@@ -147,6 +153,77 @@ static int handler_script_upload(const uint8_t *payload, size_t len,
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;
 
+    // name_len=0 selects the chunked transfer extension; old one-frame uploads
+    // retain their original wire format.
+    if (payload[0] == 0) {
+        if (len < 2) return -CMD_ERR_BAD_ARG;
+        uint8_t sub = payload[1];
+        if (sub == 0) {
+            if (len < 6) return -CMD_ERR_BAD_ARG;
+            uint8_t mode = payload[2];
+            uint8_t name_len = payload[3];
+            if (mode > 2 || (mode == 0 && (name_len == 0 || name_len > SCRIPT_NAME_MAX)) ||
+                (mode != 0 && name_len != 0) || len != (size_t)(6 + name_len))
+                return -CMD_ERR_BAD_ARG;
+            size_t pos = 4 + name_len;
+            uint16_t total = bbp_get_u16(payload, &pos);
+            if (total == 0 || total > SCRIPT_BODY_MAX) return -CMD_ERR_BAD_ARG;
+            if (mode == 0) {
+                memcpy(s_transfer_name, payload + 4, name_len);
+                s_transfer_name[name_len] = '\0';
+                if (!script_storage_validate_name(s_transfer_name)) return -CMD_ERR_BAD_ARG;
+            }
+            s_transfer_mode = mode;
+            s_transfer_total = total;
+            s_transfer_received = 0;
+            s_transfer_active = true;
+        } else if (sub == 1) {
+            if (!s_transfer_active || len < 5) return -CMD_ERR_BAD_ARG;
+            size_t pos = 2;
+            uint16_t offset = bbp_get_u16(payload, &pos);
+            size_t chunk_len = len - pos;
+            if (chunk_len == 0 || offset != s_transfer_received ||
+                chunk_len > s_transfer_total - s_transfer_received)
+                return -CMD_ERR_BAD_ARG;
+            memcpy(s_transfer_body + offset, payload + pos, chunk_len);
+            s_transfer_received += chunk_len;
+        } else if (sub == 2) {
+            if (!s_transfer_active || len != 2 || s_transfer_received != s_transfer_total)
+                return -CMD_ERR_BAD_ARG;
+            s_transfer_active = false;
+            if (s_transfer_mode != 0) {
+                bool ok = scripting_run_string((const char *)s_transfer_body,
+                                               s_transfer_total, s_transfer_mode == 2);
+                ScriptStatus st = {};
+                if (ok) scripting_get_status(&st);
+                size_t pos = 0;
+                bbp_put_bool(resp, &pos, ok);
+                bbp_put_u32(resp, &pos, ok ? st.current_script_id : 0);
+                *resp_len = pos;
+                return (int)pos;
+            }
+            char err[80] = {0};
+            bool ok = script_storage_save(s_transfer_name, s_transfer_body,
+                                          s_transfer_total, err, sizeof(err));
+            size_t pos = 0;
+            uint8_t err_len = (uint8_t)strnlen(err, sizeof(err));
+            bbp_put_bool(resp, &pos, ok);
+            bbp_put_u8(resp, &pos, err_len);
+            if (err_len) { memcpy(resp + pos, err, err_len); pos += err_len; }
+            *resp_len = pos;
+            return (int)pos;
+        } else if (sub == 3 && len == 2) {
+            s_transfer_active = false;
+        } else {
+            return -CMD_ERR_BAD_ARG;
+        }
+        resp[0] = 1;
+        resp[1] = 0;
+        *resp_len = 2;
+        return 2;
+    }
+
+    s_transfer_active = false;
     size_t rpos = 0;
     uint8_t name_len = payload[rpos++];
     if (name_len == 0 || name_len > SCRIPT_NAME_MAX) return -CMD_ERR_BAD_ARG;

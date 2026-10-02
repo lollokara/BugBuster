@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **MicroPython example.** On-device VADJ1/e-fuse 1 pulse script with a random
+  1-12 minute test interval (switchable to 1-12 hours).
+
 ### Changed
 
 - **iOS connection screen.** Compact instrument-style header and separate
@@ -31,6 +36,16 @@
 
 ### Fixed
 
+- **MicroPython power pulse.** Native `bugbuster.rail_power_up` and
+  `bugbuster.efuse_set` bindings call the existing sequenced rail-up and
+  guarded e-fuse gate; the VADJ1 pulse example no longer requires loopback
+  HTTP or an admin token. Firmware build and mocked script paths verified;
+  OTA to the S3 verified both bindings present on the live module. One bounded
+  pulse was verified on hardware (power-good, no fault, e-fuse 1 off afterward);
+  the repeating loop was not run. VADJ1 remains enabled after the e-fuse disarms.
+- **USB scripting.** Chunked BBP transfers now allow the documented 32 KB
+  limit for MicroPython script upload and eval via the Python client and MCP
+  tools; incomplete transfers cannot replace a stored script. BBP v13.
 - **iOS BLE pairing.** The connection screen now shows the token-derived
   six-digit passkey before the protected Auth write; the write waits for the
   iOS pairing prompt and logs CoreBluetooth failures. The Xcode project also
@@ -73,6 +88,8 @@
   `release_bootloader` used the wrong default boot IO.
 - **Tests.** The `set_board` path traversal test failed on CI runners where
   the checkout and temp dir sit on different drives.
+- **Desktop ADC CI test.** The grid rebuild regression test now anchors to the
+  configuration dependency instead of a CSS class removed by the UI redesign.
 
 ### Added
 
