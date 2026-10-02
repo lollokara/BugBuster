@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**128 tools in 18 groups, 6 resources, 4 prompt workflows.**
+**135 tools in 18 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -116,7 +116,7 @@ Claude Code, or your client's tool inspector. The groups:
 |---|---:|---|
 | `discovery` | 10 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
 | `io_config` | 3 | `configure_io` (required before any read/write), `set_supply_voltage`, `reset_device` |
-| `analog` | 5 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current` |
+| `analog` | 6 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current`, `observe_adc` (bounded summary) |
 | `digital` | 2 | `read_digital`, `write_digital` |
 | `waveform` | 10 | Waveform generation, ADC snapshots, logic-analyzer capture - each with a blocking form and an async `_start` / `_status` / `_result` form |
 | `bus` | 16 | I²C and SPI: `plan_*` dry runs, `setup_i2c_bus`, `scan_i2c_bus`, `i2c_write` / `i2c_read` / `i2c_write_read`, `i2c_dump_registers`, `spi_transfer`, `spi_jedec_id`, `spi_flash_read`, `bus_status`, deferred queued transactions |
@@ -124,13 +124,13 @@ Claude Code, or your client's tool inspector. The groups:
 | `target` | 3 | `target_power_up`, `enter_bootloader`, `release_bootloader` |
 | `power` | 5 | USB-PD status and selection, rail/e-fuse control, WiFi status and AP password |
 | `hat` | 13 | Logic Analyzer HAT: capabilities, rail status and control, calibration, LED state, LA routing, IO bank, level shifters |
-| `daq` | 11 | Power Profiler Pro HAT: settings, source control, measurement, energy/charge reset, triggers |
+| `daq` | 12 | Power Profiler Pro HAT: settings, source control, measurement, `observe_daq` (bounded summary), energy/charge reset, triggers |
 | `daq_power` | 17 | Power-consumption profiling over the P4's own USB-HS data plane: capture (blocking and async), energy/state/periodicity report, window zoom, A/B compare, marker windows, CSV export, supply/range/rate/stability control |
 | `daq_cal` | 4 | Power Profiler Pro HAT calibration flow |
 | `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
 | `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |
 | `advanced` | 3 | `mux_control`, `register_access`, `idac_control` - risk-gated |
-| `scripting` | 1 | `run_device_script` - evaluate Python on the on-device MicroPython engine |
+| `scripting` | 6 | `run_device_script` (waits for the end and returns all logs), `script_list` / `script_get` / `script_put` / `script_delete`, `script_autorun` |
 
 Two rules the model has to follow, and the tools enforce:
 

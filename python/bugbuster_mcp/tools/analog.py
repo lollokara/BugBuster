@@ -5,6 +5,9 @@ Tools: read_voltage, read_current, read_resistance, write_voltage, write_current
 """
 
 from __future__ import annotations
+import math
+import time
+
 from .. import session
 from ..safety import (
     require_analog_io, validate_dac_voltage, validate_dac_current,
@@ -14,6 +17,24 @@ from .io_owner import _verify_lease_covers
 
 # Analog IOs 3,6,9,12 map to slots 12,13,14,15
 _ANALOG_IO_TO_SLOT = {3: 12, 6: 13, 9: 14, 12: 15}
+
+
+def summarize(values: list[float]) -> dict:
+    """min / max / mean / std / count of a sample list (MCP-4)."""
+    n = len(values)
+    if n == 0:
+        return {"count": 0}
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / n
+    return {"count": n, "min": min(values), "max": max(values),
+            "mean": mean, "std": math.sqrt(var)}
+
+
+def check_window(seconds: float, rate_hz: float) -> None:
+    if not 0 < seconds <= 60:
+        raise ValueError("seconds must be in (0, 60]")
+    if not 0 < rate_hz <= 50:
+        raise ValueError("rate_hz must be in (0, 50]")
 
 
 def register(mcp) -> None:
@@ -142,6 +163,37 @@ def register(mcp) -> None:
             "success":  True,
             "warnings": warnings,
         }
+
+    @mcp.tool()
+    def observe_adc(io: int, seconds: float = 2.0, rate_hz: float = 10.0,
+                    quantity: str = "voltage") -> dict:
+        """
+        Watch an analog IO for a bounded time and return a summary
+        (min / max / mean / std / count) instead of a single sample.
+
+        The IO must already be configured (ANALOG_IN for "voltage",
+        CURRENT_IN for "current"). seconds <= 60, rate_hz <= 50 (host-polled).
+        """
+        require_analog_io(io, "observe_adc")
+        check_window(seconds, rate_hz)
+        from bugbuster.hal import PortMode
+        hal = session.get_hal()
+        if quantity == "voltage":
+            require_io_mode(hal, io, PortMode.ANALOG_IN, "observe_adc")
+            read, unit = hal.read_voltage, "V"
+        elif quantity == "current":
+            require_io_mode(hal, io, PortMode.CURRENT_IN, "observe_adc")
+            read, unit = hal.read_current, "mA"
+        else:
+            raise ValueError("quantity must be 'voltage' or 'current'")
+        period = 1.0 / rate_hz
+        values: list[float] = []
+        for i in range(max(1, round(seconds * rate_hz))):
+            if i:
+                time.sleep(period)
+            values.append(float(read(io)))
+        return {"io": io, "quantity": quantity, "unit": unit, "seconds": seconds,
+                **summarize(values)}
 
     @mcp.tool()
     def write_current(

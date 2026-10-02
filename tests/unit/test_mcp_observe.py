@@ -6,7 +6,6 @@ import itertools
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from bugbuster_mcp import session
 from bugbuster_mcp.tools import analog, daq
@@ -47,7 +46,6 @@ class TestObserve(unittest.TestCase):
                 p.start()
                 self.addCleanup(p.stop)
 
-    @pytest.mark.xfail(strict=True, reason="MCP-4")
     def test_observe_adc_summarises_voltage(self):
         hal = MagicMock()
         vals = itertools.cycle([1.0, 2.0, 3.0])
@@ -60,7 +58,6 @@ class TestObserve(unittest.TestCase):
         self.assertAlmostEqual(r["mean"], 2.0)
         self.assertGreaterEqual(r["count"], 3)
 
-    @pytest.mark.xfail(strict=True, reason="MCP-4")
     def test_observe_daq_summarises_each_field(self):
         bb = MagicMock()
         seq = itertools.cycle([{"current_a": 0.1, "voltage_v": 5.0}, {"current_a": 0.3, "voltage_v": 5.0}])
@@ -71,7 +68,6 @@ class TestObserve(unittest.TestCase):
         self.assertAlmostEqual(r["fields"]["current_a"]["mean"], 0.2)
         self.assertEqual(r["fields"]["voltage_v"]["max"], 5.0)
 
-    @pytest.mark.xfail(strict=True, reason="MCP-4")
     def test_bounds(self):
         with self.assertRaises(ValueError):
             self.mcp.tools["observe_daq"](seconds=120)
