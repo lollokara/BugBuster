@@ -20,6 +20,44 @@ DESTRUCTIVE_TOOLS = [
     ("power", "wifi_set_ap_password", {"password": "newpassword123"}, "confirm"),
 ]
 
+# MCP-25: flashing another MCU / the filesystem and writing calibration are as
+# destructive as ota_upload_firmware, so they take the same gate.
+MCP25_GATED = [
+    ("ota", "ota_upload_spiffs", {"path": __file__}),
+    ("ota", "ota_upload_p4", {"path": __file__}),
+    ("ota", "ota_upload_c6", {"path": __file__}),
+    ("daq_cal", "daq_cal_start", {"mode": "voltage"}),
+    ("hat", "hat_calibrate_start", {"rail_id": 1}),
+    ("hat", "hat_calibrate_import", {"rail_id": 1, "points": [{"dac_code": 0, "measured_v": 5.0}]}),
+]
+
+
+def _registered(module_name: str, tool_name: str):
+    module = __import__(f"bugbuster_mcp.tools.{module_name}", fromlist=[tool_name])
+    tools = {}
+    mcp = Mock()
+    mcp.tool = lambda: (lambda fn: tools.setdefault(fn.__name__, fn))
+    module.register(mcp)
+    return tools[tool_name]
+
+
+@pytest.mark.xfail(strict=True, reason="MCP-25")
+@pytest.mark.parametrize("module_name,tool_name,params", MCP25_GATED)
+def test_mcp25_tools_refuse_without_confirm(module_name, tool_name, params):
+    tool_fn = _registered(module_name, tool_name)
+    with patch("bugbuster_mcp.session.get_client") as get_client:
+        with pytest.raises(ValueError, match="confirm"):
+            tool_fn(**params)
+        get_client.assert_not_called()
+
+
+@pytest.mark.xfail(strict=True, reason="MCP-25")
+@pytest.mark.parametrize("module_name,tool_name,params", MCP25_GATED)
+def test_mcp25_docstring_starts_with_warning(module_name, tool_name, params):
+    doc = _registered(module_name, tool_name).__doc__ or ""
+    first = next(line.strip() for line in doc.splitlines() if line.strip())
+    assert first.startswith("WARNING:"), first
+
 
 @pytest.mark.parametrize("module_name,tool_name,params,confirm_keyword", DESTRUCTIVE_TOOLS)
 def test_destructive_tool_refuses_without_confirmation(module_name, tool_name, params, confirm_keyword):
