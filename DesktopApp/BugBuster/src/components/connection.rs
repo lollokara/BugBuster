@@ -30,7 +30,7 @@ fn ParticleBackground() -> impl IntoView {
         // Wait for canvas to mount
         slp(50).await;
 
-        let Some(el) = canvas_ref.get() else { return };
+        let Some(el) = canvas_ref.get_untracked() else { return };
         let canvas: HtmlCanvasElement = el;
         let ctx: CanvasRenderingContext2d = match canvas
             .get_context("2d")

@@ -263,9 +263,9 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let idx = id as usize;
         let is_on = move || find().map(|x| x.enabled).unwrap_or(false);
         let apply_class = if confirmable {
-            "btn btn-sm btn-tinted tone-orange"
+            "btn btn-tinted tone-orange"
         } else {
-            "btn btn-sm btn-tinted"
+            "btn btn-tinted"
         };
         view! {
             <div class="group sy-rail" data-rail=idx class:is-on=is_on>

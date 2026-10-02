@@ -96,11 +96,11 @@ pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
                             <label class="row-label" for="uart-tx">"TX IO"<span class="row-hint">"Device output to your target's RX"</span></label>
                             <select id="uart-tx" class="dropdown"
                                 aria-invalid=move || if same_pin() { "true" } else { "false" }
-                                prop:value={move || uart_config.get().tx_pin.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.tx_pin = event_target_value(&e).parse().unwrap_or(1))
                             >
                                 {UART_IO_MAP.iter().map(|(io, gpio)| {
-                                    view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
+                                    let g = *gpio;
+                                    view! { <option value=gpio.to_string() prop:selected=move || uart_config.get().tx_pin == g>{format!("IO{} (GPIO{})", io, gpio)}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
@@ -108,11 +108,11 @@ pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
                             <label class="row-label" for="uart-rx">"RX IO"<span class="row-hint">"Device input from your target's TX"</span></label>
                             <select id="uart-rx" class="dropdown"
                                 aria-invalid=move || if same_pin() { "true" } else { "false" }
-                                prop:value={move || uart_config.get().rx_pin.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.rx_pin = event_target_value(&e).parse().unwrap_or(2))
                             >
                                 {UART_IO_MAP.iter().map(|(io, gpio)| {
-                                    view! { <option value=gpio.to_string()>{format!("IO{} (GPIO{})", io, gpio)}</option> }
+                                    let g = *gpio;
+                                    view! { <option value=gpio.to_string() prop:selected=move || uart_config.get().rx_pin == g>{format!("IO{} (GPIO{})", io, gpio)}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
@@ -126,33 +126,33 @@ pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
                         <div class="row">
                             <label class="row-label" for="uart-baud">"Baud rate"</label>
                             <select id="uart-baud" class="dropdown"
-                                prop:value={move || uart_config.get().baud.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.baud = event_target_value(&e).parse().unwrap_or(115200))
                             >
                                 {BAUD_OPTIONS.iter().map(|b| {
-                                    view! { <option value=b.to_string()>{format!("{}", b)}</option> }
+                                    let bv = *b;
+                                    view! { <option value=b.to_string() prop:selected=move || uart_config.get().baud == bv>{format!("{}", b)}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
                         <div class="row">
                             <label class="row-label" for="uart-bits">"Data bits"</label>
                             <select id="uart-bits" class="dropdown"
-                                prop:value={move || uart_config.get().data_bits.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.data_bits = event_target_value(&e).parse().unwrap_or(8))
                             >
                                 {[5u8, 6, 7, 8].iter().map(|b| {
-                                    view! { <option value=b.to_string()>{format!("{}", b)}</option> }
+                                    let bv = *b;
+                                    view! { <option value=b.to_string() prop:selected=move || uart_config.get().data_bits == bv>{format!("{}", b)}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
                         <div class="row">
                             <label class="row-label" for="uart-parity">"Parity"</label>
                             <select id="uart-parity" class="dropdown"
-                                prop:value={move || uart_config.get().parity.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.parity = event_target_value(&e).parse().unwrap_or(0))
                             >
                                 {PARITY_OPTIONS.iter().map(|(c, n)| {
-                                    view! { <option value=c.to_string()>{*n}</option> }
+                                    let cv = *c;
+                                    view! { <option value=c.to_string() prop:selected=move || uart_config.get().parity == cv>{*n}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
@@ -160,11 +160,11 @@ pub fn UartTab(uart_config: RwSignal<UartConfigState>) -> impl IntoView {
                             <label class="row-label" for="uart-stop">"Stop bits"</label>
                             <select id="uart-stop" class="dropdown"
                                 aria-invalid=move || if stop_mismatch() { "true" } else { "false" }
-                                prop:value={move || uart_config.get().stop_bits.to_string()}
                                 on:change=move |e| uart_config.update(|c| c.stop_bits = event_target_value(&e).parse().unwrap_or(0))
                             >
                                 {STOP_BITS_OPTIONS.iter().map(|(c, n)| {
-                                    view! { <option value=c.to_string()>{*n}</option> }
+                                    let cv = *c;
+                                    view! { <option value=c.to_string() prop:selected=move || uart_config.get().stop_bits == cv>{*n}</option> }
                                 }).collect::<Vec<_>>()}
                             </select>
                         </div>
