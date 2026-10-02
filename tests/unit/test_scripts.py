@@ -30,6 +30,36 @@ def _usb_client():
     return client, device
 
 
+def test_http_script_status_logs_and_stop():
+    calls = []
+
+    class Transport:
+        def get(self, path, params=None):
+            calls.append(("get", path))
+            if path == "/scripts/logs":
+                return "pulse complete\n"
+            return {
+                "running": False, "currentScriptId": 3,
+                "totalRuns": 2, "totalErrors": 0, "lastError": "",
+                "mode": "EPHEMERAL", "globalsBytes": 12,
+                "globalsCount": 1, "autoResetCount": 0,
+                "lastEvalAtMs": 123, "idleForMs": 20,
+                "watermarkSoftHit": False,
+            }
+
+        def post(self, path, body=None, headers=None):
+            calls.append(("post", path))
+            return {"ok": True}
+
+    client = bb.BugBuster(Transport())
+    status = client.script_status()
+    assert status == ScriptStatusResult(False, 3, 2, 0, "", 0, 12, 1, 0, 123, 20, False)
+    assert client.script_logs() == "pulse complete\n"
+    client.script_stop()
+    assert calls == [("get", "/scripts/status"), ("get", "/scripts/logs"),
+                     ("post", "/scripts/stop")]
+
+
 @pytest.mark.parametrize("state", [{"pg": True, "fault": False},
                                    {"pg": False, "fault": False},
                                    {"pg": True, "fault": True}])
@@ -59,6 +89,35 @@ def test_vadj_pulse_uses_native_power_binding(monkeypatch, state):
                              ("sleep", 3000), ("efuse_set", (1, False))]
     else:
         assert calls == [("rail_power_up", (1, 3.0, 1)), ("efuse_set", (1, False))]
+
+
+def test_vadj_pulse_delay_without_os_urandom(monkeypatch):
+    script = Path(__file__).resolve().parents[2] / "Docs/MicroPython Examples/31_vadj1_efuse1_pulse.py"
+    calls = []
+    choices = iter((252, 11))
+
+    class StopAfterPulse(Exception):
+        pass
+
+    def sleep(milliseconds):
+        calls.append(("sleep", milliseconds))
+        if milliseconds != 3000:
+            raise StopAfterPulse
+
+    native = SimpleNamespace(
+        rail_power_up=lambda *args: {"pg": True, "fault": False},
+        efuse_set=lambda *args: calls.append(("efuse_set", args)),
+        sleep=sleep,
+    )
+    monkeypatch.setitem(sys.modules, "bugbuster", native)
+    monkeypatch.setitem(sys.modules, "os", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "random", SimpleNamespace(getrandbits=lambda bits: next(choices)))
+
+    with pytest.raises(StopAfterPulse):
+        exec(compile(script.read_bytes(), str(script), "exec"), {"__name__": "__main__"})
+
+    assert calls == [("sleep", 3000), ("efuse_set", (1, False)), ("sleep", 60000)]
+    assert list(choices) == []
 
 
 # ---------------------------------------------------------------------------

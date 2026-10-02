@@ -36,6 +36,14 @@
 
 ### Fixed
 
+- **Scripting over MCP HTTP.** The Python client now uses the existing HTTP
+  status, logs and stop routes for scripts; the MCP wrapper recognizes scripts
+  that finish before the first status poll and serializes autorun status. S3
+  boot autorun no longer stops a healthy long-running script after 30 seconds;
+  manual run-now remains bounded. Host tests and S3 build passed; the new S3
+  image was SHA-256-verified by MCP OTA. The boot pulse left VADJ1 on with
+  e-fuse 1 off and no fault; the same script was running without errors after
+  40 seconds. The later random-interval repeat has not yet been observed.
 - **BLE pairing survives reboots.** The S3 now stores NimBLE bonds in NVS (up
   to 4 devices), requests security on connect so iOS shows its passkey prompt
   straight away, and accepts re-pairing after "Forget This Device". A wrong
@@ -52,7 +60,10 @@
   HTTP or an admin token. Firmware build and mocked script paths verified;
   OTA to the S3 verified both bindings present on the live module. One bounded
   pulse was verified on hardware (power-good, no fault, e-fuse 1 off afterward);
-  the repeating loop was not run. VADJ1 remains enabled after the e-fuse disarms.
+  the repeating loop was not run. The example now draws its random delay via
+  `random.getrandbits(8)` because this MicroPython build lacks `os.urandom`;
+  MCP-over-HTTP upload and source readback verified. VADJ1 remains enabled
+  after the e-fuse disarms.
 - **USB scripting.** Chunked BBP transfers now allow the documented 32 KB
   limit for MicroPython script upload and eval via the Python client and MCP
   tools; incomplete transfers cannot replace a stored script. BBP v13.

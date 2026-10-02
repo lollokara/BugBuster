@@ -49,7 +49,8 @@ class TestScriptingTools(unittest.TestCase):
     def test_wait_collects_logs_until_the_script_ends(self):
         self.bb.script_eval.return_value = _status(True)
         # running, running, done; logs arrive while running and after the first empty read
-        self.bb.script_status.side_effect = [_status(True), _status(True), _status(False), _status(False)]
+        self.bb.script_status.side_effect = [_status(False), _status(True), _status(True),
+                                             _status(False), _status(False)]
         logs = iter(["a\n", "", "b\n", "c\n", ""])
         self.bb.script_logs.side_effect = lambda: next(logs, "")
         r = self.mcp.tools["run_device_script"](src="print(1)", wait=True, timeout_s=5)
@@ -61,8 +62,9 @@ class TestScriptingTools(unittest.TestCase):
         # Bench: right after eval the engine still reports the previous script
         # (idle), so treating "not running" as "finished" lost every log line.
         self.bb.script_eval.return_value = _status(False, sid=8)
-        self.bb.script_status.side_effect = [_status(False, sid=7), _status(True, sid=8),
-                                             _status(False, sid=8), _status(False, sid=8)]
+        self.bb.script_status.side_effect = [_status(False, sid=7), _status(False, sid=7),
+                             _status(True, sid=8), _status(False, sid=8),
+                             _status(False, sid=8)]
         logs = iter(["", "", "x\n", ""])
         self.bb.script_logs.side_effect = lambda: next(logs, "")
         r = self.mcp.tools["run_device_script"](src="print(1)", wait=True, timeout_s=5)
@@ -74,6 +76,18 @@ class TestScriptingTools(unittest.TestCase):
         self.bb.script_logs.return_value = ""
         r = self.mcp.tools["run_device_script"](src="while True: pass", wait=True, timeout_s=0)
         self.assertTrue(r["timed_out"])
+
+    def test_wait_recognizes_script_completed_before_first_status(self):
+        self.bb.script_eval.return_value = _status(True, sid=8)
+        before = _status(False, sid=0)
+        before.total_runs = 1
+        after = _status(False, sid=0)
+        after.total_runs = 2
+        self.bb.script_status.side_effect = [before, after, after]
+        self.bb.script_logs.side_effect = ["pulse complete\n", "", ""]
+        result = self.mcp.tools["run_device_script"](src="print(1)", wait=True, timeout_s=5)
+        self.assertFalse(result["timed_out"])
+        self.assertEqual(result["logs"], "pulse complete\n")
 
     def test_script_file_tools(self):
         t = self.mcp.tools
@@ -87,6 +101,11 @@ class TestScriptingTools(unittest.TestCase):
         self.bb.script_delete.assert_called_once_with("b.py")
         self.bb.script_autorun_status.return_value = SimpleNamespace(enabled=True, name="a.py")
         self.assertTrue(t["script_autorun"](action="status")["success"])
+        self.bb.script_autorun_status.return_value = SimpleNamespace(
+            _asdict=lambda: {"enabled": True})
+        result = t["script_autorun"](action="status")
+        self.assertTrue(result["autorun"]["enabled"])
+        self.assertIn("is_running", result["engine"])
         t["script_autorun"](action="enable", name="a.py")
         self.bb.script_autorun_enable.assert_called_once_with("a.py")
         with self.assertRaises(ValueError):

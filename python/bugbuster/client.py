@@ -720,9 +720,24 @@ class BugBuster:
 
     def script_status(self) -> "ScriptStatusResult":
         """
-        Return the current script engine status.  USB only.
+        Return the current script engine status.
         """
-        self._require_usb("script_status")
+        if not self._usb:
+            data = self._http_get("/scripts/status")
+            return ScriptStatusResult(
+                is_running=bool(data.get("running", False)),
+                script_id=int(data.get("currentScriptId", 0)),
+                total_runs=int(data.get("totalRuns", 0)),
+                total_errors=int(data.get("totalErrors", 0)),
+                last_error=str(data.get("lastError", "")),
+                mode=1 if data.get("mode") == "PERSISTENT" else 0,
+                globals_bytes_est=int(data.get("globalsBytes", 0)),
+                globals_count=int(data.get("globalsCount", 0)),
+                auto_reset_count=int(data.get("autoResetCount", 0)),
+                last_eval_at_ms=int(data.get("lastEvalAtMs", 0)),
+                idle_for_ms=int(data.get("idleForMs", 0)),
+                watermark_soft_hit=bool(data.get("watermarkSoftHit", False)),
+            )
         resp = self._usb_cmd(CmdId.SCRIPT_STATUS)
         pos = 0
         is_running = bool(resp[pos]); pos += 1
@@ -782,10 +797,11 @@ class BugBuster:
         """
         Drain up to 1016 bytes from the on-device script log ring.
 
-        USB only.  Returns a ``str`` (UTF-8, errors replaced).
+        HTTP drains the available log ring in one read. Returns a ``str``.
         Call repeatedly until the returned string is empty to drain fully.
         """
-        self._require_usb("script_logs")
+        if not self._usb:
+            return str(self._http_get("/scripts/logs"))
         resp = self._usb_cmd(CmdId.SCRIPT_LOGS)
         _require_resp_len(resp, 2, "SCRIPT_LOGS")
         count, = struct.unpack_from('<H', resp, 0)
@@ -793,10 +809,12 @@ class BugBuster:
 
     def script_stop(self) -> None:
         """
-        Request the running script to stop cooperatively.  USB only.
+        Request the running script to stop cooperatively.
         """
-        self._require_usb("script_stop")
-        self._usb_cmd(CmdId.SCRIPT_STOP)
+        if self._usb:
+            self._usb_cmd(CmdId.SCRIPT_STOP)
+        else:
+            self._http_post("/scripts/stop")
 
     def script_upload(self, name: str, src: str) -> None:
         """

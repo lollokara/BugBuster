@@ -506,7 +506,6 @@ NO_PYTHON_CALLER = {
     "/api/ota/upload_rp2040",
     "/api/pairing/rotate",
     "/api/scripts/lint",
-    "/api/scripts/stop",         # script_stop() is USB-only
     "/api/scripts/storage",
     "/api/usbpd/caps",
     "/api/wifi/hostname",

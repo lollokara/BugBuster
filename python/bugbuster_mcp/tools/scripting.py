@@ -82,6 +82,7 @@ def register(mcp) -> None:
         timed_out = False
 
         try:
+            before = bb.script_status() if wait else None
             result = bb.script_eval(src, persist=persist)
             script_id = result.script_id
 
@@ -94,7 +95,8 @@ def register(mcp) -> None:
                     # The eval is queued: until the engine reports OUR id the
                     # script may not have started yet (bench: is_running was
                     # false right after eval and every log line was lost).
-                    started = not script_id or st.script_id == script_id
+                    started = (not script_id or st.script_id == script_id or
+                               st.total_runs > before.total_runs)
                     if started and not st.is_running:
                         parts.append(_drain(bb))
                         break
@@ -161,7 +163,10 @@ def register(mcp) -> None:
         bb = session.get_client()
         if action == "status":
             st = bb.script_autorun_status()
-            return {"success": True, "autorun": dict(vars(st))}
+            engine = bb.script_status()
+            return {"success": True,
+                    "autorun": st._asdict() if hasattr(st, "_asdict") else vars(st),
+                    "engine": _status_dict(engine)}
         if action == "enable":
             if not name:
                 raise ValueError("enable needs a script name")

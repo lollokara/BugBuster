@@ -1,4 +1,4 @@
-import os
+import random
 import bugbuster
 
 WAIT_UNIT_SECONDS = 60
@@ -12,9 +12,9 @@ while True:
     finally:
         bugbuster.efuse_set(1, False)
 
-    choice = os.urandom(1)[0]
+    choice = random.getrandbits(8)
     while choice >= 252:
-        choice = os.urandom(1)[0]
+        choice = random.getrandbits(8)
     delay = (choice % 12 + 1) * WAIT_UNIT_SECONDS
     while delay:
         step = min(delay, 60)
