@@ -14,6 +14,7 @@
 
 #include "range_manager.h"
 #include <string.h>
+#include <math.h>
 #include <stdbool.h>
 #include "esp_log.h"
 #include "esp_attr.h"
@@ -267,8 +268,17 @@ current_range_t range_manager_step(range_manager_t *rm)
     bool ff_hi_level  = gpio_get_level(AR_FF_HI_PIN) != 0;
     bool ff_mid_level = gpio_get_level(AR_FF_MID_PIN) != 0;
 
-    // FF_HI set while we are in HI → go to MID.
-    if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI) {
+    // FF_HI set while we are in HI → go to MID, unless the FINE reading for
+    // this sample says the current is well inside the HI span (stuck latch).
+    // Two consecutive over-range samples, so one corrupted conversion cannot
+    // confirm it; a missing FINE note fails safe to the latch.
+    bool hi_note = rm->hi_note_valid;
+    if (hi_note) rm->hi_over_run = rm->hi_note_over ? (uint8_t)(rm->hi_over_run < 2 ? rm->hi_over_run + 1 : 2) : 0;
+    bool hi_over = !hi_note || rm->hi_over_run >= 2;
+    rm->hi_note_valid = false;
+    if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI && !hi_over) {
+        rm->hi_latch_vetoed++;
+    } else if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI) {
         apply_range(rm, RANGE_MID);
         rm->lock_remaining = (int32_t)rm->lock_samples;
         rm->pending_down   = false;
@@ -366,6 +376,12 @@ current_range_t range_manager_step(range_manager_t *rm)
 // ---------------------------------------------------------------------------
 // Lightweight getter (backward compat; slow-path callers)
 // ---------------------------------------------------------------------------
+
+void range_manager_note_hi(range_manager_t *rm, float fine_amps, bool fine_ok)
+{
+    rm->hi_note_valid = true;
+    rm->hi_note_over  = !fine_ok || fabsf(fine_amps) > AR_HI_CONFIRM_A;
+}
 
 current_range_t range_manager_poll(range_manager_t *rm)
 {
