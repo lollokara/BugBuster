@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "wifi_manager.h"
+#include "wifi_connect_seq.h"
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
@@ -315,108 +316,99 @@ void wifi_init(const char* ap_ssid, const char* ap_pass,
     }
 }
 
-bool wifi_connect(const char* ssid, const char* pass)
+// ---- wifi_connect: esp_wifi bindings for the pure sequence (wifi_connect_seq) ----
+
+static bool s_seq_sta_only = false;
+
+static void op_disconnect(void) { esp_wifi_disconnect(); }
+static void op_stop(void)       { esp_wifi_stop(); }
+static void op_start(void)      { esp_wifi_start(); }
+static void op_delay(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
+
+static void op_set_mode(bool sta_only)
 {
-    s_connecting = true;
+    s_seq_sta_only = sta_only;
+    esp_wifi_set_mode(sta_only ? WIFI_MODE_STA : WIFI_MODE_APSTA);
+}
 
-    // Full stop/restart for a clean connection
-    esp_wifi_disconnect();
-    esp_wifi_stop();
-    vTaskDelay(pdMS_TO_TICKS(200));
+static void op_set_sta(const char *ssid, const char *pass)
+{
+    wifi_config_t c = {};
+    strncpy((char*)c.sta.ssid, ssid ? ssid : "", sizeof(c.sta.ssid) - 1);
+    strncpy((char*)c.sta.password, pass ? pass : "", sizeof(c.sta.password) - 1);
+    if (s_seq_sta_only) {
+        c.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        c.sta.pmf_cfg.capable    = false;
+        c.sta.pmf_cfg.required   = false;
+    } else {
+        c.sta.threshold.authmode = WIFI_AUTH_WPA2_WPA3_PSK;
+        c.sta.sae_pwe_h2e        = WPA3_SAE_PWE_BOTH;
+        c.sta.pmf_cfg.capable    = true;
+        c.sta.pmf_cfg.required   = false;
+    }
+    esp_wifi_set_config(WIFI_IF_STA, &c);
+    strncpy(s_sta_ssid, ssid ? ssid : "", sizeof(s_sta_ssid) - 1);
+    s_sta_ssid[sizeof(s_sta_ssid) - 1] = '\0';
+}
 
-    // STA-only mode for connection (avoids AP channel conflicts)
-    esp_wifi_set_mode(WIFI_MODE_STA);
+static void op_get_sta(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz)
+{
+    wifi_config_t c = {};
+    ssid[0] = pass[0] = '\0';
+    if (esp_wifi_get_config(WIFI_IF_STA, &c) != ESP_OK) return;
+    strncpy(ssid, (const char*)c.sta.ssid, ssid_sz - 1);
+    ssid[ssid_sz - 1] = '\0';
+    strncpy(pass, (const char*)c.sta.password, pass_sz - 1);
+    pass[pass_sz - 1] = '\0';
+}
 
-    wifi_config_t sta_config = {};
-    strncpy((char*)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
-    strncpy((char*)sta_config.sta.password, pass ? pass : "",
-            sizeof(sta_config.sta.password) - 1);
-    sta_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
-    sta_config.sta.pmf_cfg.capable    = false;
-    sta_config.sta.pmf_cfg.required   = false;
-    esp_wifi_set_config(WIFI_IF_STA, &sta_config);
-    strncpy(s_sta_ssid, ssid, sizeof(s_sta_ssid) - 1);
-
+static bool op_try_connect(uint32_t timeout_ms)
+{
     portENTER_CRITICAL(&s_wifi_state_mux);
     s_sta_connected = false;
     portEXIT_CRITICAL(&s_wifi_state_mux);
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-
-    esp_wifi_start();
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    // Retry up to 5 times with increasing delay
-    bool connected = false;
-    for (int attempt = 0; attempt < 5 && !connected; attempt++) {
-        if (attempt > 0) {
-            esp_wifi_disconnect();
-            vTaskDelay(pdMS_TO_TICKS(500 + attempt * 500));
-            ESP_LOGI(TAG, "Retry %d/5...", attempt + 1);
-        }
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-
-        esp_err_t err = esp_wifi_connect();
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_wifi_connect() failed: %s", esp_err_to_name(err));
-            continue;
-        }
-
-        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
-        connected = (bits & WIFI_CONNECTED_BIT) != 0;
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_connect() failed: %s", esp_err_to_name(err));
+        return false;
     }
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+        WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
+    return (bits & WIFI_CONNECTED_BIT) != 0;
+}
 
+static void op_reapply_ap(void)
+{
+    // Use s_ap_pass so any NVS-saved or runtime-changed password is preserved.
+    wifi_config_t ap_config = {};
+    strncpy((char*)ap_config.ap.ssid, WIFI_SSID, sizeof(ap_config.ap.ssid) - 1);
+    strncpy((char*)ap_config.ap.password, s_ap_pass, sizeof(ap_config.ap.password) - 1);
+    ap_config.ap.ssid_len       = strlen(WIFI_SSID);
+    ap_config.ap.max_connection = 4;
+    ap_config.ap.authmode       = WIFI_AUTH_WPA2_PSK;
+    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+}
+
+static bool op_save_creds(const char *ssid, const char *pass)
+{
+    bool persisted = nvs_save_sta_credentials(ssid, pass ? pass : "");
+    ESP_LOGI(TAG, "Connected to '%s' - credentials %s", ssid,
+             persisted ? "saved" : "save FAILED (NVS error)");
+    return persisted;
+}
+
+static const WifiConnectOps s_wifi_ops = {
+    op_disconnect, op_stop, op_start, op_set_mode, op_set_sta, op_get_sta,
+    op_try_connect, op_reapply_ap, op_save_creds, op_delay,
+};
+
+bool wifi_connect(const char* ssid, const char* pass)
+{
+    s_connecting = true;
+    bool ok = wifi_connect_seq(&s_wifi_ops, ssid, pass);
     s_connecting = false;
-
-    // Restore AP+STA mode
-    if (!connected) esp_wifi_disconnect();
-    esp_wifi_stop();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
-
-    // Re-apply AP config — use s_ap_pass so any NVS-saved or runtime-changed
-    // password is preserved across STA connect/reconnect cycles.
-    {
-        wifi_config_t ap_config = {};
-        strncpy((char*)ap_config.ap.ssid, WIFI_SSID, sizeof(ap_config.ap.ssid) - 1);
-        strncpy((char*)ap_config.ap.password, s_ap_pass, sizeof(ap_config.ap.password) - 1);
-        ap_config.ap.ssid_len       = strlen(WIFI_SSID);
-        ap_config.ap.max_connection = 4;
-        ap_config.ap.authmode       = WIFI_AUTH_WPA2_PSK;
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-    }
-    // Re-apply STA config (keep the network we just connected to)
-    {
-        wifi_config_t sta_cfg = {};
-        strncpy((char*)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid) - 1);
-        strncpy((char*)sta_cfg.sta.password, pass ? pass : "",
-                sizeof(sta_cfg.sta.password) - 1);
-        sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_WPA3_PSK;
-        sta_cfg.sta.sae_pwe_h2e       = WPA3_SAE_PWE_BOTH;
-        sta_cfg.sta.pmf_cfg.capable    = true;
-        sta_cfg.sta.pmf_cfg.required   = false;
-        esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-    }
-    esp_wifi_start();
-
-    // If we were connected in STA-only mode, reconnect in APSTA mode
-    if (connected) {
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-        esp_wifi_connect();
-        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
-        connected = (bits & WIFI_CONNECTED_BIT) != 0;
-    }
-
-    bool ok = connected;
-    if (ok) {
-        // Save credentials to NVS on success; log if persist fails (H06)
-        bool persisted = nvs_save_sta_credentials(ssid, pass ? pass : "");
-        ESP_LOGI(TAG, "Connected to '%s' — credentials %s", ssid,
-                 persisted ? "saved" : "save FAILED (NVS error)");
-    } else {
-        ESP_LOGW(TAG, "Failed to connect to '%s'", ssid);
-    }
+    if (!ok) ESP_LOGW(TAG, "Failed to connect to '%s'", ssid);
     return ok;
 }
 

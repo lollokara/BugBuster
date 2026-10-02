@@ -164,25 +164,27 @@ impl ConnectionManager {
         // Check firmware version compatibility
         if let Some(h) = transport.handshake_info() {
             if h.proto_version != bbp::PROTO_VERSION {
-                // DESK-10 FIX: Protocol version mismatch is now a connection failure,
-                // not a warning. An incompatible version causes confusing downstream
-                // failures; fail fast and clearly instead.
+                let blocking = proto_mismatch_blocks(h.proto_version, bbp::PROTO_VERSION);
+                // DESK-31 (supersedes DESK-10's hard failure): warn loudly and
+                // connect, so the user can reach the OTA tab to fix the mismatch.
                 let err_msg = format!(
                     "Protocol version mismatch: device reports v{}, expected v{}. \
-                     Update firmware or desktop app to matching versions.",
+                     Connecting anyway - update firmware (OTA tab) or the desktop app.",
                     h.proto_version,
                     bbp::PROTO_VERSION
                 );
-                log::error!("{}", err_msg);
+                log::warn!("{}", err_msg);
                 let _ = app.emit(
                     "version-mismatch",
                     &serde_json::json!({
                         "device_version": h.proto_version,
                         "expected_version": bbp::PROTO_VERSION,
-                        "blocking": true,
+                        "blocking": blocking,
                     }),
                 );
-                return Err(anyhow!(err_msg));
+                if blocking {
+                    return Err(anyhow!(err_msg));
+                }
             }
         }
 
@@ -245,57 +247,17 @@ impl ConnectionManager {
         // Spawn event listener for USB stream data
         let app_handle = app.clone();
         tokio::spawn(async move {
-            let mut last_adc_emit = std::time::Instant::now();
-            let mut adc_buffer: Vec<u8> = Vec::new();
-            let emit_interval = std::time::Duration::from_millis(33); // ~30 Hz
-
             loop {
-                // Use a short timeout so we can flush the buffer periodically
-                match tokio::time::timeout(std::time::Duration::from_millis(10), event_rx.recv())
-                    .await
-                {
-                    Ok(Some(msg)) => {
+                match event_rx.recv().await {
+                    Some(msg) => {
                         match msg.cmd_id {
                             bbp::EVT_ADC_DATA => {
-                                // Forward to recording backend (no frontend involvement)
-                                {
-                                    use crate::commands::RECORDING;
-                                    if let Ok(mut guard) = RECORDING.lock() {
-                                        if let Some(ref mut rec) = *guard {
-                                            // Parse count from payload and write raw sample data
-                                            if msg.payload.len() >= 7 {
-                                                let count = u16::from_le_bytes([
-                                                    msg.payload[5],
-                                                    msg.payload[6],
-                                                ])
-                                                    as usize;
-                                                let mask = msg.payload[0];
-                                                let num_ch =
-                                                    (0..4).filter(|b| mask & (1 << b) != 0).count();
-                                                let data_len = count * num_ch * 3;
-                                                let data_end = 7 + data_len;
-                                                if msg.payload.len() >= data_end {
-                                                    use std::io::Write;
-                                                    let _ = rec
-                                                        .writer
-                                                        .write_all(&msg.payload[7..data_end]);
-                                                    rec.sample_count += count as u64;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Keep latest payload for throttled display
-                                adc_buffer = msg.payload;
-
-                                // Throttle display emit to ~30 Hz
-                                if last_adc_emit.elapsed() >= emit_interval {
-                                    let _ = app_handle.emit("adc-stream", &adc_buffer);
-                                    last_adc_emit = std::time::Instant::now();
-                                }
+                                // DESK-28: no frontend listens for a display
+                                // event; ADC samples only feed the recorder.
+                                crate::commands::recording_feed(msg.cmd_id, &msg.payload);
                             }
                             bbp::EVT_SCOPE_DATA => {
+                                crate::commands::recording_feed(msg.cmd_id, &msg.payload);
                                 let _ = app_handle.emit("scope-data", &msg.payload);
                             }
                             bbp::EVT_ALERT => {
@@ -332,14 +294,7 @@ impl ConnectionManager {
                             _ => {}
                         }
                     }
-                    Ok(None) => break, // Channel closed
-                    Err(_) => {
-                        // Timeout — flush any pending ADC data
-                        if !adc_buffer.is_empty() && last_adc_emit.elapsed() >= emit_interval {
-                            let _ = app_handle.emit("adc-stream", &adc_buffer);
-                            last_adc_emit = std::time::Instant::now();
-                        }
-                    }
+                    None => break, // Channel closed
                 }
             }
         });
@@ -1103,5 +1058,33 @@ impl ConnectionManager {
 
         log::warn!("get_token: no token for {} — device needs USB pairing", key);
         None
+    }
+}
+
+/// Whether a BBP protocol-version mismatch refuses the connection.
+///
+/// DESK-31: never. The desktop is how firmware is updated (OTA tab), so a
+/// hard failure on mismatch locked users out of the very fix they needed. The
+/// mismatch is reported as a non-blocking `version-mismatch` event instead.
+pub fn proto_mismatch_blocks(_device: u8, _app: u8) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod proto_policy_tests {
+    use super::proto_mismatch_blocks;
+
+    #[test]
+    fn matching_versions_never_block() {
+        assert!(!proto_mismatch_blocks(12, 12));
+    }
+
+    /// DESK-31: refusing to connect on a mismatch locks the user out of the
+    /// device - the desktop is how firmware gets updated (OTA). A mismatch must
+    /// warn and connect so the user can update.
+    #[test]
+    fn mismatch_warns_but_connects_so_firmware_can_be_updated() {
+        assert!(!proto_mismatch_blocks(11, 12));
+        assert!(!proto_mismatch_blocks(13, 12));
     }
 }

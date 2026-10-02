@@ -1,0 +1,29 @@
+{
+  "devices": [
+    {
+      "closedSwitches": [],
+      "device": 0,
+      "switchMask": 0
+    },
+    {
+      "closedSwitches": [],
+      "device": 1,
+      "switchMask": 0
+    },
+    {
+      "closedSwitches": [
+        0
+      ],
+      "device": 2,
+      "switchMask": 1
+    },
+    {
+      "closedSwitches": [],
+      "device": 3,
+      "switchMask": 0
+    }
+  ],
+  "muxFaulted": false,
+  "mux_faulted": false,
+  "selftestMask": 40
+}

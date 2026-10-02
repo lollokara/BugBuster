@@ -61,6 +61,7 @@ typedef enum {
     USB_REC_MARKER   = 0x05,   // digital event marker (from S3, later)
     USB_REC_STATUS   = 0x06,   // device status / heartbeat
     USB_REC_WAVE_V   = 0x07,   // struct-of-arrays voltage waveform block
+    USB_REC_OTA_ACK  = 0x08,   // usb_ota_ack_t, reply to every USB_CMD_OTA_* (C6-26)
 
     USB_CMD_START        = 0x80,
     USB_CMD_STOP         = 0x81,
@@ -75,12 +76,58 @@ typedef enum {
     USB_CMD_RANGE_CAL_ACK   = 0x8A, // no payload (advance past PROMPT)
     USB_CMD_RANGE_CAL_ABORT = 0x8B, // no payload
 
-    // Direct desktop -> P4 `staging` ingest (bypasses S3/WiFi entirely).
-    USB_CMD_OTA_BEGIN       = 0x8C, // payload: ota_meta_t + target byte (RELAY_TARGET_C6/_S3)
-    USB_CMD_OTA_DATA        = 0x8D, // payload: u32 offset + firmware bytes
-    USB_CMD_OTA_END         = 0x8E, // no payload; finalizes + verifies staged image
+    // Direct desktop -> P4 OTA over this link (no S3, no WiFi). C6-26: every
+    // command is answered with a USB_REC_OTA_ACK (DATA: every
+    // USB_OTA_ACK_WINDOW frames and on any error), handled on a dedicated
+    // worker task, never on the TinyUSB task.
+    USB_CMD_OTA_BEGIN       = 0x8C, // payload: ota_meta_t + target byte (USB_OTA_TARGET_*)
+    USB_CMD_OTA_DATA        = 0x8D, // payload: u32 offset + firmware bytes (<= 508)
+    USB_CMD_OTA_END         = 0x8E, // no payload; finalizes + verifies the image
     USB_CMD_OTA_ABORT       = 0x8F, // no payload
+    USB_CMD_OTA_APPLY       = 0x90, // no payload; C6: push the staged image
+    USB_CMD_OTA_CONFIRM     = 0x91, // no payload; P4: mark the running image valid
+    USB_CMD_OTA_REBOOT      = 0x92, // no payload; P4: reboot into the new image
+    USB_CMD_OTA_STATUS      = 0x93, // no payload; reply is an ack snapshot
 } usb_rec_type_t;
+
+// ---- OTA over the vendor link (C6-26) ---------------------------------------
+// BEGIN target byte. 2 (S3) is rejected: the S3 updates over BBP 0x77 on CDC0.
+#define USB_OTA_TARGET_C6     1u   // staged in `staging`, pushed by OTA_APPLY
+#define USB_OTA_TARGET_P4     3u   // written straight to the P4's next OTA slot
+
+#define USB_OTA_ACK_WINDOW   16u   // DATA frames per ack
+
+// usb_ota_ack_t.status
+#define USB_OTA_OK             0
+#define USB_OTA_ERR_FAILED    (-1)  // generic failure (see device log)
+#define USB_OTA_ERR_TARGET    (-2)  // unknown / unsupported target
+#define USB_OTA_ERR_IMAGE     (-3)  // product id or image layout rejected
+#define USB_OTA_ERR_BUSY      (-4)  // another session / push is live
+#define USB_OTA_ERR_OFFSET    (-5)  // DATA offset != done_bytes; resend from there
+#define USB_OTA_ERR_VERIFY    (-6)  // size or SHA-256 mismatch at END
+#define USB_OTA_ERR_STATE     (-7)  // command not valid in the current state
+#define USB_OTA_ERR_QUEUE     (-8)  // worker queue full, frame dropped
+
+// usb_ota_ack_t.flags
+#define USB_OTA_FLAG_PENDING_VERIFY 0x01u  // P4 runs an unconfirmed image
+
+typedef struct __attribute__((packed)) {
+    uint8_t  cmd;            // 0  command being answered (USB_CMD_OTA_*)
+    int8_t   status;         // 1  USB_OTA_OK or USB_OTA_ERR_*
+    uint8_t  target;         // 2  USB_OTA_TARGET_* of the session (0 = none)
+    uint8_t  state;          // 3  C6: relay_state_t; P4: ota_state_t
+    uint32_t done_bytes;     // 4  bytes accepted so far (resume point)
+    uint32_t image_size;     // 8
+    uint32_t pushed_bytes;   // 12 C6 push progress
+    uint32_t fw_version;     // 16 running P4 firmware, FW_VERSION_U32
+    uint8_t  flags;          // 20 USB_OTA_FLAG_*
+    uint8_t  _pad[3];        // 21
+} usb_ota_ack_t;             // 24 bytes
+
+#ifndef __cplusplus
+_Static_assert(sizeof(usb_ota_ack_t) == 24, "usb_ota_ack_t is 24 bytes on the wire");
+#endif
+
 
 // ---- WAVE_I / WAVE_V records -------------------------------------------------
 // Common 24-byte header for both SoA waveform records. WAVE_I payload
@@ -157,7 +204,9 @@ typedef struct __attribute__((packed)) {
 //   staging ingest progress (see ota/relay_stage.h). Extension v5 (bytes
 //   72-87): per-record-type TX/drop counters, split by WAVE_I vs WAVE_V.
 //   Extension v6 (bytes 88-95): acquisition configuration readback (filter,
-//   ADC decimation, stream decimation, actual ODR).
+//   ADC decimation, stream decimation, actual ODR). Extension v7 (96-99):
+//   board temperatures. Extension v8 (100-103): current-cal validity.
+//   Extension v9 (104-115): u32 drop counters and missed conversions.
 //   Older parsers silently ignore trailing bytes.
 typedef struct __attribute__((packed)) {
     uint32_t sample_rate;     // 0
@@ -201,7 +250,7 @@ typedef struct __attribute__((packed)) {
     uint32_t wave_v_frames;     // 76 — WAVE_V frames handed to the transport
     uint32_t wave_i_drops;      // 80 — WAVE_I frames dropped (back-pressure/no transport)
     uint32_t wave_v_drops;      // 84 — WAVE_V frames dropped
-    // --- extension v6 (offsets 92..99): acquisition configuration readback.
+    // --- extension v6 (offsets 88..95): acquisition configuration readback.
     // The device reports what it ACTUALLY applied, never what was requested:
     // the driver clamps filter/decimation combinations the part cannot hit,
     // and a UI that echoed its own request would silently misreport the rate.
@@ -209,7 +258,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  adc_dec;       // 89  ADAQ_DEC_*, or 0xFF when SINC3 programmable
     uint16_t stream_decim;  // 90  P4 stream decimation (>=1)
     uint32_t odr_mhz;       // 92  actual ODR, milli-SPS (ODR * 1000)
-    // --- extension v7 (offsets 100..103): onboard board temperatures, 0.1 C.
+    // --- extension v7 (offsets 96..99): onboard board temperatures, 0.1 C.
     // The two AD7415s (U2 analog area, U28 power area). USB_TEMP_NA when the
     // sensor is absent or has not been polled yet.
     //
@@ -238,7 +287,19 @@ typedef struct __attribute__((packed)) {
     // built against an older header still parses everything it knows about.
     uint8_t  cal_have_rcal; // 100  per-range current cal validity (bits 0-2)
     uint8_t  _pad3[3];      // 101-103  reserved
-} usb_status_payload_t;     // total: 104 bytes
+    // --- extension v9 (offsets 104..115): DAQ-05/P4-8.
+    // drop_fine/drop_coarse above are u16 and saturate at 65535 (kept for old
+    // hosts); these are the full u32 counts. missed_conversions = FINE
+    // conversions the ADC produced (ODR x time) that were never captured,
+    // cumulative since the stream started (board/daq_missed.h).
+    uint32_t drop_fine32;         // 104
+    uint32_t drop_coarse32;       // 108
+    uint32_t missed_conversions;  // 112
+} usb_status_payload_t;     // total: 116 bytes
+
+#ifndef __cplusplus
+_Static_assert(sizeof(usb_status_payload_t) == 116, "STATUS layout is append-only");
+#endif
 
 #define USB_TEMP_NA  ((int16_t)0x7FFF)   // sensor absent / not yet polled
 

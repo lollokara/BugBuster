@@ -9,8 +9,19 @@ pub const SLOTS: &[u8] = &[];
 
 const SPARK_CAP: usize = 120;
 
+/// DESK-28: set when this tab (re)starts the firmware ADC stream, so closing
+/// the tab stops only a stream it owns.
+static STREAM_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[component]
 pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+    on_cleanup(move || {
+        if STREAM_STARTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            spawn_local(async move {
+                let _ = try_invoke("stop_adc_stream", wasm_bindgen::JsValue::NULL).await;
+            });
+        }
+    });
     // Per-channel rolling ring buffers of recent ADC values (capped at SPARK_CAP).
     let history: [RwSignal<Vec<f32>>; 4] = std::array::from_fn(|_| RwSignal::new(Vec::new()));
 
@@ -29,12 +40,27 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
     });
 
+    // DESK-23: the grid rebuilds only when a channel's configuration changes;
+    // readings update in place through `live`.
+    let cfg = Memo::new(move |_| {
+        state.with(|s| {
+            s.channels
+                .iter()
+                .map(|c| (c.function, c.adc_range, c.adc_rate, c.adc_mux, c.rtd_excitation_ua))
+                .collect::<Vec<_>>()
+        })
+    });
+    let live = move |i: usize| {
+        state.with(|s| s.channels.get(i).map(|c| (c.adc_value, c.adc_raw)).unwrap_or_default())
+    };
+
     view! {
         <div class="tab-content">
             <div class="tab-desc">"Analog-to-Digital Converter readings for all 4 channels. Configure the ADC range, sampling rate, and input multiplexer per channel. Values update in real-time."</div>
             <div class="channel-grid-wide">
                 {move || {
-                    let ds = state.get();
+                    let _ = cfg.get();
+                    let ds = state.get_untracked();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
                         let has_adc = matches!(ch.function, 3 | 4 | 5 | 7 | 11 | 12);
@@ -50,7 +76,10 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             (rng_min, rng_max)
                         };
                         let span = bar_max - bar_min;
-                        let pct = if span > 0.0 { ((ch.adc_value - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+                        let pct = move || {
+                            let v = live(i).0;
+                            if span > 0.0 { ((v - bar_min) / span * 100.0).clamp(0.0, 100.0) } else { 0.0 }
+                        };
                         let unit = if matches!(ch.function, 4 | 5 | 11 | 12) { "mA" } else if is_res { "Ω" } else { "V" };
                         let exc_ua = if ch.rtd_excitation_ua > 0 { ch.rtd_excitation_ua } else { 1000 };
                         let hist = history[i];
@@ -75,13 +104,13 @@ pub fn AdcTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     } else {
                                         view! {
                                             <div>
-                                                <div class="big-value">{format!("{:.4}", ch.adc_value)}<span class="unit">{unit}</span></div>
+                                                <div class="big-value">{move || format!("{:.4}", live(i).0)}<span class="unit">{unit}</span></div>
                                                 <div class="card-details">
-                                                    <span>"Raw: 0x"{format!("{:06X}", ch.adc_raw)}</span>
-                                                    <span>"Code: "{format!("{}", ch.adc_raw)}</span>
+                                                    <span>"Raw: 0x"{move || format!("{:06X}", live(i).1)}</span>
+                                                    <span>"Code: "{move || format!("{}", live(i).1)}</span>
                                                 </div>
                                                 <div class="bar-gauge" style=format!("--bar-color: {}", color)>
-                                                    <div class="bar-fill-dynamic" style=format!("width: {}%", pct)></div>
+                                                    <div class="bar-fill-dynamic" style=move || format!("width: {}%", pct())></div>
                                                 </div>
 
                                                 <ChannelSparkline
@@ -213,6 +242,7 @@ fn send_adc_config(ch: u8, mux: u8, range: u8, rate: u8) {
             divider: 0,
         })
         .unwrap();
+        STREAM_STARTED.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = try_invoke("start_adc_stream", start_args).await;
         log(&format!(
             "[send_adc_config] ch={} mux={} range={} rate={} (stream restarted)",

@@ -101,6 +101,93 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    report success on failure today. Items: AN-01, AN-02, MCP-20, MCP-21,
    MCP-22, MCP-23, PLT-02, LA-04, DAQ-01, DAQ-02, IO-11, WEB-KEYS, IOS-KEYS,
    PWR-06, BUS-012, DESK-20, PY-20.
+
+   **Wave A status (2026-10-01, branch `audit/2026-10-m1-host-fixes`).** Each
+   fix is a `test(ID)` commit that fails on the old code followed by a
+   `fix(ID)` commit. Verified in unit / `--sim` / vitest / `cargo test` only -
+   **not yet on hardware**, so the per-item tags below stay as they were.
+
+   | Status | Items |
+   |---|---|
+   | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2, DESK-21 (BBSC v2 scope buckets) |
+   | Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
+   | Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
+
+   **Plan M2 status (2026-10-01, branch `audit/2026-10-m2-s3-firmware`, S3 flashed by OTA).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | TR-2, PLT-01, PLT-06, PLT-10, WEB-25, WEB-24 (idle state only - READY state needs the DAQ WiFi stream up), BBP-TXQ, BBP-STDOUT, HAT-RESET (last three found on hardware during M2) |
+   | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; needs a phone and the iOS prompt) |
+   | Refuted | WEB-NULL - all 17 dereferences already guarded; gate added |
+   | Fixed, verified on hardware (measured) | PLT-07 - uPython stack had 1964 B left after one HTTPS `bugbuster.http_get`; now 8 KiB, 4060 B left. The task is now in stack telemetry |
+
+   **Plan M3 status (2026-10-01, branch `audit/2026-10-m3-routing`, S3 flashed by OTA, BBP PROTO 12).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | IO-1, IO-3 (refusal on device 3 S3 checked live), IO-5, IO-8 + MUX-4, IO-9 (functional MUX checks; transient proof is T2), IO-25 (new, found on hardware), AN-03, AN-04 (299 -> 103 ms median), AN-05, BUS-003, BUS-005, BUS-012, PWR-03 (B only), PWR-02 (B only: no short fixture; T2 proves the trip), PWR-REFAC + PWR-11, PROTO bump |
+   | Fixed, host tests only | IO-2 (break-before-make transient needs a scope), LA-03 (needs the LA HAT, M8), PLT-05 (owner chose no WiFi changes on the board), FEAT-6, PROTO-4, DESK-31 |
+   | Open (needs a bench decision) | IO-12 / AN-14: after `configure_io` on analog IO9 the device has **S3** closed (firmware auto-route) while the HAL shadow says **S2**; the next HAL MUX write flips it. Which switch is electrically correct needs a wired stimulus. IO-3 label: U17's daisy-chain slot is not recoverable from the binary PCB files - device 2 stays guarded until confirmed |
+   | Read-only, settled | C6-20 caller classification (input to M4) |
+
+   **Plan M4 status (2026-10-01, branch `audit/2026-10-m4-daq`, P4/C6/S3 flashed over HTTP, USB stream 2 / DDP 9 unchanged).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, verified on hardware | DAQ-05 + P4-8 (missed_conversions = expected - received within 0.12 % across 8k-512k), DAQ-06 (8k/64k/128k within 0.5 %; 256k/512k ODR correct, capture loses 19 %/54 % and now reports it), DAQ-08 + P4-9 (full-span V_DUT write 56-100 ms, A timed out at ~740 ms), DAQ-04 (5 STOP/START cycles, no index gaps; marker race itself is T1), C6-20 |
+   | Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
+   | Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
+
+   **Plan M5 status (2026-10-02, branch `audit/2026-10-m5-latency`, S3 + SPIFFS flashed by OTA). M5 complete.**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, measured on hardware | USB-RX-LAT (new; PING 107 -> 1.0 ms), TR-3 (70 s idle: timeout -> 5 ms), WEB-23 (status with SSE open 0/10 -> 10/10), AN-06 (PING p95 during wave 4.1 -> 1.2 ms), TR-6 (11 -> 5 frames, 761 -> 405 ms; time target -60 % missed at -47 %), IO-13, AN-10/AN-11 (9.6 kSPS stream 16 -> ~1180 samples/s, reported rate now matches; plan target "within 2 % of 9.6 k" missed - SPI cost per sample is the ceiling), IOS-23 (`/api/status` -42 %) |
+   | Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12, WEB-28 (UI redeployed, vitest), DESK-22, DESK-23 (ADC tab only), DESK-24, DESK-25, DESK-28, DESK-DIAG-RAW (new) |
+   | Not verified on a client | iOS camelCase decode (IOS-23): T1 only, needs a macOS build by the owner. Desktop UI changes: `cargo check` + tests, no UI run |
+   | Refuted / closed | TR-1 (fixed by BBP-TXQ in M2; device test added) |
+   | Carried over | DESK-23 for the other tabs (Overview, Diag, Faults rebuild per tick); AN-11 faster path (fewer SPI transactions per sample) |
+
+   **Plan M6 status (2026-10-02, branch `audit/2026-10-m6-refactor`; S3, P4, C6 flashed).**
+
+   | Status | Items |
+   |---|---|
+   | Fixed, measured on hardware | C6-26 (kept + fixed; offline OTA for C6, P4, S3 app, SPIFFS all verified), TR-11b (3 invalid actions 200 -> 400), BBP-DEVINFO (new, found by the TR-11 gate) |
+   | Fixed, host tests | DESK-REFAC (25 dead commands removed), DESK-33, FEAT-4 |
+   | Gate added, refactor carried over | PY-21 (public API golden snapshot; mixin split not done), TR-11 (USB/HTTP equivalence test, 7 on the board; service layer not done) |
+   | Not verified on a client | iOS TR-11b changes (T1 only) |
+   | Open, found here | `tests/http_api` mutating tests send no admin token (401 on the board) |
+
+   **Plan M7 status (2026-10-02, branch `audit/2026-10-m7-parity`).**
+
+   | Status | Items |
+   |---|---|
+   | Done, measured on hardware | MCP-5 / PLT-08 (all logs returned), DAQ-10 (current trigger on the live stream) |
+   | Done, host tests | BUS-011, BUS-016, MCP-4, DESK-9 |
+   | Already done | PY-4 (M1) |
+   | Carried over | DESK-3, DESK-4 / WEB-3, IOS-5, DAQ-13 |
+
+   **Plan M10 / M9 status (2026-10-02, branch `audit/2026-10-m9-closeout`).**
+
+   | Status | Items |
+   |---|---|
+   | Done, measured on hardware | IO-17, AN-08, AN-15 (ch3 + MCP), BUS-017 |
+   | Done, host tests | IO-23, DAQ-07 (MCP half), MCP-34, MCP-25 (OTA/cal tools), IO-19 |
+   | Still open | AN-15 firmware voltage clamp for raw codes (needs calibrated prediction + bench), DAQ-07 USB range lock through the registry (P4), MCP-25 rest (`daq_set_source`/`daq_power_setup`/`daq_set_setting` bounds, `require_hat` HAT type), MCP-26, IO-14/15/16, IO-24, PWR-12/13/15, BUS-007/008/013/014/015, C6-5/24/30/31/35/38/40, PLT-11/18, IOS-22, DESK-29/30, LA-13/14, TEST-3/5/6/7 |
+
+   **Final hardware run (2026-10-02, `tests/device --daq --skip-destructive`,
+   USB + HTTP + DAQ HAT, no DUT wired):** 282 passed, 10 failed, 3 errors in
+   15m48s. Triage:
+
+   | Result | Tests | Cause / action |
+   |---|---|---|
+   | Test bug, fixed (96ff623), passes on the board | 3 equivalence errors | session-scoped `daq_bbp` held COM6 for every later module; now module-scoped |
+   | Test bug, fixed, passes | `test_mux_round_trip[http]`, `test_mux_device2_interlock_reports_correctly`, `test_mux_per_device_control` | since IO-25 the supply monitor holds U23 only for a window every 5 s; tests now wait out / hunt for that window |
+   | Test bug, fixed, passes | `test_vout_set_and_readback[usb]`, `test_vout_range_unipolar[usb]` | 50 ms fixed sleep raced the queued DAC write; now polls |
+   | Test bug, fixed, passes | `test_adc_stream_sample_rate` | streamed a HIGH_IMP channel; samples are pushed only on a conversion (passed before IO-25 by accident) |
+   | Flaky, passed on rerun | `test_large_response_intact`, `test_spectrum_keeps_updating_over_thousands_of_ffts` | open; watch |
+   | Needs a DUT load | `test_source_enable_produces_current_and_disable_removes_it`, `test_current_is_linear_in_vdut`, `test_current_is_monotonic_in_vdut` | bench had nothing on the DUT terminals; should skip without `--daq-load-ohms` |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
@@ -623,25 +710,16 @@ what to build, how to prove it. Effort S/M/L.
 
 ## Items the 2026-10-01 audit found already fixed or wrong
 
-Each was checked by an audit agent against source; confirm then move to
-`CHANGELOG.MD` or delete.
+2026-10-02 (M9): P4-3, P4-4, MCP-9, PY-10, DESK-5, WEB-4, WEB-10, IOS-3,
+IOS-4, IOS-9, IOS-12 and IOS-14 were re-read against source and are recorded in
+`CHANGELOG.MD`; the stale `.mex` facts were corrected. Still open:
 
 | Item | Finding |
 |---|---|
-| P4-3 | Fixed: product-ID check precedes `esp_ota_begin()` (`ota.c:63-80`). |
-| P4-4 | x8 fixed (`adaq7769.c:316-325`); x16 was never a 16-bit mode - refuted. |
-| MCP-9 | Fixed (`bugbuster_mcp/config.py` now names LTM8078). |
-| PY-10 | Docstring fixed (`client.py:~2371` says RAM-only); name unchanged. |
-| DESK-5 | Fixed: `ota_upload_daq` (`commands.rs:~807`), UI `diag.rs:1105-1172`. |
-| WEB-4 | Fixed: P4/C6 upload exists in the web UI. |
-| WEB-10 | Fixed: `IoOwnershipCard.tsx`, `FaultsCard.tsx` exist. |
-| IOS-3, IOS-4, IOS-9 | Fixed per `CLIENTS-WEB-IOS.md`. IOS-11 mostly fixed. |
-| IOS-12 | Wrong: VDUT routes exist (`api_core.cpp:465-516`). |
-| IOS-14 | Likely non-issue: ATS exempts IP literals and `.local`. |
+| IOS-11 | Mostly fixed (SignalPath has a confirm); rails/OTA/reset still to check. |
 | RP-1, RP-3, RP-4 | Addressed in source (RP-3 bounded by cal-window clamp, `bb_hat_v2.c:511-562`); still needs hardware to close. |
 | PROTO-4 | Partly fixed: `0xEF` and external bus IDs now in `bbp.rs`; still missing `0xF5-0xFD`, `0x64/0x65`, `0x47`, `EVT 0x88`, `0x0C MEM_STATUS`. |
 | PROTO-8 | Not dead: `simulated_device.py:55` uses `ESP32_FW_VERSION`. Update, do not delete. |
-| `.mex` docs | `scripting-runtime.md` lists two fixed bugs as open; `esp32-firmware.md` says BBP v9/v10 (source: 11); `desktop-app.md` says 172 commands and describes a tab-switch claim that no longer exists; web manifest says 8 tabs (`App.tsx` has 9). |
 
 ---
 
@@ -679,9 +757,9 @@ Code is on the device. The behaviour has not been provoked.
 | C6-11 watchdog | **Cannot work as configured** - task WDT panic is off (see C6-23). Fix, then induce a hang. |
 | C6-9 link-lost banner | Banner is transient and fabricated numbers keep rendering (see C6-22). Fix first. |
 | C6-1 DDP `RSP_ERR` | Send a deliberately truncated DDP frame. |
-| FEAT-9 MUX rollback | Trigger the interlock (self-test active + U17 S3 write) and confirm the shadow is unchanged. The `[0,0,0,4]` residue is gone, which is not the same thing. |
+| FEAT-9 MUX rollback | Proven 2026-10-01 by the IO-8 bench run in M3: interlock-refused closes return `ERR_ADGS_ROUTE_REJECTED` and the shadow follows the hardware. Remove at release. |
 | DESK-1 STOP on disconnect | Run the desktop app against the device and pull the link. |
-| Web UI | Built, but not uploaded to SPIFFS or opened on the device. |
+| Web UI | Uploaded to SPIFFS several times in M5/M6 (HTTP and USB); scope SSE and pollers checked live (WEB-28). Every tab not yet opened on the device. |
 
 ---
 

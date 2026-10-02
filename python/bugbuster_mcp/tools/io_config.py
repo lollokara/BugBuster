@@ -44,6 +44,10 @@ def register(mcp) -> None:
         Configure a physical IO port (1-12) to the specified operating mode.
         Equivalent to Arduino pinMode(). Must be called before read/write operations.
 
+        The first IO configured on a block powers that block's VADJ rail at
+        3.3 V unless set_supply_voltage was called for the rail first. Call
+        set_supply_voltage beforehand if the DUT needs a different supply.
+
         Parameters:
         - io: IO number 1-12. IOs 3, 6, 9, 12 support analog modes; others are digital-only.
         - mode: Operating mode string. One of:

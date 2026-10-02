@@ -369,22 +369,26 @@ class TestDigitalWriteRouting(unittest.TestCase):
 # =========================================================================
 
 class TestEnableIoBlockPower(unittest.TestCase):
-    """Verify _enable_io_block_power() activates the correct PCA controls."""
+    """Verify _enable_io_block_power() powers the right rail + e-fuse.
+
+    PWR-REFAC: a cold rail is brought up by ONE firmware-sequenced
+    rail_power_up() (e-fuse off -> V -> VADJ on -> settle -> e-fuse armed)
+    instead of host-timed power_set/idac_set_voltage calls. efuse_mask bit0 /
+    bit1 = the rail's first / second e-fuse.
+    """
 
     def test_block1_io3_enables_vadj1_and_efuse1(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[3]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE1, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(1, 12.0)
+        mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x01)
+        mock_bb.power_set.assert_not_called()
 
     def test_block1_io5_enables_vadj1_and_efuse2(self):
         hal, mock_bb = _make_hal()
         rt = hal._routing[5]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ1, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE2, on=True)
+        mock_bb.rail_power_up.assert_called_once_with(1, 3.3, 500, confirm=False, efuse_mask=0x02)
 
     def test_block2_io9_enables_vadj2_and_logical_efuse3(self):
         # Logical connector C uses EFUSE3 at the host API; firmware maps it to
@@ -392,9 +396,7 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal, mock_bb = _make_hal()
         rt = hal._routing[9]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE3, on=True)
-        mock_bb.idac_set_voltage.assert_called_once_with(2, 12.0)
+        mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x01)
 
     def test_block2_io12_enables_vadj2_and_logical_efuse4(self):
         # Logical connector D uses EFUSE4 at the host API; firmware maps it to
@@ -402,8 +404,14 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal, mock_bb = _make_hal()
         rt = hal._routing[12]
         hal._enable_io_block_power(rt)
-        mock_bb.power_set.assert_any_call(PowerControl.VADJ2, on=True)
-        mock_bb.power_set.assert_any_call(PowerControl.EFUSE4, on=True)
+        mock_bb.rail_power_up.assert_called_once_with(2, 3.3, 500, confirm=False, efuse_mask=0x02)
+
+    def test_second_block_on_a_live_rail_only_arms_its_efuse(self):
+        hal, mock_bb = _make_hal()
+        hal._enable_io_block_power(hal._routing[3])    # cold VADJ1 + EFUSE1
+        hal._enable_io_block_power(hal._routing[5])    # VADJ1 already on
+        mock_bb.rail_power_up.assert_called_once()
+        mock_bb.power_set.assert_called_once_with(PowerControl.EFUSE2, on=True)
 
     def test_ioblock_3_4_keep_mux_gpio_with_connectors_but_channel_is_logical(self):
         hal, _ = _make_hal()
@@ -433,16 +441,15 @@ class TestEnableIoBlockPower(unittest.TestCase):
 
     def test_efuse_skipped_if_already_on(self):
         # IO9/connector C routes through logical EFUSE3. The firmware owns the
-        # physical PCA9535 bit swap.
+        # physical PCA9535 bit swap. On a LIVE rail an e-fuse that is already
+        # on is not touched again.
         hal, mock_bb = _make_hal()
+        hal._supplies_on.add(PowerControl.VADJ2)
         hal._efuses_on.add(PowerControl.EFUSE3)
         rt = hal._routing[9]
         hal._enable_io_block_power(rt)
-        # supply (VADJ2) should be enabled, but efuse3 should not
-        power_calls = mock_bb.power_set.call_args_list
-        called_controls = [c[0][0] for c in power_calls]
-        self.assertIn(PowerControl.VADJ2, called_controls)
-        self.assertNotIn(PowerControl.EFUSE3, called_controls)
+        mock_bb.rail_power_up.assert_not_called()
+        mock_bb.power_set.assert_not_called()
 
     def test_ios_sharing_same_efuse_only_enable_once(self):
         """IO 3 and IO 2 share EFUSE1 — second call should skip it."""
@@ -452,6 +459,46 @@ class TestEnableIoBlockPower(unittest.TestCase):
         hal._enable_io_block_power(hal._routing[2])
         # VADJ1 and EFUSE1 already on — nothing should be called
         mock_bb.power_set.assert_not_called()
+
+
+# =========================================================================
+# AN-02: read_current units
+# =========================================================================
+
+class TestReadCurrentUnits(unittest.TestCase):
+    """Firmware convertAdcCode() already returns mA for every CH_FUNC_IIN_*
+    (tasks.cpp: adcCodeToCurrent(...) * 1000.0f), so the HAL must pass the
+    value through unchanged."""
+
+    def test_read_current_is_milliamps(self):
+        hal, mock_bb = _make_hal()
+        hal._io_mode[3] = PortMode.CURRENT_IN
+        mock_bb.get_adc_value.return_value = MagicMock(value=12.0)
+        self.assertAlmostEqual(hal.read_current(3), 12.0)
+
+
+# =========================================================================
+# MCP-24: first configure() must not power a block at 12 V
+# =========================================================================
+
+class TestDefaultSupplyVoltage(unittest.TestCase):
+    """MCP configure_io never sets a supply voltage, so the HAL default is what
+    a DUT on the block sees. A 12 V default can destroy a 3.3 V target."""
+
+    def test_first_configure_does_not_apply_12v(self):
+        for io in (3, 9):  # VADJ1 block and VADJ2 block
+            hal, mock_bb = _make_hal()
+            hal.configure(io, PortMode.DIGITAL_IN)
+            volts = [c.args[1] for c in mock_bb.rail_power_up.call_args_list]
+            self.assertTrue(volts, "block supply voltage was never set")
+            self.assertLessEqual(max(volts), 3.3, f"IO{io}: VADJ set to {volts}")
+
+    def test_explicit_supply_voltage_is_kept(self):
+        """Control: an explicit voltage still applies."""
+        hal, mock_bb = _make_hal()
+        hal._supply_v = 5.0
+        hal.configure(3, PortMode.DIGITAL_IN)
+        self.assertEqual(mock_bb.rail_power_up.call_args.args[:2], (1, 5.0))
 
 
 if __name__ == "__main__":

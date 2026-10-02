@@ -21,6 +21,7 @@
 #include "esp_err.h"
 
 #include "usb_proto.h"
+#include "usb_marker_q.h"
 #include "power_dsp.h"
 #include "current_fusion.h"
 
@@ -170,6 +171,7 @@ typedef struct {
     uint64_t wi_start_index;
     uint64_t wi_timestamp_us;   // esp_timer at slot 0
     uint32_t wi_rate;
+    uint32_t push_rate;         // DAQ-03: rate of push_sample calls (marker back-off)
     uint8_t  wi_decim;
     uint64_t sample_seq;        // widened u32 -> u64, running fused-sample index
 
@@ -188,6 +190,10 @@ typedef struct {
     // sole writer of the batch/counter fields — so the reset never tears a
     // mid-push batch or a non-atomic u64 sequence.
     volatile bool   reset_pending;
+    // DAQ-04: same handoff for the STOP flush and digital-event markers, which
+    // used to write frame_buf from the TinyUSB / S3-link tasks mid-frame.
+    volatile bool   flush_pending;
+    usb_mark_q_t    mark_q;
     volatile uint32_t dropped_frames;
 
     // Trigger latch (S3 owns the IO event logic; the PC keeps the pre-roll).
@@ -262,6 +268,20 @@ void usb_stream_batch_end(usb_stream_t *s);
  */
 void usb_stream_reset_session(usb_stream_t *s);
 
+/** @brief (any task) Ask the producer to flush the partial WAVE_I/WAVE_V
+ *         batches. Use instead of the flush_* calls while daq_fast runs. */
+void usb_stream_request_flush(usb_stream_t *s);
+
+/** @brief (S3-link task only: single producer) Queue a marker for the
+ *         producer to emit, @p age_us after the edge was seen (DAQ-03).
+ *         Returns false when the queue is full. */
+bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                             uint8_t kind, uint32_t age_us);
+
+/** @brief (producer only) Apply pending flush/marker requests. Called at the
+ *         top of usb_stream_push_sample(). */
+void usb_stream_service_requests(usb_stream_t *s);
+
 /**
  * @brief Apply the session reset immediately. ONLY safe when the producer
  *        (daq_fast_task) is not running, or when called from the producer
@@ -275,6 +295,16 @@ void usb_stream_reset_apply(usb_stream_t *s);
 
 /** @brief Send an arbitrary typed frame. */
 esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
+                                const void *payload, uint16_t len);
+
+/**
+ * @brief (any task) Send a small reply record (<= USB_REPLY_MAX bytes) built in
+ *        a caller-stack buffer and written in ONE transport write. Does not
+ *        touch frame_buf, tx_seq or the batch, so it is safe off the producer
+ *        task (C6-26 OTA acks). Sent even when streaming is off; seq is 0.
+ */
+#define USB_REPLY_MAX 64u
+esp_err_t usb_stream_send_reply(usb_stream_t *s, usb_rec_type_t type,
                                 const void *payload, uint16_t len);
 
 /**

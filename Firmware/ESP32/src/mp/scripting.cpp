@@ -13,6 +13,7 @@
 #include "script_storage.h"
 #include "config.h"
 #include "repl_ws.h"
+#include "bbp.h"
 #include "tasks.h"
 #include "esp_attr.h"
 
@@ -160,8 +161,9 @@ static void log_push_locked(const char *str, size_t len)
 
 void scripting_log_push(const char *str, size_t len)
 {
-    // Tee to stderr for IDF console visibility
-    fwrite(str, 1, len, stderr);
+    // Tee to stderr (CDC #0) for console visibility, except while a BBP host owns it:
+    // raw bytes there corrupt the COBS stream. Output still reaches the log ring.
+    if (!bbpCdcClaimed()) fwrite(str, 1, len, stderr);
 
     // Also feed the browser REPL terminal. repl_ws_forward() is non-blocking
     // and becomes a no-op until a WebSocket session is authenticated.
@@ -430,7 +432,7 @@ static void taskMicroPython(void *pvParam)
     mp_stack_set_top((void *)&stack_dummy);
     mp_stack_set_limit(MP_TASK_STACK - 1024);
 
-    ScriptCmd cmd;
+    ScriptCmd cmd = {};
 
     for (;;) {
         // ---------------------------------------------------------------
@@ -687,7 +689,7 @@ bool scripting_run_string(const char *src, size_t len, bool persist)
     memcpy(payload, src, len);
     payload[len] = '\0';
 
-    ScriptCmd cmd;
+    ScriptCmd cmd = {};
     cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
     cmd.payload = payload;
     cmd.len     = len;

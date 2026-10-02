@@ -151,9 +151,10 @@ extern "C" void cli_cmd_status(const char* args)
     term_println("----|--------------|------------|----------------|----------|-----|-----|----------");
 
     for (uint8_t ch = 0; ch < 4; ch++) {
-        ChannelFunction func = g_cli_dev->getChannelFunction(ch);
+        const uint8_t pch = tasks_logical_to_physical(ch);
+        ChannelFunction func = g_cli_dev->getChannelFunction(pch);
         uint32_t adcRaw = 0;
-        g_cli_dev->readAdcResult(ch, &adcRaw);
+        g_cli_dev->readAdcResult(pch, &adcRaw);
 
         // Get current ADC range from state
         AdcRange range = ADC_RNG_0_12V;
@@ -163,11 +164,11 @@ extern "C" void cli_cmd_status(const char* args)
         }
 
         float adcVal = g_cli_dev->adcCodeToVoltage(adcRaw, range);
-        uint16_t dacActive = g_cli_dev->getDacActive(ch);
+        uint16_t dacActive = g_cli_dev->getDacActive(pch);
         uint8_t dinComp = g_cli_dev->readDinCompOut();
-        bool dinBit = (dinComp >> ch) & 1;
+        bool dinBit = (dinComp >> pch) & 1;
         uint16_t chAlert = 0;
-        g_cli_dev->readChannelAlertStatus(ch, &chAlert);
+        g_cli_dev->readChannelAlertStatus(pch, &chAlert);
 
         // Get DO state from shared state
         bool doState = false;
@@ -487,7 +488,7 @@ extern "C" void cli_cmd_dac(const char* args)
             cmd.floatVal = fval;
             sendCommand(cmd);
             delay_ms(20);
-            uint16_t active = g_cli_dev->getDacActive((uint8_t)ch);
+            uint16_t active = g_cli_dev->getDacActive(tasks_logical_to_physical((uint8_t)ch));
             term_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
             return;
         }
@@ -499,7 +500,7 @@ extern "C" void cli_cmd_dac(const char* args)
             cmd.floatVal = fval;
             sendCommand(cmd);
             delay_ms(20);
-            uint16_t active = g_cli_dev->getDacActive((uint8_t)ch);
+            uint16_t active = g_cli_dev->getDacActive(tasks_logical_to_physical((uint8_t)ch));
             term_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
             return;
         }
@@ -515,7 +516,7 @@ extern "C" void cli_cmd_dac(const char* args)
         cmd.dacCode = (uint16_t)uval;
         sendCommand(cmd);
         delay_ms(20);
-        uint16_t active = g_cli_dev->getDacActive((uint8_t)ch);
+        uint16_t active = g_cli_dev->getDacActive(tasks_logical_to_physical((uint8_t)ch));
         term_printf("DAC_ACTIVE[%u] = %u (0x%04X)\r\n", ch, active, active);
         return;
     }

@@ -14,7 +14,7 @@
 use crate::bbp;
 use crate::connection_manager::ConnectionManager;
 use crate::daq_proto::{self, DaqRecord, EnergyRecord, FftRecord, StatsRecord, StatusRecord};
-use crate::daq_store::{DaqIntegral, DaqStore, DaqViewData};
+use crate::daq_store::{DaqIntegral, DaqStore};
 use crate::daq_usb::{daq_usb_present, DaqTransport, DaqUsbConnection, MockDaqTransport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -272,7 +272,8 @@ fn ingest_loop(
                     break; // receiver gone
                 }
             }
-            Ok(_) => {}
+            // DESK-24: give a waiting control command a chance at the mutex.
+            Ok(_) => std::thread::yield_now(),
             Err(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     }
@@ -363,9 +364,11 @@ pub fn daq_get_view(
     smooth: u32,
     filter_type: u8,
     daq: State<'_, DaqState>,
-) -> CmdResult<DaqViewData> {
+) -> CmdResult<tauri::ipc::Response> {
+    // DESK-25: raw bytes (ArrayBuffer on the JS side), not JSON.
     let store = daq.store.read().map_err(map_err)?;
-    Ok(store.get_view(start, end, max_points, smooth, filter_type))
+    let view = store.get_view(start, end, max_points, smooth, filter_type);
+    Ok(tauri::ipc::Response::new(view.to_view_bytes()))
 }
 
 #[tauri::command]
@@ -458,7 +461,6 @@ pub async fn daq_reset_stats(daq: State<'_, DaqState>) -> CmdResult<()> {
 
 const DAQ_CFG_GET: u8 = 0x00;
 const DAQ_CFG_SET: u8 = 0x01;
-const DAQ_CFG_ACTION: u8 = 0x04;
 
 /// Set a single persistent DAQ setting (TLV: [op][key u16 LE][type u8][len u8][value]).
 #[tauri::command]
@@ -474,25 +476,6 @@ pub async fn daq_cfg_set(
     payload.push(value.len() as u8);
     payload.extend_from_slice(&value);
     mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload)
-        .await
-        .map(|_| ())
-        .map_err(map_err)
-}
-
-/// Read a single persistent DAQ setting; returns the raw TLV value bytes.
-#[tauri::command]
-pub async fn daq_cfg_get(key: u16, mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<u8>> {
-    let mut payload = vec![DAQ_CFG_GET];
-    payload.extend_from_slice(&key.to_le_bytes());
-    mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload)
-        .await
-        .map_err(map_err)
-}
-
-/// Trigger a one-shot DAQ action (1=energy reset, 2=charge reset, 3=factory reset).
-#[tauri::command]
-pub async fn daq_cfg_action(action: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_DAQ_CONFIG, &[DAQ_CFG_ACTION, action])
         .await
         .map(|_| ())
         .map_err(map_err)

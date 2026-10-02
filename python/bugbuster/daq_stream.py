@@ -56,6 +56,7 @@ REC_FFT = 0x04
 REC_MARKER = 0x05
 REC_STATUS = 0x06
 REC_WAVE_V = 0x07
+REC_OTA_ACK = 0x08   # reply to every CMD_OTA_* (C6-26)
 
 # Control commands (PC -> device)
 CMD_START = 0x80
@@ -67,6 +68,28 @@ CMD_RESET_STATS = 0x85
 CMD_FFT_CONFIG = 0x86
 CMD_SET_SOURCE = 0x87
 CMD_ARM = 0x88
+CMD_RANGE_CAL_START = 0x89
+CMD_RANGE_CAL_ACK = 0x8A
+CMD_RANGE_CAL_ABORT = 0x8B
+# OTA over the vendor link (C6-26), see bugbuster.daq_usb_ota.
+CMD_OTA_BEGIN = 0x8C
+CMD_OTA_DATA = 0x8D
+CMD_OTA_END = 0x8E
+CMD_OTA_ABORT = 0x8F
+CMD_OTA_APPLY = 0x90
+CMD_OTA_CONFIRM = 0x91
+CMD_OTA_REBOOT = 0x92
+CMD_OTA_STATUS = 0x93
+
+OTA_TARGET_C6 = 1
+OTA_TARGET_P4 = 3
+OTA_ACK_WINDOW = 16
+OTA_ERRORS = {
+    0: "ok", -1: "failed", -2: "unsupported target", -3: "image rejected",
+    -4: "busy", -5: "offset mismatch", -6: "verify failed", -7: "bad state",
+    -8: "device queue full",
+}
+OTA_ERR_OFFSET = -5
 
 # meta byte bit layout (WAVE_I only)
 META_RANGE_MASK = 0x03
@@ -183,6 +206,32 @@ class StatusRecord:
         return dict(self.raw)
 
 
+@dataclass
+class OtaAckRecord:
+    """usb_ota_ack_t: the device's answer to a CMD_OTA_* command."""
+    cmd: int
+    status: int          # 0 ok, < 0 OTA_ERRORS
+    target: int          # OTA_TARGET_* (0 = no session)
+    state: int           # C6: relay_state_t, P4: ota_state_t
+    done_bytes: int      # resume point
+    image_size: int
+    pushed_bytes: int    # C6 push progress
+    fw_version: int      # running P4 firmware, (major << 16) | (minor << 8) | patch
+    flags: int
+
+    @property
+    def pending_verify(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def fw_version_str(self) -> str:
+        v = self.fw_version
+        return f"{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+
+
+_OTA_ACK = struct.Struct("<BbBBIIIIB3x")      # 24 bytes
+
+
 _WAVE_HDR = struct.Struct("<QQIHBB")          # 24 bytes
 _MARKER = struct.Struct("<QQBBBB")            # 20 bytes
 _ENERGY = struct.Struct("<dddddfff")          # 52 bytes
@@ -246,6 +295,11 @@ def _parse_status(p: bytes) -> Dict[str, Any]:
         out["cal_have_hi"] = bool(cal_have & 0x01)
         out["cal_have_mid"] = bool(cal_have & 0x02)
         out["cal_have_lo"] = bool(cal_have & 0x04)
+    if len(p) >= 116:
+        # Extension v9: u32 drop counters (the v2 u16 ones saturate) and FINE
+        # conversions the ADC produced but the P4 never captured.
+        d32f, d32c, missed = struct.unpack_from("<III", p, 104)
+        out.update(drop_fine32=d32f, drop_coarse32=d32c, missed_conversions=missed)
     return out
 
 
@@ -328,6 +382,11 @@ def parse_frame(buf, off: int = 0) -> Tuple[Optional[Any], int]:
     if rec_type == REC_STATS:
         return StatusRecord({"stats": _parse_stats(p)}), total
 
+    if rec_type == REC_OTA_ACK:
+        if len(p) < _OTA_ACK.size:
+            return None, total
+        return OtaAckRecord(*_OTA_ACK.unpack_from(p, 0)), total
+
     return None, total
 
 
@@ -356,6 +415,9 @@ class PowerCapture:
     device_status: Dict[str, Any] = field(default_factory=dict)
     rate_source: str = "wave_header"
     rate_warning: Optional[str] = None
+    # DAQ-10: index into current[] of the trigger sample (0 without pre-roll,
+    # None for an untriggered capture).
+    trigger_offset: Optional[int] = None
 
     @property
     def sample_count(self) -> int:
@@ -395,7 +457,7 @@ class CaptureAccumulator:
         # deque, not list: this is drained from the head on every waveform
         # record, and list.pop(0) made capture assembly O(n^2) - the host fell
         # behind the stream and the DEVICE dropped frames to back-pressure.
-        self._v_pending: Deque[Tuple[int, float]] = deque()
+        self._v_pending: Deque[Tuple[float, float]] = deque()  # (t_s, volts)
 
     @property
     def full(self) -> bool:
@@ -438,19 +500,22 @@ class CaptureAccumulator:
         self._drain_voltage()
 
     def _feed_voltage(self, rec: WaveVRecord) -> None:
+        # WAVE_V indices count voltage samples (volt_seq), not fused current
+        # samples; both restart at 0 together, so compare in seconds.
+        rate_v = float(rec.sample_rate) or (self.cap.sample_rate or 1.0)
         for k, v in enumerate(rec.voltage):
-            self._v_pending.append((rec.start_index + k, v))
+            self._v_pending.append(((rec.start_index + k) / rate_v, v))
         self._drain_voltage()
 
     def _drain_voltage(self) -> None:
         """Zero-order-hold voltage onto the current timebase."""
         cap = self.cap
-        if cap.start_index is None:
+        if cap.start_index is None or cap.sample_rate <= 0:
             return
         target = cap.sample_count
         while len(cap.voltage) < target:
-            abs_idx = cap.start_index + len(cap.voltage)
-            while self._v_pending and self._v_pending[0][0] <= abs_idx:
+            t_i = (cap.start_index + len(cap.voltage)) / cap.sample_rate
+            while self._v_pending and self._v_pending[0][0] <= t_i + 1e-12:
                 self._last_v = self._v_pending.popleft()[1]
             if self._last_v is None:
                 if self._v_pending:
@@ -581,7 +646,11 @@ class DaqStream:
         try:
             data = self._dev.read(DAQ_EP_IN, self.READ_CHUNK, timeout_ms)
         except Exception as exc:
-            if "timeout" in str(exc).lower() or getattr(exc, "errno", None) == 110:
+            # libusb on Windows reports a quiet endpoint as errno 10060
+            # "Operation timed out", which the plain "timeout" match missed.
+            msg = str(exc).lower()
+            if ("timeout" in msg or "timed out" in msg
+                    or getattr(exc, "errno", None) in (110, 10060)):
                 data = b""
             else:
                 raise DaqStreamError(f"DAQ bulk read failed: {exc}") from exc
@@ -641,19 +710,52 @@ class DaqStream:
         start_stream: bool = True,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 10.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: Optional[float] = None,
+        trigger_edge: str = "rising",
     ) -> PowerCapture:
         """Record ``duration_s`` of fused measurement data.
 
-        With ``wait_for_trigger``, samples before the TRIGGER marker are
-        discarded and the capture window starts at t=0 (arm the trigger engine
-        over BBP first - the S3 owns the IO event logic).
+        With ``wait_for_trigger``, the capture starts at the TRIGGER marker
+        (arm the trigger engine over BBP first - the S3 owns the IO event
+        logic). With ``trigger_current_a``, the host triggers when the current
+        crosses that level (``trigger_edge`` "rising" or "falling"), no IO
+        needed. ``pre_trigger_s`` keeps that much data from before the trigger
+        (DAQ-10); ``PowerCapture.trigger_offset`` is the trigger's index. The
+        pre-roll only holds data received since this call started, so a
+        trigger in the first ``pre_trigger_s`` gets a shorter one.
         """
+        if trigger_edge not in ("rising", "falling"):
+            raise ValueError("trigger_edge must be 'rising' or 'falling'")
         if start_stream:
             self.start()
+        soft = trigger_current_a is not None
         acc = CaptureAccumulator(max_samples=max_samples)
-        triggered = not wait_for_trigger
+        triggered = not (wait_for_trigger or soft)
         deadline_trig = time.monotonic() + trigger_timeout_s
-        deadline: Optional[float] = None if wait_for_trigger else time.monotonic() + duration_s
+        deadline: Optional[float] = None if not triggered else time.monotonic() + duration_s
+        history: Deque[Any] = deque()   # waveform records seen before the trigger
+        hist_samples = 0
+        rate_hint = 0.0
+        prev_i: Optional[float] = None
+
+        def _start_at(trig_index: int, recs: List[Any]) -> CaptureAccumulator:
+            rate = rate_hint or 1.0
+            pre_n = int(round(max(0.0, pre_trigger_s) * rate))
+            first = trig_index - pre_n
+            new = CaptureAccumulator(max_samples=max_samples)
+            for r in recs:
+                if isinstance(r, WaveIRecord):
+                    end = r.start_index + len(r.current)
+                    if end <= first:
+                        continue
+                    k = max(0, first - r.start_index)
+                    r = WaveIRecord(r.start_index + k, r.timestamp_us, r.sample_rate,
+                                    r.decimation, r.current[k:], r.meta[k:])
+                new.feed(r)
+            if new.cap.start_index is not None:
+                new.cap.trigger_offset = max(0, trig_index - new.cap.start_index)
+            return new
 
         try:
             while True:
@@ -666,13 +768,45 @@ class DaqStream:
                     break
                 if acc.full:
                     break
-                for rec in self.read_records(timeout_ms=100):
+                batch = self.read_records(timeout_ms=100)
+                for n, rec in enumerate(batch):
                     if not triggered:
-                        if isinstance(rec, MarkerRecord) and rec.kind == MARK_KIND_TRIGGER:
+                        trig_index: Optional[int] = None
+                        if isinstance(rec, WaveIRecord):
+                            rate_hint = float(rec.sample_rate) / max(1, rec.decimation)
+                            if soft and trigger_current_a is not None:
+                                thr = float(trigger_current_a)
+                                for j, v in enumerate(rec.current):
+                                    if prev_i is not None and (
+                                        (trigger_edge == "rising" and prev_i < thr <= v)
+                                        or (trigger_edge == "falling" and prev_i > thr >= v)):
+                                        trig_index = rec.start_index + j
+                                        break
+                                    prev_i = v
+                            history.append(rec)
+                            hist_samples += len(rec.current)
+                            # keep only what the pre-roll can use (plus one record)
+                            while (len(history) > 1 and isinstance(history[0], WaveIRecord)
+                                   and hist_samples - len(history[0].current)
+                                   >= max(0.0, pre_trigger_s) * (rate_hint or 1.0)):
+                                hist_samples -= len(history.popleft().current)
+                        elif isinstance(rec, WaveVRecord):
+                            history.append(rec)
+                        elif (not soft and isinstance(rec, MarkerRecord)
+                              and rec.kind == MARK_KIND_TRIGGER):
+                            trig_index = rec.sample_index
+                        if trig_index is not None:
                             triggered = True
-                            acc = CaptureAccumulator(max_samples=max_samples)
+                            acc = _start_at(trig_index, list(history))
+                            if isinstance(rec, MarkerRecord):
+                                acc.feed(rec)
+                            if acc.cap.trigger_offset is None:
+                                acc.cap.trigger_offset = 0
                             deadline = time.monotonic() + duration_s
-                            acc.feed(rec)
+                            # the rest of this batch belongs to the capture
+                            for rest in batch[n + 1:]:
+                                acc.feed(rest)
+                            break
                         continue
                     acc.feed(rec)
                     # A single read can return a large batch; without this the

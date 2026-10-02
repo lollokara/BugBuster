@@ -1,0 +1,36 @@
+{
+  "slots": [
+    {
+      "raw": 2740,
+      "slot": 0,
+      "source": 1,
+      "sourceName": "TEMP",
+      "unit": "C",
+      "value": 38.88268280029297
+    },
+    {
+      "raw": 20582,
+      "slot": 1,
+      "source": 5,
+      "sourceName": "AVDD_HI",
+      "unit": "V",
+      "value": 15.098865509033203
+    },
+    {
+      "raw": 26263,
+      "slot": 2,
+      "source": 2,
+      "sourceName": "DVCC",
+      "unit": "V",
+      "value": 3.339513063430786
+    },
+    {
+      "raw": 19607,
+      "slot": 3,
+      "source": 3,
+      "sourceName": "AVCC",
+      "unit": "V",
+      "value": 5.235633850097656
+    }
+  ]
+}

@@ -23,10 +23,13 @@ extern "C" {
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-#define BBP_PROTO_VERSION       11
+// v12 (audit M3): IO_RELEASE takes u8 n + slots (n=0 = all of the caller's
+// session); MUX refusals answer 0x13 ROUTE_REJECTED; RAIL_POWER_UP 0x93;
+// optional trailing bytes on PCA_SET_PORT (flags) and HAT_LA_CONFIG (rle).
+#define BBP_PROTO_VERSION       12
 
-#define BBP_FW_VERSION_MAJOR    5
-#define BBP_FW_VERSION_MINOR    1
+#define BBP_FW_VERSION_MAJOR    6
+#define BBP_FW_VERSION_MINOR    0
 #define BBP_FW_VERSION_PATCH    0
 
 // Handshake magic bytes: 0xBB 'B' 'U' 'G'
@@ -39,7 +42,7 @@ extern "C" {
 
 // Framing
 #define BBP_MAX_PAYLOAD         1024
-#define BBP_COBS_MAX            (BBP_MAX_PAYLOAD + 2 + 1) // payload + COBS overhead + delimiter
+#define BBP_COBS_MAX            (BBP_MAX_PAYLOAD + BBP_MAX_PAYLOAD / 254 + 3) // worst-case COBS overhead + delimiter
 #define BBP_FRAME_DELIMITER     0x00
 
 // Message header size: type(1) + seq(2) + cmd(1) = 4
@@ -154,6 +157,7 @@ extern "C" {
 #define BBP_CMD_MUX_SET_ALL     0x90
 #define BBP_CMD_MUX_GET_ALL     0x91
 #define BBP_CMD_MUX_SET_SWITCH  0x92
+#define BBP_CMD_RAIL_POWER_UP   0x93  // Sequenced VADJ rail + e-fuse power-up (power/rail_power.h)
 
 // DS4424 IDAC
 #define BBP_CMD_IDAC_GET_STATUS     0xA0  // Get all IDAC channel states
@@ -324,22 +328,27 @@ extern "C" {
 
 // -----------------------------------------------------------------------------
 // Error Codes
+//
+// SINGLE SOURCE OF TRUTH. The trailing comment is the user-facing message.
+// Firmware/tools/gen_error_tables.py generates the Python ErrorCode enum, the
+// MCP ERROR_MESSAGES table and the desktop bbp.rs consts + error_to_string()
+// from this block; CI runs it with --check. Edit here, then run the generator.
 // -----------------------------------------------------------------------------
 
-#define BBP_ERR_INVALID_CMD     0x01
-#define BBP_ERR_INVALID_CH      0x02
-#define BBP_ERR_INVALID_PARAM   0x03
-#define BBP_ERR_SPI_FAIL        0x04
-#define BBP_ERR_QUEUE_FULL      0x05
-#define BBP_ERR_BUSY            0x06
-#define BBP_ERR_INVALID_STATE   0x07
-#define BBP_ERR_CRC_FAIL        0x08
-#define BBP_ERR_FRAME_TOO_LARGE 0x09
-#define BBP_ERR_STREAM_ACTIVE   0x0A
-#define BBP_ERR_TIMEOUT                0x11
-#define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot owned by another session
-#define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX mutual-exclusion rejected route
-#define BBP_ERR_UNSUPPORTED_HAT        0x14  // Command requires different HAT type (LA vs DAQ)
+#define BBP_ERR_INVALID_CMD            0x01  // The command is not recognized by the device
+#define BBP_ERR_INVALID_CH             0x02  // Channel number is out of range
+#define BBP_ERR_INVALID_PARAM          0x03  // One or more parameters are invalid
+#define BBP_ERR_SPI_FAIL               0x04  // SPI communication with the AD74416H failed
+#define BBP_ERR_QUEUE_FULL             0x05  // Device command queue is full - retry after a short delay
+#define BBP_ERR_BUSY                   0x06  // Device is busy processing another operation
+#define BBP_ERR_INVALID_STATE          0x07  // Operation cannot be performed in the current device state
+#define BBP_ERR_CRC_FAIL               0x08  // Payload CRC check failed
+#define BBP_ERR_FRAME_TOO_LARGE        0x09  // Command or response payload exceeds the maximum frame size
+#define BBP_ERR_STREAM_ACTIVE          0x0A  // Cannot configure while streaming is active
+#define BBP_ERR_TIMEOUT                0x11  // Device operation timed out or no response received
+#define BBP_ERR_IO_OWNERSHIP_REQUIRED  0x12  // IO slot is owned by another session
+#define BBP_ERR_ADGS_ROUTE_REJECTED    0x13  // MUX route rejected by the U17-S3 / U23 self-test interlock
+#define BBP_ERR_UNSUPPORTED_HAT        0x14  // Command requires a different HAT type, or no HAT is attached
 
 // -----------------------------------------------------------------------------
 // ADC Stream Ring Buffer (lock-free, single-producer single-consumer)
@@ -363,7 +372,8 @@ struct BbpAdcStreamBuf {
 // -----------------------------------------------------------------------------
 
 size_t bbp_cobs_encode(const uint8_t *input, size_t length, uint8_t *output);
-size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output);
+// Returns the decoded length, or 0 if the frame is malformed or would exceed max_out.
+size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output, size_t max_out);
 
 // -----------------------------------------------------------------------------
 // CRC-16/CCITT

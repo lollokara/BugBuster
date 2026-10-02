@@ -1,0 +1,17 @@
+{
+  "count": 2,
+  "faults": [
+    {
+      "channel": 2,
+      "timestamp_ms": 168033,
+      "type": 3,
+      "typeName": "pg_restored"
+    },
+    {
+      "channel": 3,
+      "timestamp_ms": 170036,
+      "type": 1,
+      "typeName": "efuse_clear"
+    }
+  ]
+}

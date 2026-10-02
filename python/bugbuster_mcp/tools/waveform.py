@@ -117,12 +117,12 @@ def start_waveform(
 
     The IO must be configured as ANALOG_OUT with configure_io first.
     Only one waveform can run at a time. The firmware continuously updates
-    the DAC at the requested frequency (0.01-100 Hz).
+    the DAC at the requested frequency (0.1-100 Hz).
 
     Parameters:
     - io: IO number — must be 3, 6, 9, or 12 (analog-capable IOs).
     - waveform: Shape — "sine", "square", "triangle", or "sawtooth".
-    - freq_hz: Frequency in Hz (0.01 to 100.0).
+    - freq_hz: Frequency in Hz (0.1 to 100.0).
     - amplitude: Peak amplitude in volts. The waveform spans
                  [offset - amplitude, offset + amplitude].
     - offset: DC offset in volts (default 0.0).
@@ -137,9 +137,9 @@ def start_waveform(
         raise ValueError(
             f"Unknown waveform {waveform!r}. Use: sine, square, triangle, sawtooth."
         )
-    if not (0.01 <= freq_hz <= 100.0):
+    if not (0.1 <= freq_hz <= 100.0):
         raise ValueError(
-            f"Frequency {freq_hz} Hz out of range. Supported: 0.01-100 Hz."
+            f"Frequency {freq_hz} Hz out of range. Supported: 0.1-100 Hz."
         )
     if amplitude < 0:
         raise ValueError("Amplitude must be non-negative.")
@@ -190,15 +190,15 @@ def stop_waveform() -> dict:
     """
     Stop the waveform generator.
 
-    The DAC output holds at the last generated value after stopping.
-    Call write_voltage to set a specific DC level afterwards.
+    The waveform channel is returned to HIGH_IMP (output off). Call
+    configure_io and write_voltage to drive a DC level afterwards.
 
     Returns: success.
     """
     bb = session.get_client()
     bb.stop_waveform()
     warnings = check_faults_post(bb)
-    res = {"success": True, "message": "Waveform stopped. DAC holds last value."}
+    res = {"success": True, "message": "Waveform stopped. Channel set to HIGH_IMP (output off)."}
     if warnings:
         res["warnings"] = warnings
     return res
@@ -374,24 +374,25 @@ def capture_logic_analyzer(
 
     ch_data = bb.hat_la_decode(raw, channels=channels)
 
-    # Build per-channel edge summary
+    # Build per-channel edge summary. ch_data holds one 0/1 value per sample.
     duration_ms = (depth / actual_rate) * 1000
     ch_edges = []
     ch_freq  = []
-    for chi, edges in enumerate(ch_data):
+    for chi, samples in enumerate(ch_data):
         if chi >= channels:
             break
-        # edges is list of (timestamp_s, level) tuples from decode
-        transitions = len(edges) if edges else 0
+        edges = [(i / actual_rate, samples[i])
+                 for i in range(1, len(samples)) if samples[i] != samples[i - 1]]
         ch_edges.append({
             "channel":     chi,
-            "transitions": transitions,
-            "edges":       edges[:100] if edges else [],  # cap at 100 for readability
+            "transitions": len(edges),
+            "edges":       edges[:100],  # (time_s, new_level), capped for readability
         })
-        # Estimate frequency from transition rate
-        if transitions >= 2 and duration_ms > 0:
-            freq = transitions / 2 / (duration_ms / 1000)
-            ch_freq.append(round(freq, 2))
+        # Two transitions per period, measured between the first and last
+        # edge so partial periods at the window ends do not bias it.
+        if len(edges) >= 3:
+            span = edges[-1][0] - edges[0][0]
+            ch_freq.append(round((len(edges) - 1) / 2 / span, 2))
         else:
             ch_freq.append(0)
 

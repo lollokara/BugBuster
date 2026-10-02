@@ -169,7 +169,7 @@ export interface UpdateComponent {
   available: boolean;
   availableBuildId: string;
   version: string;
-  newer: boolean;
+  updateAvailable: boolean;
   size: number;
   sha256: string;
   crc32?: number;

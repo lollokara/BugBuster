@@ -427,19 +427,13 @@ impl HttpTransport {
     async fn post_json_slow(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.slow_client.post(&url).json(body).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.client.post(&url).json(body).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     /// POST with a per-request timeout override. Used for commands that the
@@ -461,10 +455,7 @@ impl HttpTransport {
             .json(body)
             .send()
             .await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     /// Map channel function string from webserver to numeric ID used by BBP.
@@ -563,7 +554,7 @@ impl HttpTransport {
             for (i, d) in diag.iter().enumerate().take(4) {
                 state.diag[i] = DiagState {
                     source: d.get("source").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
-                    raw_code: d.get("raw").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                    raw_code: d.get("rawCode").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
                     value: d.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                 };
             }
@@ -1446,6 +1437,22 @@ impl Transport for HttpTransport {
                 Ok(vec![if success { 1 } else { 0 }])
             }
 
+            bbp::CMD_WIFI_SET_AP_PASSWORD => {
+                // DESK-9: payload pass_len(u8) + pass -> POST /api/wifi/ap_password,
+                // re-encoded as the BBP status byte (0 persisted, 1 live only, 2 failed).
+                let n = *payload.first().ok_or_else(|| anyhow!("Invalid payload"))? as usize;
+                if payload.len() < 1 + n {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let pass = String::from_utf8_lossy(&payload[1..1 + n]).to_string();
+                let json = self
+                    .post_json("/api/wifi/ap_password", &serde_json::json!({"password": pass}))
+                    .await?;
+                let ok = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let persisted = json.get("persisted").and_then(|v| v.as_bool()).unwrap_or(false);
+                Ok(vec![if !ok { 2 } else if persisted { 0 } else { 1 }])
+            }
+
             bbp::CMD_WIFI_SCAN => {
                 let json = self.get_json_slow("/api/wifi/scan").await?;
                 // Re-encode as BBP binary: count(u8) + N * (ssid_len(u8) + ssid + rssi(i8) + auth(u8))
@@ -2205,6 +2212,68 @@ impl Transport for HttpTransport {
 
     fn base_url(&self) -> Option<String> {
         Some(self.base_url.clone())
+    }
+}
+
+#[cfg(test)]
+mod logical_failure_tests {
+    use serde_json::json;
+
+    /// TR-11b: an action answered 200 {"ok":false} (old firmware) or 4xx (new)
+    /// must be an error; a 4xx carries the device's message.
+    #[test]
+    fn both_failure_forms_are_errors() {
+        let f = super::logical_failure;
+        assert_eq!(f(200, &json!({"ok": false, "error": "busy"})).as_deref(), Some("busy"));
+        assert_eq!(f(400, &json!({"ok": false, "error": "ch must be 0-3"})).as_deref(), Some("ch must be 0-3"));
+        assert_eq!(f(400, &json!({})).as_deref(), Some("HTTP 400"));
+        assert_eq!(f(200, &json!({"ok": true})), None);
+        assert_eq!(f(200, &json!({"value": 1})), None);
+    }
+}
+
+/// TR-11b: Some(message) when a POST reply means failure: any 4xx/5xx (current
+/// firmware) or 200 {"ok": false} (older firmware).
+fn logical_failure(status: u16, json: &Value) -> Option<String> {
+    let msg = ["error", "err", "message"]
+        .iter()
+        .find_map(|k| json.get(*k).and_then(|v| v.as_str()))
+        .map(str::to_string);
+    if status >= 400 {
+        return Some(msg.unwrap_or_else(|| format!("HTTP {}", status)));
+    }
+    if json.get("ok").and_then(|v| v.as_bool()) == Some(false) {
+        return Some(msg.unwrap_or_else(|| "device refused the request".to_string()));
+    }
+    None
+}
+
+/// Parse a POST reply, turning either failure form into an error.
+async fn action_json(resp: reqwest::Response, path: &str) -> Result<Value> {
+    let status = resp.status().as_u16();
+    let json: Value = if status >= 400 {
+        resp.json().await.unwrap_or(Value::Null)
+    } else {
+        resp.json().await?
+    };
+    if let Some(m) = logical_failure(status, &json) {
+        return Err(anyhow!("{} ({})", m, path));
+    }
+    Ok(json)
+}
+
+#[cfg(test)]
+mod diag_raw_tests {
+    /// DESK-DIAG-RAW: firmware emits `diagnostics[].rawCode`; the desktop read
+    /// `raw`, so HTTP diagnostic raw codes were always 0.
+    #[test]
+    fn status_diag_raw_code_is_parsed() {
+        let j = serde_json::json!({
+            "spiOk": true, "channels": [],
+            "diagnostics": [{"source": 2, "rawCode": 4660, "value": 1.5}]
+        });
+        let st = super::HttpTransport::parse_status_json(&j).expect("parse");
+        assert_eq!(st.diag[0].raw_code, 4660);
     }
 }
 

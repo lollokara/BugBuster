@@ -298,6 +298,14 @@ bool tasks_drain_command_queue(uint32_t timeout_ms);
  */
 uint32_t tasks_adc_rate_poll_ms(AdcRate fastest);
 
+/** AN-11: adcPoll loop counters since boot (exposed in /api/debug). */
+struct AdcPollStats {
+    uint32_t loops;      // poll iterations
+    uint32_t ready;      // iterations that found ADC_DATA_RDY set
+    uint32_t rdy_irq;    // ADC_RDY falling edges seen by the ISR
+};
+void tasks_adc_poll_stats(AdcPollStats *out);
+
 /**
  * @brief Reset the entire board signal path to a safe state.
  *
@@ -433,7 +441,7 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 
 // Number of entries tasks_get_registry() can return. Keep in lockstep with
 // s_task_registry[] in tasks.cpp.
-#define BB_TASK_REGISTRY_MAX 6
+#define BB_TASK_REGISTRY_MAX 7
 
 // One row of the task table. `handle` is resolved at call time, not cached:
 // during boot and after a task exits it can legitimately be NULL.

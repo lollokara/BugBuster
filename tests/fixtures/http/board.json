@@ -1,0 +1,45 @@
+{
+  "active": null,
+  "available": [
+    {
+      "description": "Custom DUT profile (defaults)",
+      "id": "new-board",
+      "name": "New Board",
+      "pinCount": 12,
+      "rails": {
+        "vadj1": {
+          "locked": false,
+          "value": 3.299999952316284
+        },
+        "vadj2": {
+          "locked": true,
+          "value": 5
+        },
+        "vlogic": {
+          "locked": true,
+          "value": 3.299999952316284
+        }
+      }
+    },
+    {
+      "description": "STM32F407 Discovery board (SWD + USART2)",
+      "id": "stm32f4-discovery",
+      "name": "STM32F4 Discovery",
+      "pinCount": 12,
+      "rails": {
+        "vadj1": {
+          "locked": false,
+          "value": 3.299999952316284
+        },
+        "vadj2": {
+          "locked": true,
+          "value": 5
+        },
+        "vlogic": {
+          "locked": true,
+          "value": 3.299999952316284
+        }
+      }
+    }
+  ]
+}

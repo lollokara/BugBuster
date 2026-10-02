@@ -167,6 +167,20 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
                 "srcSelGpio": ch["do_src_sel_gpio"],
                 "t1": ch["do_t1"], "t2": ch["do_t2"]}
 
+    # Current limit - POST /api/channel/<ch>/ilimit. Mirrors
+    # handle_post_current_limit: only "limit8mA" is read, and a missing key
+    # silently means 25 mA, which is how a wrong client key goes unnoticed.
+    if method == "POST" and path.startswith("/channel/") and path.endswith("/ilimit"):
+        try:
+            ch_idx = int(path.split("/")[2])
+        except ValueError:
+            return {"error": "Channel must be 0-3", "code": 400}
+        if not (0 <= ch_idx < len(device.channels)):
+            return {"error": "Channel must be 0-3", "code": 400}
+        limit8 = bool(body.get("limit8mA", False))
+        device.channels[ch_idx]["current_limit"] = 1 if limit8 else 0
+        return {"ok": True, "channel": ch_idx, "limit8mA": limit8}
+
     # AVDD rail selection — POST /api/channel/<ch>/avdd
     if method == "POST" and path.startswith("/channel/") and path.endswith("/avdd"):
         parts = path.split("/")
@@ -710,19 +724,23 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     if key == ("POST", "/idac/cal/save"):
         return {"ok": True}
 
-    # IO expander (PCA9535) power status — GET /ioexp
+    # IO expander (PCA9535) power status — GET /ioexp. Shape of the real
+    # firmware response (see tests/fixtures/http/ioexp.json), not the client's
+    # normalised keys.
     if key == ("GET", "/ioexp"):
+        faults = getattr(device, "efuse_faults", [False] * 4)
+        pc = device.pca_control
         return {
             "present": True,
-            "logic_pg": True,
-            "vadj1_pg": True,
-            "vadj2_pg": True,
-            "efuse_faults": [False, False, False, False],
+            "powerGood": {"logic": True, "vadj1": True, "vadj2": True},
+            "efuses": [{"id": i + 1, "enabled": bool(pc.get(5 + i, False)),
+                        "fault": bool(faults[i])} for i in range(4)],
             "enables": {
-                "vadj1": True, "vadj2": True, "15v": False,
-                "mux": True, "usb_hub": True,
-                "efuse1": True, "efuse2": True, "efuse3": True, "efuse4": True,
+                "vadj1": bool(pc.get(0, False)), "vadj2": bool(pc.get(1, False)),
+                "analog15v": bool(pc.get(2, False)), "mux": bool(pc.get(3, True)),
+                "usbHub": bool(pc.get(4, True)),
             },
+            "input0": 0, "input1": 0, "output0": 0, "output1": 0,
         }
 
     # IO expander control — POST /ioexp/control
@@ -737,6 +755,18 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # IO expander fault log — GET /ioexp/faults
     if key == ("GET", "/ioexp/faults"):
         return {"faults": []}
+
+    # Sequenced rail power-up — POST /ioexp/rail_up (firmware power/rail_power.h)
+    if key == ("POST", "/ioexp/rail_up"):
+        from tests.mock.handlers.power import rail_power_up_model
+        b = body or {}
+        flags = (0x01 if b.get("confirm") else 0) | (0x02 if b.get("powerCycle") else 0)
+        r = rail_power_up_model(device, int(b.get("rail", 0)), float(b.get("voltage", 0.0)),
+                                flags, int(b.get("efuseMask", 0)))
+        if r is None:
+            return {"error": "voltage must be 3-15 V; above 12 V needs confirm", "code": 400}
+        return {"rail": r["rail"], "appliedV": r["applied_v"], "clamped": r["clamped"],
+                "pg": r["pg"], "efuseFaults": r["efuse_faults"]}
 
     # IO expander fault config — POST /ioexp/fault_config
     if key == ("POST", "/ioexp/fault_config"):
@@ -868,6 +898,29 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
     # WiFi connect — POST /wifi/connect
     if key == ("POST", "/wifi/connect"):
         return {"ok": True}
+
+    # Waveform generator - firmware handle_post_wavegen_start/_stop.
+    if key == ("POST", "/wavegen/start"):
+        ch = int(body.get("channel", -1))
+        if not 0 <= ch <= 3:
+            return {"error": "Invalid channel", "code": 400}
+        device.wavegen_running = True
+        device.wavegen_config = {
+            "channel": ch,
+            "waveform": int(body.get("waveform", 0)),
+            "freq_hz": float(body.get("freq_hz", 0.0)),
+            "amplitude": float(body.get("amplitude", 0.0)),
+            "offset": float(body.get("offset", 0.0)),
+            "mode": int(body.get("mode", 0)),
+        }
+        return {"status": "started"}
+    if key == ("POST", "/wavegen/stop"):
+        # bbpStopWavegen(): a running waveform's channel goes back to HIGH_IMP (AN-05).
+        if device.wavegen_running and device.wavegen_config:
+            device.channels[device.wavegen_config["channel"]]["function"] = 0
+        device.wavegen_running = False
+        device.wavegen_config = None
+        return {"status": "stopped"}
 
     # Fallback
     return {"error": "not implemented", "path": path, "method": method, "code": 404}

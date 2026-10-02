@@ -91,10 +91,12 @@ jobs:
           python -m pip install pytest pytest-cov pytest-timeout mcp pydantic zeroconf websockets
 
       # One invocation so coverage spans every suite sharing the --sim fixture.
+      # tests/firmware_host compiles real firmware functions with the runner's
+      # gcc/clang; it fails (not skips) under CI if no compiler is found.
       - name: Unit, synthetic, simulator and simulated-device tests
         shell: bash
         run: |
-          pytest tests/unit tests/synthetic tests/simulator tests/device --sim -q \
+          pytest tests/unit tests/synthetic tests/simulator tests/firmware_host tests/device --sim -q \
             ${{ matrix.coverage && '--cov=bugbuster --cov=bugbuster_mcp --cov-branch --cov-report=xml:coverage.xml --cov-report=term' || '' }}
 
       # --sim-full swaps the device fixture for a real localhost HTTP server,

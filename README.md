@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-0d1117?style=flat-square&labelColor=161b22" alt="License"/>
-  <img src="https://img.shields.io/badge/MCP-121%20tools%20%C2%B7%2018%20groups-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP tools"/>
+  <img src="https://img.shields.io/badge/MCP-135%20tools%20%C2%B7%2018%20groups-0d1117?style=flat-square&labelColor=161b22&color=d4a574" alt="MCP tools"/>
   <img src="https://img.shields.io/badge/protocol-BBP%20v10-0d1117?style=flat-square&labelColor=161b22&color=2d7ddb" alt="Protocol"/>
   <img src="https://img.shields.io/badge/python-3.11%2B-0d1117?style=flat-square&labelColor=161b22&color=3776ab" alt="Python"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d1117?style=flat-square&labelColor=161b22" alt="Platform"/>
@@ -23,7 +23,7 @@
 ## What this is
 
 BugBuster is a **bench instrument you can hand to an AI**. One USB-C cable, one
-board, and a Model Context Protocol server that exposes **121 tools** - so Claude
+board, and a Model Context Protocol server that exposes **135 tools** - so Claude
 (or any MCP client) can read voltages, drive outputs, capture logic traces, scan
 an I²C bus, profile power draw, and single-step a target over SWD without a
 human in the measurement loop.
@@ -37,7 +37,7 @@ toy.
 **What it is not.** It will not replace a scope with real bandwidth. The logic
 analyzer streams 4 channels at up to 1 MHz over USB (125 MHz single-channel is
 capture-then-download, not live), the ADC tops out at 4.8 kSPS/channel, and the
-waveform generator covers 0.01–100 Hz. It is built for embedded bring-up, power
+waveform generator covers 0.1–100 Hz. It is built for embedded bring-up, power
 profiling, and protocol debugging - not RF or high-speed signal integrity work.
 
 ## Why
@@ -162,7 +162,7 @@ HATs, auto-detected at boot. The mainboard works standalone.
 |---|---|
 | **Measure** | 4-ch 24-bit ADC - voltage (0–12 V), current (4–20 mA), resistance, RTD; up to 4.8 kSPS/ch |
 | **Drive** | 4-ch 16-bit DAC - 0–11 V / ±12 V, or 0–25 mA |
-| **Generate** | Sine / square / triangle / sawtooth, 0.01–100 Hz |
+| **Generate** | Sine / square / triangle / sawtooth, 0.1–100 Hz |
 | **Digital IO** | 12 level-shifted IOs, 1.8–5 V VLOGIC, MUX-routed, debounced counters |
 | **Route** | 32-switch MUX - 4× ADGS2414D octal SPST, break-before-make |
 | **Power** | VADJ1/VADJ2 adjustable 3–15 V (capped by the negotiated USB-PD voltage), USB-PD 5–20 V, 4 e-fuses |
@@ -426,7 +426,7 @@ BugBuster/
 │
 ├── python/
 │   ├── bugbuster/             Control library (USB + HTTP)
-│   ├── bugbuster_mcp/         MCP server (121 tools, 18 groups)
+│   ├── bugbuster_mcp/         MCP server (135 tools, 18 groups)
 │   └── examples/              Annotated example scripts
 │
 ├── tests/                     pytest - unit, simulator, hardware-in-the-loop

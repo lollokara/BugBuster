@@ -84,7 +84,7 @@ static int handler_idac_set_code(const uint8_t *payload, size_t len,
     size_t rpos = 0;
     uint8_t ch    = bbp_get_u8(payload, &rpos);
     int8_t  code  = (int8_t)bbp_get_u8(payload, &rpos);
-    if (ch >= DS4424_NUM_CHANNELS) return -CMD_ERR_OUT_OF_RANGE;
+    if (ch >= 3) return -CMD_ERR_OUT_OF_RANGE;  // AN-15: ch3 is unconnected (HTTP and SET_VOLTAGE agree)
 
     if (!ds4424_set_code(ch, code)) return -CMD_ERR_HARDWARE;
 

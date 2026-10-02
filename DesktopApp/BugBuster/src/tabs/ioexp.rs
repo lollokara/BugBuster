@@ -1,6 +1,5 @@
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 
 /// PCA control index mapping (matches http_transport.rs ctrl_names):
 /// 0 = vadj1, 1 = vadj2, 2 = 15v, 3 = mux, 4 = usb, 5 = efuse1, 6 = efuse2, 7 = efuse3, 8 = efuse4
@@ -16,16 +15,16 @@ const SUPPLY_CONTROLS: &[(u8, &str, &str, &str)] = &[
 pub fn IoExpTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (ioexp, set_ioexp) = signal(IoExpState::default());
 
-    // Poll PCA status whenever device state updates
-    let set_ioexp_clone = set_ioexp;
-    Effect::new(move |_| {
-        let _ = state.get(); // subscribe to state changes
-        spawn_local(async move {
+    // DESK-22: own 2 s poll instead of a refetch on every device-state tick.
+    let _ = state;
+    start_tab_poll(
+        move || async move {
             if let Some(st) = fetch_pca_status().await {
-                set_ioexp_clone.set(st);
+                set_ioexp.try_set(st);
             }
-        });
-    });
+        },
+        || 2000,
+    );
 
     let imon = RwSignal::new(EfuseImonStatus::default());
     start_efuse_imon_poll(imon);

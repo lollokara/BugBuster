@@ -21,6 +21,11 @@ jobs:
       - name: Wire protocol versions in lockstep
         run: python Firmware/tools/check_proto_version.py --verbose
 
+      # bbp.h is the single source for BBP error codes + messages; the Python,
+      # MCP and desktop tables are generated (FEAT-6).
+      - name: Generated BBP error tables are current
+        run: python Firmware/tools/gen_error_tables.py --check
+
       # Every surface audited on 2026-08-20 had count drift, and the 2026-08-07
       # documentation reset had already fixed all of it once.
       - name: Documented counts match source

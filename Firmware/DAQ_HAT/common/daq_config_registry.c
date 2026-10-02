@@ -12,16 +12,20 @@
 // ---------------------------------------------------------------------------
 // Enum option tables.
 // ---------------------------------------------------------------------------
+// DAQ-06: these are the ODRs the ADAQs actually run at (MCLK 16.384 MHz,
+// fMOD = 8.192 MHz: Wideband /1024, /128, /64, /32 and Sinc5 /16). They used to
+// read 10k/50k/100k/250k/1M, which the hardware never produced. Indices are
+// unchanged, so stored settings keep their meaning.
 const uint32_t DAQ_SAMPLE_RATE_SPS[DAQ_SR_COUNT] = {
-    10000u, 50000u, 100000u, 250000u, 1000000u,
+    8000u, 64000u, 128000u, 256000u, 512000u,
 };
 const uint16_t DAQ_FFT_LENGTH_BINS[DAQ_FFT_LEN_COUNT] = {
     64u, 128u, 256u, 512u, 1024u, 2048u, 4096u,
 };
 
 static const char *const OPT_RANGE[]   = { "A", "mA", "uA" };
-static const char *const OPT_SR[]      = { "10 ksps", "50 ksps", "100 ksps",
-                                           "250 ksps", "1 Msps" };
+static const char *const OPT_SR[]      = { "8 ksps", "64 ksps", "128 ksps",
+                                           "256 ksps", "512 ksps" };
 static const char *const OPT_FFT_LEN[] = { "64", "128", "256", "512", "1024",
                                            "2048", "4096" };
 static const char *const OPT_WINDOW[]  = { "Rect", "Hann", "Blackman-Harris" };

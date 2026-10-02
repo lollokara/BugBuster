@@ -74,11 +74,11 @@ def test_health_get_status(base_url, session):
 
 
 def test_status_has_spi_ok(base_url, session):
-    """GET /api/status response should include 'spi_ok' field."""
+    """GET /api/status response should include 'spiOk' (camelCase only since IOS-23)."""
     resp = session.get(f"{base_url}/status", timeout=5)
     data = resp.json()
 
-    assert "spi_ok" in data, f"Status missing 'spi_ok': {list(data.keys())}"
+    assert "spiOk" in data, f"Status missing 'spiOk': {list(data.keys())}"
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def test_channel_get_adc(base_url, session):
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
     # Either 'value' or 'raw_code' should be present
-    has_adc = "value" in data or "raw_code" in data or "adc_value" in data
+    has_adc = "adcValue" in data and "adcRaw" in data
     assert has_adc, f"ADC response missing value fields: {list(data.keys())}"
 
 

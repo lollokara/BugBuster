@@ -199,23 +199,18 @@ static void val_wifistatus(char *b, int n)
 // Diagnostics — read the snapshot pushed by the P4 (DDP_CMD_SET_DIAGNOSTICS).
 // Devices are grouped into submenus; each leaf row shows a live value and, when
 // selected, opens a scrolling-sparkline detail view. The C6 fills its own
-// self-stats (heap, die temp, uptime) locally. When no fresh P4 frame is
-// available a light simulation keeps the menu useful on the bench.
+// self-stats (heap, die temp, uptime) locally. Without a fresh P4 frame every
+// P4-sourced row shows "--" (C6-22: no simulated values).
 // ===========================================================================
 static uint32_t s_anim_ms = 0;
-static ddp_diag_t s_dg;        // current diagnostics (live or simulated)
+static ddp_diag_t s_dg;        // current diagnostics (zeroed, valid = 0, when stale)
 static bool       s_dg_live = false;
 
 // C6 internal die-temperature sensor (installed lazily in menu_init).
 static temperature_sensor_handle_t s_c6_tsens = NULL;
 
-static float wob(float base, float amp, float hz, float ph)
-{
-    return base + amp * sinf((float)s_anim_ms * 0.001f * hz * 6.2832f + ph);
-}
-
-// Refresh the diagnostics cache: prefer a recent DDP push, else simulate a
-// representative subset so the grouped menu and sparklines work without a P4.
+// Refresh the diagnostics cache from a recent DDP push. Stale data clears every
+// validity bit, so rows render "--" and the PD guard below refuses.
 static void diag_refresh(void)
 {
     uint32_t age;
@@ -225,29 +220,6 @@ static void diag_refresh(void)
     }
     s_dg_live = false;
     memset(&s_dg, 0, sizeof(s_dg));
-    s_dg.t_board0_c10 = (int16_t)(wob(41.5f, 0.6f, 0.05f, 0) * 10);
-    s_dg.t_board1_c10 = (int16_t)(wob(43.0f, 0.8f, 0.04f, 1) * 10);
-    s_dg.t_adaq0_c10  = (int16_t)(wob(52.0f, 0.7f, 0.05f, 2) * 10);
-    s_dg.t_adaq1_c10  = (int16_t)(wob(53.5f, 0.7f, 0.05f, 3) * 10);
-    s_dg.t_adaq2_c10  = (int16_t)(wob(51.0f, 0.7f, 0.05f, 4) * 10);
-    s_dg.t_p4_c10     = (int16_t)(wob(48.0f, 0.6f, 0.06f, 5) * 10);
-    s_dg.t_s3_c10     = (int16_t)(wob(45.0f, 0.6f, 0.05f, 6) * 10);
-    s_dg.i_ua         = (int32_t)(wob(0.1234f, 0.01f, 0.2f, 0) * 1e6f);
-    s_dg.v_uv         = (int32_t)(wob(5.000f, 0.02f, 0.1f, 1) * 1e6f);
-    s_dg.p_uw         = (int32_t)(wob(0.617f, 0.03f, 0.2f, 2) * 1e6f);
-    s_dg.smu_iin_ma   = (int16_t)wob(96.0f, 3.0f, 0.15f, 3);
-    s_dg.smu_iout_ma  = (int16_t)wob(128.0f, 4.0f, 0.2f, 2);
-    s_dg.vdut_mv      = (uint16_t)(wob(5.00f, 0.01f, 0.1f, 4) * 1000);
-    s_dg.pd_mv        = (uint16_t)(wob(20.0f, 0.05f, 0.1f, 5) * 1000);
-    s_dg.pd_ma        = 5000;
-    s_dg.vadj1_mv     = (uint16_t)(wob(3.30f, 0.01f, 0.1f, 6) * 1000);
-    s_dg.vadj2_mv     = (uint16_t)(wob(5.00f, 0.01f, 0.1f, 7) * 1000);
-    s_dg.vlogic_mv    = (uint16_t)(wob(3.30f, 0.01f, 0.1f, 8) * 1000);
-    s_dg.p4_free_mem_kb  = (uint16_t)wob(211.0f, 2.0f, 0.1f, 4);
-    s_dg.p4_free_stack_b = (uint16_t)(4096 - (int)((s_anim_ms / 500) % 7) * 16);
-    s_dg.p4_tasks        = 23;
-    s_dg.p4_uptime_s     = (uint32_t)(s_anim_ms / 1000);
-    s_dg.valid = 0xFFFF;   // everything "valid" in sim so rows show numbers
 }
 
 static bool dvalid(uint16_t bit) { return (s_dg.valid & bit) != 0; }
@@ -602,11 +574,11 @@ static const menu_t m_cal = { "Calibration", cal_items, 3 };
 
 // Radio pick-lists for the acquisition enums (selected row shows a dot).
 static const menu_item_t srate_items[] = {
-    { .label = "10 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 0, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "50 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 1, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "100 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 2, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "250 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 3, .sel_ref = &g_settings.sample_rate_idx },
-    { .label = "1 Msps",   .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 4, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "8 ksps",   .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 0, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "64 ksps",  .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 1, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "128 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 2, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "256 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 3, .sel_ref = &g_settings.sample_rate_idx },
+    { .label = "512 ksps", .type = IT_TOGGLE, .ok_arg = pick_srate, .arg = 4, .sel_ref = &g_settings.sample_rate_idx },
 };
 static const menu_t m_srate = { "Sample Rate", srate_items, 5 };
 
@@ -1204,7 +1176,11 @@ menu_status_t menu_update(uint32_t events, uint32_t now_ms, bool *need_render)
         // Sample the live value into the sparkline ring at ~4 Hz.
         if (now_ms - s_hist_last >= 250) {
             s_hist_last = now_ms;
-            if (s_detail && s_detail->sample) {
+            // C6-22: a row showing "--" has no real value; plot nothing
+            // rather than a run of zeros.
+            char vb[24] = "";
+            if (s_detail && s_detail->value) s_detail->value(vb, sizeof(vb));
+            if (s_detail && s_detail->sample && strcmp(vb, "--") != 0) {
                 float v = s_detail->sample();
                 if (s_hist_count < HIST_N) {
                     s_hist[s_hist_count++] = v;

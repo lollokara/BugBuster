@@ -149,10 +149,10 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let alive_clean = alive.clone();
     on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
 
-    // ── Initial + reactive fetch ───────────────────────────────────────────────
+    // ── Initial fetch (once; DESK-22: no longer re-run on every device-state tick)
+    let _ = state;
     let alive_init = alive.clone();
     Effect::new(move |_| {
-        let _ = state.get();
         let alive = alive_init.clone();
         spawn_local(async move {
             if let Some(st) = fetch_idac_status().await {
@@ -174,36 +174,21 @@ pub fn VoltagesTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
-    // 2 s HAT status + rails refresh
-    let alive_poll = alive.clone();
-    Effect::new(move |_| {
-        let alive = alive_poll.clone();
-        let handle = leptos::prelude::set_interval_with_handle(
-            move || {
-                let alive = alive.clone();
-                spawn_local(async move {
-                    if let Some(st) = fetch_hat_status().await {
-                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
-                            set_hat.set(st);
-                        }
-                    }
-                    let la_hat = hat.try_get_untracked().is_some_and(|h| h.detected && h.hat_type != HAT_TYPE_DAQ);
-                    if let Some(rl) = if la_hat { hat_get_rail_status().await } else { None } {
-                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
-                            set_rails.set(rl);
-                        }
-                    }
-                });
-            },
-            Duration::from_secs(2),
-        )
-        .ok();
-        on_cleanup(move || {
-            if let Some(h) = handle {
-                h.clear();
+    // HAT status + rails refresh (DESK-22: non-overlapping; backs off on a bare board)
+    start_tab_poll(
+        move || async move {
+            if let Some(st) = fetch_hat_status().await {
+                set_hat.try_set(st);
             }
-        });
-    });
+            let la_hat = hat.try_get_untracked().is_some_and(|h| h.detected && h.hat_type != HAT_TYPE_DAQ);
+            if let Some(rl) = if la_hat { hat_get_rail_status().await } else { None } {
+                set_rails.try_set(rl);
+            }
+        },
+        move || {
+            if hat.try_get_untracked().is_some_and(|h| h.detected) { 2000 } else { HAT_ABSENT_POLL_MS }
+        },
+    );
 
     // IDAC calibration poll (400 ms, only while running)
     let alive_cal = alive.clone();

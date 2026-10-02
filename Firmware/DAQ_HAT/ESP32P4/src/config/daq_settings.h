@@ -73,6 +73,11 @@ int  daq_settings_encode_one(uint16_t key, uint8_t *buf, size_t cap);
 // (e.g. wifi password) are emitted with an empty value unless @include_secret.
 int  daq_settings_encode_all(uint8_t *buf, size_t cap, bool include_secret);
 
+/** C6-21: encode non-secret settings from *idx into @p buf until it is full;
+ *  advances *idx. Returns bytes written, 0 when every key has been sent. */
+int  daq_settings_encode_chunk(size_t *idx, uint8_t *buf, size_t cap);
+size_t daq_settings_count_nonsecret(void);
+
 // --- Actions ---------------------------------------------------------------
 bool daq_settings_action(uint8_t action_id, daq_src_t src);
 

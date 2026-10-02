@@ -113,6 +113,10 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+// WEB-28: without a timeout a busy device pinned all six per-host browser
+// connections behind stalled requests.
+export const REQUEST_TIMEOUT_MS = 10000;
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, mac, admin = false, signal } = opts;
   const headers: Record<string, string> = {};
@@ -123,16 +127,31 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     headers[ADMIN_TOKEN_HEADER] = token;
   }
 
+  const ctl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, REQUEST_TIMEOUT_MS);
+  const onCallerAbort = () => ctl.abort();
+  if (signal) {
+    if (signal.aborted) ctl.abort();
+    else signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
   let res: Response;
   try {
     res = await fetch(path, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
+      signal: ctl.signal,
     });
   } catch (err) {
+    if (timedOut) {
+      throw new HttpError(0, "Timeout", `no response within ${REQUEST_TIMEOUT_MS} ms`);
+    }
     throw new HttpError(0, "Network Error", err instanceof Error ? err.message : "fetch failed");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onCallerAbort);
   }
 
   if (res.status === 401) {
@@ -162,7 +181,16 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
 
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const data = (await res.json()) as T;
+  // TR-11b: an older firmware answers a failed action 200 {ok:false}; the
+  // current one answers 4xx (handled above). GET replies may legitimately
+  // carry ok:false as status data, so only actions are checked.
+  if (method !== "GET" && data && typeof data === "object" && (data as { ok?: unknown }).ok === false) {
+    const d = data as { error?: unknown; err?: unknown };
+    const msg = typeof d.error === "string" ? d.error : typeof d.err === "string" ? d.err : "request failed";
+    throw new HttpError(res.status, "Request failed", msg);
+  }
+  return data;
 }
 
 export async function adminRawFetch(mac: string, path: string, init: RequestInit = {}): Promise<Response> {

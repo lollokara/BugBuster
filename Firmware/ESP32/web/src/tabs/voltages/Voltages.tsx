@@ -1,17 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../../api/client";
+import { IdacRow as IdacChannel, idacRows } from "./voltagesView";
 
 interface Rail {
   name: string;
   voltageMv: number;
   currentMa?: number;
-}
-
-interface IdacChannel {
-  ch: number;
-  code: number;
-  voltage: number;
-  enabled: boolean;
 }
 
 interface HatRail {
@@ -72,13 +66,7 @@ export function Voltages() {
       setOverviewRails(rails);
 
       // IDAC channels
-      const channels: IdacChannel[] = (idac.channels ?? []).map((c: any, i: number) => ({
-        ch: i,
-        code: c.code ?? 0,
-        voltage: c.voltage ?? 0,
-        enabled: c.enabled ?? false,
-      }));
-      setIdacChannels(channels);
+      setIdacChannels(idacRows(idac));
 
       // HAT rails (optional)
       try {

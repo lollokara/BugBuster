@@ -2,7 +2,6 @@ use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::VecDeque;
-use std::time::Duration;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -104,10 +103,10 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         });
     });
 
-    // ── Initial fetch ─────────────────────────────────────────────────────────
+    // ── Initial fetch (once; DESK-22: no longer re-run on every device-state tick)
+    let _ = state;
     let alive_init = alive.clone();
     Effect::new(move |_| {
-        let _ = state.get();
         let alive = alive_init.clone();
         spawn_local(async move {
             if let Some(st) = fetch_hat_status().await {
@@ -129,37 +128,24 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     // ── 3 s status poll ────────────────────────────────────────────────────────
-    // Reduced from 1 s to 3 s: each cycle issues two BBP commands (hat_get_status
-    // + hat_get_rail_status) that share the single-client CDC0 link with the
-    // overview poll and the connection manager status poll.
-    let alive_poll = alive.clone();
-    Effect::new(move |_| {
-        let alive = alive_poll.clone();
-        let handle = leptos::prelude::set_interval_with_handle(
-            move || {
-                let alive = alive.clone();
-                spawn_local(async move {
-                    if let Some(st) = fetch_hat_status().await {
-                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
-                            set_hat.set(st);
-                        }
-                    }
-                    if let Some(rl) = hat_get_rail_status().await {
-                        if alive.load(std::sync::atomic::Ordering::Relaxed) {
-                            set_rails.set(rl);
-                        }
-                    }
-                });
-            },
-            Duration::from_secs(3),
-        )
-        .ok();
-        on_cleanup(move || {
-            if let Some(h) = handle {
-                h.clear();
+    // Each cycle issues two BBP commands (hat_get_status + hat_get_rail_status)
+    // that share the single-client CDC0 link. DESK-22: non-overlapping, and a
+    // bare board is probed every HAT_ABSENT_POLL_MS instead of every 3 s forever.
+    start_tab_poll(
+        move || async move {
+            if let Some(st) = fetch_hat_status().await {
+                set_hat.try_set(st);
             }
-        });
-    });
+            if hat.try_get_untracked().is_some_and(|h| h.detected) {
+                if let Some(rl) = hat_get_rail_status().await {
+                    set_rails.try_set(rl);
+                }
+            }
+        },
+        move || {
+            if hat.try_get_untracked().is_some_and(|h| h.detected) { HAT_POLL_MS } else { HAT_ABSENT_POLL_MS }
+        },
+    );
 
     // ── Rail control helpers ───────────────────────────────────────────────────
     let apply_voltage = move |id: u8| {

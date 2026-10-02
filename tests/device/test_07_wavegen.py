@@ -197,6 +197,27 @@ def test_wavegen_stop_all_channels(device):
     assert_no_faults(device)
 
 
+def test_wavegen_stop_returns_channel_to_high_imp(device):
+    """AN-05 (decision B): stop_waveform() is a full stop - the firmware puts
+    the waveform channel back to HIGH_IMP (output off). It does NOT hold the
+    last DAC value. The simulator must model the same thing."""
+    _setup_vout_channel(device)
+    device.start_waveform(
+        CH_VOUT, WaveformType.SQUARE,
+        freq_hz=10.0, amplitude=1.0, offset=2.0,
+    )
+    time.sleep(0.1)
+    device.stop_waveform()
+    func = ChannelFunction.HIGH_IMP + 1
+    for _ in range(20):  # stop queues CMD_SET_CHANNEL_FUNC asynchronously
+        func = device.get_status()["channels"][CH_VOUT]["function"]
+        if func == ChannelFunction.HIGH_IMP:
+            break
+        time.sleep(0.05)
+    _safe_stop(device, CH_VOUT)
+    assert func == ChannelFunction.HIGH_IMP
+
+
 # ---------------------------------------------------------------------------
 # Multiple waveform types on the same channel (VOUT on ch1)
 # ---------------------------------------------------------------------------

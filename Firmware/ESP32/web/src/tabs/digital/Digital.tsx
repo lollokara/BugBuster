@@ -8,7 +8,7 @@ import { Led } from "../../components/Led";
 import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import { api, PairingRequiredError } from "../../api/client";
 import { useIoLease } from "../../api/io_lease";
-import { deviceMac, deviceStatus } from "../../state/signals";
+import { deviceMac, deviceStatus, pollIntervalFor } from "../../state/signals";
 import {
   DIN_DEBOUNCE_OPTIONS,
   DO_MODE_OPTIONS,
@@ -28,7 +28,7 @@ function useInterval<T>(fn: () => Promise<T>, ms: number) {
       } catch {
         /* ignore */
       }
-      if (alive) setTimeout(tick, ms);
+      if (alive) setTimeout(tick, pollIntervalFor(ms));
     };
     tick();
     return () => {

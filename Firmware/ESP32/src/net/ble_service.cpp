@@ -43,6 +43,7 @@
 #include "ds4424.h"
 #include "hat.h"
 #include "cJSON.h"
+#include "mbedtls/sha256.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -492,18 +493,19 @@ static const struct ble_gatt_chr_def bb_chars[] = {
     {
         .uuid      = &BB_CHR_AUTH_UUID.u,
         .access_cb = chr_auth_access,
-        .flags     = BLE_GATT_CHR_F_WRITE,
+        .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
     },
     {
         .uuid       = &BB_CHR_WIFI_UUID.u,
         .access_cb  = chr_wifi_access,
-        .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+        .flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN |
+                      BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_wifi_val_handle,
     },
     {
         .uuid      = &BB_CHR_SUPPLY_UUID.u,
         .access_cb = chr_supply_access,
-        .flags     = BLE_GATT_CHR_F_WRITE,
+        .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
     },
     {
         .uuid      = &BB_CHR_SENSOR_UUID.u,
@@ -513,7 +515,7 @@ static const struct ble_gatt_chr_def bb_chars[] = {
     {
         .uuid      = &BB_CHR_APIREQ_UUID.u,
         .access_cb = chr_apireq_access,
-        .flags     = BLE_GATT_CHR_F_WRITE,
+        .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN,
     },
     {
         .uuid       = &BB_CHR_APIRESP_UUID.u,
@@ -573,6 +575,30 @@ static void bb_advertise(void)
     }
 }
 
+// Six-digit pairing passkey: big-endian u32 of the digest's first 4 bytes, mod 10^6.
+// Digest = SHA-256(admin_token || "bb-ble-passkey"); python bugbuster.auth.ble_passkey() mirrors it.
+static uint32_t passkey_from_digest(const uint8_t digest[32])
+{
+    uint32_t v = ((uint32_t)digest[0] << 24) | ((uint32_t)digest[1] << 16) |
+                 ((uint32_t)digest[2] << 8) | (uint32_t)digest[3];
+    return v % 1000000u;
+}
+
+static uint32_t ble_pairing_passkey(void)
+{
+    static const char label[] = "bb-ble-passkey";
+    const char *token = auth_get_admin_token();
+    uint8_t digest[32];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, (const unsigned char *)token, strlen(token));
+    mbedtls_sha256_update(&ctx, (const unsigned char *)label, sizeof(label) - 1);
+    mbedtls_sha256_finish(&ctx, digest);
+    mbedtls_sha256_free(&ctx);
+    return passkey_from_digest(digest);
+}
+
 static int bb_gap_event(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -597,6 +623,16 @@ static int bb_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
         bb_advertise();
+        return 0;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+            struct ble_sm_io pk = {};
+            pk.action  = BLE_SM_IOACT_DISP;
+            pk.passkey = ble_pairing_passkey();
+            int rc = ble_sm_inject_io(event->passkey.conn_handle, &pk);
+            if (rc != 0) ESP_LOGW(TAG, "passkey inject failed rc=%d", rc);
+        }
         return 0;
 
     default:
@@ -654,11 +690,13 @@ bool ble_service_init(void)
         return false;
     }
 
-    // Bonding + LE Secure Connections; app-layer token still gates control.
+    // Passkey pairing (MITM): the S3 "displays" a passkey derived from the admin
+    // token, so only a holder of the token can pair; app-layer token still gates control.
     ble_hs_cfg.sync_cb        = on_sync;
     ble_hs_cfg.reset_cb       = on_reset;
-    ble_hs_cfg.sm_io_cap      = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_io_cap      = BLE_HS_IO_DISPLAY_ONLY;
     ble_hs_cfg.sm_bonding     = 1;
+    ble_hs_cfg.sm_mitm        = 1;
     ble_hs_cfg.sm_sc          = 1;
     ble_hs_cfg.sm_our_key_dist  = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;

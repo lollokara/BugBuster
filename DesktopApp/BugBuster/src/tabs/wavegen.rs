@@ -193,7 +193,7 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     let commit_freq = move || {
         if let Ok(v) = edit_freq.get_untracked().parse::<f64>() {
-            set_freq_hz.set(v.clamp(0.01, 100.0));
+            set_freq_hz.set(v.clamp(0.1, 100.0));
         }
         set_edit_freq.set(format!("{:.1}", freq_hz.get_untracked()));
     };
@@ -290,7 +290,7 @@ pub fn WavegenTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     view! {
         <div class="tab-content">
-            <div class="tab-desc">"Waveform generator. Outputs sine, square, triangle, or sawtooth waveforms through the DAC. Select a channel, set frequency (0.01-100 Hz), amplitude, and offset. The channel is automatically set to VOUT or IOUT mode."</div>
+            <div class="tab-desc">"Waveform generator. Outputs sine, square, triangle, or sawtooth waveforms through the DAC. Select a channel, set frequency (0.1-100 Hz), amplitude, and offset. The channel is automatically set to VOUT or IOUT mode."</div>
             <div class="wavegen-layout">
                 <div class="card wavegen-controls">
                     <div class="card-header"><span>"Waveform Generator"</span></div>

@@ -106,6 +106,36 @@ void usb_stream_reset_session(usb_stream_t *s)
     s->reset_pending = true;
 }
 
+void usb_stream_request_flush(usb_stream_t *s)
+{
+    __atomic_store_n(&s->flush_pending, true, __ATOMIC_RELEASE);
+}
+
+bool usb_stream_queue_marker(usb_stream_t *s, uint8_t channel, uint8_t edge,
+                             uint8_t kind, uint32_t age_us)
+{
+    usb_mark_req_t r = { channel, edge, kind, age_us, esp_timer_get_time() };
+    return usb_mark_q_push(&s->mark_q, r);
+}
+
+void usb_stream_service_requests(usb_stream_t *s)
+{
+    usb_mark_req_t r;
+    while (usb_mark_q_pop(&s->mark_q, &r)) {
+        // DAQ-03: back off by the S3 edge-to-send age plus our own queue time.
+        int64_t q_us = esp_timer_get_time() - r.rx_us;
+        uint64_t age = (uint64_t)r.age_us + (q_us > 0 ? (uint64_t)q_us : 0u);
+        if (age > UINT32_MAX) age = UINT32_MAX;
+        usb_stream_send_marker(s, r.channel, r.edge, r.kind,
+                               usb_mark_back_index(s->sample_seq, (uint32_t)age,
+                                                   s->push_rate));
+    }
+    if (__atomic_exchange_n(&s->flush_pending, false, __ATOMIC_ACQ_REL)) {
+        usb_stream_flush_wave_i(s);
+        usb_stream_flush_wave_v(s);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Frame assembly
 // -----------------------------------------------------------------------------
@@ -287,6 +317,33 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
     return emit_frame(s, type, payload, len);
 }
 
+esp_err_t usb_stream_send_reply(usb_stream_t *s, usb_rec_type_t type,
+                                const void *payload, uint16_t len)
+{
+    if (len > USB_REPLY_MAX) return ESP_ERR_INVALID_SIZE;
+    if (!s->have_transport || !s->transport.write) return ESP_ERR_INVALID_STATE;
+    if (s->transport.connected && !s->transport.connected(s->transport.ctx)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t f[USB_FRAME_OVERHEAD + USB_REPLY_MAX];
+    memset(f, 0, USB_FRAME_HEADER_LEN);
+    f[0] = USB_PROTO_MAGIC0;
+    f[1] = USB_PROTO_MAGIC1;
+    f[2] = USB_PROTO_VERSION;
+    f[3] = (uint8_t)type;
+    f[10] = (uint8_t)(len);
+    f[11] = (uint8_t)(len >> 8);
+    if (len && payload) memcpy(&f[USB_FRAME_HEADER_LEN], payload, len);
+    uint32_t crc_off = USB_FRAME_HEADER_LEN + len;
+    f[crc_off] = 0;            // device->PC record: CRC slot unchecked
+    f[crc_off + 1] = 0;
+    uint32_t total = crc_off + USB_FRAME_CRC_LEN;
+    if (s->transport.writable && s->transport.writable(s->transport.ctx) < total) {
+        return ESP_ERR_NO_MEM;
+    }
+    return (s->transport.write(f, total, s->transport.ctx) == total) ? ESP_OK : ESP_FAIL;
+}
+
 // -----------------------------------------------------------------------------
 // WAVE_I / WAVE_V batching (SoA; matches wire layout so flush is two memcpys)
 
@@ -343,6 +400,8 @@ void usb_stream_push_sample(usb_stream_t *s, const fusion_output_t *fo,
     if (s->reset_pending) {
         usb_stream_reset_apply(s);   // consumed on the sole producer task
     }
+    usb_stream_service_requests(s);  // DAQ-04: markers + STOP flush
+    s->push_rate = sample_rate;
     uint64_t idx = s->sample_seq++;
     if (!s->streaming) {
         return;

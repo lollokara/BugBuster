@@ -38,6 +38,7 @@
 #include "range_cal.h"
 #include "s3_link.h"
 #include "ddp_master.h"
+#include "daq_missed.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -134,6 +135,10 @@ typedef struct daq_board {
     uint8_t                 dsp_count;    // running DSP-tail counter
     uint32_t                drop_fine;    // paired-stream resync drops (diag)
     uint32_t                drop_coarse;
+    // STATUS v9 missed_conversions: FINE DRDY edges never captured. Armed on
+    // the first STATUS after run_fast so capture start-up is not counted.
+    daq_missed_t            missed;
+    bool                    missed_armed;
     // P4: raw (un-decimated) fused-sample periods accumulated since the last
     // power-DSP push that haven't yet been folded into a whole dsp_decim-
     // sized dt -- 1 per fast_emit() call plus 1 per drop_fine/drop_coarse
@@ -201,6 +206,12 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out);
  *        or no PD contract is negotiated.
  */
 bool daq_board_pd_ok(const daq_board_t *b, uint16_t min_mv, uint16_t min_ma);
+
+/** DAQ-08: post a DUT-supply setting to the ctrl task (the ramp takes up to
+ *  ~2.5 s, far past the S3 link's 200 ms reply budget). False if not queued. */
+bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival);
+/** DAQ-08: apply one DUT-supply setting now (ctrl task or boot). */
+void daq_settings_apply_smu(daq_board_t *b, uint16_t key, int32_t ival);
 
 /**
  * @brief Start the USB-HS measurement stream: install the TinyUSB vendor

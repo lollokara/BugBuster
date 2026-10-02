@@ -9,7 +9,10 @@ Slot mapping:
   CH0..CH3   →  slots 12..15  (analog channels)
 """
 
+import pytest
+
 import bugbuster as bb
+from bugbuster.transport.usb import DeviceError
 from tests.mock import SimulatedDevice, SimulatedUSBTransport
 from bugbuster.constants import IoClaimStatus, IoOwnerKind
 
@@ -64,9 +67,9 @@ def test_second_claimer_rejected():
         0xA7,  # IO_CLAIM
         bytes([1, 0]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    # resp[0] is global status, resp[1] is per-slot status for slot 0
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"Expected HELD_BY_OTHER (0x01), got 0x{resp[0]:02x}"
+    # firmware reply: [n, status...]
+    assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
+        f"Expected HELD_BY_OTHER (11), got 0x{resp[1]:02x}"
     )
 
     client1._io_release_raw([0])
@@ -100,9 +103,8 @@ def test_release_by_other_rejected():
         0xA8,  # IO_RELEASE
         bytes([1, 3]),
     )
-    assert resp[0] == IoClaimStatus.NOT_OWNED, (
-        f"Expected NOT_OWNED (0x02), got 0x{resp[0]:02x}"
-    )
+    # firmware reply: [n, released...]
+    assert resp == bytes([1, 0]), f"Expected not released, got {resp.hex()}"
     # Original owner still holds it
     assert device.io_owner_table[3]["kind"] == 1
 
@@ -115,26 +117,21 @@ def test_release_by_other_rejected():
 
 def test_invalid_slot_claim():
     client, device = _make_client()
-    resp = device.dispatch(
-        0xA7,  # IO_CLAIM
-        bytes([1, 20]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
-    )
-    # Global status and per-slot status both INVALID_SLOT
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER or resp[1] == IoClaimStatus.INVALID_SLOT, (
-        f"Expected INVALID_SLOT (0x03) for slot 20, got resp={resp.hex()}"
-    )
+    with pytest.raises(DeviceError):
+        device.dispatch(
+            0xA7,  # IO_CLAIM
+            bytes([1, 20]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
+        )
 
 
 def test_invalid_slot_claim_direct():
-    """Direct check: per-slot byte for an out-of-range index is INVALID_SLOT."""
+    """Slot 16 is out of range: the firmware answers with a BBP error."""
     _, device = _make_client()
-    resp = device.dispatch(
-        0xA7,
-        bytes([1, 16]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
-    )
-    assert resp[1] == IoClaimStatus.INVALID_SLOT, (
-        f"Expected INVALID_SLOT (0x03) for slot 16, got 0x{resp[1]:02x}"
-    )
+    with pytest.raises(DeviceError):
+        device.dispatch(
+            0xA7,
+            bytes([1, 16]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +207,8 @@ def test_force_release_wrong_token():
         0xAA,  # IO_FORCE_RELEASE
         bytes([2, len(b"WRONGTOKEN")]) + b"WRONGTOKEN",
     )
-    assert resp[0] == IoClaimStatus.ADMIN_REQUIRED, (
-        f"Expected ADMIN_REQUIRED (0x05), got 0x{resp[0]:02x}"
+    assert resp[0] == 0x05, (
+        f"Expected the simulator's admin-required reply (0x05), got 0x{resp[0]:02x}"
     )
 
 
@@ -296,10 +293,8 @@ def test_g2_nonowner_claim_rejected_by_simulator():
         0xA7,  # IO_CLAIM
         bytes([1, 12]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    # global status = HELD_BY_OTHER, per-slot[0] = HELD_BY_OTHER
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"Expected global HELD_BY_OTHER, got 0x{resp[0]:02x}"
-    )
+    # firmware reply: [n, status...]
+    assert resp[0] == 1, f"Expected n=1, got {resp[0]}"
     assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
         f"Expected per-slot HELD_BY_OTHER for slot 12, got 0x{resp[1]:02x}"
     )
@@ -366,8 +361,8 @@ def test_g6_autoclaim_blocked_by_foreign_owner():
         0xA7,
         bytes([1, 12]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"Auto-claim must return HELD_BY_OTHER, got 0x{resp[0]:02x}"
+    assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
+        f"Auto-claim must return HELD_BY_OTHER, got 0x{resp[1]:02x}"
     )
     # Table still shows original owner
     assert device.io_owner_table[12]["session_id"] == original_session, (
@@ -393,8 +388,8 @@ def test_g7_usb_vs_script_conflict():
         0xA7,
         bytes([1, 5]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"USB must be blocked by SCRIPT owner, got 0x{resp[0]:02x}"
+    assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
+        f"USB must be blocked by SCRIPT owner, got 0x{resp[1]:02x}"
     )
     device.io_owner_table[5]["kind"] = IoOwnerKind.NONE
 
@@ -412,8 +407,8 @@ def test_g7_http_vs_script_conflict():
         0xA7,
         bytes([1, 8]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
-    assert resp[0] == IoClaimStatus.HELD_BY_OTHER, (
-        f"USB (HTTP proxy) must be blocked by SCRIPT owner, got 0x{resp[0]:02x}"
+    assert resp[1] == IoClaimStatus.HELD_BY_OTHER, (
+        f"USB (HTTP proxy) must be blocked by SCRIPT owner, got 0x{resp[1]:02x}"
     )
     device.io_owner_table[8]["kind"] = IoOwnerKind.NONE
 
@@ -443,8 +438,8 @@ def test_g8_evt_io_preempted_emitted_on_lease_expiry():
         bytes([1, 9]) + b'\x00\x00\x00\x00' + b'\x00\x00\x00\x00',
     )
     # Claim must succeed (expired slot treated as free)
-    assert resp[0] == IoClaimStatus.OK, (
-        f"Claim on expired slot must succeed, got 0x{resp[0]:02x}"
+    assert resp[1] == IoClaimStatus.OK, (
+        f"Claim on expired slot must succeed, got 0x{resp[1]:02x}"
     )
 
     # BBP_EVT_IO_PREEMPTED (0x86) must have been emitted.
@@ -458,3 +453,38 @@ def test_g8_evt_io_preempted_emitted_on_lease_expiry():
         f"displaced_kind must be USB (1), got {payload[0]}"
     )
     assert payload[1] == 9, f"Event slot must be 9, got {payload[1]}"
+
+
+# ---------------------------------------------------------------------------
+# MCP-20: io_claim_lease - a held lease that survives other calls
+# ---------------------------------------------------------------------------
+
+def test_io_claim_lease_survives_auto_claimed_calls():
+    """A mutating call auto-claims and releases its slot unless the session
+    already holds it. A lease taken with io_claim_lease must therefore stay
+    held after such a call (the MCP io_claim tool relies on this)."""
+    client, device = _make_client()
+    client.io_claim_lease([12], lease_ms=30_000, purpose="mcp")
+    client.set_dac_voltage(0, 1.0)
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.USB
+
+
+def test_io_release_ends_a_lease():
+    client, device = _make_client()
+    client.io_claim_lease([12], lease_ms=30_000, purpose="mcp")
+    client.io_release([12])
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.NONE
+    client.set_dac_voltage(0, 1.0)  # auto-claim path again
+    assert client.io_owner_status()[12]["kind"] == IoOwnerKind.NONE
+
+
+def test_io_claim_lease_refused_slot_raises():
+    client1, device = _make_client()
+    client1._io_claim_raw([12], 0, "foreign_owner")
+    client2 = _make_second_client(device)
+    try:
+        client2.io_claim_lease([12], lease_ms=5_000)
+    except RuntimeError as exc:
+        assert "12" in str(exc)
+    else:
+        raise AssertionError("claim on a slot held by another session must raise")

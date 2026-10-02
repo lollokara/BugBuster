@@ -71,7 +71,7 @@ with bb.connect_usb(USB_PORT) as dev:
     print("Triangle wave started: 1 Hz, 0–8 V on channel 0")
     time.sleep(2.0)
 
-    # Stop — DAC holds the last output value
+    # Stop - the channel returns to HIGH_IMP (output off)
     dev.stop_waveform()
     print("Waveform stopped.")
 

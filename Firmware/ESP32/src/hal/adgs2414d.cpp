@@ -6,6 +6,8 @@
 // =============================================================================
 
 #include "adgs2414d.h"
+#include "adgs_interlock.h"
+#include "adgs_bbm.h"
 #include "ad74416h_spi.h"
 #include "config.h"
 #include "esp_log.h"
@@ -77,13 +79,15 @@ static void sync_api_main_from_physical(void)
 // given back by ADC task between its polling cycles.
 SemaphoreHandle_t g_spi_bus_mutex = NULL;
 
-static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
+// Returns false when the SPI bus could not be acquired (IO-9): nothing was
+// clocked out, so callers must not treat this as a hardware fault.
+static bool spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
     // Acquire SPI bus (max 200ms wait)
     if (g_spi_bus_mutex == NULL ||
         xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
         ESP_LOGE(TAG, "SPI bus acquire timeout (200ms) - aborting transfer");
-        return;
+        return false;
     }
 
     // CS is managed by the SPI hardware (spics_io_num = PIN_MUX_CS).
@@ -100,6 +104,7 @@ static void spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 
     // Release bus
     xSemaphoreGiveRecursive(g_spi_bus_mutex);
+    return true;
 }
 
 // Send a 16-bit address-mode command to all devices (before daisy-chain)
@@ -128,14 +133,14 @@ static void adgs_enter_daisy_chain(void)
 // The chain is a shift register: each SDO is an 8-clock delayed SDI, and each
 // device latches the last 8 bits it received when CS rises. Therefore the byte
 // for the last physical device (U23) must be clocked first.
-static void adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
+static bool adgs_daisy_chain_write(const uint8_t states[ADGS_NUM_DEVICES])
 {
     uint8_t tx[ADGS_NUM_DEVICES];
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
         tx[i] = states[ADGS_NUM_DEVICES - 1 - i];
     }
     uint8_t rx[ADGS_NUM_DEVICES] = {};
-    spi_transfer(tx, rx, ADGS_NUM_DEVICES);
+    return spi_transfer(tx, rx, ADGS_NUM_DEVICES);
 }
 #endif
 
@@ -152,42 +157,49 @@ static uint8_t adgs_address_mode_read(uint8_t reg)
 
 #if ADGS_NUM_DEVICES > 1
 // Read back switch states in daisy-chain mode.
-// Perform a "dummy" write of the current cached state and capture SDO.
-// In daisy-chain mode, SDO outputs the previous switch data register contents.
-static void adgs_daisy_chain_readback(uint8_t out[ADGS_NUM_DEVICES])
+// SDO outputs the previously latched switch data while the clocked-in bytes are
+// latched again, so the readback frame MUST re-send exactly the frame that was
+// just written (`written`). It used to re-send the shadow s_mux_state, which
+// during break-before-make still held the OLD closed switches and re-latched
+// the old route for the whole dead time (IO-2).
+static bool adgs_daisy_chain_readback(const uint8_t written[ADGS_NUM_DEVICES],
+                                      uint8_t out[ADGS_NUM_DEVICES])
 {
     uint8_t tx[ADGS_NUM_DEVICES];
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
-        tx[i] = s_mux_state[ADGS_NUM_DEVICES - 1 - i];
+        tx[i] = written[ADGS_NUM_DEVICES - 1 - i];
     }
     uint8_t rx[ADGS_NUM_DEVICES] = {};
-    spi_transfer(tx, rx, ADGS_NUM_DEVICES);
+    if (!spi_transfer(tx, rx, ADGS_NUM_DEVICES)) return false;
 
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
         out[i] = rx[ADGS_NUM_DEVICES - 1 - i];
     }
+    return true;
 }
 #endif
 
-// Write states and verify by readback. Returns true on match.
-static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
+typedef enum { ADGS_WR_OK, ADGS_WR_MISMATCH, ADGS_WR_BUS_BUSY } adgs_wr_t;
+
+// Write states and verify by readback.
+static adgs_wr_t adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
 {
 #if ADGS_NUM_DEVICES > 1
-    adgs_daisy_chain_write(states);
+    if (!adgs_daisy_chain_write(states)) return ADGS_WR_BUS_BUSY;
     delay_us(10);
 
     // Readback verify
     uint8_t readback[ADGS_NUM_DEVICES] = {};
-    adgs_daisy_chain_readback(readback);
+    if (!adgs_daisy_chain_readback(states, readback)) return ADGS_WR_BUS_BUSY;
 
     for (int i = 0; i < ADGS_NUM_DEVICES; i++) {
         if (readback[i] != states[i]) {
             ESP_LOGW(TAG, "Readback mismatch: device %d wrote=0x%02X read=0x%02X",
                      i, states[i], readback[i]);
-            return false;
+            return ADGS_WR_MISMATCH;
         }
     }
-    return true;
+    return ADGS_WR_OK;
 #else
     adgs_address_mode_write(ADGS_REG_SW_DATA, states[0]);
     delay_ms(1);  // ensure register write is committed
@@ -203,7 +215,7 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
         }
         ESP_LOGI(TAG, "Write-verify: wrote=0x%02X readback=0x%02X OK",
                  states[0], rb);
-        return true;
+        return ADGS_WR_OK;
     }
 
     uint8_t err_flags = adgs_address_mode_read(ADGS_REG_ERR_FLAGS);
@@ -215,7 +227,7 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
                  "(wrote=0x%02X readback=0x%02X ERR_FLAGS=0x%02X). "
                  "Continuing in write-only mode.",
                  states[0], rb, err_flags);
-        return true;
+        return ADGS_WR_OK;
     }
 
     if (states[0] != 0x00) {
@@ -230,16 +242,23 @@ static bool adgs_write_and_verify(const uint8_t states[ADGS_NUM_DEVICES])
                  !!(err_flags & ADGS_ERR_SCLK_FLAG),
                  !!(err_flags & ADGS_ERR_RW_FLAG));
     }
-    return false;
+    return ADGS_WR_MISMATCH;
 #endif
 }
 
 // Write switch states with verification and retry.
-// Returns false and sets the fault flag if all retries fail.
+// Returns false and sets the fault flag if all retries fail. Returns false
+// WITHOUT the fault path when the SPI bus could not be acquired (IO-9): the
+// hardware was not touched, so neither the fault flag nor the shadow change.
 static bool adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
 {
     for (int attempt = 0; attempt < ADGS_MAX_RETRIES; attempt++) {
-        if (adgs_write_and_verify(states)) {
+        adgs_wr_t r = adgs_write_and_verify(states);
+        if (r == ADGS_WR_BUS_BUSY) {
+            ESP_LOGW(TAG, "MUX write skipped: SPI bus busy (not a MUX fault)");
+            return false;
+        }
+        if (r == ADGS_WR_OK) {
             if (attempt > 0) {
                 ESP_LOGI(TAG, "MUX write succeeded on retry %d", attempt);
             }
@@ -283,7 +302,7 @@ static bool adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
     }
 
     // One final attempt after reset
-    if (adgs_write_and_verify(states)) {
+    if (adgs_write_and_verify(states) == ADGS_WR_OK) {
         ESP_LOGI(TAG, "MUX recovered after software reset!");
         s_mux_faulted = false;
         return true;
@@ -308,6 +327,17 @@ static bool adgs_write_states(const uint8_t states[ADGS_NUM_DEVICES])
 #endif
     portEXIT_CRITICAL(&s_adgs_mux);
     return false;
+}
+
+// Write a full frame and, only if it succeeded, commit `device`'s byte to the
+// shadow (IO-9: the shadow must follow the hardware, not the intent).
+static bool adgs_write_states_committed(const uint8_t snap[ADGS_NUM_DEVICES], uint8_t device)
+{
+    if (!adgs_write_states(snap)) return false;
+    portENTER_CRITICAL(&s_adgs_mux);
+    s_mux_state[device] = snap[device];
+    portEXIT_CRITICAL(&s_adgs_mux);
+    return true;
 }
 
 // Get the group mask for a switch index
@@ -410,40 +440,65 @@ bool adgs_set_all_safe(const uint8_t states[ADGS_MAIN_DEVICES])
     // Interlock: if caller tries to set U17 S3 while U23 is active, block it.
     // Report the refusal - a silent return here answered the host with the
     // stale read-back and looked like a successful write to the wrong device.
-    if ((states[U17_DEVICE_IDX] & U17_S3_MASK) && adgs_selftest_active()) {
+    if (!adgs_interlock_main_ok(states, ADGS_MAIN_DEVICES, ADGS_D_NET_DEV_MASK, U17_S3_MASK,
+                                s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
         return false;
     }
 #endif
 
+    // IO-13: break-before-make is only needed when this write both opens a
+    // switch and closes another. A pure close, pure open or same-state write
+    // goes out as one frame without the dead time.
+    if (!adgs_needs_dead_time(s_mux_state, states, ADGS_MAIN_DEVICES)) {
+        if (memcmp(s_mux_state, states, ADGS_MAIN_DEVICES) == 0) return true;
+        uint8_t direct[ADGS_NUM_DEVICES];
+        memcpy(direct, s_mux_state, ADGS_NUM_DEVICES);
+        memcpy(direct, states, ADGS_MAIN_DEVICES);
+        if (!adgs_write_states(direct)) return false;
+        memcpy(s_mux_state, direct, ADGS_MAIN_DEVICES);
+        sync_api_main_from_physical();
+        return true;
+    }
+
     // Step 1: Open main MUX switches (preserve self-test device)
     uint8_t temp[ADGS_NUM_DEVICES];
+    memcpy(temp, s_mux_state, ADGS_NUM_DEVICES);
     memset(temp, 0, ADGS_MAIN_DEVICES);
-#if ADGS_HAS_SELFTEST
-    temp[ADGS_SELFTEST_DEV] = s_mux_state[ADGS_SELFTEST_DEV];  // preserve U23
-#endif
-    adgs_write_states(temp);
+    if (!adgs_write_states(temp)) {
+        // Bus busy (nothing written) or MUX fault (fault path already opened
+        // everything and cleared the shadow). Never go on to close the new
+        // route over a break that did not happen.
+        return false;
+    }
+    memcpy(s_mux_state, temp, ADGS_MAIN_DEVICES);   // hardware is open now
+    sync_api_main_from_physical();
 
     // Step 2: Wait dead time
     delay_ms(ADGS_DEAD_TIME_MS);
 
     // Step 3: Set new main MUX state (preserve self-test device)
-    memcpy(s_mux_state, states, ADGS_MAIN_DEVICES);
-    adgs_write_states(s_mux_state);
+    uint8_t target[ADGS_NUM_DEVICES];
+    memcpy(target, s_mux_state, ADGS_NUM_DEVICES);
+    memcpy(target, states, ADGS_MAIN_DEVICES);
+    if (!adgs_write_states(target)) return false;
+    memcpy(s_mux_state, target, ADGS_MAIN_DEVICES);
     sync_api_main_from_physical();
     return true;
 }
 
-void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
+bool adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
 {
-    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) return;
-    if (!s_mux_initialized) return;
+    if (device >= ADGS_MAIN_DEVICES || sw >= ADGS_NUM_SWITCHES) return false;
+    if (!s_mux_initialized) return false;
 
 #if ADGS_HAS_SELFTEST
-    // Interlock: block U17 S3 close if U23 is active.
-    if (device == U17_DEVICE_IDX && sw == 2 && closed && adgs_selftest_active()) {
+    // Interlock: block U17 S3 close if U23 is active. Report it (IO-8): this
+    // used to return silently and every caller treated it as success.
+    if (!adgs_interlock_switch_ok(device, sw, closed, ADGS_D_NET_DEV_MASK, U17_S3_MASK,
+                                  s_mux_state[ADGS_SELFTEST_DEV])) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot close U17 S3 while U23 self-test is active!");
-        return;
+        return false;
     }
 #endif
 
@@ -462,27 +517,27 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
         memcpy(write_snap, temp_state, sizeof(write_snap));
         portEXIT_CRITICAL(&s_adgs_mux);
 
-        adgs_write_states(write_snap);
+        if (!adgs_write_states_committed(write_snap, device)) return false;
 
         // Wait dead time before closing
         delay_ms(ADGS_DEAD_TIME_MS);
 
-        // Compute and commit the close state
+        // Compute the close state from the (now open) committed shadow
         portENTER_CRITICAL(&s_adgs_mux);
         new_state = (s_mux_state[device] & ~group_mask) | (1u << sw);
-        s_mux_state[device] = new_state;
         memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
+        write_snap[device] = new_state;
         portEXIT_CRITICAL(&s_adgs_mux);
     } else {
         // Opening a switch: no dead time needed
         portENTER_CRITICAL(&s_adgs_mux);
         new_state = s_mux_state[device] & ~(1u << sw);
-        s_mux_state[device] = new_state;
         memcpy(write_snap, s_mux_state, sizeof(s_mux_state));
+        write_snap[device] = new_state;
         portEXIT_CRITICAL(&s_adgs_mux);
     }
 
-    adgs_write_states(write_snap);
+    if (!adgs_write_states_committed(write_snap, device)) return false;
 
     portENTER_CRITICAL(&s_adgs_mux);
     sync_api_main_from_physical();
@@ -504,6 +559,7 @@ void adgs_set_switch_safe(uint8_t device, uint8_t sw, bool closed)
     }
 #endif
     portEXIT_CRITICAL(&s_adgs_mux);
+    return true;
 }
 
 uint8_t adgs_get_state(uint8_t device)
@@ -558,7 +614,7 @@ bool adgs_set_api_switch_safe(uint8_t device, uint8_t sw, bool closed)
     }
 
     if (device < ADGS_MAIN_DEVICES) {
-        adgs_set_switch_safe(device, sw, closed);
+        if (!adgs_set_switch_safe(device, sw, closed)) return false;
         sync_api_main_from_physical();
         return true;
     }
@@ -629,7 +685,13 @@ bool adgs_readback_verify(uint8_t out[ADGS_NUM_DEVICES])
     if (!s_mux_initialized) return false;
 
 #if ADGS_NUM_DEVICES > 1
-    adgs_daisy_chain_readback(out);
+    // Standalone verify: the shadow IS the latched state here, so re-clocking
+    // it leaves the switches unchanged.
+    uint8_t snap[ADGS_NUM_DEVICES];
+    portENTER_CRITICAL(&s_adgs_mux);
+    memcpy(snap, s_mux_state, sizeof(snap));
+    portEXIT_CRITICAL(&s_adgs_mux);
+    if (!adgs_daisy_chain_readback(snap, out)) return false;
 #else
     out[0] = adgs_address_mode_read(ADGS_REG_SW_DATA);
 #endif
@@ -713,7 +775,8 @@ bool adgs_set_selftest(uint8_t sw_byte)
     }
 
     // Safety interlock: U17 S3 must be open before ANY U23 switch can close.
-    if (sw_byte != 0 && adgs_u17_s3_active()) {
+    if (!adgs_interlock_selftest_ok(sw_byte, s_mux_state, ADGS_MAIN_DEVICES,
+                                    ADGS_D_NET_DEV_MASK, U17_S3_MASK)) {
         ESP_LOGE(TAG, "INTERLOCK: Cannot activate U23 while U17 S3 (IO 9 analog) is closed!");
         return false;
     }
@@ -754,7 +817,8 @@ uint8_t adgs_get_selftest(void)
 
 bool adgs_u17_s3_active(void)
 {
-    return (s_mux_state[U17_DEVICE_IDX] & U17_S3_MASK) != 0;
+    // IO-3: any analog S3 that can reach the physical-D net.
+    return adgs_dnet_s3_closed(s_mux_state, ADGS_MAIN_DEVICES, ADGS_D_NET_DEV_MASK, U17_S3_MASK);
 }
 
 bool adgs_selftest_active(void)

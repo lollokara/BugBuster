@@ -9,6 +9,9 @@
 #include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
+#include "esp_timer.h"
+#include "ext_job_queue.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -35,8 +38,10 @@ static bool s_i2c_internal_pullups = false;
 static SemaphoreHandle_t s_spi_mutex = nullptr;
 static bool s_spi_bus_ready = false;
 static spi_device_handle_t s_spi_dev = nullptr;
-static uint8_t s_spi_tx[EXT_SPI_MAX_TRANSFER] = {};
-static uint8_t s_spi_rx[EXT_SPI_MAX_TRANSFER] = {};
+// BUS-003: DMA-capable (internal, word-aligned) bounce buffers. Without DMA the
+// SPI master caps a transaction at 64 bytes.
+DMA_ATTR static uint8_t s_spi_tx[EXT_SPI_MAX_TRANSFER] = {};
+DMA_ATTR static uint8_t s_spi_rx[EXT_SPI_MAX_TRANSFER] = {};
 static uint8_t s_spi_sck_gpio = 0xFF;
 static uint8_t s_spi_mosi_gpio = 0xFF;
 static uint8_t s_spi_miso_gpio = 0xFF;
@@ -44,25 +49,11 @@ static uint8_t s_spi_cs_gpio = 0xFF;
 static uint32_t s_spi_frequency_hz = 0;
 static uint8_t s_spi_mode = 0;
 
-static constexpr size_t EXT_JOB_CAPACITY = 16;
 static constexpr size_t EXT_JOB_MAX_BYTES = 512;
-
-struct ExtBusJob {
-    uint32_t id;
-    uint8_t kind;
-    uint8_t status;
-    uint8_t addr;
-    uint16_t timeout_ms;
-    size_t tx_len;
-    size_t rx_len;
-    uint8_t *tx;
-    uint8_t *rx;
-};
 
 static SemaphoreHandle_t s_job_mutex = nullptr;
 static TaskHandle_t s_job_task = nullptr;
-static ExtBusJob s_jobs[EXT_JOB_CAPACITY] = {};
-static uint32_t s_next_job_id = 1;
+static ExtJobQueue s_jq = { {}, 1 };
 
 static bool valid_gpio(uint8_t gpio)
 {
@@ -77,6 +68,29 @@ static bool reserved_i2c_addr(uint8_t addr)
 static TickType_t ticks(uint16_t timeout_ms)
 {
     return pdMS_TO_TICKS(timeout_ms ? timeout_ms : 100);
+}
+
+// BUS-017: esp_err_t of the last I2C/SPI transfer, kept per calling task so a
+// handler can tell a NACK from a stuck or contended bus.
+static portMUX_TYPE s_err_lock = portMUX_INITIALIZER_UNLOCKED;
+static esp_err_t s_last_err = ESP_OK;
+static TaskHandle_t s_last_err_task = nullptr;
+
+static bool note_err(esp_err_t err)
+{
+    taskENTER_CRITICAL(&s_err_lock);
+    s_last_err = err;
+    s_last_err_task = xTaskGetCurrentTaskHandle();
+    taskEXIT_CRITICAL(&s_err_lock);
+    return err == ESP_OK;
+}
+
+esp_err_t ext_bus_last_error(void)
+{
+    taskENTER_CRITICAL(&s_err_lock);
+    esp_err_t err = (s_last_err_task == xTaskGetCurrentTaskHandle()) ? s_last_err : ESP_FAIL;
+    taskEXIT_CRITICAL(&s_err_lock);
+    return err;
 }
 
 bool ext_i2c_setup(uint8_t sda_gpio, uint8_t scl_gpio, uint32_t frequency_hz, bool internal_pullups)
@@ -223,44 +237,43 @@ bool ext_i2c_scan(uint8_t start_addr, uint8_t stop_addr, bool skip_reserved,
 
 bool ext_i2c_write(uint8_t addr, const uint8_t *data, size_t len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || (len > 0 && data == nullptr) || len > 255) {
-        return false;
-    }
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if ((len > 0 && data == nullptr) || len > 255) return note_err(ESP_ERR_INVALID_ARG);
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_write_to_device(EXT_I2C_PORT, addr, data, len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 bool ext_i2c_read(uint8_t addr, uint8_t *data, size_t len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || data == nullptr || len == 0 || len > 255) {
-        return false;
-    }
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if (data == nullptr || len == 0 || len > 255) return note_err(ESP_ERR_INVALID_ARG);
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_read_from_device(EXT_I2C_PORT, addr, data, len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 bool ext_i2c_write_read(uint8_t addr, const uint8_t *wr_data, size_t wr_len,
                         uint8_t *rd_data, size_t rd_len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || wr_data == nullptr || rd_data == nullptr ||
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if (wr_data == nullptr || rd_data == nullptr ||
         wr_len == 0 || rd_len == 0 || wr_len > 255 || rd_len > 255) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_write_read_device(
         EXT_I2C_PORT, addr, wr_data, wr_len, rd_data, rd_len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 static bool valid_optional_gpio(uint8_t gpio)
@@ -307,7 +320,7 @@ bool ext_spi_setup(uint8_t sck_gpio, uint8_t mosi_gpio, uint8_t miso_gpio, uint8
     bus_cfg.quadhd_io_num = -1;
     bus_cfg.max_transfer_sz = EXT_SPI_MAX_TRANSFER;
 
-    esp_err_t err = spi_bus_initialize(EXT_SPI_HOST, &bus_cfg, SPI_DMA_DISABLED);
+    esp_err_t err = spi_bus_initialize(EXT_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     if (err == ESP_OK) {
         s_spi_bus_ready = true;
         spi_device_interface_config_t dev_cfg = {};
@@ -396,19 +409,20 @@ bool ext_spi_transfer(const uint8_t *tx_data, size_t tx_len,
                       uint8_t *rx_data, size_t *inout_rx_len,
                       uint16_t timeout_ms)
 {
-    if (s_spi_dev == nullptr || inout_rx_len == nullptr || rx_data == nullptr ||
+    if (s_spi_dev == nullptr) return note_err(ESP_ERR_INVALID_STATE);
+    if (inout_rx_len == nullptr || rx_data == nullptr ||
         tx_len > EXT_SPI_MAX_TRANSFER || *inout_rx_len > EXT_SPI_MAX_TRANSFER) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     size_t transfer_len = tx_len > *inout_rx_len ? tx_len : *inout_rx_len;
     if (transfer_len == 0 || transfer_len > EXT_SPI_MAX_TRANSFER) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (tx_len > 0 && tx_data == nullptr) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (xSemaphoreTake(s_spi_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
 
     memset(s_spi_tx, 0, transfer_len);
@@ -428,7 +442,7 @@ bool ext_spi_transfer(const uint8_t *tx_data, size_t tx_len,
     }
 
     xSemaphoreGive(s_spi_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 static uint8_t *job_alloc(size_t len)
@@ -439,18 +453,9 @@ static uint8_t *job_alloc(size_t len)
     return ptr;
 }
 
-static void job_free_buffers(ExtBusJob &job)
+static uint32_t job_now_ms(void)
 {
-    if (job.tx) {
-        free(job.tx);
-        job.tx = nullptr;
-    }
-    if (job.rx) {
-        free(job.rx);
-        job.rx = nullptr;
-    }
-    job.tx_len = 0;
-    job.rx_len = 0;
+    return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 static void ext_job_worker(void *)
@@ -458,13 +463,7 @@ static void ext_job_worker(void *)
     while (true) {
         int idx = -1;
         if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-                if (s_jobs[i].status == EXT_BUS_JOB_QUEUED) {
-                    s_jobs[i].status = EXT_BUS_JOB_RUNNING;
-                    idx = (int)i;
-                    break;
-                }
-            }
+            idx = ext_jq_take_next(s_jq);
             xSemaphoreGive(s_job_mutex);
         }
 
@@ -473,7 +472,7 @@ static void ext_job_worker(void *)
             continue;
         }
 
-        ExtBusJob *job = &s_jobs[idx];
+        ExtBusJob *job = &s_jq.jobs[idx];
         bool ok = false;
         if (job->kind == EXT_BUS_JOB_I2C_READ) {
             ok = ext_i2c_read(job->addr, job->rx, job->rx_len, job->timeout_ms);
@@ -486,7 +485,7 @@ static void ext_job_worker(void *)
         }
 
         if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            job->status = ok ? EXT_BUS_JOB_DONE : EXT_BUS_JOB_ERROR;
+            ext_jq_complete(s_jq, idx, ok, job_now_ms());
             xSemaphoreGive(s_job_mutex);
         }
     }
@@ -538,37 +537,15 @@ static bool submit_job(uint8_t kind, uint8_t addr, const uint8_t *tx, size_t tx_
         return false;
     }
 
-    int slot = -1;
-    for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        if (s_jobs[i].status == EXT_BUS_JOB_EMPTY ||
-            s_jobs[i].status == EXT_BUS_JOB_DONE ||
-            s_jobs[i].status == EXT_BUS_JOB_ERROR) {
-            slot = (int)i;
-            break;
-        }
-    }
-    if (slot < 0) {
-        xSemaphoreGive(s_job_mutex);
+    uint32_t id = ext_jq_submit(s_jq, kind, addr, timeout_ms, tx_copy, tx_len, rx_buf, rx_len,
+                                job_now_ms());
+    xSemaphoreGive(s_job_mutex);
+    if (id == 0) {
         if (tx_copy) free(tx_copy);
         if (rx_buf) free(rx_buf);
         return false;
     }
-
-    ExtBusJob &job = s_jobs[slot];
-    job_free_buffers(job);
-    job.id = s_next_job_id++;
-    if (s_next_job_id == 0) s_next_job_id = 1;
-    job.kind = kind;
-    job.status = EXT_BUS_JOB_QUEUED;
-    job.addr = addr;
-    job.timeout_ms = timeout_ms;
-    job.tx = tx_copy;
-    job.rx = rx_buf;
-    job.tx_len = tx_len;
-    job.rx_len = rx_len;
-    *job_id = job.id;
-
-    xSemaphoreGive(s_job_mutex);
+    *job_id = id;
     return true;
 }
 
@@ -597,21 +574,7 @@ bool ext_job_get(uint32_t job_id, uint8_t *status, uint8_t *kind,
 {
     if (!status || !kind || !result_len || !ensure_job_runtime()) return false;
     if (xSemaphoreTake(s_job_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
-        ExtBusJob &job = s_jobs[i];
-        if (job.id == job_id && job.status != EXT_BUS_JOB_EMPTY) {
-            *status = job.status;
-            *kind = job.kind;
-            *result_len = 0;
-            if (job.status == EXT_BUS_JOB_DONE && job.rx && result && max_result_len > 0) {
-                size_t n = job.rx_len < max_result_len ? job.rx_len : max_result_len;
-                memcpy(result, job.rx, n);
-                *result_len = n;
-            }
-            xSemaphoreGive(s_job_mutex);
-            return true;
-        }
-    }
+    bool found = ext_jq_get(s_jq, job_id, status, kind, result, max_result_len, result_len);
     xSemaphoreGive(s_job_mutex);
-    return false;
+    return found;
 }

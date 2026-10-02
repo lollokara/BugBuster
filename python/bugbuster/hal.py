@@ -371,6 +371,8 @@ class BugBusterHAL:
         Custom routing table overriding :data:`DEFAULT_ROUTING`.
     supply_voltage : float
         Default VADJ voltage (volts) when IO_Blocks are first enabled.
+        3.3 V, the lowest common DUT supply; set it (or call
+        :meth:`set_voltage`) before configuring IOs for a higher rail.
     vlogic : float
         Default logic-level voltage (volts) for all digital IOs.
     adc_rate : AdcRate
@@ -381,7 +383,7 @@ class BugBusterHAL:
         self,
         client,
         routing:        Optional[dict]    = None,
-        supply_voltage: float   = 12.0,
+        supply_voltage: float   = 3.3,
         vlogic:         float   = 3.3,
         adc_rate:       AdcRate = AdcRate.SPS_200_H,
     ):
@@ -523,10 +525,31 @@ class BugBusterHAL:
                 f"Valid: {[m.name for m in sorted(rt.valid_modes)]}"
             )
 
+        # TR-6: one lease for the whole sequence instead of a claim/release
+        # pair around every channel call (unless the caller already holds it).
+        slots = [12 + rt.channel] if rt.channel is not None else []
+        held = getattr(self._bb, "_io_claimed_slots", None)
+        covered = isinstance(held, set) and set(slots) <= held
+        if slots and getattr(self._bb, "_usb", False) is True and not covered:
+            with self._bb.io_claim(slots, lease_ms=5000, purpose="configure_io"):
+                self._configure_locked(io, rt, mode, bipolar, rtd_ma_1)
+        else:
+            self._configure_locked(io, rt, mode, bipolar, rtd_ma_1)
+
+    def _configure_locked(self, io: int, rt: IORouting, mode: PortMode,
+                          bipolar: bool, rtd_ma_1: bool) -> None:
+        prev_mode = self._io_mode.get(io, PortMode.DISABLED)
+
         # ── Disable current mode ─────────────────────────────────────────
-        if rt.channel is not None:
+        # (TR-6: a channel the HAL left DISABLED is already HIGH_IMP.)
+        if rt.channel is not None and (prev_mode != PortMode.DISABLED or mode == PortMode.DISABLED):
             self._bb.set_channel_function(rt.channel, ChannelFunction.HIGH_IMP)
-        self._set_mux(rt, PortMode.DISABLED)
+        # TR-6: the explicit DISABLED MUX write is only needed when the rail
+        # is about to be powered up under a live route. Otherwise the target
+        # write below is break-before-make safe in firmware (IO-13).
+        if (mode == PortMode.DISABLED or
+                (prev_mode != PortMode.DISABLED and rt.supply not in self._supplies_on)):
+            self._set_mux(rt, PortMode.DISABLED)
 
         if mode == PortMode.DISABLED:
             self._io_mode[io] = PortMode.DISABLED
@@ -569,8 +592,8 @@ class BugBusterHAL:
     def read_current(self, io: int) -> float:
         """Read 4–20 mA loop current in mA (CURRENT_IN)."""
         self._require_mode(io, PortMode.CURRENT_IN, "read_current")
-        adc = self._bb.get_adc_value(self._routing[io].channel)
-        return (adc.value / 12.0) * 1000.0
+        # Firmware convertAdcCode() already returns mA for IIN channels.
+        return self._bb.get_adc_value(self._routing[io].channel).value
 
     def write_current(self, io: int, current_ma: float) -> None:
         """Set 4–20 mA output in mA (CURRENT_OUT)."""
@@ -801,13 +824,16 @@ class BugBusterHAL:
 
     def _enable_io_block_power(self, rt: IORouting) -> None:
         if rt.supply not in self._supplies_on:
-            self._bb.power_set(rt.supply, on=True)
-            self._bb.idac_set_voltage(rt.supply_idac, self._supply_v)
+            # PWR-REFAC: one firmware-sequenced frame brings a cold rail up with
+            # this block's e-fuse (off -> V -> VADJ on -> settle -> armed through
+            # the blackout gate). The 500 ms settle keeps targets with input
+            # capacitance (ESP32 dev boards) from tripping the e-fuse.
+            mask = 0x01 if (int(rt.efuse) - int(PowerControl.EFUSE1)) % 2 == 0 else 0x02
+            self._bb.rail_power_up(rt.supply_idac, self._supply_v, 500,
+                                   confirm=self._supply_v > 12.0, efuse_mask=mask)
             self._supplies_on.add(rt.supply)
-            # Let the adjustable rail settle before enabling the protected IO block.
-            # Some targets, including ESP32 dev boards with input capacitance,
-            # can trip the eFuse if the rail and eFuse are enabled back-to-back.
-            time.sleep(0.5)
+            self._efuses_on.add(rt.efuse)
+            return
         if rt.efuse not in self._efuses_on:
             self._bb.power_set(rt.efuse, on=True)
             self._efuses_on.add(rt.efuse)

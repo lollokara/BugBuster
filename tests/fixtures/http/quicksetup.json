@@ -1,0 +1,29 @@
+{
+  "slots": [
+    {
+      "index": 0,
+      "occupied": true,
+      "summary": {
+        "hash": 19,
+        "name": "Current Setup",
+        "size": 823,
+        "ts": 1359
+      }
+    },
+    {
+      "index": 1,
+      "occupied": false,
+      "summary": null
+    },
+    {
+      "index": 2,
+      "occupied": false,
+      "summary": null
+    },
+    {
+      "index": 3,
+      "occupied": false,
+      "summary": null
+    }
+  ]
+}

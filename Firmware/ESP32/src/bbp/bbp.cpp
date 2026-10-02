@@ -45,6 +45,8 @@ static uint16_t s_evtSeq = 0;          // Event sequence counter
 // automatically invalidated when a new host connects.
 static uint8_t  s_bbp_usb_session = 1;
 
+extern "C" void cmd_ota_abort_session(void);  // cmds/cmd_ota.cpp
+
 // Handshake detection state
 static uint8_t  s_magic_idx = 0;
 static const uint8_t s_magic[BBP_MAGIC_LEN] = {
@@ -53,6 +55,21 @@ static const uint8_t s_magic[BBP_MAGIC_LEN] = {
 
 // ADC stream state
 static uint8_t  s_adcStreamMask = 0;    // 0 = inactive
+// AN-10: divider applied by the producer (adcPoll task) and the scope-mode
+// reference the stream holds so the conversion sequence carries only the
+// streamed channels (no 20 SPS diagnostic slots).
+static volatile uint8_t s_adcStreamDiv = 1;
+static uint8_t  s_adcStreamDivCount = 0;   // producer-only
+static bool     s_adcStreamScope = false;  // BBP task only
+
+static void adcStreamEnd(void)
+{
+    s_adcStreamMask = 0;
+    if (s_adcStreamScope) {
+        s_adcStreamScope = false;
+        tasks_scope_mode_exit();
+    }
+}
 
 // Scope stream state
 static bool     s_scopeStreamActive = false;
@@ -120,7 +137,7 @@ size_t bbp_cobs_encode(const uint8_t *input, size_t length, uint8_t *output)
     return write_idx;
 }
 
-size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output)
+size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output, size_t max_out)
 {
     size_t read_idx  = 0;
     size_t write_idx = 0;
@@ -129,10 +146,12 @@ size_t bbp_cobs_decode(const uint8_t *input, size_t length, uint8_t *output)
         uint8_t code = input[read_idx++];
         if (code == 0) break;  // Invalid in COBS stream
         for (uint8_t i = 1; i < code && read_idx < length; i++) {
+            if (write_idx >= max_out) return 0;
             output[write_idx++] = input[read_idx++];
         }
         // Add implicit zero delimiter between groups, but NOT after the last group
         if (code != 0xFF && read_idx < length) {
+            if (write_idx >= max_out) return 0;
             output[write_idx++] = 0x00;
         }
     }
@@ -184,6 +203,16 @@ static void sendMsg(uint8_t msgType, uint16_t seq, uint8_t cmdId,
     if (payload && payloadLen > 0) {
         if (pos + payloadLen + 2 > BBP_MAX_PAYLOAD) {
             ESP_LOGW(TAG, "sendMsg: payload too large (%u + %u > %u)", (unsigned)pos, (unsigned)payloadLen, BBP_MAX_PAYLOAD);
+            // Tell the host instead of leaving it to time out.
+            pos = 0;
+            bbp_put_u8(s_msgBuf, &pos, BBP_MSG_ERR);
+            bbp_put_u16(s_msgBuf, &pos, seq);
+            bbp_put_u8(s_msgBuf, &pos, cmdId);
+            bbp_put_u8(s_msgBuf, &pos, BBP_ERR_FRAME_TOO_LARGE);
+            bbp_put_u8(s_msgBuf, &pos, cmdId);
+            uint16_t ecrc = bbp_crc16(s_msgBuf, pos);
+            bbp_put_u16(s_msgBuf, &pos, ecrc);
+            sendFrame(s_msgBuf, pos);
             if (s_txMutex) xSemaphoreGive(s_txMutex);
             return;
         }
@@ -231,7 +260,7 @@ void bbpSendEvent(uint8_t evtId, const uint8_t *payload, size_t len)
 bool bbp_dac_read_active(uint8_t ch, uint16_t *code_out)
 {
     if (!s_dev || ch >= 4) return false;
-    *code_out = s_dev->getDacActive(ch);
+    *code_out = s_dev->getDacActive(tasks_logical_to_physical(ch));
     return true;
 }
 
@@ -437,6 +466,14 @@ static void processScopeStream(void)
 {
     if (!s_scopeStreamActive) return;
 
+    // AN-07: copy new buckets under g_stateMutex, send after releasing it -
+    // the ADC poll task needs the same mutex to publish samples and used to
+    // wait behind the USB/WS writes. Bounded batch; the rest goes next call.
+    enum { SCOPE_BATCH = 16 };
+    static ScopeBucket s_batch[SCOPE_BATCH];
+    static uint16_t    s_batchSeq[SCOPE_BATCH];
+    uint16_t n = 0;
+
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
 
     uint16_t currentSeq = g_deviceState.scope->seq;
@@ -445,22 +482,31 @@ static void processScopeStream(void)
         return;
     }
 
-    // How many new buckets? (handle wrap)
+    // How many new buckets? (handle wrap; skip what the ring already overwrote)
     uint16_t newBuckets = currentSeq - s_scopeLastSeq;
-    if (newBuckets > SCOPE_BUF_SIZE) newBuckets = SCOPE_BUF_SIZE;
+    if (newBuckets > SCOPE_BUF_SIZE) {
+        s_scopeLastSeq = (uint16_t)(currentSeq - SCOPE_BUF_SIZE);
+        newBuckets = SCOPE_BUF_SIZE;
+    }
+    if (newBuckets > SCOPE_BATCH) newBuckets = SCOPE_BATCH;
 
-    // Send each new bucket as a SCOPE_DATA event
     for (uint16_t i = 0; i < newBuckets; i++) {
         uint16_t bucketSeq = s_scopeLastSeq + i + 1;
         uint16_t idx = (g_deviceState.scope->head - (currentSeq - bucketSeq) + SCOPE_BUF_SIZE)
                        % SCOPE_BUF_SIZE;
-        // Avoid sending partially-written data: only send if this index is valid
         if (idx >= SCOPE_BUF_SIZE) continue;
-        const ScopeBucket &b = g_deviceState.scope->buckets[idx];
+        s_batch[n] = g_deviceState.scope->buckets[idx];
+        s_batchSeq[n] = bucketSeq;
+        n++;
+    }
+    s_scopeLastSeq = (uint16_t)(s_scopeLastSeq + newBuckets);
+    xSemaphoreGive(g_stateMutex);
 
+    for (uint16_t k = 0; k < n; k++) {
+        const ScopeBucket &b = s_batch[k];
         uint8_t evtBuf[64];
         size_t pos = 0;
-        bbp_put_u32(evtBuf, &pos, bucketSeq);
+        bbp_put_u32(evtBuf, &pos, s_batchSeq[k]);
         bbp_put_u32(evtBuf, &pos, b.timestamp_ms);
         bbp_put_u16(evtBuf, &pos, b.count);
 
@@ -476,9 +522,6 @@ static void processScopeStream(void)
         // client is subscribed). HTTP/WS clients see identical data to BBP.
         ws_stream_forward(WS_STREAM_SCOPE, evtBuf, pos);
     }
-
-    s_scopeLastSeq = currentSeq;
-    xSemaphoreGive(g_stateMutex);
 }
 
 // -----------------------------------------------------------------------------
@@ -550,6 +593,7 @@ bool bbpDetectHandshake(uint8_t byte)
             // so the response reflects the new session.
             bool re_handshake = s_cdcClaimed;
             if (re_handshake) {
+                cmd_ota_abort_session();
                 uint8_t prev_session = s_bbp_usb_session;
                 uint8_t released = io_owner_release_session(IO_OWNER_USB, prev_session);
                 s_bbp_usb_session++;
@@ -581,7 +625,7 @@ bool bbpDetectHandshake(uint8_t byte)
             s_rxLen = 0;
             s_evtSeq = 0;
             s_lastFrameMs = millis_now();
-            s_adcStreamMask = 0;
+            adcStreamEnd();
             s_scopeStreamActive = false;
 
             return true;
@@ -598,9 +642,10 @@ bool bbpDetectHandshake(uint8_t byte)
 
 void bbpExitBinaryMode(void)
 {
-    s_adcStreamMask = 0;
+    adcStreamEnd();
     s_scopeStreamActive = false;
     bbpStopWavegen();  // Stop wavegen on disconnect
+    cmd_ota_abort_session();
     s_active = false;
     s_rxLen = 0;
     s_magic_idx = 0;
@@ -669,7 +714,7 @@ void bbpProcess(void)
             if (byte == BBP_FRAME_DELIMITER) {
                 // End of frame - decode and dispatch
                 if (s_rxLen > 0) {
-                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, s_decodedBuf);
+                    size_t decodedLen = bbp_cobs_decode(s_rxBuf, s_rxLen, s_decodedBuf, sizeof(s_decodedBuf));
                     if (decodedLen >= BBP_MIN_MSG_SIZE && decodedLen <= BBP_MAX_PAYLOAD) {
                         dispatchMessage(s_decodedBuf, decodedLen);
                     }
@@ -695,6 +740,13 @@ void bbpProcess(void)
 
 void bbpPushAdcSample(const uint32_t raw[4], uint32_t timestamp_us)
 {
+    // AN-10: honour the START_ADC_STREAM divider (it used to be echoed only).
+    uint8_t div = s_adcStreamDiv;
+    if (div > 1) {
+        if (++s_adcStreamDivCount < div) return;
+        s_adcStreamDivCount = 0;
+    }
+
     // Lock-free SPSC: only the producer (ADC task) writes head
     uint16_t head = __atomic_load_n(&s_adcBuf.head, __ATOMIC_RELAXED);
     uint16_t next = (head + 1) & (BBP_ADC_STREAM_BUF_SIZE - 1);
@@ -729,6 +781,12 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
     s_adcBuf.head  = 0;
     s_adcBuf.tail  = 0;
 
+    s_adcStreamDiv = div;
+    s_adcStreamDivCount = 0;
+    if (!s_adcStreamScope) {
+        tasks_scope_mode_enter(mask);
+        s_adcStreamScope = true;
+    }
     s_adcStreamMask = mask;
 
     // Estimate effective sample rate from fastest active channel
@@ -755,6 +813,12 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
         }
         xSemaphoreGive(g_stateMutex);
     }
+    // AN-10: report what the poll loop can deliver, not the converter rate.
+    // Measured 2026-10-02 (VIN ch0, ADC_RDY wake): 9.6 kSPS -> 1165-1353/s,
+    // 4.8 kSPS -> ~1130/s, 1.2 kSPS -> ~735-1030/s. Each sample costs several
+    // SPI transactions (LIVE_STATUS, result UPR+LWR, CONV_CTRL RMW).
+    static constexpr uint16_t ADC_STREAM_MAX_SPS = 1200;
+    if (effectiveRate > ADC_STREAM_MAX_SPS) effectiveRate = ADC_STREAM_MAX_SPS;
     effectiveRate /= div;
 
     ESP_LOGI(TAG, "ADC stream started: mask=0x%02X div=%d rate=%d", mask, div, effectiveRate);
@@ -764,7 +828,7 @@ void bbpStartAdcStream(uint8_t mask, uint8_t div, uint16_t *rate_out)
 
 void bbpStopAdcStream(void)
 {
-    s_adcStreamMask = 0;
+    adcStreamEnd();
     ESP_LOGI(TAG, "ADC stream stopped");
 }
 

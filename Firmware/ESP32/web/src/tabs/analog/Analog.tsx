@@ -9,6 +9,7 @@ import { ChDOverlay } from "../../components/ChDOverlay";
 import { IoOwnerBanner } from "../../components/IoOwnerBanner";
 import { api, PairingRequiredError } from "../../api/client";
 import { useIoLease } from "../../api/io_lease";
+import { pollIntervalFor } from "../../state/signals";
 import {
   deviceStatus,
   deviceMac,
@@ -261,7 +262,7 @@ function IdacCard() {
       } catch {
         /* ignore */
       }
-      if (alive) setTimeout(tick, 2000);
+      if (alive) setTimeout(tick, pollIntervalFor(2000));
     };
     tick();
     return () => {
@@ -403,7 +404,7 @@ function DiagnosticsCard() {
       } catch {
         /* ignore */
       }
-      if (alive) setTimeout(tick, 1500);
+      if (alive) setTimeout(tick, pollIntervalFor(1500));
     };
     tick();
     return () => {

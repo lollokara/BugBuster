@@ -42,13 +42,27 @@ _VDUT_MIN_MV, _VDUT_MAX_MV = 1800, 20000
 _ILIMIT_MIN_MA, _ILIMIT_MAX_MA = 100, 2500
 
 # Registry RANGE_IDX options are ("A", "mA", "uA") - NOT the DaqRange enum order.
-_RANGE_NAMES = {"a": 0, "amp": 0, "high": 0, "coarse": 0,
+# DAQ-07: "hi"/"mid"/"lo" are the names reports and CSVs use (hi = 51 ohm);
+# "high"/"low" meant the opposite and "coarse"/"fine" are sample sources.
+_RANGE_NAMES = {"a": 0, "amp": 0, "lo": 0,
                 "ma": 1, "milliamp": 1, "mid": 1,
-                "ua": 2, "microamp": 2, "fine": 2, "low": 2}
+                "ua": 2, "microamp": 2, "hi": 2}
 _RANGE_LABELS = {0: "a (50 mohm shunt, ~50 mA - 3 A)",
                  1: "ma (2 ohm shunt, ~2 - 50 mA)",
                  2: "ua (51 ohm shunt, nA - ~2 mA)"}
-_SAMPLE_RATES_SPS = (10_000, 50_000, 100_000, 250_000, 1_000_000)
+# DAQ-06: the rates the ADC actually runs at, by registry option index.
+_SAMPLE_RATES_SPS = (8_000, 64_000, 128_000, 256_000, 512_000)
+# Nominal values the registry used to advertise, still accepted for old callers.
+_LEGACY_RATES_SPS = (10_000, 50_000, 100_000, 250_000, 1_000_000)
+
+
+def _rate_index(sps: int) -> int:
+    sps = int(sps)
+    if sps in _SAMPLE_RATES_SPS:
+        return _SAMPLE_RATES_SPS.index(sps)
+    if sps in _LEGACY_RATES_SPS:
+        return _LEGACY_RATES_SPS.index(sps)
+    raise ValueError(f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
 
 # Bound a single capture so one bad duration cannot exhaust host memory.
 # Samples are Python floats in lists, so budget ~64 B per sample across the
@@ -56,6 +70,10 @@ _SAMPLE_RATES_SPS = (10_000, 50_000, 100_000, 250_000, 1_000_000)
 MAX_CAPTURE_DURATION_S = 900.0
 MAX_CAPTURE_SAMPLES = 4_000_000
 MAX_STORED_CAPTURES = 8
+# MCP-34: also bound the whole store by an estimate of its size; the newest
+# capture is always kept.
+_BYTES_PER_SAMPLE = 64
+MAX_STORED_BYTES = 512 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Capture + job stores (in-process, MCP server lifetime)
@@ -65,12 +83,18 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def _capture_bytes(cap) -> int:
+    return len(getattr(cap, "current", ())) * _BYTES_PER_SAMPLE
+
+
 def _store_capture(cap) -> str:
     capture_id = f"cap-{uuid.uuid4().hex[:8]}"
     with _lock:
         _captures[capture_id] = cap
-        while len(_captures) > MAX_STORED_CAPTURES:
-            _captures.pop(next(iter(_captures)))
+        total = sum(_capture_bytes(c) for c in _captures.values())
+        while len(_captures) > 1 and (len(_captures) > MAX_STORED_CAPTURES
+                                      or total > MAX_STORED_BYTES):
+            total -= _capture_bytes(_captures.pop(next(iter(_captures))))
     return capture_id
 
 
@@ -91,7 +115,11 @@ def _open_stream():
 
 
 def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
-                trigger_timeout_s: float) -> Dict[str, Any]:
+                trigger_timeout_s: float, pre_trigger_s: float = 0.0,
+                trigger_current_a: float | None = None,
+                trigger_edge: str = "rising") -> Dict[str, Any]:
+    if not (0.0 <= pre_trigger_s <= 10.0):
+        raise ValueError("pre_trigger_s must be 0..10")
     stream = _open_stream()
     try:
         cap = stream.capture(
@@ -99,6 +127,9 @@ def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
             max_samples=sample_limit,
             wait_for_trigger=wait_for_trigger,
             trigger_timeout_s=trigger_timeout_s,
+            pre_trigger_s=pre_trigger_s,
+            trigger_current_a=trigger_current_a,
+            trigger_edge=trigger_edge,
         )
     finally:
         stream.close()
@@ -110,6 +141,7 @@ def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
         "duration_s": cap.duration_s,
         "dropped_samples": cap.dropped_samples,
         "markers": len(cap.markers),
+        "trigger_offset": cap.trigger_offset,
         "next": f"Call daq_power_report(capture_id='{capture_id}') for the "
                 f"energy/state analysis.",
     }
@@ -186,7 +218,9 @@ def register(mcp) -> None:
         - autorange: True lets the analog loop pick the shunt seamlessly
           (normal). False holds whatever range daq_set_current_range last set,
           which removes range-transition artefacts from a sensitive capture.
-        - sample_rate_sps: 10000, 50000, 100000, 250000 or 1000000.
+        - sample_rate_sps: 8000, 64000, 128000, 256000 or 512000 (the rates
+          the ADC really runs at; the old nominal 10k/50k/100k/250k/1M are
+          accepted and mapped to the same options).
         - reset_accumulators: zero the device energy and charge counters so the
           run starts from 0.
 
@@ -213,12 +247,9 @@ def register(mcp) -> None:
             bb.daq.set(DaqKey.AUTORANGING, bool(autorange))
             applied["autorange"] = bool(autorange)
         if sample_rate_sps is not None:
-            if int(sample_rate_sps) not in _SAMPLE_RATES_SPS:
-                raise ValueError(
-                    f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
-            bb.daq.set(DaqKey.SAMPLE_RATE_IDX,
-                       _SAMPLE_RATES_SPS.index(int(sample_rate_sps)))
-            applied["sample_rate_sps"] = int(sample_rate_sps)
+            idx = _rate_index(sample_rate_sps)
+            bb.daq.set(DaqKey.SAMPLE_RATE_IDX, idx)
+            applied["sample_rate_sps"] = _SAMPLE_RATES_SPS[idx]
         if enable is not None:
             bb.daq.set(DaqKey.SOURCE_ENABLE, bool(enable))
             applied["source_enabled"] = bool(enable)
@@ -249,7 +280,8 @@ def register(mcp) -> None:
         lock once the DUT's span is known.
 
         Parameters:
-        - range_name: "ua" | "ma" | "a" (ignored when autorange=True).
+        - range_name: "ua" | "ma" | "a", or the report names "hi" | "mid" | "lo"
+          (ignored when autorange=True).
         - autorange: True re-enables the seamless hardware autoranger.
 
         Returns: the resulting range and autorange state.
@@ -265,26 +297,28 @@ def register(mcp) -> None:
         idx = _RANGE_NAMES.get(range_name.strip().lower())
         if idx is None:
             raise ValueError(
-                f"Unknown range {range_name!r}. Use 'ua', 'ma' or 'a'.")
+                f"Unknown range {range_name!r}. Use 'ua' (= 'hi'), 'ma' (= 'mid') or 'a' (= 'lo').")
         bb.daq.set(DaqKey.AUTORANGING, False)
         bb.daq.set(DaqKey.RANGE_IDX, idx)
         return {"autorange": False, "range": _RANGE_LABELS[idx]}
 
     @mcp.tool()
-    def daq_set_sample_rate(sample_rate_sps: int = 100000,
+    def daq_set_sample_rate(sample_rate_sps: int = 128000,
                             stream_decimation: int = 1,
                             i_understand_aliasing: bool = False) -> dict:
         """
         Set the acquisition rate.
 
         Pick the rate from the shortest feature that matters, not the run
-        length: a 50 us radio ramp needs 250 ksps or better. The device reports
+        length: a 50 us radio ramp needs 256 ksps or better. The device reports
         the ODR it ACTUALLY applied, which may differ from the request - the
         driver clamps filter/decimation combinations the part cannot hit. Read
         the applied rate back from a capture, never assume the setpoint.
 
         Parameters:
-        - sample_rate_sps: 10000, 50000, 100000, 250000 or 1000000. This is the
+        - sample_rate_sps: 8000, 64000, 128000, 256000 or 512000 - the rates
+          the ADC really runs at (old nominal 10k/50k/100k/250k/1M values are
+          accepted and mapped to the same options). This is the
           ADC's own ODR and IS anti-alias filtered - the correct way to trade
           bandwidth for a longer or smaller capture.
         - stream_decimation: keep 1 of every N streamed samples. This is a naive
@@ -299,9 +333,8 @@ def register(mcp) -> None:
 
         bb = session.get_client()
         require_hat(bb)
-        if int(sample_rate_sps) not in _SAMPLE_RATES_SPS:
-            raise ValueError(
-                f"sample_rate_sps must be one of {list(_SAMPLE_RATES_SPS)}")
+        idx = _rate_index(sample_rate_sps)
+        sps = _SAMPLE_RATES_SPS[idx]
         if not (1 <= int(stream_decimation) <= 1000):
             raise ValueError("stream_decimation must be 1..1000")
         if int(stream_decimation) > 1 and not i_understand_aliasing:
@@ -311,13 +344,12 @@ def register(mcp) -> None:
                 "the measurement. Lower sample_rate_sps instead, or pass "
                 "i_understand_aliasing=True if you specifically want raw "
                 "sub-sampling.")
-        bb.daq.set(DaqKey.SAMPLE_RATE_IDX,
-                   _SAMPLE_RATES_SPS.index(int(sample_rate_sps)))
+        bb.daq.set(DaqKey.SAMPLE_RATE_IDX, idx)
         bb.daq.set(DaqKey.USB_DECIMATION, int(stream_decimation))
         return {
-            "sample_rate_sps": int(sample_rate_sps),
+            "sample_rate_sps": sps,
             "stream_decimation": int(stream_decimation),
-            "effective_stream_sps": int(sample_rate_sps) / int(stream_decimation),
+            "effective_stream_sps": sps / int(stream_decimation),
             "note": "The device reports the ODR it actually applied in every "
                     "capture; check capture.sample_rate_sps.",
         }
@@ -418,6 +450,9 @@ def register(mcp) -> None:
         duration_s: float = 2.0,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 10.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: float | None = None,
+        trigger_edge: str = "rising",
     ) -> dict:
         """
         Record a block of DUT current and voltage from the DAQ HAT data plane.
@@ -427,17 +462,24 @@ def register(mcp) -> None:
         server - only a capture_id comes back, which daq_power_report,
         daq_power_window and daq_power_export then work on.
 
-        With wait_for_trigger=True the capture discards everything before the
-        TRIGGER marker, so t=0 is the DUT event. Configure the trigger IO with
+        With wait_for_trigger=True the capture starts at the TRIGGER marker,
+        so t=0 is the DUT event. Configure the trigger IO with
         daq_set_io_role(role="trigger") and arm it with daq_arm() first.
+        trigger_current_a triggers instead when the DUT current crosses that
+        level (trigger_edge "rising"/"falling"), no IO needed.
+        pre_trigger_s keeps that much data from before the trigger; the
+        result's trigger_offset is the trigger's sample index.
 
         Parameters:
-        - duration_s: capture length in seconds (0.001..120).
+        - duration_s: capture length after the trigger, seconds (0.001..120).
         - wait_for_trigger: start the window at the trigger marker.
         - trigger_timeout_s: give up if the trigger never fires.
+        - pre_trigger_s: 0..10 s of history kept before the trigger.
+        - trigger_current_a: software current-threshold trigger (A).
+        - trigger_edge: "rising" (default) or "falling".
 
         Returns: capture_id, sample_count, sample_rate_sps, duration_s,
-        dropped_samples, marker count.
+        dropped_samples, marker count, trigger_offset.
         """
         if not (0.001 <= duration_s <= MAX_CAPTURE_DURATION_S):
             raise ValueError(f"duration_s must be 0.001..{MAX_CAPTURE_DURATION_S}")
@@ -446,13 +488,17 @@ def register(mcp) -> None:
                 "Captures longer than 10 s block the tool call - use "
                 "daq_power_capture_start / _status / _result instead.")
         return _do_capture(duration_s, MAX_CAPTURE_SAMPLES,
-                           wait_for_trigger, trigger_timeout_s)
+                           wait_for_trigger, trigger_timeout_s,
+                           pre_trigger_s, trigger_current_a, trigger_edge)
 
     @mcp.tool()
     def daq_power_capture_start(
         duration_s: float = 30.0,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 60.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: float | None = None,
+        trigger_edge: str = "rising",
     ) -> dict:
         """
         Start a long power capture in the background and return immediately.
@@ -479,7 +525,8 @@ def register(mcp) -> None:
         def _worker():
             try:
                 res = _do_capture(duration_s, MAX_CAPTURE_SAMPLES,
-                                  wait_for_trigger, trigger_timeout_s)
+                                  wait_for_trigger, trigger_timeout_s,
+                                  pre_trigger_s, trigger_current_a, trigger_edge)
                 with _lock:
                     _jobs[job_id].update(status="done", result=res)
             except Exception as exc:
@@ -733,9 +780,11 @@ def register(mcp) -> None:
         between consecutive markers.
 
         Markers come from the ESP32-S3 IOs tagged with daq_set_io_role(...,
-        role="flag"), timestamped in the epoch shared with the P4, so each one
-        maps to an exact sample index. A firmware GPIO toggle around a code
-        region therefore brackets that region's energy precisely.
+        role="flag"). The S3 polls the IOs and reports how long ago it saw the
+        edge; the P4 backs the marker off by that age. A marker therefore lands
+        within about one S3 IO poll interval plus a UART frame (sub-ms) of the
+        real edge - not on an exact sample. Good for bracketing code regions
+        that last milliseconds; too coarse for microsecond events.
 
         Parameters:
         - channel: restrict to one mainboard IO (1..12). None = all.

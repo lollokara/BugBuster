@@ -260,20 +260,9 @@ static void apply_sr_mode(daq_board_t *b)
     if (was) daq_board_run_fast(b, DAQ_RING_CAPACITY);
 }
 
-static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
+void daq_settings_apply_smu(daq_board_t *b, uint16_t key, int32_t ival)
 {
-    daq_board_t *b = (daq_board_t *)user;
-    (void)sval;
-
-    const daq_setting_schema_t *sc = daq_config_schema(key);
-    if (sc && (sc->flags & (DAQ_F_C6_LOCAL | DAQ_F_S3_LOCAL))) return;   // applied on the C6 / S3
-
     switch (key) {
-    case DAQ_K_AUTORANGING:
-    case DAQ_K_RANGE_IDX:
-        apply_ranging(b);
-        break;
-
     case DAQ_K_SOURCE_ENABLE:
         // Hard guard (no override): the DUT output may only be enabled with a
         // USB-PD contract of at least 9 V / 3 A negotiated on the S3.
@@ -289,6 +278,34 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
         break;
     case DAQ_K_DUT_ILIMIT_MA:
         smu_set_current_limit(&b->smu, (float)ival / 1000.0f);
+        break;
+    default:
+        break;
+    }
+}
+
+static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
+{
+    daq_board_t *b = (daq_board_t *)user;
+    (void)sval;
+
+    const daq_setting_schema_t *sc = daq_config_schema(key);
+    if (sc && (sc->flags & (DAQ_F_C6_LOCAL | DAQ_F_S3_LOCAL))) return;   // applied on the C6 / S3
+
+    switch (key) {
+    case DAQ_K_AUTORANGING:
+    case DAQ_K_RANGE_IDX:
+        apply_ranging(b);
+        break;
+
+    case DAQ_K_SOURCE_ENABLE:
+    case DAQ_K_DUT_VOLTAGE_MV:
+    case DAQ_K_DUT_ILIMIT_MA:
+        // DAQ-08: the V_DUT ramp blocks for up to ~2.5 s, so outside boot it
+        // runs on the ctrl task and the S3-link reply goes out at once.
+        if (s_boot_apply || !daq_board_defer_smu(b, key, ival)) {
+            daq_settings_apply_smu(b, key, ival);
+        }
         break;
 
     case DAQ_K_FFT_ENABLE:

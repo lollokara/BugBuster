@@ -10,6 +10,11 @@
 #include "daq_trigger.h"
 #include "hat.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+
+// DAQ-03: time the current poll pass observed its levels. An edge is detected
+// at most one poll interval after it happened; this is the best stamp we have.
+static int64_t s_poll_us = 0;
 
 static const char *TAG = "daq_trig";
 
@@ -130,7 +135,7 @@ static void maybe_fire_trigger(uint8_t io, bool rising) {
     }
     // OR (or satisfied AND): fire now on this IO's edge.
     s_fired = true;
-    hat_daq_send_mark(io, rising ? 1u : 0u, HAT_DAQ_MARK_KIND_TRIGGER);
+    hat_daq_send_mark(io, rising ? 1u : 0u, HAT_DAQ_MARK_KIND_TRIGGER, s_poll_us);
     ESP_LOGI(TAG, "TRIGGER fired on IO%u (%s)", io, rising ? "rising" : "falling");
 }
 
@@ -152,7 +157,7 @@ static void update_io_level(uint8_t io, bool level) {
     if (!edge_matches(t->cfg.edge, rising)) return;
 
     if (t->cfg.role == DAQ_TRIG_ROLE_FLAG) {
-        hat_daq_send_mark(io, rising ? 1u : 0u, HAT_DAQ_MARK_KIND_FLAG);
+        hat_daq_send_mark(io, rising ? 1u : 0u, HAT_DAQ_MARK_KIND_FLAG, s_poll_us);
     } else if (t->cfg.role == DAQ_TRIG_ROLE_TRIGGER) {
         t->trig_latched = true;
         maybe_fire_trigger(io, rising);
@@ -161,6 +166,7 @@ static void update_io_level(uint8_t io, bool level) {
 
 void daq_trigger_poll_digital(const DioState *all_dio) {
     if (all_dio == nullptr) return;
+    s_poll_us = esp_timer_get_time();
     for (int i = 0; i < DIO_NUM_IOS; i++) {
         uint8_t io = (uint8_t)(i + DIO_FIRST_IO);
         const trig_io_t *t = &s_io[i];
@@ -175,5 +181,6 @@ void daq_trigger_feed_analog(uint8_t io, float volts) {
     trig_io_t *t = &s_io[idx(io)];
     if (t->cfg.role == DAQ_TRIG_ROLE_OFF) return;
     if (t->cfg.source != DAQ_TRIG_SRC_ANALOG) return;
+    s_poll_us = esp_timer_get_time();
     update_io_level(io, volts >= t->cfg.threshold_v);
 }

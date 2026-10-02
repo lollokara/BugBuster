@@ -11,10 +11,15 @@
 #include "mbedtls/sha256.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_timer.h"
 
 static const char *TAG = "relay_stage";
 #define RELAY_NVS_NS "relay"
 #define STAGE_ERASE_BLOCK 4096u
+
+// C6-25: an in-flight session idle this long is abandoned (the S3 died mid-
+// upload and never sent ABORT). Generous: the C6 push's flash erase is slow.
+#define RELAY_STALE_US (120LL * 1000 * 1000)
 
 // Persist to NVS only every this many bytes of staging progress (plus always
 // at relay_stage_end()), to avoid tens of thousands of NVS commits per image.
@@ -28,6 +33,10 @@ typedef struct {
     const esp_partition_t  *part;
     uint32_t                erased_through;   // bytes of `staging` erased so far
     uint32_t                last_persisted_bytes;
+    // RAM-only, so a reboot clears it: a session restored from NVS has not
+    // been touched in this boot until a write/read/push resumes it.
+    bool                    touched;
+    int64_t                 last_activity_us;
     SemaphoreHandle_t       lock;
 } relay_ctx_t;
 
@@ -35,6 +44,21 @@ static relay_ctx_t s_relay;
 
 static void lock(void)   { if (s_relay.lock) xSemaphoreTake(s_relay.lock, portMAX_DELAY); }
 static void unlock(void) { if (s_relay.lock) xSemaphoreGive(s_relay.lock); }
+
+static void touch(void)
+{
+    s_relay.touched = true;
+    s_relay.last_activity_us = esp_timer_get_time();
+}
+
+// In flight AND alive. An orphan (restored after a reboot and never resumed,
+// or idle past RELAY_STALE_US) can be replaced by a new begin.
+static bool session_live(void)
+{
+    if (s_relay.status.state != RELAY_STAGING && s_relay.status.state != RELAY_PUSHING) return false;
+    if (!s_relay.touched) return false;
+    return (esp_timer_get_time() - s_relay.last_activity_us) < RELAY_STALE_US;
+}
 
 static const esp_partition_t *stage_partition(void)
 {
@@ -100,13 +124,19 @@ esp_err_t relay_stage_begin(relay_target_t target, const ota_meta_t *meta)
         return ESP_ERR_INVALID_SIZE;
     }
     // Only one relay in flight at a time: reject if a staging/pushing run is
-    // already active, regardless of target (a caller wanting to restart
-    // should abort first).
-    if (s_relay.status.state == RELAY_STAGING || s_relay.status.state == RELAY_PUSHING) {
+    // live, regardless of target (a caller wanting to restart should abort
+    // first). C6-25: a stale run is replaced instead - after a P4 reboot the
+    // S3's ABORT is routed to the P4-self OTA (s_ota_target is RAM-only), so
+    // nothing else could ever clear it.
+    if (session_live()) {
         ESP_LOGW(TAG, "relay_stage_begin: rejected, relay already in flight (state=%d)",
                  s_relay.status.state);
         unlock();
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_relay.status.state == RELAY_STAGING || s_relay.status.state == RELAY_PUSHING) {
+        ESP_LOGW(TAG, "relay_stage_begin: replacing stale session (state=%d, staged=%lu)",
+                 s_relay.status.state, (unsigned long)s_relay.status.staged_bytes);
     }
     memset(&s_relay.status, 0, sizeof(s_relay.status));
     s_relay.status.target     = target;
@@ -115,6 +145,7 @@ esp_err_t relay_stage_begin(relay_target_t target, const ota_meta_t *meta)
     memcpy(s_relay.status.sha256, meta->sha256, 32);
     s_relay.erased_through = 0;
     s_relay.last_persisted_bytes = 0;
+    touch();
     persist_status();
     ESP_LOGI(TAG, "relay stage begin: target=%d size=%lu", target, (unsigned long)meta->image_size);
     unlock();
@@ -152,6 +183,7 @@ esp_err_t relay_stage_write(uint32_t offset, const uint8_t *data, size_t len)
     if (err != ESP_OK) { unlock(); return err; }
 
     s_relay.status.staged_bytes += (uint32_t)len;
+    touch();
     // Persist only every STAGE_PERSIST_INTERVAL bytes of progress (see
     // comment above STAGE_PERSIST_INTERVAL) to bound NVS wear; the final
     // state is always persisted in relay_stage_end()/relay_stage_reset().
@@ -267,6 +299,7 @@ int relay_stage_read(uint32_t offset, uint8_t *out, size_t len)
     const esp_partition_t *part = stage_partition();
     if (!part) { unlock(); return -1; }
     int ret = (esp_partition_read(part, offset, out, clamped) != ESP_OK) ? -1 : (int)clamped;
+    if (ret > 0) touch();   // an S3 pull or C6 push is progress too
     unlock();
     return ret;
 }
@@ -275,6 +308,7 @@ esp_err_t relay_stage_set_pushed_bytes(uint32_t pushed)
 {
     lock();
     s_relay.status.pushed_bytes = pushed;
+    touch();
     if (s_relay.status.state == RELAY_STAGED) s_relay.status.state = RELAY_PUSHING;
     persist_status();
     unlock();

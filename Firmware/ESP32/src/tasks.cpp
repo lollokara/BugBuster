@@ -171,6 +171,20 @@ static bool setVoutRangePreservingOutput(uint8_t logical_channel, float present_
 // -----------------------------------------------------------------------------
 
 // Map ADC rate enum to approximate poll interval in ms.
+// AN-11 counters, read by tasks_adc_poll_stats().
+static volatile uint32_t s_adcLoops = 0;
+static volatile uint32_t s_adcReadyHits = 0;
+static volatile uint32_t s_adcRdyIrqs = 0;
+
+void tasks_adc_poll_stats(AdcPollStats *out)
+{
+    if (!out) return;
+    out->loops   = s_adcLoops;
+    out->ready   = s_adcReadyHits;
+    out->rdy_irq = s_adcRdyIrqs;
+}
+
+// Map ADC rate enum to approximate poll interval in ms.
 // We can't match full SPI throughput at 9600 SPS, but we poll as fast as
 // practical for higher rates. Minimum ~2ms due to SPI + FreeRTOS overhead.
 uint32_t tasks_adc_rate_poll_ms(AdcRate fastest)
@@ -219,6 +233,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
     TickType_t pollDelay = pdMS_TO_TICKS(50);
 
     for (;;) {
+        s_adcLoops++;
         if (s_device) {
             uint32_t raw[AD74416H_NUM_CHANNELS];
             float    eng[AD74416H_NUM_CHANNELS];
@@ -264,6 +279,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
             }
 
             bool adcReady = s_device->isAdcReady();
+            if (adcReady) s_adcReadyHits++;
 
             // Read hardware (outside mutex) - only for channels that have fresh ADC data
             // DIN_LOGIC and DIN_LOOP use the comparator path, not the ADC conversion path
@@ -421,8 +437,9 @@ static void taskAdcPoll(void* /*pvParameters*/)
             // ---- DAQ trigger/flag: digital edge detection -------------------
             // Sample the ESP32 GPIO levels for all 12 IOs and emit flag/trigger
             // markers on matching edges. Runs every poll iteration so digital
-            // detection tracks the ADC poll rate (the P4 stamps the precise
-            // sample index when the marker arrives).
+            // detection tracks the ADC poll rate. daq_trigger stamps the poll
+            // time and sends the edge age, so the P4 backs the marker off to
+            // the poll instead of UART arrival (DAQ-03).
             dio_poll_inputs();
             daq_trigger_poll_digital(dio_get_all());
         }
@@ -431,7 +448,44 @@ static void taskAdcPoll(void* /*pvParameters*/)
         if (pollDelay == 0) {
             delay_us(50);
         }
-        vTaskDelay(pollDelay);
+        // AN-11: wake on the AD74416H ADC_RDY falling edge (adc_rdy_isr), with
+        // the rate-derived poll interval as the fallback if the pin is quiet.
+        // At high conversion rates an edge is always pending, so the loop would
+        // never block and would starve cmdProc (prio 2, same core): after
+        // ADC_WAKE_BURST back-to-back wakes, sleep one tick.
+        static constexpr uint8_t ADC_WAKE_BURST = 4;
+        static uint8_t s_wakeBurst = 0;
+        if (ulTaskNotifyTake(pdTRUE, pollDelay) > 0) {
+            if (++s_wakeBurst >= ADC_WAKE_BURST) {
+                s_wakeBurst = 0;
+                vTaskDelay(1);
+            }
+        } else {
+            s_wakeBurst = 0;
+        }
+    }
+}
+
+// AN-11: ADC_RDY (open-drain, active low) -> notify adcPoll.
+static void IRAM_ATTR adc_rdy_isr(void * /*arg*/)
+{
+    s_adcRdyIrqs++;
+    BaseType_t woken = pdFALSE;
+    if (g_adcTaskHandle) vTaskNotifyGiveFromISR(g_adcTaskHandle, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+static void adc_rdy_irq_init(void)
+{
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW("adcPoll", "ADC_RDY: isr service failed (%s), polling only", esp_err_to_name(err));
+        return;
+    }
+    gpio_set_intr_type(PIN_ADC_RDY, GPIO_INTR_NEGEDGE);
+    err = gpio_isr_handler_add(PIN_ADC_RDY, adc_rdy_isr, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGW("adcPoll", "ADC_RDY: handler add failed (%s), polling only", esp_err_to_name(err));
     }
 }
 
@@ -887,7 +941,13 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     // the AD74416H channel to the terminal for all analog/current/RTD/HART modes.
     {
         bool close_analog = (func != CH_FUNC_HIGH_IMP);
-        adgs_set_switch_safe(mux_dev, 2, close_analog); // S3 is index 2
+        if (!adgs_set_switch_safe(mux_dev, 2, close_analog)) { // S3 is index 2
+            // IO-8: the self-test holds U23, so the terminal is NOT connected
+            // to the channel. The function is still applied; surface it.
+            ESP_LOGE("tasks", "CH%u analog route (MUX dev %u S3) refused by the "
+                              "self-test interlock - terminal not connected",
+                     logical_channel, mux_dev);
+        }
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -992,14 +1052,21 @@ bool tasks_apply_dac_code(uint8_t logical_channel, uint16_t code)
 bool tasks_apply_dac_voltage(uint8_t logical_channel, float voltage, bool bipolar)
 {
     if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
-    uint8_t physical_ch = (logical_channel == 2) ? 3 : (logical_channel == 3 ? 2 : logical_channel);
+    uint8_t physical_ch = tasks_logical_to_physical(logical_channel);
 
     float present_voltage = 0.0f;
+    bool range_change_needed = true;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         present_voltage = g_deviceState.channels[logical_channel].dacValue;
+        range_change_needed =
+            (g_deviceState.channels[logical_channel].dacBipolar != bipolar);
         xSemaphoreGive(g_stateMutex);
     }
-    if (!setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
+    // AN-04: same guard as the BBP CMD_SET_DAC_VOLTAGE path. Re-parking the
+    // output and waiting out the range settle on every same-range write is what
+    // made HTTP/script DAC writes slow and glitchy.
+    if (range_change_needed &&
+        !setVoutRangePreservingOutput(logical_channel, present_voltage, bipolar)) {
         return false;
     }
     if (!s_device->setDacVoltage(physical_ch, voltage, bipolar)) {
@@ -1176,11 +1243,17 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
                 // Restart ADC conversion (respects scope mode if active).
                 tasks_rebuild_adc_conv_ctrl();
-                delay_ms(20);
-                s_device->clearAllAlerts();
-
-                // Release bus — ADC poll task resumes
+                // AN-12: release the bus for the first-conversion settle so
+                // the ADC poll / DAC / MUX are not stalled for 20 ms; take it
+                // back only for the alert clear.
                 xSemaphoreGiveRecursive(g_spi_bus_mutex);
+                delay_ms(20);
+                if (xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+                    s_device->clearAllAlerts();
+                    xSemaphoreGiveRecursive(g_spi_bus_mutex);
+                } else {
+                    ESP_LOGW("cmd", "ADC config: bus busy, alert clear skipped");
+                }
                 break;
             }
 
@@ -1488,7 +1561,8 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 uint16_t rtdCfgVal = RTD_CONFIG_RTD_MODE_SEL_MASK;  // 2-wire, RTD_ADC_REF = 0
                 if (cmd.rtdCfg.current != 0)
                     rtdCfgVal |= RTD_CONFIG_RTD_CURRENT_MASK;  // 1 mA
-                spiDriver.writeRegister(AD74416H_REG_RTD_CONFIG(cmd.channel), rtdCfgVal);
+                spiDriver.writeRegister(
+                    AD74416H_REG_RTD_CONFIG(tasks_logical_to_physical(cmd.channel)), rtdCfgVal);
 
                 uint16_t excUa = (cmd.rtdCfg.current != 0) ? 1000 : 500;
                 if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -1623,7 +1697,29 @@ static void taskWavegen(void* /*pvParameters*/)
 
         // Generation loop
         uint32_t sampleIndex = 0;
-        int64_t nextSampleTime = esp_timer_get_time();
+        // AN-06: a periodic esp_timer wakes this task once per sample. The
+        // old pacing spun on taskYIELD() for the sub-tick remainder, which
+        // starves every lower-priority task on this core.
+        TaskHandle_t self = xTaskGetCurrentTaskHandle();
+        esp_timer_handle_t pace = NULL;
+        const esp_timer_create_args_t pace_args = {
+            .callback = [](void *arg) { xTaskNotifyGive((TaskHandle_t)arg); },
+            .arg = self,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "wavegen_pace",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&pace_args, &pace) != ESP_OK ||
+            esp_timer_start_periodic(pace, sampleIntervalUs) != ESP_OK) {
+            ESP_LOGE("wavegen", "pacing timer failed");
+            if (pace) esp_timer_delete(pace);
+            if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+                g_deviceState.wavegen.active = false;
+                xSemaphoreGive(g_stateMutex);
+            }
+            continue;
+        }
+        ulTaskNotifyTake(pdTRUE, 0);   // drop any stale notification
 
         while (true) {
             // Check if still active. Default true so a transient mutex timeout
@@ -1669,27 +1765,12 @@ static void taskWavegen(void* /*pvParameters*/)
 
             sampleIndex++;
 
-            // Precise timing: yield cooperatively until next sample time.
-            // A busy-wait here would starve taskAdcPoll (same priority, same
-            // core) for the entire inter-sample interval.  taskYIELD() gives
-            // other ready tasks a chance to run on each scheduler tick while
-            // keeping the wavegen in the ready queue for low-latency reschedule.
-            nextSampleTime += sampleIntervalUs;
-            {
-                int64_t sleepUs = nextSampleTime - esp_timer_get_time();
-                if (sleepUs > 1000) {
-                    vTaskDelay(pdMS_TO_TICKS(sleepUs / 1000));
-                }
-                while (esp_timer_get_time() < nextSampleTime) {
-                    taskYIELD();
-                }
-                if (nextSampleTime < esp_timer_get_time() - (int64_t)sampleIntervalUs) {
-                    // Fallen more than one interval behind — reset timeline.
-                    nextSampleTime = esp_timer_get_time();
-                }
-            }
+            // Block until the pacing timer fires (missed ticks coalesce).
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
         }
 
+        esp_timer_stop(pace);
+        esp_timer_delete(pace);
         ESP_LOGI("wavegen", "Stopped");
     }
 }
@@ -1759,6 +1840,8 @@ void initTasks(AD74416H& device)
         1
     ) != pdPASS) {
         ESP_LOGE("tasks", "Failed to create task adcPoll — heap exhausted");
+    } else {
+        adc_rdy_irq_init();
     }
 
     if (xTaskCreatePinnedToCore(
@@ -1817,6 +1900,7 @@ size_t tasks_get_registry(BbTaskInfo *out, size_t max)
         { "wavegen",  TASK_STACK_WAVEGEN  },
         { "mainLoop", TASK_STACK_MAINLOOP },
         { "bbpCli",   TASK_STACK_BBPCLI   },
+        { "uPython",  MP_TASK_STACK       },
     };
     const size_t n_spec = sizeof(spec) / sizeof(spec[0]);
     size_t n = 0;
@@ -1877,8 +1961,10 @@ void tasks_reset_hardware(void)
         dio_configure(i, DIO_MODE_DISABLED);
     }
 
-    // 4. Reset HAT if connected
-    if (hat_detected()) {
+    // 4. Reset HAT pins if connected. Not the DAQ HAT: its P4 handles HAT_CMD_RESET
+    //    with esp_restart(), and this runs after every script.
+    const HatState *hs = hat_get_state();
+    if (hat_detected() && !(hs && hs->type == HAT_TYPE_DAQ_POWER)) {
         hat_reset();
     }
 

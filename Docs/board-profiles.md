@@ -26,7 +26,9 @@ Profiles live in
 }
 ```
 
-`pins` is keyed by physical IO number, 1 to 12.
+`pins` is keyed by physical IO number, 1 to 12. Pin entries are descriptive
+only: nothing stops `write_digital` on a pin marked `"IN"`. Only rails are
+enforced.
 
 ## Rail locking
 

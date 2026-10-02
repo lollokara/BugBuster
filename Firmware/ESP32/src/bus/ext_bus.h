@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,12 @@ void ext_spi_get_status(bool *ready, uint8_t *sck_gpio, uint8_t *mosi_gpio,
 bool ext_spi_transfer(const uint8_t *tx_data, size_t tx_len,
                       uint8_t *rx_data, size_t *inout_rx_len,
                       uint16_t timeout_ms);
+
+// BUS-017: esp_err_t of the calling task's last ext_i2c_write/read/write_read
+// or ext_spi_transfer (EXT_BUS_ERR_MUTEX when the bus mutex timed out). Map it
+// with ext_bus_cmd_error() from ext_bus_errmap.h.
+#define EXT_BUS_ERR_MUTEX  0x7E01
+esp_err_t ext_bus_last_error(void);
 
 typedef enum {
     EXT_BUS_JOB_I2C_READ       = 1,

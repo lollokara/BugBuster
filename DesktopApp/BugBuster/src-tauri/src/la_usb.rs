@@ -419,25 +419,6 @@ impl LaUsbConnection {
     }
 }
 
-pub fn decode_capture(raw: &[u8], channels: u8) -> Vec<Vec<u8>> {
-    let mut result: Vec<Vec<u8>> = (0..channels).map(|_| Vec::new()).collect();
-    let bits_per_sample = channels as usize;
-
-    for &byte in raw {
-        let mut bit_pos = 0;
-        while bit_pos < 8 {
-            for ch in 0..channels as usize {
-                if bit_pos + ch < 8 {
-                    result[ch].push((byte >> (bit_pos + ch)) & 1);
-                }
-            }
-            bit_pos += bits_per_sample;
-        }
-    }
-
-    result
-}
-
 pub fn hat_usb_present() -> bool {
     if let Ok(devices) = nusb::list_devices() {
         devices

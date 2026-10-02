@@ -265,6 +265,8 @@ def test_wifi_stream_start_takes_the_c6_claim():
 
 def test_relay_apply_takes_the_c6_claim():
     i = DAQ_C.index("case HATP_CMD_DAQ_RELAY_APPLY:")
+    if "relay_apply_start(b)" in DAQ_C[i:i + 300]:   # C6-26: shared helper
+        i = DAQ_C.index("static int relay_apply_start(")
     j = DAQ_C.index("return 0;", i)
     assert "daq_c6_claim(" in _strip_noise(DAQ_C[i:j]), "relay apply must claim the C6 bus"
 

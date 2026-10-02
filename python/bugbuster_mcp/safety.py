@@ -65,6 +65,12 @@ def require_hal_initialized(hal) -> None:
         )
 
 
+def require_confirm(confirm: bool, tool: str, consequence: str) -> None:
+    """MCP-25: one gate for tools that flash an MCU or write calibration."""
+    if not confirm:
+        raise ValueError(f"{tool} requires confirm=True: it {consequence}. Pass confirm=True to proceed.")
+
+
 # ---------------------------------------------------------------------------
 # Voltage / current limits
 # ---------------------------------------------------------------------------
@@ -152,7 +158,7 @@ def require_hat(bb) -> None:
     Raise an informative error if the HAT expansion board is not detected.
     """
     try:
-        status = bb.hat_get_status()
+        status = bb.hat_status_cached() if hasattr(bb, "hat_status_cached") else bb.hat_get_status()
         if not status.get("detected"):
             raise RuntimeError(
                 "No HAT expansion board detected. "
@@ -235,9 +241,11 @@ def check_faults_post(bb) -> list[str]:
                     f"E-fuse {i + 1} has tripped (overcurrent on IO_Block {i + 1}). "
                     f"The output has been disabled. Check the connected device and reduce load."
                 )
-        if not status.get("vadj1_pg", True):
+        # IO-19: power-good reads low on a rail that is off; only an enabled
+        # rail without power-good is a fault.
+        if status.get("vadj1_en", True) and not status.get("vadj1_pg", True):
             warnings.append("VADJ1 power-good signal lost. Supply 1 may be overloaded.")
-        if not status.get("vadj2_pg", True):
+        if status.get("vadj2_en", True) and not status.get("vadj2_pg", True):
             warnings.append("VADJ2 power-good signal lost. Supply 2 may be overloaded.")
     except Exception:
         pass

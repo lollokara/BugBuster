@@ -18,6 +18,7 @@ functions at the bottom of this file::
         print(bb.get_adc_value(0))
 """
 
+import hashlib
 import struct
 import logging
 import warnings
@@ -100,6 +101,18 @@ from .protocol import ProtocolError
 
 log = logging.getLogger(__name__)
 
+# TR-7: commands that are safe to resend after a timeout - pure reads with no
+# device-side effect. Derived from names so a new GET_/_STATUS command is
+# covered; EXT_* bus transactions are excluded (a bus read is still a bus
+# transaction), as are draining reads such as SCRIPT_LOGS.
+_RETRY_SAFE_CMDS = frozenset(
+    int(c) for n, c in CmdId.__members__.items()
+    if not n.startswith("EXT_") and (
+        n == "PING" or n.startswith("GET_")
+        or n.endswith(("_STATUS", "_LIST", "_INFO", "_GET", "_GET_ALL"))
+        or "_GET_" in n)
+)
+
 
 def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
     """Raise ProtocolError if *resp* is shorter than *min_len* bytes."""
@@ -107,6 +120,23 @@ def _require_resp_len(resp: bytes, min_len: int, cmd_name: str) -> None:
         raise ProtocolError(
             f"{cmd_name}: response too short - got {len(resp)} bytes, expected >= {min_len}"
         )
+
+
+def _i2c_addr7(address: int) -> int:
+    """Validate a 7-bit I2C address. Masking an 8-bit one hits another device."""
+    if not 0 <= address <= 0x7F:
+        hint = f" - looks like an 8-bit address, use 0x{address >> 1:02X}" if address <= 0xFF else ""
+        raise ValueError(f"I2C address 0x{address:X} is not 7-bit{hint}")
+    return address
+
+
+def ble_passkey(admin_token: str) -> str:
+    """Six-digit BLE pairing passkey for a device with this admin token.
+
+    Mirrors ``ble_pairing_passkey()`` in ``net/ble_service.cpp``.
+    """
+    digest = hashlib.sha256(admin_token.encode() + b"bb-ble-passkey").digest()
+    return f"{int.from_bytes(digest[:4], 'big') % 1_000_000:06d}"
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +174,16 @@ ScriptStatusResult = namedtuple("ScriptStatusResult",
      "last_eval_at_ms", "idle_for_ms", "watermark_soft_hit"],
     defaults=(0, 0, 0, 0, 0, 0, False))
 AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", "io12_high", "last_run_ok", "last_run_id"])
+
+
+@dataclass(frozen=True)
+class ApPasswordResult:
+    """Result of :meth:`BugBuster.wifi_set_ap_password`. Truthy when applied."""
+    applied: bool
+    persisted: bool   # False: live now, reverts to the old password on reboot
+
+    def __bool__(self) -> bool:
+        return self.applied
 
 
 @dataclass(frozen=True)
@@ -513,9 +553,9 @@ class BugBuster:
         """
         Send a binary command and return the raw response payload.
 
-        On ``TimeoutError`` the input buffer is drained for 50 ms and the
-        command is retried once.  If the second attempt also times out the
-        original exception is re-raised.
+        On ``TimeoutError`` an idempotent read (``_RETRY_SAFE_CMDS``) is
+        retried once after a 50 ms drain; anything else re-raises at once.
+        If the retry also times out the original exception is re-raised.
 
         A unit-testable pre-send hook is available: set
         ``client._usb_pre_send_hook`` to a callable that is invoked (with no
@@ -550,7 +590,11 @@ class BugBuster:
                     except (OSError, serial.SerialException) as _drain_exc:
                         log.debug("Drain read error (ignored): %s", _drain_exc)
                         break
-            # Single retry
+            # Single retry - only for idempotent reads (TR-7). A timed-out
+            # write usually DID run on the device; resending it would run it
+            # twice (I2C/SPI writes, SCRIPT_EVAL, power commands).
+            if cmd_id not in _RETRY_SAFE_CMDS:
+                raise
             try:
                 return _attempt()
             except TimeoutError:
@@ -569,6 +613,21 @@ class BugBuster:
     def _require_usb(self, method: str):
         if not self._usb:
             raise NotImplementedError(f"{method} is only available over USB")
+
+    def adc_leds_set_mode(self, manual: bool) -> bool:
+        """
+        Choose who drives the ADC status LEDs. **USB only.**
+
+        ``manual=False`` hands them back to the firmware's automatic display.
+        Any GPIO write (``SET_GPIO_VALUE``) switches them to manual, and this
+        is the only command that switches them back.
+
+        :return: the mode the device applied (True = manual).
+        """
+        self._require_usb("adc_leds_set_mode")
+        resp = self._usb_cmd(CmdId.ADC_LEDS_SET_MODE, bytes([1 if manual else 0]))
+        _require_resp_len(resp, 1, "ADC_LEDS_SET_MODE")
+        return bool(resp[0])
 
     # ------------------------------------------------------------------
     # ── Device ──────────────────────────────────────────────────────────
@@ -712,7 +771,7 @@ class BugBuster:
 
     def script_logs(self) -> str:
         """
-        Drain up to 1020 bytes from the on-device script log ring.
+        Drain up to 1016 bytes from the on-device script log ring.
 
         USB only.  Returns a ``str`` (UTF-8, errors replaced).
         Call repeatedly until the returned string is empty to drain fully.
@@ -1220,7 +1279,7 @@ class BugBuster:
                 payload = struct.pack('<BB', channel, int(limit))
                 self._usb_cmd(CmdId.SET_CURRENT_LIMIT, payload)
             else:
-                self._http_post(f"/channel/{channel}/ilimit", {"limit_8mA": bool(limit)})
+                self._http_post(f"/channel/{channel}/ilimit", {"limit8mA": bool(limit)})
         self._auto_claim_wrap([channel + 12], _body)
 
     def set_avdd_select(self, channel: int, select: AvddSelect) -> None:
@@ -1444,13 +1503,13 @@ class BugBuster:
                 self._usb_cmd(CmdId.SET_DIN_CONFIG, payload)
             else:
                 self._http_post(f"/channel/{channel}/din/config", {
-                    "thresh":      threshold,
-                    "thresh_mode": thresh_mode,
-                    "debounce":    debounce,
-                    "sink":        sink,
-                    "sink_range":  sink_range,
-                    "oc_det":      oc_detect,
-                    "sc_det":      sc_detect,
+                    "thresh":     threshold,
+                    "threshMode": bool(thresh_mode),
+                    "debounce":   debounce,
+                    "sink":       sink,
+                    "sinkRange":  bool(sink_range),
+                    "ocDet":      bool(oc_detect),
+                    "scDet":      bool(sc_detect),
                 })
         self._auto_claim_wrap([channel + 12], _body)
 
@@ -1660,6 +1719,7 @@ class BugBuster:
 
     def ext_i2c_write(self, address: int, data: Union[bytes, bytearray, list[int]], *, timeout_ms: int = 100) -> int:
         """Write bytes to the configured external I2C bus."""
+        address = _i2c_addr7(address)
         raw = bytes(data)
         if len(raw) > 255:
             raise ValueError("I2C write payload must be <=255 bytes")
@@ -1671,11 +1731,12 @@ class BugBuster:
             })
             return int(resp.get("written", 0))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, len(raw)) + raw
-        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE, payload, address)
         return resp[0]
 
     def ext_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> bytes:
         """Read bytes from the configured external I2C bus."""
+        address = _i2c_addr7(address)
         if not (1 <= length <= 255):
             raise ValueError("I2C read length must be 1-255 bytes")
         if not self._usb:
@@ -1686,7 +1747,7 @@ class BugBuster:
             })
             return bytes(resp.get("data", []))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, length)
-        resp = self._usb_cmd(CmdId.EXT_I2C_READ, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_READ, payload, address)
         count = resp[0]
         return bytes(resp[1:1 + count])
 
@@ -1699,6 +1760,7 @@ class BugBuster:
         timeout_ms: int = 100,
     ) -> bytes:
         """Write bytes then repeated-start read from the configured external I2C bus."""
+        address = _i2c_addr7(address)
         raw = bytes(write_data)
         if not (1 <= len(raw) <= 255):
             raise ValueError("I2C write-read write payload must be 1-255 bytes")
@@ -1713,9 +1775,22 @@ class BugBuster:
             })
             return bytes(resp.get("data", []))
         payload = struct.pack("<BHBB", address & 0x7F, timeout_ms & 0xFFFF, len(raw), read_length) + raw
-        resp = self._usb_cmd(CmdId.EXT_I2C_WRITE_READ, payload)
+        resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE_READ, payload, address)
         count = resp[0]
         return bytes(resp[1:1 + count])
+
+    def _ext_i2c_cmd(self, cmd: int, payload: bytes, address: int) -> bytes:
+        """BUS-017: the firmware reports a NACK as a hardware fault, which BBP
+        carries as SPI_FAIL; say what it is. TIMEOUT (stuck bus) and BUSY pass
+        through unchanged."""
+        try:
+            return self._usb_cmd(cmd, payload)
+        except DeviceError as exc:
+            if exc.code != 0x04:  # BBP_ERR_SPI_FAIL
+                raise
+            nack = DeviceError(exc.code, exc.seq)
+            nack.args = (f"I2C NACK: no device acknowledged address 0x{address:02X} (seq={exc.seq})",)
+            raise nack from exc
 
     # ------------------------------------------------------------------
     # ── External target SPI bus (routed IO pins) ───────────────────────
@@ -1779,6 +1854,7 @@ class BugBuster:
 
     def ext_job_submit_i2c_read(self, address: int, length: int, *, timeout_ms: int = 100) -> int:
         """Queue a deferred I2C read in ESP32 RAM/PSRAM and return its job id."""
+        address = _i2c_addr7(address)
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
         if not (1 <= length <= 255):
@@ -1796,6 +1872,7 @@ class BugBuster:
         timeout_ms: int = 100,
     ) -> int:
         """Queue a deferred I2C write/read transaction and return its job id."""
+        address = _i2c_addr7(address)
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
         raw = bytes(write_data)
@@ -2420,7 +2497,7 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.PCA_GET_STATUS)
             return _parse_pca_status(resp)
         else:
-            return self._http_get("/ioexp")
+            return _normalize_http_pca_status(self._http_get("/ioexp"))
 
     def power_set(self, control: PowerControl, on: bool) -> None:
         """
@@ -2626,6 +2703,53 @@ class BugBuster:
         _require_resp_len(resp, 2, "PCA_SET_PORT")
         return resp[0], resp[1]
 
+    def rail_power_up(
+        self,
+        rail: int,
+        voltage: float,
+        settle_ms: int = 500,
+        *,
+        confirm: bool = False,
+        power_cycle: bool = False,
+        efuse_mask: int = 0,
+    ) -> dict:
+        """
+        Power a VADJ rail up as one firmware-sequenced operation.
+
+        Firmware order: rail e-fuses off -> (VADJ off + 200 ms discharge if
+        *power_cycle*) -> set *voltage* -> VADJ on -> *settle_ms* -> e-fuses
+        armed through the soft-start blackout gate -> power-good / fault read.
+
+        :param rail: 1 = VADJ1 (EFUSE1+2, IO 1-6), 2 = VADJ2 (EFUSE3+4, IO 7-12).
+        :param voltage: 3.0-15.0 V. Above 12 V the device refuses unless *confirm*.
+        :param settle_ms: wait between rail enable and e-fuse enable (0-5000).
+        :param efuse_mask: bit0/bit1 = the rail's first/second e-fuse; 0 = both.
+        :return: ``rail``, ``applied_v`` (after DAC clamping), ``clamped``,
+                 ``pg``, ``efuse_faults`` (two bools, the rail's e-fuses).
+        """
+        if rail not in (1, 2):
+            raise ValueError(f"rail must be 1 or 2, got {rail!r}")
+        if not 0 <= settle_ms <= 5000:
+            raise ValueError("settle_ms must be 0-5000")
+        if self._usb:
+            flags = (0x01 if confirm else 0) | (0x02 if power_cycle else 0)
+            payload = struct.pack('<BHHBB', rail, int(round(voltage * 1000)),
+                                  settle_ms, flags, efuse_mask & 0x03)
+            resp = self._usb_cmd(CmdId.RAIL_POWER_UP, payload)
+            r, mv, status = struct.unpack_from('<BHB', resp)
+            return {"rail": r, "applied_v": mv / 1000.0, "clamped": bool(status & 0x08),
+                    "pg": bool(status & 0x01),
+                    "efuse_faults": [bool(status & 0x02), bool(status & 0x04)]}
+        body = self._http_post("/ioexp/rail_up", {
+            "rail": rail, "voltage": voltage, "settleMs": settle_ms,
+            "confirm": confirm, "powerCycle": power_cycle, "efuseMask": efuse_mask & 0x03,
+        })
+        if "error" in body:
+            raise ValueError(body["error"])
+        return {"rail": body["rail"], "applied_v": float(body["appliedV"]),
+                "clamped": bool(body["clamped"]), "pg": bool(body["pg"]),
+                "efuse_faults": [bool(x) for x in body["efuseFaults"]]}
+
     def power_set_fault_config(self, auto_disable: bool = True, log_events: bool = True) -> None:
         """
         Configure PCA9535 fault behavior.
@@ -2674,6 +2798,31 @@ class BugBuster:
                 "cannot run on a bare BugBuster board. Connect the HAT and "
                 "call hat_detect() to refresh, then retry."
             )
+
+    # TR-9: how long a positive HAT status answers presence/type checks.
+    HAT_CACHE_TTL_S = 30.0
+
+    def hat_status_cached(self) -> dict:
+        """HAT status for presence/type guards, cached per connection.
+
+        Only a *detected* status is cached (a HAT plugged in later is noticed
+        on the next call); it expires after HAT_CACHE_TTL_S, on reconnect
+        (transport ``connect_gen``) and on hat_detect()/hat_reset().
+        """
+        import time as _time
+        gen = getattr(self._t, "connect_gen", 0)
+        c = getattr(self, "_hat_status_cache", None)
+        now = _time.monotonic()
+        if c is not None and c[0] == gen and now - c[1] < self.HAT_CACHE_TTL_S:
+            return c[2]
+        status = self.hat_get_status()
+        self._hat_status_cache = (gen, now, status) if status.get("detected") else None
+        return status
+
+    def hat_invalidate_cache(self) -> None:
+        """Forget the cached HAT status (TR-9)."""
+        self._hat_status_cache = None
+        self._hat_present_cache = None
 
     def hat_get_status(self) -> dict:
         """
@@ -2786,6 +2935,7 @@ class BugBuster:
     def hat_reset(self) -> bool:
         """Reset HAT to default state (all pins disconnected)."""
         self._require_hat_present()
+        self._hat_status_cache = None
         if self._usb:
             self._usb_cmd(CmdId.HAT_RESET)
             return True
@@ -2802,6 +2952,7 @@ class BugBuster:
         """
         # Invalidate the cached presence — the very point of calling
         # hat_detect() is usually to re-probe after wiring changes.
+        self._hat_status_cache = None
         self._hat_present_cache = None
         if self._usb:
             resp = self._usb_cmd(CmdId.HAT_DETECT)
@@ -3654,7 +3805,7 @@ class BugBuster:
 
         *channel*   — output channel (0–3).
         *waveform*  — :class:`WaveformType` (SINE, SQUARE, TRIANGLE, SAWTOOTH).
-        *freq_hz*   — frequency in Hz (0.01–100 Hz supported).
+        *freq_hz*   — frequency in Hz (0.1–100 Hz; the firmware rejects lower).
         *amplitude* — peak amplitude in volts or milliamps depending on *mode*.
         *offset*    — DC offset in the same units as *amplitude*.
         *mode*      — :class:`OutputMode` (VOLTAGE or CURRENT).
@@ -3668,8 +3819,8 @@ class BugBuster:
             raise ValueError("channel must be 0-3")
         waveform = WaveformType(waveform)
         mode = OutputMode(mode)
-        if not 0.01 <= float(freq_hz) <= 100.0:
-            raise ValueError("freq_hz must be 0.01-100.0")
+        if not 0.1 <= float(freq_hz) <= 100.0:
+            raise ValueError("freq_hz must be 0.1-100.0")
         max_out = 25.0 if mode == OutputMode.CURRENT else 12.0
         if not 0.0 <= float(amplitude) <= max_out:
             raise ValueError(f"amplitude must be 0.0-{max_out}")
@@ -3691,7 +3842,7 @@ class BugBuster:
             })
 
     def stop_waveform(self) -> None:
-        """Stop the waveform generator.  The DAC output stays at the last value."""
+        """Stop the waveform generator.  The waveform channel returns to HIGH_IMP (output off)."""
         if self._usb:
             self._usb_cmd(CmdId.STOP_WAVEGEN)
         else:
@@ -3710,8 +3861,10 @@ class BugBuster:
         """
         Start continuous ADC data streaming. **USB only.**
 
-        The device pushes batches of raw 24-bit ADC codes at up to 9.6 kSPS
-        per channel.
+        The device pushes batches of raw 24-bit ADC codes. The converter runs
+        at up to 9.6 kSPS, but the stream delivers about 1.2 k samples/s at
+        most (SPI read cost per sample); the START reply's effective rate
+        reports the capped value. *divider* is applied on the device.
 
         *channels* — list of channel indices to stream (e.g. ``[0, 1, 2, 3]``).
         *divider*  — sample rate divisor (1 = full rate, 2 = half rate, …).
@@ -4003,7 +4156,7 @@ class BugBuster:
             self._usb_cmd(CmdId.SET_ALERT_MASK, payload)
         else:
             self._http_post("/faults/mask", {
-                "alert_mask": alert_mask, "supply_mask": supply_mask,
+                "alertMask": alert_mask & 0xFFFF, "supplyMask": supply_mask & 0xFFFF,
             })
 
     def check_faults(self) -> list[dict]:
@@ -4142,7 +4295,10 @@ class BugBuster:
         if code is None:
             raise ValueError(f"voltage_v must be one of {list(_V_TO_CODE)}")
         if self._usb:
+            # BBP SELECT_PDO only stages the PDO; GO 0x01 renegotiates. HTTP
+            # /api/usbpd/select does both in one call.
             self._usb_cmd(CmdId.USBPD_SELECT_PDO, struct.pack('<B', code))
+            self.usbpd_go(0x01)
         else:
             self._http_post("/usbpd/select", {"voltage": int(voltage_v)})
 
@@ -4198,11 +4354,26 @@ class BugBuster:
             raw = self._http_get("/wifi/scan")
             return raw.get("networks", raw) if isinstance(raw, dict) else raw
 
-    def wifi_set_ap_password(self, password: str) -> bool:
+    def wifi_forget(self) -> bool:
+        """
+        Erase the saved STA credentials from NVS and disconnect. **USB only.**
+
+        The device drops off the station network until :meth:`wifi_connect`
+        is called again; the SoftAP is unaffected.
+        """
+        self._require_usb("wifi_forget")
+        resp = self._usb_cmd(CmdId.WIFI_FORGET)
+        _require_resp_len(resp, 1, "WIFI_FORGET")
+        return bool(resp[0])
+
+    def wifi_set_ap_password(self, password: str) -> ApPasswordResult:
         """
         Set the SoftAP password. Persists to NVS and applies live (no reboot needed).
         Password must be 8–63 characters (WPA2-PSK requirement).
-        Returns ``True`` on success, ``False`` on failure.
+
+        Returns an :class:`ApPasswordResult` that is truthy when the password
+        was applied. Check ``.persisted``: when False the NVS write failed and
+        the old password returns on the next reboot.
         """
         if len(password) < 8 or len(password) > 63:
             raise ValueError(
@@ -4213,12 +4384,14 @@ class BugBuster:
             payload = struct.pack('<B', len(pass_b)) + pass_b
             resp = self._usb_cmd(CmdId.WIFI_SET_AP_PASSWORD, payload)
             _require_resp_len(resp, 1, "WIFI_SET_AP_PASSWORD")
-            return bool(resp[0])
+            # 0x00 applied+persisted, 0x01 applied not persisted, 0x02 failed
+            return ApPasswordResult(applied=resp[0] != 0x02, persisted=resp[0] == 0x00)
         else:
             result = self._http_post("/wifi/ap_password", {"password": password})
             if isinstance(result, dict):
-                return bool(result.get("success", False))
-            return bool(result)
+                applied = bool(result.get("success", False))
+                return ApPasswordResult(applied, applied and bool(result.get("persisted", False)))
+            return ApPasswordResult(bool(result), False)
 
     # ------------------------------------------------------------------
     # ── Quick Setup slots ─────────────────────────────────────────────
@@ -4360,14 +4533,15 @@ class BugBuster:
             h = (h * 0x01000193) & 0xFFFFFFFF
         return h
 
-    def _io_claim_raw(self, slots: list[int], lease_ms: int, purpose: str) -> None:
-        """Send IO_CLAIM command for the given slot indices."""
+    def _io_claim_raw(self, slots: list[int], lease_ms: int, purpose: str) -> list[int]:
+        """Send IO_CLAIM; return the per-slot status bytes (0 = acquired)."""
         if not self._usb:
-            return  # HTTP transport: ownership enforced server-side only
+            return [0] * len(slots)  # HTTP transport: ownership enforced server-side only
         n = len(slots)
         purpose_tag = self._fnv1a32(purpose)
         payload = struct.pack('<B', n) + bytes(slots) + struct.pack('<II', lease_ms, purpose_tag)
-        self._usb_cmd(CmdId.IO_CLAIM, payload)
+        resp = self._usb_cmd(CmdId.IO_CLAIM, payload)
+        return list(resp[1:1 + resp[0]]) if resp else []
 
     def _io_release_raw(self, slots: list[int]) -> None:
         """Send IO_RELEASE command for the given slot indices (or all if empty)."""
@@ -4421,6 +4595,23 @@ class BugBuster:
         else:
             return fn(*args, **kwargs)
 
+    def io_claim_lease(self, slots: list[int], *, lease_ms: int = 0, purpose: str = "") -> None:
+        """
+        Claim IO slots and keep them until :meth:`io_release` (or the lease
+        expires). Unlike the :meth:`io_claim` context manager this does not
+        release on return, so a long-lived holder (the MCP server) can span
+        several calls.
+
+        Raises ``RuntimeError`` naming the refused slots if the device rejects
+        any of them (held by another owner); nothing is kept in that case.
+        """
+        status = self._io_claim_raw(slots, lease_ms, purpose)
+        refused = [s for s, st in zip(slots, status, strict=False) if st != 0]
+        if refused:
+            self._io_release_raw([s for s in slots if s not in refused])
+            raise RuntimeError(f"IO slots {refused} are held by another owner")
+        self._io_claimed_slots = (self._io_claimed_slots or set()) | set(slots)
+
     def io_release(self, slots: list[int] = None) -> None:
         """
         Explicitly release IO slot ownership.
@@ -4429,6 +4620,10 @@ class BugBuster:
         an empty list to release all slots currently owned by this session.
         """
         self._io_release_raw(slots if slots else [])
+        if not slots:
+            self._io_claimed_slots = None
+        elif self._io_claimed_slots is not None:
+            self._io_claimed_slots = (self._io_claimed_slots - set(slots)) or None
 
     def io_owner_status(self) -> list[dict]:
         """
@@ -4657,6 +4852,23 @@ def _parse_faults(resp: bytes) -> dict:
         "supply_alert_status": supply, "supply_alert_mask": supply_mask,
         "channels": channels,
     }
+
+
+def _normalize_http_pca_status(raw: dict) -> dict:
+    """Add the documented keys to the firmware's /api/ioexp JSON (raw keys kept)."""
+    out = dict(raw)
+    pg = raw.get("powerGood") or {}
+    efuses = sorted(raw.get("efuses") or [], key=lambda e: e.get("id", 0))
+    out.setdefault("logic_pg", bool(pg.get("logic", False)))
+    out.setdefault("vadj1_pg", bool(pg.get("vadj1", False)))
+    out.setdefault("vadj2_pg", bool(pg.get("vadj2", False)))
+    out.setdefault("efuse_faults", [bool(e.get("fault", False)) for e in efuses] or [False] * 4)
+    out.setdefault("efuse_enables", [bool(e.get("enabled", False)) for e in efuses] or [False] * 4)
+    en = raw.get("enables") or {}
+    for key, src in (("vadj1_en", "vadj1"), ("vadj2_en", "vadj2"), ("en_15v", "analog15v"),
+                     ("en_mux", "mux"), ("en_usb_hub", "usbHub")):
+        out.setdefault(key, bool(en.get(src, False)))
+    return out
 
 
 def _parse_pca_status(resp: bytes) -> dict:

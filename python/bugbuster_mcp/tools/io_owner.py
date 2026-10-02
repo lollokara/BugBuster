@@ -118,9 +118,8 @@ def register(mcp) -> None:
 
         handle = uuid.uuid4().hex
         bb = session.get_client()
-        # Coordinate with the bugbuster Python lib (landed by parallel agent).
-        # io_claim acquires the slots for lease_seconds; 0 means infinite.
-        bb.io_claim(slots, lease_seconds, purpose)
+        # 0 means infinite; the lease survives until io_release / io_force_release.
+        bb.io_claim_lease(slots, lease_ms=int(lease_seconds * 1000), purpose=purpose)
 
         with _leases_lock:
             _active_leases[handle] = list(slots)

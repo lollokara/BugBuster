@@ -1,0 +1,230 @@
+{
+  "captured_at": "2026-10-01T16:18:46",
+  "device_info": {
+    "macAddress": "02:00:00:00:00:01",
+    "mac_address": "02:00:00:00:00:01",
+    "siliconId0": "0x0028",
+    "siliconId1": "0x0545",
+    "siliconRev": 3,
+    "silicon_id0": 40,
+    "silicon_id1": 1349,
+    "silicon_rev": 3,
+    "spiOk": true,
+    "spi_ok": true
+  },
+  "host_role": "live board",
+  "routes": {
+    "/api/adgs/routes": {
+      "file": "adgs__routes.json",
+      "status": 200
+    },
+    "/api/board": {
+      "file": "board.json",
+      "status": 200
+    },
+    "/api/bus/status": {
+      "file": "bus__status.json",
+      "status": 200
+    },
+    "/api/daq": {
+      "file": "daq.json",
+      "status": 200
+    },
+    "/api/daq/vdut/status": {
+      "file": "daq__vdut__status.json",
+      "status": 200
+    },
+    "/api/daq/wifi_stream/status": {
+      "file": "daq__wifi_stream__status.json",
+      "status": 200
+    },
+    "/api/debug": {
+      "file": "debug.json",
+      "status": 200
+    },
+    "/api/device/info": {
+      "file": "device__info.json",
+      "status": 200
+    },
+    "/api/device/version": {
+      "file": "device__version.json",
+      "status": 200
+    },
+    "/api/diagnostics": {
+      "file": "diagnostics.json",
+      "status": 200
+    },
+    "/api/dio": {
+      "file": "dio.json",
+      "status": 200
+    },
+    "/api/faults": {
+      "file": "faults.json",
+      "status": 200
+    },
+    "/api/gpio": {
+      "file": "gpio.json",
+      "status": 200
+    },
+    "/api/hat": {
+      "file": "hat.json",
+      "status": 200
+    },
+    "/api/hat/calibration": {
+      "file": "hat__calibration.json",
+      "status": 200
+    },
+    "/api/hat/la/status": {
+      "file": "hat__la__status.json",
+      "status": 503
+    },
+    "/api/hat/power": {
+      "file": "hat__power.json",
+      "status": 200
+    },
+    "/api/hat/v2/calibrate/status": {
+      "file": "hat__v2__calibrate__status.json",
+      "status": 503
+    },
+    "/api/hat/v2/caps": {
+      "file": "hat__v2__caps.json",
+      "status": 503
+    },
+    "/api/hat/v2/la/log": {
+      "skipped": "draining read"
+    },
+    "/api/hat/v2/rails": {
+      "file": "hat__v2__rails.json",
+      "status": 200
+    },
+    "/api/idac": {
+      "file": "idac.json",
+      "status": 200
+    },
+    "/api/idac/cal/points": {
+      "file": "idac__cal__points.json",
+      "status": 200
+    },
+    "/api/io/owner": {
+      "file": "io__owner.json",
+      "status": 200
+    },
+    "/api/ioexp": {
+      "file": "ioexp.json",
+      "status": 200
+    },
+    "/api/ioexp/faults": {
+      "file": "ioexp__faults.json",
+      "status": 200
+    },
+    "/api/mux": {
+      "file": "mux.json",
+      "status": 200
+    },
+    "/api/ota/info": {
+      "file": "ota__info.json",
+      "status": 200
+    },
+    "/api/overview": {
+      "file": "overview.json",
+      "status": 200
+    },
+    "/api/pairing/info": {
+      "file": "pairing__info.json",
+      "status": 200
+    },
+    "/api/quicksetup": {
+      "file": "quicksetup.json",
+      "status": 200
+    },
+    "/api/registry/get_dac_readback": {
+      "file": "registry__get_dac_readback.json",
+      "status": 400
+    },
+    "/api/scope": {
+      "file": "scope.json",
+      "status": 200
+    },
+    "/api/scope/stream": {
+      "skipped": "SSE loop occupies the only httpd task (WEB-23)"
+    },
+    "/api/scripts/autorun/status": {
+      "file": "scripts__autorun__status.json",
+      "status": 200
+    },
+    "/api/scripts/files": {
+      "file": "scripts__files.json",
+      "status": 200
+    },
+    "/api/scripts/files/get": {
+      "skipped": "needs a ?name= parameter"
+    },
+    "/api/scripts/logs": {
+      "skipped": "draining read: consumes the log buffer"
+    },
+    "/api/scripts/repl/ws": {
+      "skipped": "WebSocket"
+    },
+    "/api/scripts/status": {
+      "file": "scripts__status.json",
+      "status": 200
+    },
+    "/api/scripts/storage": {
+      "file": "scripts__storage.json",
+      "status": 200
+    },
+    "/api/selftest": {
+      "skipped": "may start a measurement"
+    },
+    "/api/selftest/efuse_imon": {
+      "skipped": "runs a measurement, switches the U23 MUX"
+    },
+    "/api/selftest/supplies": {
+      "skipped": "runs a measurement, switches the U23 MUX"
+    },
+    "/api/selftest/supplies/cached": {
+      "skipped": "runs a monitor step in the handler (PWR-10)"
+    },
+    "/api/status": {
+      "file": "status.json",
+      "status": 200
+    },
+    "/api/system/memory": {
+      "file": "system__memory.json",
+      "status": 200
+    },
+    "/api/uart/config": {
+      "file": "uart__config.json",
+      "status": 200
+    },
+    "/api/uart/pins": {
+      "file": "uart__pins.json",
+      "status": 200
+    },
+    "/api/update/check": {
+      "skipped": "contacts GitHub and starts a worker"
+    },
+    "/api/update/status": {
+      "file": "update__status.json",
+      "status": 200
+    },
+    "/api/usbpd": {
+      "file": "usbpd.json",
+      "status": 200
+    },
+    "/api/wifi": {
+      "file": "wifi.json",
+      "status": 200
+    },
+    "/api/wifi/hostname": {
+      "file": "wifi__hostname.json",
+      "status": 200
+    },
+    "/api/wifi/scan": {
+      "skipped": "radio scan disturbs the WiFi link"
+    },
+    "/api/ws/stream": {
+      "skipped": "WebSocket"
+    }
+  }
+}

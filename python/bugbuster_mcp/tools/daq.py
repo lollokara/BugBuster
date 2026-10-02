@@ -15,8 +15,11 @@ Tools: daq_get_settings, daq_get_setting, daq_set_setting, daq_set_source,
 """
 
 from __future__ import annotations
+import time
+
 from .. import session
 from ..safety import require_hat
+from .analog import check_window, summarize
 
 
 # DUT supply limits (mirror daq_config_registry schema bounds).
@@ -155,6 +158,27 @@ def register(mcp) -> None:
         rng = m.get("range")
         m["range"] = getattr(rng, "name", str(rng)).lower()
         return m
+
+    @mcp.tool()
+    def observe_daq(seconds: float = 2.0, rate_hz: float = 10.0) -> dict:
+        """
+        Watch the DAQ HAT meter for a bounded time (seconds <= 60, rate_hz
+        <= 50, host-polled live readings) and return, per numeric field
+        (current_a, voltage_v, power_w, ...), min / max / mean / std / count.
+        For a gap-free high-rate capture use daq_power_capture instead.
+        """
+        check_window(seconds, rate_hz)
+        bb = session.get_client()
+        require_hat(bb)
+        period = 1.0 / rate_hz
+        series: dict[str, list[float]] = {}
+        for i in range(max(1, round(seconds * rate_hz))):
+            if i:
+                time.sleep(period)
+            for k, v in bb.daq.measure().items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    series.setdefault(k, []).append(float(v))
+        return {"seconds": seconds, "fields": {k: summarize(v) for k, v in series.items()}}
 
     @mcp.tool()
     def daq_energy_reset() -> dict:

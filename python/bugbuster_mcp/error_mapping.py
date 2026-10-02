@@ -8,21 +8,24 @@ from __future__ import annotations
 from typing import Optional
 
 
-# Device error codes (from bugbuster.constants.ErrorCode)
+# Device error codes - GENERATED from bbp.h by Firmware/tools/gen_error_tables.py.
 ERROR_MESSAGES = {
+    # BEGIN GENERATED: bbp-errors
     0x01: ("invalid_cmd", "The command is not recognized by the device"),
     0x02: ("invalid_channel", "Channel number is out of range"),
     0x03: ("invalid_param", "One or more parameters are invalid"),
     0x04: ("spi_fail", "SPI communication with the AD74416H failed"),
     0x05: ("queue_full", "Device command queue is full - retry after a short delay"),
     0x06: ("busy", "Device is busy processing another operation"),
-    0x07: ("invalid_state", "Operation cannot be performed in current device state"),
+    0x07: ("invalid_state", "Operation cannot be performed in the current device state"),
     0x08: ("crc_fail", "Payload CRC check failed"),
-    0x09: ("frame_too_large", "Command payload exceeds maximum size"),
+    0x09: ("frame_too_large", "Command or response payload exceeds the maximum frame size"),
     0x0A: ("stream_active", "Cannot configure while streaming is active"),
     0x11: ("timeout", "Device operation timed out or no response received"),
-    0x12: ("io_ownership_required", "IO slot ownership required for this operation"),
-    0x13: ("cal_invalid_or_route_rejected", "Calibration invalid OR MUX route rejected"),
+    0x12: ("io_ownership_required", "IO slot is owned by another session"),
+    0x13: ("adgs_route_rejected", "MUX route rejected by the U17-S3 / U23 self-test interlock"),
+    0x14: ("unsupported_hat", "Command requires a different HAT type, or no HAT is attached"),
+    # END GENERATED: bbp-errors
 }
 
 
@@ -77,8 +80,11 @@ def map_device_error(
     elif error_code == 0x06:  # Busy
         return f"{context}. Wait for the current operation to complete, then retry"
     
-    elif error_code == 0x13:  # Calibration invalid or route rejected
-        return f"{context}. This code has two meanings: (1) calibration data is missing or invalid - run calibration first; (2) the requested MUX routing is rejected by hardware constraints"
+    elif error_code == 0x13:  # MUX route rejected by the self-test interlock
+        return f"{context}. U17 S3 (IO9 analog path) and the U23 self-test share a net; retry once the self-test / e-fuse current monitor releases U23"
+
+    elif error_code == 0x14:  # Unsupported HAT
+        return f"{context}. Check device_status for the attached HAT type; this command needs a different HAT"
     
     else:
         return f"{context}. Error: {error_name} ({error_code:#04x})"

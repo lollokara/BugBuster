@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { pollIntervalFor } from "../state/signals";
 
 export interface UsePollOptions<T> {
   immediate?: boolean;
@@ -43,13 +44,13 @@ export function usePoll<T>(
       } catch (error) {
         if (alive) onErrorRef.current?.(error);
       }
-      if (alive) timeout = setTimeout(tick, intervalMs);
+      if (alive) timeout = setTimeout(tick, pollIntervalFor(intervalMs));
     };
 
     if (immediate) {
       tick();
     } else {
-      timeout = setTimeout(tick, intervalMs);
+      timeout = setTimeout(tick, pollIntervalFor(intervalMs));
     }
 
     return () => {

@@ -70,24 +70,41 @@ static int handler_io_claim(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
-// IO_RELEASE  payload: u8 slot_idx, u8 session_id
-//   resp: u8 slot_idx, u8 released(bool)
+// IO_RELEASE  payload: u8 n_slots, u8 slots[n]   (n_slots = 0: every slot the caller holds)
+//   session_id is the current BBP caller's (no wire spoofing, same as IO_CLAIM).
+//   resp: u8 n_slots, u8 released[n] (bool); for n_slots = 0: u8 0, u8 count_released
 // ---------------------------------------------------------------------------
 static int handler_io_release(const uint8_t *payload, size_t len,
                                uint8_t *resp, size_t *resp_len)
 {
-    if (len < 2) return -CMD_ERR_BAD_ARG;
+    if (len < 1) return -CMD_ERR_BAD_ARG;
     size_t rpos = 0;
-    uint8_t slot_idx   = bbp_get_u8(payload, &rpos);
-    uint8_t session_id = bbp_get_u8(payload, &rpos);
+    uint8_t n_slots = bbp_get_u8(payload, &rpos);
+    io_owner_t caller = io_owner_get_current_bbp_caller();
+    if (n_slots == 0) {
+        io_owner_kind_t kind = caller.kind == IO_OWNER_NONE ? IO_OWNER_USB : caller.kind;
+        size_t pos = 0;
+        bbp_put_u8(resp, &pos, 0);
+        bbp_put_u8(resp, &pos, io_owner_release_session(kind, caller.session_id));
+        *resp_len = pos;
+        return (int)pos;
+    }
+    if (n_slots > IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
+    if (len < (size_t)(1 + n_slots)) return -CMD_ERR_BAD_ARG;
 
-    if (slot_idx >= IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
+    uint8_t slots[IO_OWNER_NUM_SLOTS];
+    for (uint8_t i = 0; i < n_slots; i++) {
+        slots[i] = bbp_get_u8(payload, &rpos);
+        if (slots[i] >= IO_OWNER_NUM_SLOTS) return -CMD_ERR_OUT_OF_RANGE;
+    }
 
-    bool released = io_owner_release(slot_idx, session_id);
+    uint8_t session_id = caller.session_id;
 
     size_t pos = 0;
-    bbp_put_u8(resp, &pos, slot_idx);
-    bbp_put_bool(resp, &pos, released);
+    bbp_put_u8(resp, &pos, n_slots);
+    for (uint8_t i = 0; i < n_slots; i++) {
+        bbp_put_bool(resp, &pos, io_owner_release(slots[i], session_id));
+    }
     *resp_len = pos;
     return (int)pos;
 }
@@ -165,12 +182,12 @@ static const ArgSpec s_io_claim_rsp[] = {
 };
 
 static const ArgSpec s_io_release_args[] = {
-    { "slot_idx",   ARG_U8, true, 0, 15 },
-    { "session_id", ARG_U8, true, 0, 255 },
+    { "n_slots",  ARG_U8, true, 0, IO_OWNER_NUM_SLOTS },
+    { "slots[]",  ARG_U8, true, 0, 15 },  // variable-length; n_slots entries
 };
 static const ArgSpec s_io_release_rsp[] = {
-    { "slot_idx",  ARG_U8,   true, 0, 0 },
-    { "released",  ARG_BOOL, true, 0, 0 },
+    { "n_slots",    ARG_U8,   true, 0, 0 },
+    { "released[]", ARG_BOOL, true, 0, 0 },
 };
 
 static const ArgSpec s_io_force_args[] = {

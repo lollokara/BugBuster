@@ -262,8 +262,34 @@ class OTAClient:
         Returns only after the P4 has been reset, seen running the new version
         and confirmed -- an unconfirmed image would be reverted by the
         bootloader on the next boot.
+
+        The P4 reset turns the DUT supply OFF and nothing turns it back on. If
+        it was on, the result carries a ``warnings`` list saying so (DAQ-16).
         """
-        return self._push_daq("/ota/upload_p4", path, sha256, on_event, timeout)
+        warning = self._dut_supply_warning()
+        r = self._push_daq("/ota/upload_p4", path, sha256, on_event, timeout)
+        if warning:
+            r.setdefault("warnings", []).append(warning)
+        return r
+
+    def _dut_supply_warning(self) -> Optional[str]:
+        """Advisory pre-check before anything that resets the P4. A failed
+        status read (no DAQ HAT, older firmware) never blocks the update."""
+        try:
+            r = self._session.get(f"{self._base}/daq/vdut/status", timeout=5)
+            st = r.json() if r.ok else {}
+        except Exception as e:
+            log.debug("DUT supply pre-check failed: %s", e)
+            return None
+        if not (isinstance(st, dict) and st.get("enabled") is True):
+            return None
+        v = st.get("voltageSetpointV")
+        at = f" ({float(v):.2f} V)" if isinstance(v, (int, float)) else ""
+        msg = (f"DUT supply was ON{at} when the P4 update started. The P4 reset "
+               "turns it OFF and it does not come back on by itself - re-enable "
+               "it after the update if the DUT needs power.")
+        log.warning(msg)
+        return msg
 
     def upload_c6(self, path: str, *, sha256: Optional[str] = None,
                   on_event: Optional[Callable[[dict], None]] = None,
@@ -358,10 +384,13 @@ class OTAClient:
         default (RP2040 + ESP32).
 
         P4 and C6 require a DAQ HAT; the device returns an error otherwise.
+        With ``p4=True`` and the DUT supply on, the result carries a
+        ``warnings`` list: the P4 reset turns the supply OFF (DAQ-16).
         """
         body = {k: bool(v) for k, v in
                 (("rp2040", rp2040), ("esp32", esp32), ("p4", p4), ("c6", c6))
                 if v is not None}
+        warning = self._dut_supply_warning() if p4 else None
         r = self._session.post(
             f"{self._base}/update/apply",
             json=body or None,
@@ -370,7 +399,10 @@ class OTAClient:
         )
         if not r.ok:
             raise OTAError(f"/api/update/apply -> HTTP {r.status_code}: {r.text[:300]}")
-        return r.json()
+        out = r.json()
+        if warning and isinstance(out, dict):
+            out.setdefault("warnings", []).append(warning)
+        return out
 
     def get_update_status(self) -> dict:
         """Return current device-side update state and progress counters."""

@@ -143,48 +143,36 @@ def _get_sim_device(usb_device):
 
 
 def test_wifi_set_ap_password_persisted(usb_device):
-    """
-    wifi_set_ap_password() returns True when the simulator returns 0x01 (persisted OK).
-    """
-    sim = _get_sim_device(usb_device)
-    if sim is None:
-        pytest.skip("Simulator-only test — requires --sim")
-
-    sim.wifi_ap_password_persist_result = 0x01
-    result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
-    assert result is True, f"Expected True (persisted), got {result!r}"
-
-
-def test_wifi_set_ap_password_nvs_skip(usb_device, monkeypatch):
-    """
-    wifi_set_ap_password() returns False when the simulator returns 0x00 (NVS skip).
-    Status 0x00 means the password matched NVS and no write was needed.
-    """
+    """0x00 = applied live and persisted to NVS."""
     sim = _get_sim_device(usb_device)
     if sim is None:
         pytest.skip("Simulator-only test — requires --sim")
 
     sim.wifi_ap_password_persist_result = 0x00
     result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
-    # 0x00 is falsy — client.py returns bool(resp[0]) which is False
-    assert result is False, f"Expected False (NVS skip / no-op), got {result!r}"
+    assert result and result.persisted, f"Expected applied+persisted, got {result!r}"
 
 
-def test_wifi_set_ap_password_persist_failed(usb_device):
-    """
-    wifi_set_ap_password() returns True (non-zero byte) when the simulator
-    returns 0x02 (persist failed).  The client converts any non-zero byte to True;
-    callers that need the exact code must inspect the raw response.
-    Status 0x02 is distinct from 0x00 (NVS skip) — the write was attempted but failed.
-    """
+def test_wifi_set_ap_password_not_persisted(usb_device):
+    """0x01 = applied live, NVS write failed (reverts on reboot)."""
+    sim = _get_sim_device(usb_device)
+    if sim is None:
+        pytest.skip("Simulator-only test — requires --sim")
+
+    sim.wifi_ap_password_persist_result = 0x01
+    result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
+    assert result and not result.persisted, f"Expected applied, not persisted, got {result!r}"
+
+
+def test_wifi_set_ap_password_failed(usb_device):
+    """0x02 = failed: the result must be falsy."""
     sim = _get_sim_device(usb_device)
     if sim is None:
         pytest.skip("Simulator-only test — requires --sim")
 
     sim.wifi_ap_password_persist_result = 0x02
     result = usb_device.wifi_set_ap_password("correct-horse-battery-staple")
-    # 0x02 is truthy — bool(0x02) == True
-    assert result is True, f"Expected True (persist-failed byte 0x02 is truthy), got {result!r}"
+    assert not result, f"Expected failure, got {result!r}"
 
 
 def test_wifi_set_ap_password_roundtrip(usb_device):

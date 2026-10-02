@@ -25,6 +25,8 @@ def register(device) -> None:
     device.register_handler(CmdId.WIFI_CONNECT,          _wifi_connect(device))
     device.register_handler(CmdId.WIFI_SCAN,             _wifi_scan(device))
     device.register_handler(CmdId.WIFI_SET_AP_PASSWORD,  _wifi_set_ap_password(device))
+    device.register_handler(CmdId.WIFI_FORGET,           _wifi_forget(device))
+    device.register_handler(CmdId.ADC_LEDS_SET_MODE,     _adc_leds_set_mode(device))
     device.register_handler(CmdId.START_WAVEGEN,         _start_wavegen(device))
     device.register_handler(CmdId.STOP_WAVEGEN,     _stop_wavegen(device))
 
@@ -120,20 +122,23 @@ def _usbpd_get_status(device):
 
 # ---------------------------------------------------------------------------
 # USBPD_SELECT_PDO (0xC1)
-# client sends: struct.pack('<B', code)
+# client sends: struct.pack('<B', code) -> resp: u8 code
+# Firmware (cmd_husb.cpp) only writes the HUSB238 PDO_SELECT register; the
+# source is not renegotiated until USBPD_GO 0x01 (SELECT_PDO).
 # ---------------------------------------------------------------------------
 
 def _usbpd_select_pdo(device):
     def handler(payload: bytes) -> bytes:
-        if payload:
-            device.usbpd_voltage = payload[0]
-        return b''
+        if not payload:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.usbpd_staged = payload[0]
+        return bytes([payload[0]])
     return handler
 
 
 # ---------------------------------------------------------------------------
 # USBPD_GO (0xC2)
-# payload: u8 cmd -> resp: u8 cmd
+# payload: u8 cmd -> resp: u8 cmd. 0x01 commits the staged PDO.
 # ---------------------------------------------------------------------------
 
 def _usbpd_go(device):
@@ -141,6 +146,9 @@ def _usbpd_go(device):
         if not payload:
             raise DeviceError(ErrorCode.INVALID_PARAM, 0)
         device.usbpd_last_go = payload[0]
+        staged = getattr(device, "usbpd_staged", None)
+        if payload[0] == 0x01 and staged is not None:
+            device.usbpd_voltage = staged
         return bytes([payload[0]])
     return handler
 
@@ -186,6 +194,27 @@ def _wifi_connect(device):
 
 
 # ---------------------------------------------------------------------------
+# WIFI_FORGET (0x0A)  payload: none -> resp: bool ok   (cmd_wifi.cpp)
+# ADC_LEDS_SET_MODE (0x47)  payload: u8 mode -> resp: u8 mode   (cmd_status.cpp)
+# ---------------------------------------------------------------------------
+
+def _wifi_forget(device):
+    def handler(payload: bytes) -> bytes:
+        device.wifi_sta_forgotten = True
+        return b"\x01"
+    return handler
+
+
+def _adc_leds_set_mode(device):
+    def handler(payload: bytes) -> bytes:
+        if not payload:
+            raise DeviceError(ErrorCode.INVALID_PARAM, 0)
+        device.adc_leds_manual = payload[0] != 0
+        return bytes([payload[0]])
+    return handler
+
+
+# ---------------------------------------------------------------------------
 # WIFI_SCAN (0xE4)
 # client: _parse_wifi_scan(resp)
 #   count (B), then count × (n B, ssid nB, rssi b, auth B)
@@ -201,10 +230,10 @@ def _wifi_scan(device):
 # ---------------------------------------------------------------------------
 # WIFI_SET_AP_PASSWORD (0xEF)
 # client sends: struct.pack('<B', len(pass_b)) + pass_b
-# firmware returns: status byte
-#   0x00 = no change needed (NVS skip)
-#   0x01 = persisted OK
-#   0x02 = persist failed
+# firmware returns one status byte (cmd_wifi.cpp handler_wifi_set_ap_password):
+#   0x00 = applied live and persisted to NVS
+#   0x01 = applied live, NVS write failed (reverts on reboot)
+#   0x02 = failed (not applied)
 # ---------------------------------------------------------------------------
 
 def _wifi_set_ap_password(device):
@@ -213,9 +242,9 @@ def _wifi_set_ap_password(device):
             raise ValueError("Empty payload")
         length = payload[0]
         password = payload[1:1 + length].decode('utf-8', errors='replace')
-        device.wifi_ap_password = password
-        # Return the persist result configured on the device (default: 0x01 = persisted OK)
-        result = getattr(device, 'wifi_ap_password_persist_result', 0x01)
+        result = getattr(device, 'wifi_ap_password_persist_result', 0x00)
+        if result != 0x02:
+            device.wifi_ap_password = password
         return struct.pack('<B', result)
     return handler
 
@@ -250,6 +279,10 @@ def _start_wavegen(device):
 
 def _stop_wavegen(device):
     def handler(payload: bytes) -> bytes:
+        # Firmware wavegen_stop_and_reset(): a running waveform's channel goes
+        # back to HIGH_IMP (AN-05). A stop with nothing running is a no-op.
+        if device.wavegen_running and device.wavegen_config:
+            device.channels[device.wavegen_config['channel']]["function"] = 0
         device.wavegen_running = False
         device.wavegen_config = None
         return b''

@@ -230,6 +230,12 @@ if ESP32_NEW is not None:
     if not DRY_RUN: path.write_text(t)
     print(f"  {_tag}  bbp.h  → ESP32 {ESP32_NEW}")
 
+    path = ROOT / "python/bugbuster/protocol.py"
+    t = path.read_text()
+    t = re.sub(r'(?m)^(ESP32_FW_VERSION\\s*=\\s*)\\(\\d+,\\s*\\d+,\\s*\\d+\\)', rf'\\g<1>({major}, {minor}, {patch})', t)
+    if not DRY_RUN: path.write_text(t)
+    print(f"  {_tag}  protocol.py  → ESP32_FW_VERSION {ESP32_NEW}")
+
 if RP2040_NEW is not None:
     major, minor = RP2040_NEW.split(".")
     cmake = ROOT / "Firmware/RP2040/CMakeLists.txt"

@@ -1,0 +1,15 @@
+{
+  "date": "Oct  1 2026",
+  "fwMajor": 5,
+  "fwMinor": 1,
+  "fwPatch": 0,
+  "idfVersion": "5.3.1",
+  "nextPartition": "app1",
+  "nextPartitionSize": 4194304,
+  "partition": "app0",
+  "partitionSize": 4194304,
+  "protoVersion": 11,
+  "time": "13:15:23",
+  "version": "nightly-dirty",
+  "webBuild": "scripts-fix-20260427-1150"
+}

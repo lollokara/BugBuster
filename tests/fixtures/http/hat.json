@@ -1,0 +1,50 @@
+{
+  "configConfirmed": false,
+  "config_confirmed": false,
+  "connected": true,
+  "consecutiveTimeouts": 0,
+  "dapConnected": false,
+  "degraded": false,
+  "detectVoltage": 0,
+  "detect_voltage": 0,
+  "detected": true,
+  "fwMajor": 1,
+  "fwMinor": 0,
+  "kind": "daq",
+  "laRoute": 0,
+  "lastOkMs": 252153,
+  "lastTimeoutMs": 0,
+  "pinConfig": [
+    {
+      "function": 0,
+      "functionName": "Disconnected",
+      "pin": 0
+    },
+    {
+      "function": 0,
+      "functionName": "Disconnected",
+      "pin": 1
+    },
+    {
+      "function": 0,
+      "functionName": "Disconnected",
+      "pin": 2
+    },
+    {
+      "function": 0,
+      "functionName": "Disconnected",
+      "pin": 3
+    }
+  ],
+  "pin_config": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "responsive": true,
+  "targetDetected": false,
+  "targetDpidr": 0,
+  "type": 16,
+  "typeName": "DAQ"
+}

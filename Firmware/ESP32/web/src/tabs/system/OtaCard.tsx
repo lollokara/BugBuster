@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { GlassCard } from "../../components/GlassCard";
 import { api, DaqUploadEvent, HttpError, OtaInfo, UpdateCheckResult, UpdateStatus } from "../../api/client";
 import { deviceMac } from "../../state/signals";
+import { componentHasUpdate, updateSelection } from "./otaView";
 
 type Stage = "idle" | "hashing" | "uploading" | "rebooting" | "error" | "done";
 type GitStage = "idle" | "checking" | "applying" | "done" | "error";
@@ -43,10 +44,11 @@ export function GitOtaCard() {
     try {
       const r = await api.update.check(mac);
       setCheckResult(r);
-      setApplyRp(r.rp2040.newer);
-      setApplyEsp(r.esp32.newer);
+      const sel = updateSelection(r);
+      setApplyRp(sel.rp2040);
+      setApplyEsp(sel.esp32);
       setGitStage("idle");
-      if (!r.rp2040.newer && !r.esp32.newer) setMsg("Both components are up to date.");
+      if (sel.upToDate) setMsg("Both components are up to date.");
     } catch (e) {
       setGitStage("error");
       setMsg((e as Error).message);
@@ -105,10 +107,10 @@ export function GitOtaCard() {
                 {c.available ? (
                   <>
                     <span class="mono">{c.version || c.availableBuildId}</span>
-                    <span class={c.newer ? "pill active" : "pill"} style={{ fontSize: "0.7rem" }}>
-                      {c.newer ? "Update available" : "Up to date"}
+                    <span class={componentHasUpdate(c) ? "pill active" : "pill"} style={{ fontSize: "0.7rem" }}>
+                      {componentHasUpdate(c) ? "Update available" : "Up to date"}
                     </span>
-                    {c.newer && (
+                    {componentHasUpdate(c) && (
                       <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
                         <input
                           type="checkbox"

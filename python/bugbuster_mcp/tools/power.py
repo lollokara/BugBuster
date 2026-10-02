@@ -224,7 +224,7 @@ def register(mcp) -> None:
         - password: New WPA2-PSK password. Must be 8-63 characters.
         - confirm: Must be True to proceed.
 
-        Returns: success, message.
+        Returns: success, persisted, message.
         """
         if not confirm:
             raise ValueError(
@@ -237,12 +237,12 @@ def register(mcp) -> None:
                 f"AP password must be 8-63 characters (WPA2 requirement), got {len(password)}"
             )
         bb = session.get_client()
-        ok = bb.wifi_set_ap_password(password)
-        return {
-            "success": ok,
-            "message": (
-                "AP password updated and applied live. Reconnect using the new password."
-                if ok else
-                "Failed to set AP password. Check firmware logs."
-            ),
-        }
+        res = bb.wifi_set_ap_password(password)
+        if not res:
+            msg = "Failed to set AP password. Check firmware logs."
+        elif not res.persisted:
+            msg = ("AP password applied live but NOT saved to NVS: the old password "
+                   "returns after a reboot. Reconnect using the new password.")
+        else:
+            msg = "AP password updated and applied live. Reconnect using the new password."
+        return {"success": bool(res), "persisted": bool(res) and res.persisted, "message": msg}

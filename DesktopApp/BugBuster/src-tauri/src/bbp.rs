@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Protocol Constants
 // -----------------------------------------------------------------------------
 
-pub const PROTO_VERSION: u8 = 11;
+pub const PROTO_VERSION: u8 = 12;
 
 pub const MAGIC: [u8; 4] = [0xBB, 0x42, 0x55, 0x47]; // 0xBB 'B' 'U' 'G'
 pub const HANDSHAKE_RSP_LEN: usize = 14;
@@ -242,6 +242,23 @@ pub const CMD_OTA: u8 = 0x77;
 pub const CMD_PING: u8 = 0xFE;
 pub const CMD_DISCONNECT: u8 = 0xFF;
 
+// PROTO-4: opcodes the firmware defines that the desktop table lacked
+// (tests/unit/test_bbp_command_parity_rust.py keeps this in sync with bbp.h).
+pub const CMD_MEM_STATUS: u8 = 0x0C;
+pub const CMD_ADC_LEDS_SET_MODE: u8 = 0x47;
+pub const CMD_START_ADC_DSP_STREAM: u8 = 0x64;
+pub const CMD_STOP_ADC_DSP_STREAM: u8 = 0x65;
+pub const CMD_RAIL_POWER_UP: u8 = 0x93;
+pub const CMD_SCRIPT_EVAL: u8 = 0xF5;
+pub const CMD_SCRIPT_STATUS: u8 = 0xF6;
+pub const CMD_SCRIPT_LOGS: u8 = 0xF7;
+pub const CMD_SCRIPT_STOP: u8 = 0xF8;
+pub const CMD_SCRIPT_UPLOAD: u8 = 0xF9;
+pub const CMD_SCRIPT_LIST: u8 = 0xFA;
+pub const CMD_SCRIPT_RUN_FILE: u8 = 0xFB;
+pub const CMD_SCRIPT_DELETE: u8 = 0xFC;
+pub const CMD_SCRIPT_AUTORUN: u8 = 0xFD;
+
 // -----------------------------------------------------------------------------
 // Event IDs
 // -----------------------------------------------------------------------------
@@ -255,12 +272,15 @@ pub const EVT_LA_DONE: u8 = 0x85;
 pub const EVT_IO_PREEMPTED: u8 = 0x86; // IO slot preempted by selftest/internal (mirrors firmware BBP_EVT_IO_PREEMPTED)
 pub const EVT_IO_OWNER_REJECT: u8 = 0x87; // IO claim rejected because slot held by another owner
 pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
+pub const EVT_ADC_DSP: u8 = 0x88; // DSP stream window (stats + FFT peaks + spikes)
 pub const EVT_DISCONNECT: u8 = 0xFE; // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------
 // Error Codes
 // -----------------------------------------------------------------------------
 
+// Generated from bbp.h by Firmware/tools/gen_error_tables.py - do not edit.
+// BEGIN GENERATED: bbp-errors
 pub const ERR_INVALID_CMD: u8 = 0x01;
 pub const ERR_INVALID_CH: u8 = 0x02;
 pub const ERR_INVALID_PARAM: u8 = 0x03;
@@ -275,25 +295,28 @@ pub const ERR_TIMEOUT: u8 = 0x11;
 pub const ERR_IO_OWNERSHIP_REQUIRED: u8 = 0x12;
 pub const ERR_ADGS_ROUTE_REJECTED: u8 = 0x13;
 pub const ERR_UNSUPPORTED_HAT: u8 = 0x14;
+// END GENERATED: bbp-errors
 
 /// Convert error code to human-readable string. Handles unknown future codes
 /// gracefully by returning "Unknown error 0xXX" instead of panicking.
 pub fn error_to_string(code: u8) -> String {
     match code {
-        ERR_INVALID_CMD => "Invalid command".to_string(),
-        ERR_INVALID_CH => "Invalid channel".to_string(),
-        ERR_INVALID_PARAM => "Invalid parameter".to_string(),
-        ERR_SPI_FAIL => "SPI communication failure".to_string(),
-        ERR_QUEUE_FULL => "Command queue full".to_string(),
-        ERR_BUSY => "Device busy".to_string(),
-        ERR_INVALID_STATE => "Invalid state".to_string(),
-        ERR_CRC_FAIL => "CRC check failed".to_string(),
-        ERR_FRAME_TOO_LARGE => "Frame too large".to_string(),
-        ERR_STREAM_ACTIVE => "Stream already active".to_string(),
-        ERR_TIMEOUT => "Command timeout".to_string(),
-        ERR_IO_OWNERSHIP_REQUIRED => "IO slot ownership required".to_string(),
-        ERR_ADGS_ROUTE_REJECTED => "MUX routing rejected (self-test interlock)".to_string(),
-        ERR_UNSUPPORTED_HAT => "Command requires different HAT type".to_string(),
+        // BEGIN GENERATED: bbp-errors
+        ERR_INVALID_CMD => "The command is not recognized by the device".to_string(),
+        ERR_INVALID_CH => "Channel number is out of range".to_string(),
+        ERR_INVALID_PARAM => "One or more parameters are invalid".to_string(),
+        ERR_SPI_FAIL => "SPI communication with the AD74416H failed".to_string(),
+        ERR_QUEUE_FULL => "Device command queue is full - retry after a short delay".to_string(),
+        ERR_BUSY => "Device is busy processing another operation".to_string(),
+        ERR_INVALID_STATE => "Operation cannot be performed in the current device state".to_string(),
+        ERR_CRC_FAIL => "Payload CRC check failed".to_string(),
+        ERR_FRAME_TOO_LARGE => "Command or response payload exceeds the maximum frame size".to_string(),
+        ERR_STREAM_ACTIVE => "Cannot configure while streaming is active".to_string(),
+        ERR_TIMEOUT => "Device operation timed out or no response received".to_string(),
+        ERR_IO_OWNERSHIP_REQUIRED => "IO slot is owned by another session".to_string(),
+        ERR_ADGS_ROUTE_REJECTED => "MUX route rejected by the U17-S3 / U23 self-test interlock".to_string(),
+        ERR_UNSUPPORTED_HAT => "Command requires a different HAT type, or no HAT is attached".to_string(),
+        // END GENERATED: bbp-errors
         _ => format!("Unknown error 0x{:02X}", code),
     }
 }

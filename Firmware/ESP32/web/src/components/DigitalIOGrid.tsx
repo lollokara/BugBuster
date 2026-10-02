@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api/client";
 import { Led } from "./Led";
+import { pollIntervalFor } from "../state/signals";
 
 function pinsFromResponse(data: unknown): any[] {
   if (Array.isArray(data)) return data;
@@ -34,7 +35,7 @@ export function DigitalIOGrid() {
       } catch {
         if (alive) setPins([]);
       }
-      if (alive) window.setTimeout(tick, 2000);
+      if (alive) window.setTimeout(tick, pollIntervalFor(2000));
     };
     tick();
     return () => {

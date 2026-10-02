@@ -1,0 +1,100 @@
+{
+  "ios": [
+    {
+      "gpio": 4,
+      "input": false,
+      "io": 1,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 2,
+      "input": false,
+      "io": 2,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 1,
+      "input": false,
+      "io": 3,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 7,
+      "input": false,
+      "io": 4,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 6,
+      "input": false,
+      "io": 5,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 5,
+      "input": false,
+      "io": 6,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 8,
+      "input": false,
+      "io": 7,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 9,
+      "input": false,
+      "io": 8,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 10,
+      "input": false,
+      "io": 9,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 11,
+      "input": false,
+      "io": 10,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 12,
+      "input": false,
+      "io": 11,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    },
+    {
+      "gpio": 13,
+      "input": false,
+      "io": 12,
+      "mode": 0,
+      "modeName": "disabled",
+      "output": false
+    }
+  ]
+}

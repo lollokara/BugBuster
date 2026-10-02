@@ -36,7 +36,21 @@ def with_error_context(tool_name: str):
             except Exception as e:
                 # Check for device error patterns in the exception message
                 error_msg = str(e)
-                
+
+                # FEAT-6: DeviceError carries the numeric code; its message
+                # prints the NAME ("Device error TIMEOUT"), so the hex regex
+                # below never matched a real device error.
+                code = getattr(e, "code", None)
+                if isinstance(code, int) and "device error" in error_msg.lower():
+                    transport = None
+                    try:
+                        transport = session.get_transport()
+                        if transport == "auto":
+                            transport = None
+                    except Exception:
+                        pass
+                    raise RuntimeError(map_device_error(code, tool_name, transport=transport)) from e
+
                 # Pattern: "Device error 0x11" or similar
                 if "device error" in error_msg.lower():
                     import re
@@ -94,7 +108,8 @@ def require_hat_type(expected_type_name: str, expected_type_code: int | None = N
             # Try to get HAT status and check type
             try:
                 bb = session.get_client()
-                hat_status = bb.hat_get_status()
+                hat_status = (bb.hat_status_cached() if hasattr(bb, "hat_status_cached")
+                              else bb.hat_get_status())
                 
                 # Check if HAT is detected at all
                 if not hat_status.get("detected"):

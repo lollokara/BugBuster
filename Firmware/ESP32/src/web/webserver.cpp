@@ -4,6 +4,7 @@
 
 #include "freertos/idf_additions.h"  // vTaskDeleteWithCaps
 #include "webserver.h"
+#include "cors.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +30,8 @@
 #include "ds4424.h"
 #include "husb238.h"
 #include "pca9535.h"
+#include "power/rail_power.h"
+#include "cmd_errors.h"
 #include "hat.h"
 #include "adgs2414d.h"
 #include "dio.h"
@@ -116,16 +119,16 @@ static const char* http_status_string(int code)
     }
 }
 
-static void add_number_alias(cJSON *obj, const char *camel, const char *snake, double value)
+// IOS-23: camelCase only (see api_core.cpp); the second argument keeps the
+// retired snake_case name greppable.
+static void add_number_alias(cJSON *obj, const char *camel, const char * /*retired*/, double value)
 {
     cJSON_AddNumberToObject(obj, camel, value);
-    cJSON_AddNumberToObject(obj, snake, value);
 }
 
-static void add_bool_alias(cJSON *obj, const char *camel, const char *snake, bool value)
+static void add_bool_alias(cJSON *obj, const char *camel, const char * /*retired*/, bool value)
 {
     cJSON_AddBoolToObject(obj, camel, value);
-    cJSON_AddBoolToObject(obj, snake, value);
 }
 
 // -----------------------------------------------------------------------------
@@ -154,8 +157,7 @@ static void set_cors_headers(httpd_req_t *req, char *origin_buf, size_t origin_b
     if (origin_buf && origin_buf_size > 0) {
         origin_buf[0] = '\0';
         if (httpd_req_get_hdr_value_str(req, "Origin", origin_buf, origin_buf_size) == ESP_OK) {
-            if (strncmp(origin_buf, "http://localhost", 16) == 0 ||
-                strncmp(origin_buf, "http://127.0.0.1", 16) == 0) {
+            if (cors_origin_allowed(origin_buf)) {
                 httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin_buf);
                 httpd_resp_set_hdr(req, "Vary", "Origin");
             }
@@ -192,8 +194,19 @@ static esp_err_t check_admin_auth(httpd_req_t *req)
 // Helper: send a cJSON object as an HTTP response (deletes root after send)
 // -----------------------------------------------------------------------------
 
+// TR-11b: a failed action used to answer 200 {"ok":false}, which clients
+// that only look at the status code took for success. A non-GET reply whose
+// top-level "ok" is false is now sent as 400 (body unchanged). GET replies
+// keep 200: there "ok":false is status data (e.g. no HAT fitted).
+static int logical_failure_status(httpd_req_t *req, const cJSON *root, int code)
+{
+    if (code != 200 || req->method == HTTP_GET || !root) return code;
+    return cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(root, "ok")) ? 400 : code;
+}
+
 static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
 {
+    code = logical_failure_status(req, root, code);
     char *body = cJSON_PrintUnformatted(root);
     if (!body) {
         cJSON_Delete(root);
@@ -217,8 +230,33 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
     return ESP_OK;
 }
 
+// Consecutive recv timeouts (httpd recv_wait_timeout, 5 s default) tolerated
+// before an upload is abandoned, so a stalled client cannot hold the httpd task.
+#define UPLOAD_RECV_MAX_TIMEOUTS 5
+
+static bool recv_timeout_retry(int *timeouts)
+{
+    return ++(*timeouts) <= UPLOAD_RECV_MAX_TIMEOUTS;
+}
+
+static int upload_recv(httpd_req_t *req, char *buf, size_t len)
+{
+    int timeouts = 0;
+    for (;;) {
+        int n = httpd_req_recv(req, buf, len);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && recv_timeout_retry(&timeouts)) continue;
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) ESP_LOGW(TAG, "upload stalled, aborting %s", req->uri);
+        return n;
+    }
+}
+
 static esp_err_t send_raw_json(httpd_req_t *req, const char *body, int code = 200)
 {
+    if (code == 200 && req->method != HTTP_GET && body && strstr(body, "\"ok\":false")) {
+        cJSON *parsed = cJSON_Parse(body);
+        code = logical_failure_status(req, parsed, code);
+        cJSON_Delete(parsed);
+    }
     char origin_buf[96];
     set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "application/json");
@@ -651,8 +689,6 @@ static esp_err_t handle_get_faults(httpd_req_t *req)
             cJSON_AddNumberToObject(obj, "id", ch);
             cJSON_AddNumberToObject(obj, "channelAlert", g_deviceState.channels[ch].channelAlertStatus);
             cJSON_AddNumberToObject(obj, "channelAlertMask", g_deviceState.channels[ch].channelAlertMask);
-            cJSON_AddNumberToObject(obj, "alert", g_deviceState.channels[ch].channelAlertStatus);
-            cJSON_AddNumberToObject(obj, "mask", g_deviceState.channels[ch].channelAlertMask);
             cJSON_AddItemToArray(channels, obj);
         }
         xSemaphoreGive(g_stateMutex);
@@ -745,7 +781,10 @@ static esp_err_t handle_get_scope(httpd_req_t *req)
 //   latency at ~100 ms. For a homemade scope that's well below human
 //   perception and it lets the HTTP socket close quickly when the tab is
 //   hidden.
-static esp_err_t handle_get_scope_stream(httpd_req_t *req)
+// WEB-23: this loop runs on its own task with a detached (async) request -
+// httpd serves every socket from one task, so running it inline stalled
+// every other request for as long as a scope tab was open.
+static esp_err_t scope_sse_loop(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
@@ -866,6 +905,38 @@ static esp_err_t handle_get_scope_stream(httpd_req_t *req)
     }
 }
 
+#define SCOPE_SSE_MAX_STREAMS 2
+static volatile int s_scope_sse_streams = 0;
+
+static void scope_sse_task(void *arg)
+{
+    httpd_req_t *req = (httpd_req_t *)arg;
+    scope_sse_loop(req);
+    httpd_req_async_handler_complete(req);
+    __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+    vTaskDelete(NULL);
+}
+
+// GET /api/scope/stream - detach and stream from a dedicated task (WEB-23).
+static esp_err_t handle_get_scope_stream(httpd_req_t *req)
+{
+    if (__atomic_add_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST) > SCOPE_SSE_MAX_STREAMS) {
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return send_error(req, 503, "too many scope streams");
+    }
+    httpd_req_t *async_req = NULL;
+    if (httpd_req_async_handler_begin(req, &async_req) != ESP_OK) {
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return send_error(req, 500, "scope stream: async begin failed");
+    }
+    if (xTaskCreate(scope_sse_task, "scope_sse", 4096, async_req, 4, NULL) != pdPASS) {
+        httpd_req_async_handler_complete(async_req);
+        __atomic_sub_fetch(&s_scope_sse_streams, 1, __ATOMIC_SEQ_CST);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 // GET /api/diagnostics
 static esp_err_t handle_get_diagnostics(httpd_req_t *req)
 {
@@ -940,7 +1011,7 @@ static esp_err_t handle_get_dac_readback(httpd_req_t *req)
     if (ch < 0) return send_error(req, 400, "Channel must be 0-3");
 
     uint16_t activeCode = 0;
-    spiDriver.readRegister(AD74416H_REG_DAC_ACTIVE(ch), &activeCode);
+    spiDriver.readRegister(AD74416H_REG_DAC_ACTIVE(tasks_logical_to_physical((uint8_t)ch)), &activeCode);
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "channel", ch);
@@ -1848,9 +1919,7 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
 // GET /api/selftest/supplies/cached — cached supply rail voltages
 static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 {
-    if (selftest_worker_enabled()) {
-        selftest_monitor_step();
-    }
+    // PWR-10: cache only - the main loop's monitor step is the sampler.
     const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
 
     static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
@@ -2338,9 +2407,12 @@ static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
     cJSON *json = recv_json_body(req);
     if (!json) return send_error(req, 400, "Invalid JSON or body too large");
 
-    PcaFaultConfig cfg;
-    cfg.auto_disable_efuse = cJSON_IsTrue(cJSON_GetObjectItem(json, "auto_disable"));
-    cfg.log_events = cJSON_IsTrue(cJSON_GetObjectItem(json, "log_events"));
+    PcaFaultConfig cfg = {};
+    pca9535_get_fault_config(&cfg);
+    cJSON *ad = cJSON_GetObjectItem(json, "auto_disable");
+    cJSON *le = cJSON_GetObjectItem(json, "log_events");
+    if (cJSON_IsBool(ad)) cfg.auto_disable_efuse = cJSON_IsTrue(ad);
+    if (cJSON_IsBool(le)) cfg.log_events = cJSON_IsTrue(le);
     cJSON_Delete(json);
 
     pca9535_set_fault_config(&cfg);
@@ -2351,6 +2423,45 @@ static esp_err_t handle_post_ioexp_fault_config(httpd_req_t *req)
     return send_json(req, rsp);
 }
 
+// POST /api/ioexp/rail_up  body: {"rail":1, "voltage":5.0, "settleMs":500,
+//   "confirm":false, "powerCycle":false, "efuseMask":0}
+// Same firmware sequence as BBP RAIL_POWER_UP (power/rail_power.h).
+static esp_err_t handle_post_ioexp_rail_up(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    const cJSON *j_rail = cJSON_GetObjectItem(body, "rail");
+    const cJSON *j_v    = cJSON_GetObjectItem(body, "voltage");
+    const cJSON *j_set  = cJSON_GetObjectItem(body, "settleMs");
+    const cJSON *j_mask = cJSON_GetObjectItem(body, "efuseMask");
+    int   rail   = cJSON_IsNumber(j_rail) ? j_rail->valueint : 0;
+    float volts  = cJSON_IsNumber(j_v) ? (float)j_v->valuedouble : 0.0f;
+    int   settle = cJSON_IsNumber(j_set) ? j_set->valueint : 500;
+    int   mask   = cJSON_IsNumber(j_mask) ? j_mask->valueint : 0;
+    uint8_t flags = (uint8_t)((cJSON_IsTrue(cJSON_GetObjectItem(body, "confirm")) ? RAIL_PU_CONFIRM : 0) |
+                              (cJSON_IsTrue(cJSON_GetObjectItem(body, "powerCycle")) ? RAIL_PU_POWER_CYCLE : 0));
+    cJSON_Delete(body);
+    if (rail < 1 || rail > 2 || settle < 0 || settle > (int)RAIL_PU_MAX_SETTLE_MS || mask < 0 || mask > 3)
+        return send_error(req, 400, "rail must be 1-2, settleMs 0-5000, efuseMask 0-3");
+
+    RailPowerResult r = {};
+    int rc = rail_power_up(rail_power_ops_hw(), (uint8_t)rail, volts, (uint16_t)settle,
+                           flags, (uint8_t)mask, &r);
+    if (rc == CMD_ERR_BAD_ARG)
+        return send_error(req, 400, "voltage must be 3-15 V; above 12 V needs confirm");
+    if (rc != 0) return send_error(req, 500, "rail power-up failed (I2C)");
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "rail", rail);
+    cJSON_AddNumberToObject(root, "appliedV", r.applied_v);
+    cJSON_AddBoolToObject(root, "clamped", r.clamped);
+    cJSON_AddBoolToObject(root, "pg", r.pg);
+    cJSON *f = cJSON_AddArrayToObject(root, "efuseFaults");
+    cJSON_AddItemToArray(f, cJSON_CreateBool(r.fault[0]));
+    cJSON_AddItemToArray(f, cJSON_CreateBool(r.fault[1]));
+    return send_json(req, root);
+}
+
 // POST /api/ioexp dispatch
 static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 {
@@ -2358,6 +2469,7 @@ static esp_err_t handle_ioexp_post_dispatch(httpd_req_t *req)
 
     if (strstr(req->uri, "/api/ioexp/control")) return handle_post_ioexp_control(req);
     if (strstr(req->uri, "/api/ioexp/fault_config")) return handle_post_ioexp_fault_config(req);
+    if (strstr(req->uri, "/api/ioexp/rail_up")) return handle_post_ioexp_rail_up(req);
     return send_error(req, 404, "Unknown IO Expander endpoint");
 }
 
@@ -2413,6 +2525,15 @@ static esp_err_t handle_get_daq_wifi_stream_status(httpd_req_t *req)
 {
     char *resp = api_core_handle("GET", "/api/daq/wifi_stream/status", NULL);
     if (!resp) return send_error(req, 500, "wifi stream status failed");
+    if (check_admin_auth(req) != ESP_OK) {
+        // api_core is shared with BLE (paired channel); only HTTP strips the hotspot credentials.
+        cJSON *root = cJSON_Parse(resp);
+        cJSON_free(resp);
+        if (!root) return send_error(req, 500, "wifi stream status failed");
+        cJSON_DeleteItemFromObject(root, "ssid");
+        cJSON_DeleteItemFromObject(root, "password");
+        return send_json(req, root);
+    }
     esp_err_t rc = send_raw_json(req, resp);
     cJSON_free(resp);
     return rc;
@@ -2584,7 +2705,6 @@ static esp_err_t handle_post_hat_detect(httpd_req_t *req)
     cJSON_AddNumberToObject(rsp, "type", type);
     cJSON_AddStringToObject(rsp, "typeName", hat_type_name(type));
     cJSON_AddNumberToObject(rsp, "detectVoltage", hs->detect_voltage);
-    cJSON_AddNumberToObject(rsp, "detect_voltage", hs->detect_voltage);
     return send_json(req, rsp);
 }
 
@@ -3066,6 +3186,16 @@ static esp_err_t handle_get_debug(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "i2cBusOk", i2c_bus_ready());
 
+    // AN-11: ADC poll loop counters
+    {
+        AdcPollStats ps = {};
+        tasks_adc_poll_stats(&ps);
+        cJSON *ap = cJSON_AddObjectToObject(root, "adcPoll");
+        cJSON_AddNumberToObject(ap, "loops", ps.loops);
+        cJSON_AddNumberToObject(ap, "ready", ps.ready);
+        cJSON_AddNumberToObject(ap, "rdyIrq", ps.rdy_irq);
+    }
+
     // DS4424
     cJSON *idac = cJSON_AddObjectToObject(root, "ds4424");
     cJSON_AddBoolToObject(idac, "present", ds4424_present());
@@ -3133,7 +3263,7 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
     if (ch < 0 || ch > 3) return send_error(req, 400, "Invalid channel");
     if (wf < 0 || wf > 3) return send_error(req, 400, "Invalid waveform");
     if (mode < 0 || mode > 1) return send_error(req, 400, "Invalid mode");
-    if (freq < 0.01 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
+    if (freq < 0.1 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
     double max_out = (mode == WAVEGEN_CURRENT) ? IOUT_MAX_MA : VOUT_BIPOLAR_OFFSET_V;
     if (amp < 0.0 || amp > max_out) return send_error(req, 400, "Amplitude out of range");
     if (off < -max_out || off > max_out) return send_error(req, 400, "Offset out of range");
@@ -3199,7 +3329,10 @@ static esp_err_t handle_post_mux_switch(httpd_req_t *req)
         return send_error(req, 400, "Invalid device/switch");
 
     if (!adgs_set_api_switch_safe((uint8_t)dev, (uint8_t)sw, closed)) {
-        return send_error(req, 400, "Invalid device/switch");
+        // IO-8: indexes are validated above, so this is an interlock refusal.
+        return send_error(req, 409,
+                          "MUX write refused: U17 S3 and the U23 self-test are "
+                          "mutually exclusive. Retry once the self-test releases.");
     }
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         adgs_get_all_states(g_deviceState.muxState);
@@ -3818,9 +3951,8 @@ static esp_err_t handle_ota_upload(httpd_req_t *req)
 
     while (remaining > 0) {
         int to_read = (remaining > 4096) ? 4096 : remaining;
-        int received = httpd_req_recv(req, buf, to_read);
+        int received = upload_recv(req, buf, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "OTA receive error at %d/%d bytes", total_written, req->content_len);
             failed = true;
             break;
@@ -3930,9 +4062,8 @@ static esp_err_t handle_rp2040_upload(httpd_req_t *req)
 
     while (remaining > 0) {
         int to_read = (remaining > 4096) ? 4096 : remaining;
-        int received = httpd_req_recv(req, buf, to_read);
+        int received = upload_recv(req, buf, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "RP2040 upload receive error at %d/%d bytes", total_written, req->content_len);
             failed = true;
             break;
@@ -3990,8 +4121,7 @@ static int daq_upload_read(void *vctx, uint8_t *buf, size_t max)
     if (c->remaining <= 0) return 0;
     size_t want = ((size_t)c->remaining < max) ? (size_t)c->remaining : max;
     while (true) {
-        int n = httpd_req_recv(c->req, (char *)buf, want);
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;   // same retry as the other uploads
+        int n = upload_recv(c->req, (char *)buf, want);
         if (n <= 0) return -1;
         c->remaining -= n;
         return n;
@@ -4321,9 +4451,8 @@ static esp_err_t handle_uploadfs(httpd_req_t *req)
             to_read = remaining;
         }
 
-        int received = httpd_req_recv(req, buf + buf_fill, to_read);
+        int received = upload_recv(req, buf + buf_fill, to_read);
         if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             ESP_LOGE(TAG, "SPIFFS recv error at offset %d", offset);
             failed = true;
             break;
@@ -4585,11 +4714,8 @@ static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, src + received, total - received);
+        int ret = upload_recv(req, src + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                continue;
-            }
             free(src);
             return send_error(req, 500, "Receive error");
         }
@@ -4628,11 +4754,8 @@ static esp_err_t handle_post_scripts_lint(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, src + received, total - received);
+        int ret = upload_recv(req, src + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                continue;
-            }
             free(src);
             return send_error(req, 500, "Receive error");
         }
@@ -4776,9 +4899,8 @@ static esp_err_t handle_post_scripts_files(httpd_req_t *req)
 
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, (char *)buf + received, total - received);
+        int ret = upload_recv(req, (char *)buf + received, total - received);
         if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
             free(buf);
             return send_error(req, 500, "Receive error");
         }

@@ -198,6 +198,10 @@ def decode_status(p: bytes) -> dict:
         d["cal_have_hi"] = bool(cal_have & 0x01)
         d["cal_have_mid"] = bool(cal_have & 0x02)
         d["cal_have_lo"] = bool(cal_have & 0x04)
+    if len(p) >= 116:
+        # Extension v9: u32 drop counters + missed FINE conversions.
+        (d["drop_fine32"], d["drop_coarse32"],
+         d["missed_conversions"]) = struct.unpack_from("<III", p, 104)
     return d
 
 

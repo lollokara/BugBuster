@@ -1,0 +1,12 @@
+{
+  "activeTarget": 0,
+  "activeTargetName": "",
+  "availableTargets": 14,
+  "currentEsp32": "5.1.0",
+  "currentRp2040": "bb-hat-1.0",
+  "lastError": "",
+  "progressDone": 0,
+  "progressTotal": 0,
+  "state": 0,
+  "step": "idle"
+}

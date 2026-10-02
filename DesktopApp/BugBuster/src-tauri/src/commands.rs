@@ -15,10 +15,6 @@ use crate::state::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-/// Global CSV writer protected by a Mutex.
-/// `None` means no recording is in progress.
-pub static CSV_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
-
 type CmdResult<T> = Result<T, String>;
 const QUICKSETUP_SLOT_COUNT: u8 = 4;
 const QUICKSETUP_MAX_JSON_BYTES: usize = 1000;
@@ -79,20 +75,6 @@ pub async fn disconnect_device(
     mgr.disconnect(&app).await.map_err(map_err)
 }
 
-#[tauri::command]
-pub fn get_connection_status(mgr: State<'_, ConnectionManager>) -> ConnectionStatus {
-    mgr.get_connection_status()
-}
-
-// -----------------------------------------------------------------------------
-// Device State
-// -----------------------------------------------------------------------------
-
-#[tauri::command]
-pub fn get_device_state(mgr: State<'_, ConnectionManager>) -> DeviceState {
-    mgr.get_device_state()
-}
-
 // -----------------------------------------------------------------------------
 // Channel Configuration
 // -----------------------------------------------------------------------------
@@ -107,21 +89,6 @@ pub async fn set_channel_function(
     pw.put_u8(channel);
     pw.put_u8(function);
     mgr.send_command(bbp::CMD_SET_CH_FUNC, &pw.buf)
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_dac_code(
-    channel: u8,
-    code: u16,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<()> {
-    let mut pw = PayloadWriter::new();
-    pw.put_u8(channel);
-    pw.put_u16(code);
-    mgr.send_command(bbp::CMD_SET_DAC_CODE, &pw.buf)
         .await
         .map_err(map_err)?;
     Ok(())
@@ -305,21 +272,6 @@ pub async fn set_vout_range(
 }
 
 #[tauri::command]
-pub async fn set_current_limit(
-    channel: u8,
-    limit_8ma: bool,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<()> {
-    let mut pw = PayloadWriter::new();
-    pw.put_u8(channel);
-    pw.put_bool(limit_8ma);
-    mgr.send_command(bbp::CMD_SET_ILIMIT, &pw.buf)
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn set_gpio_config(
     gpio: u8,
     mode: u8,
@@ -483,6 +435,39 @@ pub async fn wifi_forget(mgr: State<'_, ConnectionManager>) -> CmdResult<bool> {
     Ok(r.get_bool().unwrap_or(false))
 }
 
+/// DESK-9: result of a SoftAP password change.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApPasswordResult {
+    pub applied: bool,
+    /// false: applied live but the NVS write failed (old password after reboot).
+    pub persisted: bool,
+}
+
+/// Status byte of WIFI_SET_AP_PASSWORD: 0 applied + persisted, 1 applied only, 2 failed.
+pub fn ap_password_result(status: u8) -> ApPasswordResult {
+    ApPasswordResult { applied: status != 2, persisted: status == 0 }
+}
+
+#[tauri::command]
+pub async fn wifi_set_ap_password(
+    password: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<ApPasswordResult> {
+    let b = password.as_bytes();
+    if !(8..=63).contains(&b.len()) {
+        return Err("AP password must be 8-63 characters (WPA2)".into());
+    }
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(b.len() as u8);
+    pw.buf.extend_from_slice(b);
+    let rsp = mgr
+        .send_command(bbp::CMD_WIFI_SET_AP_PASSWORD, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(ap_password_result(rsp.first().copied().unwrap_or(2)))
+}
+
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------
@@ -505,7 +490,6 @@ const USB_OTA_TARGET_RP2040: u8 = 1;
 const USB_OTA_TARGET_SPIFFS: u8 = 2;
 const USB_OTA_CHUNK_SIZE: usize = 960;
 const USB_OTA_OP_INFO: u8 = 0x01;
-const USB_OTA_OP_ROLLBACK: u8 = 0x02;
 const USB_OTA_OP_BEGIN: u8 = 0x10;
 const USB_OTA_OP_CHUNK: u8 = 0x11;
 
@@ -549,6 +533,25 @@ fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+/// DAQ-16: warning for a P4 OTA started while the DUT supply is on, from a
+/// GET /api/daq/vdut/status body. None when the supply is off or unknown.
+fn vdut_ota_warning(status: &serde_json::Value) -> Option<String> {
+    if status.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let at = status
+        .get("voltageSetpointV")
+        .and_then(|v| v.as_f64())
+        .map(|v| format!(" ({:.2} V)", v))
+        .unwrap_or_default();
+    Some(format!(
+        "DUT supply was ON{} when the P4 update started. The P4 reset turns it OFF \
+         and it does not come back on by itself - re-enable it after the update \
+         if the DUT needs power.",
+        at
+    ))
 }
 
 fn decode_hex_32(hex: &str) -> Result<[u8; 32], String> {
@@ -646,25 +649,6 @@ async fn usb_upload_blob(
     }
 
     Ok(format!("Uploaded {} bytes over USB", data.len()))
-}
-
-async fn usb_ota_rollback(mgr: &ConnectionManager) -> Result<String, String> {
-    let rsp = usb_send_ota_command(mgr, &[USB_OTA_OP_ROLLBACK]).await?;
-    let json: serde_json::Value =
-        serde_json::from_slice(&rsp).map_err(|e| format!("USB rollback parse failed: {}", e))?;
-    if json
-        .get("success")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        Ok(json
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Rollback requested")
-            .to_string())
-    } else {
-        Err("USB rollback rejected".to_string())
-    }
 }
 
 fn is_usb_connection(mgr: &ConnectionManager) -> bool {
@@ -830,6 +814,28 @@ pub async fn ota_upload_daq(
         .timeout(std::time::Duration::from_secs(900))
         .build()
         .map_err(|e| e.to_string())?;
+
+    // DAQ-16: advisory only. A failed status read never blocks the push.
+    let mut supply_warning: Option<String> = None;
+    if target == "p4" {
+        if let Ok(r) = client
+            .get(format!("{}/api/daq/vdut/status", base_url))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(v) = r.json::<serde_json::Value>().await {
+                    supply_warning = vdut_ota_warning(&v);
+                }
+            }
+        }
+        if let Some(ref w) = supply_warning {
+            log::warn!("{}", w);
+            emit_progress(&app, "warning", 0.0, w);
+        }
+    }
+
     let mut req = client
         .post(format!(
             "{}/api/ota/upload_{}?sha256={}",
@@ -902,6 +908,9 @@ pub async fn ota_upload_daq(
                             .map(|v| format!(" — now running {}", v))
                             .unwrap_or_default()
                     );
+                    if let Some(ref w) = supply_warning {
+                        final_msg = format!("{}. {}", final_msg, w);
+                    }
                     // Only a *successful* done record should flip the frontend's
                     // success state; app.rs treats any "done" stage as success.
                     emit_progress(&app, "done", 100.0, &final_msg);
@@ -925,58 +934,6 @@ pub async fn ota_upload_daq(
         Some(true) => Ok(final_msg),
         Some(false) => Err(final_msg),
     }
-}
-
-#[tauri::command]
-pub async fn ota_rollback(
-    app: tauri::AppHandle,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<String> {
-    let _guard = mgr.ota_guard();
-
-    if is_usb_connection(&mgr) {
-        emit_progress(&app, "flashing", 0.0, "Requesting rollback over USB...");
-        let result = usb_ota_rollback(&mgr).await?;
-        emit_progress(&app, "done", 100.0, &result);
-        return Ok(result);
-    }
-
-    let base_url = mgr
-        .get_base_url()
-        .await
-        .ok_or("Rollback requires USB or HTTP connection. Connect via WiFi or USB first.")?;
-
-    let conn_status = mgr.get_connection_status();
-    let admin_token = conn_status.admin_token;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut req = client.post(format!("{}/api/ota/rollback", base_url));
-    if let Some(token) = admin_token {
-        req = req.header("X-BugBuster-Admin-Token", token);
-    }
-
-    emit_progress(&app, "flashing", 0.0, "Requesting rollback over HTTP...");
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Rollback failed: {}", e))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Rollback failed (HTTP {}): {}", status, body));
-    }
-
-    emit_progress(
-        &app,
-        "done",
-        100.0,
-        "Rollback requested; device is rebooting...",
-    );
-    Ok("Rollback requested; device is rebooting...".to_string())
 }
 
 // -----------------------------------------------------------------------------
@@ -1219,41 +1176,6 @@ pub async fn idac_set_voltage(
 }
 
 // Calibration point management
-
-#[tauri::command]
-pub async fn idac_cal_add_point(
-    channel: u8,
-    code: i8,
-    measured_v: f32,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<()> {
-    let mut pw = PayloadWriter::new();
-    pw.put_u8(channel);
-    pw.put_u8(code as u8);
-    pw.put_f32(measured_v);
-    mgr.send_command(bbp::CMD_IDAC_CAL_ADD_POINT, &pw.buf)
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn idac_cal_clear(channel: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    let mut pw = PayloadWriter::new();
-    pw.put_u8(channel);
-    mgr.send_command(bbp::CMD_IDAC_CAL_CLEAR, &pw.buf)
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn idac_cal_save(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_IDAC_CAL_SAVE, &[])
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
 
 // -----------------------------------------------------------------------------
 // Self-Test / Auto-Calibration
@@ -1509,18 +1431,6 @@ pub async fn efuse_imon_set(
 }
 
 #[tauri::command]
-pub async fn selftest_measure_supply(
-    rail: u8,
-    mgr: State<'_, ConnectionManager>,
-) -> CmdResult<serde_json::Value> {
-    let rsp = mgr
-        .send_command(bbp::CMD_SELFTEST_MEASURE_SUPPLY, &[rail])
-        .await
-        .map_err(map_err)?;
-    Ok(parse_selftest_measure_supply(rail, &rsp))
-}
-
-#[tauri::command]
 pub async fn selftest_supplies_cached(
     mgr: State<'_, ConnectionManager>,
 ) -> CmdResult<crate::state::SelftestSuppliesCached> {
@@ -1679,38 +1589,11 @@ pub async fn hat_set_pin(
 }
 
 #[tauri::command]
-pub async fn hat_set_all_pins(pins: [u8; 4], mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_HAT_SET_ALL_PINS, &pins)
-        .await
-        .map_err(map_err)?;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn hat_reset(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
     mgr.send_command(bbp::CMD_HAT_RESET, &[])
         .await
         .map_err(map_err)?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn hat_detect(mgr: State<'_, ConnectionManager>) -> CmdResult<HatStatus> {
-    let rsp = mgr
-        .send_command(bbp::CMD_HAT_DETECT, &[])
-        .await
-        .map_err(map_err)?;
-    Ok(parse_hat_detect(&rsp))
-}
-
-// HAT Power Query
-#[tauri::command]
-pub async fn hat_get_power(mgr: State<'_, ConnectionManager>) -> CmdResult<serde_json::Value> {
-    let rsp = mgr
-        .send_command(bbp::CMD_HAT_GET_POWER, &[])
-        .await
-        .map_err(map_err)?;
-    Ok(parse_hat_get_power(&rsp))
 }
 
 // HAT Power Management
@@ -2227,15 +2110,22 @@ pub fn write_text_file(path: String, content: String) -> CmdResult<()> {
 // -----------------------------------------------------------------------------
 // BBSC Binary Recording + CSV Export
 //
-// Format: [4B magic "BBSC"] [4B header_len LE] [JSON header] [raw samples...]
-// Each sample: 3 bytes per active channel (24-bit raw ADC codes, LE)
+// Format: [4B magic "BBSC"] [4B header_len LE] [JSON header] [records...]
+// v2 (written now): one record per scope bucket (EVT_SCOPE_DATA):
+//   [seq u32][ts_ms u32][count u16] then per active channel (avg, min, max) f32, all LE.
+// v1 (read only): 3 bytes per active channel per sample (24-bit raw ADC codes, LE).
 // -----------------------------------------------------------------------------
+
+const BBSC_VERSION: u64 = 2;
+const SCOPE_HDR_LEN: usize = 10;
+const SCOPE_EVT_LEN: usize = SCOPE_HDR_LEN + 4 * 12;
 
 /// Recording state: file writer + metadata
 pub struct RecordingState {
     pub writer: BufWriter<File>,
     pub sample_count: u64,
     pub path: String,
+    pub mask: u8,
 }
 
 pub static RECORDING: Mutex<Option<RecordingState>> = Mutex::new(None);
@@ -2262,7 +2152,8 @@ pub fn start_recording(
 
     // Build JSON header
     let header = serde_json::json!({
-        "version": 1,
+        "version": BBSC_VERSION,
+        "kind": "scope_buckets",
         "channels": num_ch,
         "mask": channel_mask,
         "sample_rate": sample_rate,
@@ -2286,6 +2177,7 @@ pub fn start_recording(
         writer,
         sample_count: 0,
         path: path.clone(),
+        mask: channel_mask & 0x0F,
     });
 
     log::info!(
@@ -2315,34 +2207,25 @@ pub fn stop_recording() -> CmdResult<u64> {
 
 /// Append raw ADC samples (binary, from adc-stream event payload)
 /// This receives the raw EVT_ADC_DATA payload and writes sample data directly.
-#[tauri::command]
-pub fn append_recording_data(raw_payload: Vec<u8>) -> CmdResult<()> {
-    let mut guard = RECORDING.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let rec = match guard.as_mut() {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    // Parse: [mask:1][timestamp:4][count:2][samples: count * num_ch * 3]
-    if raw_payload.len() < 7 {
-        return Ok(());
+/// Feed one device event to the active recording, if any.
+pub fn recording_feed(cmd_id: u8, payload: &[u8]) {
+    if cmd_id != bbp::EVT_SCOPE_DATA || payload.len() < SCOPE_EVT_LEN {
+        return;
     }
-    let mask = raw_payload[0];
-    let count = u16::from_le_bytes([raw_payload[5], raw_payload[6]]) as usize;
+    let Ok(mut guard) = RECORDING.lock() else { return };
+    let Some(rec) = guard.as_mut() else { return };
 
-    // Only write the raw sample data (skip the 7-byte header)
-    let data_start = 7;
-    let num_ch = (0..4).filter(|b| mask & (1 << b) != 0).count();
-    let data_len = count * num_ch * 3;
-    let data_end = data_start + data_len;
-
-    if raw_payload.len() >= data_end {
-        rec.writer
-            .write_all(&raw_payload[data_start..data_end])
-            .map_err(|e| format!("Write error: {}", e))?;
-        rec.sample_count += count as u64;
+    let mut out = Vec::with_capacity(SCOPE_EVT_LEN);
+    out.extend_from_slice(&payload[..SCOPE_HDR_LEN]);
+    for ch in 0..4 {
+        if rec.mask & (1 << ch) != 0 {
+            let off = SCOPE_HDR_LEN + ch * 12;
+            out.extend_from_slice(&payload[off..off + 12]);
+        }
     }
-    Ok(())
+    if rec.writer.write_all(&out).is_ok() {
+        rec.sample_count += 1;
+    }
 }
 
 /// Export a BBSC file to CSV
@@ -2385,15 +2268,47 @@ pub fn export_bbsc_to_csv(bbsc_path: String, csv_path: String) -> CmdResult<u64>
 
     let active_channels: Vec<usize> = (0..4).filter(|b| mask & (1 << b) != 0).collect();
     let num_ch = active_channels.len();
-    let bytes_per_sample = num_ch * 3;
 
     // Create CSV
     let csv_file = File::create(&csv_path).map_err(|e| format!("Create error: {}", e))?;
     let mut csv = BufWriter::new(csv_file);
+    let ch_names = ["ch_a", "ch_b", "ch_c", "ch_d"];
+
+    if header["version"].as_u64().unwrap_or(1) >= 2 {
+        let mut hdr = "seq,time_s,count".to_string();
+        for &ch in &active_channels {
+            for k in ["avg", "min", "max"] {
+                hdr.push_str(&format!(",{}_{}_v", ch_names[ch], k));
+            }
+        }
+        writeln!(csv, "{}", hdr).map_err(|e| format!("Write error: {}", e))?;
+
+        let mut rec = vec![0u8; SCOPE_HDR_LEN + num_ch * 12];
+        let mut n: u64 = 0;
+        loop {
+            match reader.read_exact(&mut rec) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(format!("Read error: {}", e)),
+            }
+            let u32_at = |o: usize| u32::from_le_bytes([rec[o], rec[o + 1], rec[o + 2], rec[o + 3]]);
+            let count = u16::from_le_bytes([rec[8], rec[9]]);
+            let mut line = format!("{},{:.3},{}", u32_at(0), u32_at(4) as f64 / 1000.0, count);
+            for i in 0..num_ch * 3 {
+                line.push_str(&format!(",{:.6}", f32::from_bits(u32_at(SCOPE_HDR_LEN + i * 4))));
+            }
+            writeln!(csv, "{}", line).map_err(|e| format!("Write error: {}", e))?;
+            n += 1;
+        }
+        csv.flush().map_err(|e| format!("Flush error: {}", e))?;
+        log::info!("Exported {} scope buckets from {} to {}", n, bbsc_path, csv_path);
+        return Ok(n);
+    }
+
+    let bytes_per_sample = num_ch * 3;
 
     // CSV header
     let mut hdr = "sample,time_s".to_string();
-    let ch_names = ["ch_a", "ch_b", "ch_c", "ch_d"];
     for &ch in &active_channels {
         hdr.push(',');
         hdr.push_str(ch_names[ch]);
@@ -2467,47 +2382,6 @@ fn raw_to_voltage_f64(raw: u32, range: u8) -> f64 {
         7 => (code / fs * 5.0) - 2.5,
         _ => code / fs * 12.0,
     }
-}
-
-// Keep legacy CSV commands for backwards compatibility
-#[tauri::command]
-pub fn start_csv_recording(path: String) -> CmdResult<()> {
-    let file = File::create(&path).map_err(|e| format!("Failed to create CSV file: {}", e))?;
-    let mut writer = BufWriter::new(file);
-    writeln!(writer, "timestamp_ms,ch_a,ch_b,ch_c,ch_d")
-        .map_err(|e| format!("Failed to write CSV header: {}", e))?;
-    writer.flush().map_err(|e| format!("Flush error: {}", e))?;
-    let mut guard = CSV_WRITER
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
-    *guard = Some(writer);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn stop_csv_recording() -> CmdResult<()> {
-    let mut guard = CSV_WRITER
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
-    if let Some(mut w) = guard.take() {
-        w.flush().ok();
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn append_csv_data(timestamp_ms: f64, ch_values: Vec<f32>) -> CmdResult<()> {
-    let mut guard = CSV_WRITER
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
-    if let Some(ref mut w) = *guard {
-        let a = ch_values.first().copied().unwrap_or(0.0);
-        let b = ch_values.get(1).copied().unwrap_or(0.0);
-        let c = ch_values.get(2).copied().unwrap_or(0.0);
-        let d = ch_values.get(3).copied().unwrap_or(0.0);
-        writeln!(w, "{},{},{},{},{}", timestamp_ms, a, b, c, d).ok();
-    }
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------
@@ -2841,16 +2715,20 @@ pub async fn set_pin_drive_strength(pin: u8, drive: u8) -> CmdResult<()> {
 
 /// Configure software current limit for one of the 4 efuse blocks.
 /// efuse index: 0=VADJ1-A, 1=VADJ1-B, 2=VADJ2-A, 3=VADJ2-B.
-/// Stub — logs only until firmware wiring lands.
+/// No firmware implements a software limit yet (only the hardware e-fuse trip
+/// and the IMON readout), so this refuses rather than pretending to arm it.
+/// The value is still kept in the board profile.
 #[tauri::command]
 pub async fn set_efuse_config(efuse: u8, sw_limit_ma: u16, enabled: bool) -> CmdResult<()> {
     log::info!(
-        "[set_efuse_config] efuse={} sw_limit_ma={} enabled={}",
+        "[set_efuse_config] efuse={} sw_limit_ma={} enabled={} (not enforced)",
         efuse,
         sw_limit_ma,
         enabled
     );
-    Ok(())
+    Err("e-fuse software current limit is not enforced by the firmware; \
+         saved to the board profile only"
+        .to_string())
 }
 
 /// Open a native "Save As" dialog for a board profile JSON file.
@@ -3019,14 +2897,6 @@ pub fn parse_selftest_auto_cal(data: &[u8]) -> serde_json::Value {
     })
 }
 
-pub fn parse_selftest_measure_supply(rail: u8, data: &[u8]) -> serde_json::Value {
-    let mut r = bbp::PayloadReader::new(data);
-    serde_json::json!({
-        "rail":    r.get_u8().unwrap_or(rail),
-        "voltage": r.get_f32().unwrap_or(0.0),
-    })
-}
-
 pub fn parse_selftest_supplies_cached(data: &[u8]) -> crate::state::SelftestSuppliesCached {
     use crate::state::{SelftestSuppliesCached, SupplyRail};
     let mut r = bbp::PayloadReader::new(data);
@@ -3132,23 +3002,6 @@ pub fn parse_quicksetup_action(slot: u8, data: &[u8], apply: bool) -> QuickSetup
         ok,
         message: message.to_string(),
     }
-}
-
-pub fn parse_hat_get_power(data: &[u8]) -> serde_json::Value {
-    let mut r = bbp::PayloadReader::new(data);
-    let mut connectors = Vec::new();
-    for _ in 0..2 {
-        let enabled = r.get_bool().unwrap_or(false);
-        let current_ma = r.get_f32().unwrap_or(0.0);
-        let fault = r.get_bool().unwrap_or(false);
-        connectors.push(serde_json::json!({
-            "enabled":   enabled,
-            "currentMa": current_ma,
-            "fault":     fault,
-        }));
-    }
-    let io_voltage_mv = r.get_u16().unwrap_or(0);
-    serde_json::json!({ "connectors": connectors, "ioVoltageMv": io_voltage_mv })
 }
 
 pub fn parse_usbpd_status(data: &[u8]) -> UsbPdState {
@@ -3318,21 +3171,6 @@ pub fn parse_hat_status(data: &[u8]) -> HatStatus {
         dap_connected,
         target_detected,
         target_dpidr,
-    }
-}
-
-pub fn parse_hat_detect(data: &[u8]) -> HatStatus {
-    let mut r = bbp::PayloadReader::new(data);
-    let detected = r.get_bool().unwrap_or(false);
-    let hat_type = r.get_u8().unwrap_or(0);
-    let detect_voltage = r.get_f32().unwrap_or(0.0);
-    let connected = r.get_bool().unwrap_or(false);
-    HatStatus {
-        detected,
-        connected,
-        hat_type,
-        detect_voltage,
-        ..Default::default()
     }
 }
 
@@ -4892,6 +4730,60 @@ mod tests {
     }
 
     #[test]
+    fn vdut_ota_warning_only_when_supply_enabled() {
+        let on = serde_json::json!({"present": true, "enabled": true, "voltageSetpointV": 3.3});
+        let w = vdut_ota_warning(&on).expect("supply on must warn");
+        assert!(w.contains("DUT supply") && w.contains("OFF"), "{w}");
+        assert!(w.contains("3.30 V"), "{w}");
+        let off = serde_json::json!({"present": true, "enabled": false});
+        assert_eq!(vdut_ota_warning(&off), None);
+        assert_eq!(vdut_ota_warning(&serde_json::json!({"error": "x"})), None);
+    }
+
+    /// PWR-08: no firmware enforces an e-fuse software current limit, so the
+    /// command must not report success (the board tab showed it as armed).
+    #[test]
+    fn set_efuse_config_reports_unsupported() {
+        let r = futures::executor::block_on(set_efuse_config(0, 500, true));
+        let err = r.expect_err("SW limit is not enforced by any firmware");
+        assert!(err.contains("not enforced"), "{err}");
+    }
+
+    /// DESK-21: Scope tab Record only produces scope buckets (EVT_SCOPE_DATA,
+    /// bbp.cpp processScopeStream); they must reach the file and the CSV.
+    #[test]
+    fn scope_buckets_are_recorded_and_exported() {
+        let dir = std::env::temp_dir().join(format!("bb-desk21-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bbsc = dir.join("rec.bbsc").to_string_lossy().to_string();
+        let csv = dir.join("rec.csv").to_string_lossy().to_string();
+
+        start_recording(bbsc.clone(), 0b0101, vec![0; 4], 20).unwrap();
+        // [seq u32][ts_ms u32][count u16] then 4 x (avg, min, max) f32
+        let mut p = Vec::new();
+        p.extend_from_slice(&7u32.to_le_bytes());
+        p.extend_from_slice(&1500u32.to_le_bytes());
+        p.extend_from_slice(&10u16.to_le_bytes());
+        for ch in 0..4 {
+            for v in [1.0f32 + ch as f32, 0.5, 2.5] {
+                p.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        recording_feed(bbp::EVT_SCOPE_DATA, &p);
+        assert_eq!(stop_recording().unwrap(), 1, "one bucket recorded");
+
+        assert_eq!(export_bbsc_to_csv(bbsc, csv.clone()).unwrap(), 1);
+        let text = std::fs::read_to_string(&csv).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "seq,time_s,count,ch_a_avg_v,ch_a_min_v,ch_a_max_v,ch_c_avg_v,ch_c_min_v,ch_c_max_v"
+        );
+        assert_eq!(lines.next().unwrap(), "7,1.500,10,1.000000,0.500000,2.500000,3.000000,0.500000,2.500000");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn firmware_info_from_json_parses_version_fields() {
         let json = serde_json::json!({
             "fwMajor": 3,
@@ -5145,29 +5037,6 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // parse_selftest_measure_supply
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn parse_selftest_measure_supply_normal() {
-        let data = build(|w| {
-            w.put_u8(1); // rail 1
-            w.put_f32(12.05); // voltage
-        });
-        let v = parse_selftest_measure_supply(1, &data);
-        assert_eq!(v["rail"], 1);
-        assert!((v["voltage"].as_f64().unwrap() - 12.05).abs() < 0.01);
-    }
-
-    #[test]
-    fn parse_selftest_measure_supply_empty_uses_fallback_rail() {
-        // If payload is empty, rail falls back to the argument
-        let v = parse_selftest_measure_supply(2, &[]);
-        assert_eq!(v["rail"], 2);
-        assert_eq!(v["voltage"], 0.0);
-    }
-
-    // -------------------------------------------------------------------------
     // parse_selftest_supplies_cached
     // -------------------------------------------------------------------------
 
@@ -5247,48 +5116,6 @@ mod tests {
         let missing = parse_quicksetup_action(1, &[1], false);
         assert!(!missing.ok);
         assert_eq!(missing.message, "not found");
-    }
-
-    // -------------------------------------------------------------------------
-    // parse_hat_get_power
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn parse_hat_get_power_both_connectors() {
-        let data = build(|w| {
-            // Connector 0: enabled, 150 mA, no fault
-            w.put_bool(true);
-            w.put_f32(150.0);
-            w.put_bool(false);
-            // Connector 1: disabled, 0 mA, no fault
-            w.put_bool(false);
-            w.put_f32(0.0);
-            w.put_bool(false);
-            // IO voltage
-            w.put_u16(3300);
-        });
-        let v = parse_hat_get_power(&data);
-        assert_eq!(v["connectors"][0]["enabled"], true);
-        assert!((v["connectors"][0]["currentMa"].as_f64().unwrap() - 150.0).abs() < 1.0);
-        assert_eq!(v["connectors"][0]["fault"], false);
-        assert_eq!(v["connectors"][1]["enabled"], false);
-        assert_eq!(v["ioVoltageMv"], 3300);
-    }
-
-    #[test]
-    fn parse_hat_get_power_with_fault() {
-        let data = build(|w| {
-            w.put_bool(true);
-            w.put_f32(500.0);
-            w.put_bool(true); // fault!
-            w.put_bool(false);
-            w.put_f32(0.0);
-            w.put_bool(false);
-            w.put_u16(5000);
-        });
-        let v = parse_hat_get_power(&data);
-        assert_eq!(v["connectors"][0]["fault"], true);
-        assert_eq!(v["ioVoltageMv"], 5000);
     }
 
     // -------------------------------------------------------------------------
@@ -5522,7 +5349,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // parse_hat_status / parse_hat_detect
+    // parse_hat_status
     // -------------------------------------------------------------------------
 
     #[test]
@@ -5564,24 +5391,6 @@ mod tests {
         assert!(!s.target_detected);
         assert!(s.connectors[0].enabled);
         assert!((s.connectors[0].current_ma - 200.0).abs() < 1.0);
-    }
-
-    #[test]
-    fn parse_hat_detect_minimal() {
-        let data = build(|w| {
-            w.put_bool(true); // detected
-            w.put_u8(2); // hat_type
-            w.put_f32(5.0); // detect_voltage
-            w.put_bool(false); // connected
-        });
-        let s = parse_hat_detect(&data);
-        assert!(s.detected);
-        assert_eq!(s.hat_type, 2);
-        assert!((s.detect_voltage - 5.0).abs() < 0.01);
-        assert!(!s.connected);
-        // Default fields should be zero/false
-        assert_eq!(s.fw_major, 0);
-        assert_eq!(s.io_voltage_mv, 0);
     }
 
     // ── IoOwnerRejectEvent parse tests ────────────────────────────────────────

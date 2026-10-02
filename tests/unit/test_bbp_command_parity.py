@@ -100,6 +100,29 @@ def test_every_python_cmdid_exists_in_the_firmware():
         f"these: {sorted(missing)}")
 
 
+# Firmware opcodes with deliberately no CmdId. Each needs a reason.
+_FIRMWARE_ONLY: dict[str, str] = {}
+
+
+def test_every_firmware_opcode_has_a_cmdid():
+    """The reverse direction: a firmware command the library cannot even name
+    is unreachable from Python, MCP and every script built on them."""
+    fw = _firmware_opcodes()
+    named = {_ALIASES.get(c.name, c.name) for c in CmdId}
+    missing = sorted(
+        f"{n} (0x{v:02X})" for n, v in fw.items()
+        if n not in named and n not in _FIRMWARE_ONLY
+    )
+    assert not missing, f"BBP_CMD_* in bbp.h with no CmdId: {missing}"
+
+
+def test_firmware_only_list_has_no_stale_entries():
+    fw = _firmware_opcodes()
+    named = {_ALIASES.get(c.name, c.name) for c in CmdId}
+    stale = sorted(n for n in _FIRMWARE_ONLY if n not in fw or n in named)
+    assert not stale, f"remove from _FIRMWARE_ONLY: {stale}"
+
+
 def test_opcode_values_agree_between_firmware_and_python():
     fw = _firmware_opcodes()
     mismatched = []

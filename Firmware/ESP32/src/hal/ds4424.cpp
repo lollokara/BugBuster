@@ -28,6 +28,8 @@
 #include "config.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_timer.h"
+#include "ds4424_nvs_debounce.h"
 #include "nvs.h"
 
 #include <string.h>
@@ -240,6 +242,54 @@ static void save_voltage_to_nvs(uint8_t ch, float volts)
     }
 }
 
+// PWR-16: setpoints are persisted once, NVS_SAVE_DELAY_US after the last
+// change, from the esp_timer task.
+#define NVS_SAVE_DELAY_US (1000 * 1000)
+static ds4424_nvs_debounce_t s_nvs_db;
+static esp_timer_handle_t s_nvs_timer = NULL;
+static portMUX_TYPE s_nvs_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void nvs_db_write(uint8_t ch, int32_t mv, void *user)
+{
+    (void)user;
+    save_voltage_to_nvs(ch, (float)mv / 1000.0f);
+}
+
+static void nvs_flush_cb(void *arg)
+{
+    (void)arg;
+    ds4424_nvs_debounce_t snap;
+    portENTER_CRITICAL(&s_nvs_mux);
+    snap = s_nvs_db;
+    s_nvs_db.dirty = 0;
+    portEXIT_CRITICAL(&s_nvs_mux);
+    ds4424_nvs_debounce_flush(&snap, nvs_db_write, NULL);
+    portENTER_CRITICAL(&s_nvs_mux);
+    for (int i = 0; i < DS4424_NVS_CH; i++) s_nvs_db.saved_mv[i] = snap.saved_mv[i];
+    portEXIT_CRITICAL(&s_nvs_mux);
+}
+
+static void schedule_voltage_save(uint8_t ch, float volts)
+{
+    int32_t mv = (int32_t)roundf(volts * 1000.0f);
+    if (s_nvs_timer == NULL) {
+        ds4424_nvs_debounce_init(&s_nvs_db);
+        const esp_timer_create_args_t a = { .callback = nvs_flush_cb, .arg = NULL,
+                                            .dispatch_method = ESP_TIMER_TASK,
+                                            .name = "ds4424_nvs",
+                                            .skip_unhandled_events = true };
+        if (esp_timer_create(&a, &s_nvs_timer) != ESP_OK) {
+            save_voltage_to_nvs(ch, volts);   // no timer: old behaviour
+            return;
+        }
+    }
+    portENTER_CRITICAL(&s_nvs_mux);
+    ds4424_nvs_debounce_mark(&s_nvs_db, ch, mv);
+    portEXIT_CRITICAL(&s_nvs_mux);
+    esp_timer_stop(s_nvs_timer);                       // restart the quiet window
+    esp_timer_start_once(s_nvs_timer, NVS_SAVE_DELAY_US);
+}
+
 static void ds4424_load_voltages(void)
 {
     nvs_handle_t h;
@@ -344,7 +394,7 @@ bool ds4424_set_code(uint8_t ch, int8_t code)
 
     bool ok = write_dac(ch, code);
     if (ok && ch < 3) {
-        save_voltage_to_nvs(ch, s_state.state[ch].target_v);
+        schedule_voltage_save(ch, s_state.state[ch].target_v);
     }
     return ok;
 }
@@ -469,7 +519,7 @@ bool ds4424_set_voltage(uint8_t ch, float volts)
 
     bool ok = write_dac(ch, code);
     if (ok) {
-        save_voltage_to_nvs(ch, volts);
+        schedule_voltage_save(ch, volts);   // PWR-16: debounced NVS write
     }
     return ok;
 }

@@ -1331,9 +1331,15 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: json)
         
-        let (_, response) = try await gatedData(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else { return false }
-        return (200...299).contains(httpResponse.statusCode)
+        let (data, response) = try await gatedData(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else { return false }
+        // TR-11b: an older firmware reports a failed action as 200 {"ok":false}.
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let ok = obj["ok"] as? Bool {
+            return ok
+        }
+        return true
     }
     
     /// POST JSON and decode the response body (firmware returns HTTP 200 for non-ok results).
@@ -1357,9 +1363,11 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: json)
 
+        // TR-11b: a failed action answers 4xx with the same JSON body, so the
+        // structured result is decoded for client errors too.
         guard let (data, response) = try? await gatedData(for: request),
               let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else { return nil }
+              (200...499).contains(http.statusCode) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 

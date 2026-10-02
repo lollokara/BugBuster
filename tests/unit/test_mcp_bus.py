@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.bus import register
+from tests.unit._mock_client import make_client_mock
 
 
 class DummyMCP:
@@ -58,7 +59,7 @@ class TestMCPBusTools(unittest.TestCase):
             self.mcp.tools["plan_i2c_bus"](sda_io=0, scl_io=2, supply_voltage=3.3)
 
     def test_scan_i2c_bus_uses_session_client(self):
-        fake_bb = MagicMock()
+        fake_bb = make_client_mock()
         fake_bb.bus.i2c_scan.return_value = {
             "kind": "i2c_scan",
             "addresses": ["0x50"],
@@ -79,7 +80,7 @@ class TestMCPBusTools(unittest.TestCase):
         fake_bb.bus.i2c_scan.assert_called_once()
 
     def test_spi_transfer_uses_session_client(self):
-        fake_bb = MagicMock()
+        fake_bb = make_client_mock()
         fake_plan = MagicMock()
         fake_plan.as_dict.return_value = {"kind": "spi"}
         fake_bb.bus.setup_spi.return_value = fake_plan
@@ -101,7 +102,7 @@ class TestMCPBusTools(unittest.TestCase):
         fake_bb.bus.spi_transfer.assert_called_once_with([0x9F, 0x00])
 
     def test_spi_jedec_id_uses_session_client(self):
-        fake_bb = MagicMock()
+        fake_bb = make_client_mock()
         fake_plan = MagicMock()
         fake_plan.as_dict.return_value = {"kind": "spi"}
         fake_bb.bus.setup_spi.return_value = fake_plan
@@ -119,7 +120,7 @@ class TestMCPBusTools(unittest.TestCase):
         self.assertEqual(payload["jedec_id"], "EF4018")
 
     def test_defer_spi_transfer_uses_session_client(self):
-        fake_bb = MagicMock()
+        fake_bb = make_client_mock()
         fake_bb.bus.defer_spi_transfer.return_value = 7
 
         with patch("bugbuster_mcp.session.get_client", return_value=fake_bb):
@@ -130,7 +131,7 @@ class TestMCPBusTools(unittest.TestCase):
         fake_bb.bus.defer_spi_transfer.assert_called_once_with([0x9F, 0x00], timeout_ms=25)
 
     def test_deferred_result_uses_session_client(self):
-        fake_bb = MagicMock()
+        fake_bb = make_client_mock()
         fake_bb.bus.deferred_result.return_value = {
             "job_id": 7,
             "status_name": "done",

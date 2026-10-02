@@ -265,7 +265,7 @@ def _selftest_status(device):
     def handler(payload: bytes) -> bytes:
         return struct.pack('<BBfffBBBf',
                            1,     # boot_ran
-                           1,     # boot_passed
+                           int(getattr(device, "selftest_boot_passed", True)),
                            12.0,  # vadj1_v
                            5.0,   # vadj2_v
                            3.3,   # vlogic_v

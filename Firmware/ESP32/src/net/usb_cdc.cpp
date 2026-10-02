@@ -6,6 +6,8 @@
 #include "bbp.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "tinyusb.h"
 #include "tusb_cdc_acm.h"
 #include "tusb_console.h"
@@ -191,8 +193,19 @@ uint32_t usb_cdc_cli_read(uint8_t *buf, size_t len)
 
 uint32_t usb_cdc_cli_write(const uint8_t *buf, size_t len)
 {
-    size_t written = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, (uint8_t *)buf, len);
-    tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, pdMS_TO_TICKS(10));
+    // The TX FIFO (CONFIG_TINYUSB_CDC_TX_BUFSIZE) is smaller than a full BBP frame:
+    // queue in pieces, flushing in between; give up if the host stops reading.
+    size_t written = 0;
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(500);
+    while (written < len) {
+        size_t n = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, (uint8_t *)buf + written, len - written);
+        written += n;
+        tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, pdMS_TO_TICKS(10));
+        if (n == 0) {
+            if ((int32_t)(xTaskGetTickCount() - deadline) >= 0) break;
+            vTaskDelay(1);
+        }
+    }
     return written;
 }
 

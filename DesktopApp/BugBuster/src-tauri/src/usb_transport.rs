@@ -2,7 +2,7 @@
 // usb_transport.rs - USB CDC transport using BBP binary protocol
 // =============================================================================
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +13,21 @@ use tokio::sync::oneshot;
 use crate::bbp::{self, FrameAccumulator, HandshakeInfo, Message, PayloadReader};
 use crate::state::DeviceState;
 use crate::transport::Transport;
+
+/// TR-3: the firmware drops back to the text CLI after 60 s without a frame.
+pub const KEEPALIVE_MS: u64 = 25_000;
+
+/// TR-3: true when nothing has been sent for KEEPALIVE_MS.
+fn keepalive_due(last_tx_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(last_tx_ms) >= KEEPALIVE_MS
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Pending command awaiting a response, keyed by sequence number.
 struct PendingCommand {
@@ -28,6 +43,8 @@ pub struct UsbTransport {
     /// `connect` (i.e. construction of a new `UsbTransport`).
     write_failed: Arc<AtomicBool>,
     seq_counter: AtomicU16,
+    /// TR-3: wall-clock ms of the last frame written (keepalive thread reads it).
+    last_tx_ms: Arc<AtomicU64>,
     port_name: String,
     handshake_info: Option<HandshakeInfo>,
     // Serial port writer (shared with reader thread)
@@ -193,10 +210,38 @@ impl UsbTransport {
                 log::info!("BBP reader thread exiting");
             })?;
 
+        // TR-3 keepalive: PING when idle so the firmware never drops back to
+        // the text CLI (60 s). Fire-and-forget with seq 0; the reader drops the
+        // unmatched response.
+        let last_tx_ms = Arc::new(AtomicU64::new(now_ms()));
+        {
+            let ka_connected = connected.clone();
+            let ka_writer = writer.clone();
+            let ka_last = last_tx_ms.clone();
+            std::thread::Builder::new()
+                .name("bbp-keepalive".into())
+                .spawn(move || {
+                    while ka_connected.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_secs(1));
+                        if !keepalive_due(ka_last.load(Ordering::Relaxed), now_ms()) {
+                            continue;
+                        }
+                        let frame = Message::build_frame(0, bbp::CMD_PING, &[]);
+                        if let Ok(mut w) = ka_writer.lock() {
+                            if let Some(ref mut port) = *w {
+                                let _ = port.write_all(&frame).and_then(|_| port.flush());
+                            }
+                        }
+                        ka_last.store(now_ms(), Ordering::Relaxed);
+                    }
+                })?;
+        }
+
         Ok(Self {
             connected,
             write_failed: Arc::new(AtomicBool::new(false)),
             seq_counter: AtomicU16::new(1),
+            last_tx_ms,
             port_name: port_name.to_string(),
             handshake_info: Some(handshake_info),
             writer,
@@ -286,6 +331,7 @@ impl Transport for UsbTransport {
                     self.write_failed.store(true, Ordering::Relaxed);
                     return Err(anyhow!("Serial write failed (write_failed latched): {}", e));
                 }
+                self.last_tx_ms.store(now_ms(), Ordering::Relaxed);
             } else {
                 return Err(anyhow!("Port closed"));
             }
@@ -306,11 +352,7 @@ impl Transport for UsbTransport {
             Ok(Ok(msg)) => {
                 if msg.is_error() {
                     let err_code = msg.error_code().unwrap_or(0);
-                    Err(anyhow!(
-                        "Device error 0x{:02X} for cmd 0x{:02X}",
-                        err_code,
-                        cmd_id
-                    ))
+                    Err(anyhow!(device_error_message(err_code, cmd_id)))
                 } else {
                     Ok(msg.payload)
                 }
@@ -369,5 +411,39 @@ impl Drop for UsbTransport {
         if let Ok(mut writer_lock) = self.writer.lock() {
             *writer_lock = None;
         }
+    }
+}
+
+/// DESK-33: user-facing text for a BBP ERR reply (the UI shows this string).
+fn device_error_message(code: u8, cmd_id: u8) -> String {
+    format!(
+        "{} (error 0x{:02X}, cmd 0x{:02X})",
+        bbp::error_to_string(code),
+        code,
+        cmd_id
+    )
+}
+
+#[cfg(test)]
+mod device_error_tests {
+    /// DESK-33: UI messages carried only a hex code; the generated
+    /// `bbp::error_to_string` table was never used.
+    #[test]
+    fn device_errors_read_as_text() {
+        let m = super::device_error_message(crate::bbp::ERR_BUSY, 0x10);
+        assert!(m.contains("busy"), "{m}");
+        assert!(m.contains("0x10"), "{m}");
+    }
+}
+
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+
+    #[test]
+    fn keepalive_fires_after_idle_and_not_before() {
+        assert!(!keepalive_due(1_000, 1_000 + 10_000));
+        assert!(keepalive_due(1_000, 1_000 + KEEPALIVE_MS));
+        assert!(KEEPALIVE_MS < 60_000);
     }
 }

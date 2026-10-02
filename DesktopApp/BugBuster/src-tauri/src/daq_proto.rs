@@ -37,6 +37,9 @@ pub const REC_FFT: u8 = 0x04;
 pub const REC_MARKER: u8 = 0x05;
 pub const REC_STATUS: u8 = 0x06;
 pub const REC_WAVE_V: u8 = 0x07;
+/// Reply to every CMD_OTA_* (C6-26); not decoded by the desktop yet.
+#[allow(dead_code)]
+pub const REC_OTA_ACK: u8 = 0x08;
 
 pub const CMD_START: u8 = 0x80;
 pub const CMD_STOP: u8 = 0x81;
@@ -47,6 +50,19 @@ pub const CMD_RESET_STATS: u8 = 0x85;
 pub const CMD_FFT_CONFIG: u8 = 0x86;
 pub const CMD_SET_SOURCE: u8 = 0x87;
 pub const CMD_ARM: u8 = 0x88;
+// OTA over the vendor link (C6-26). The Python library (bugbuster.daq_usb_ota)
+// is the sender today; kept here so the four usb_proto.h copies agree.
+#[allow(dead_code)]
+pub mod ota {
+    pub const CMD_OTA_BEGIN: u8 = 0x8C;
+    pub const CMD_OTA_DATA: u8 = 0x8D;
+    pub const CMD_OTA_END: u8 = 0x8E;
+    pub const CMD_OTA_ABORT: u8 = 0x8F;
+    pub const CMD_OTA_APPLY: u8 = 0x90;
+    pub const CMD_OTA_CONFIRM: u8 = 0x91;
+    pub const CMD_OTA_REBOOT: u8 = 0x92;
+    pub const CMD_OTA_STATUS: u8 = 0x93;
+}
 
 // MARKER kind codes (usb_marker_payload_t.kind).
 pub const MARK_KIND_FLAG: u8 = 0;
@@ -151,35 +167,40 @@ pub struct StatusRecord {
     /// Extension v1 (bytes 20-27): SMU input-rail sense. 0 when not reported.
     pub in_voltage: f32,
     pub in_current: f32,
-    /// Extension v2 (bytes 28-39): FINE ADC health.
+    /// Extension v2 (bytes 28-35): FINE ADC health.
     /// `adaq_ok_bits`: bit0=FINE ok, bit1=COARSE ok, bit2=VOLT ok. 0 = old firmware.
     pub adaq_ok_bits: u8,
     /// Percentage of FINE samples that carried a STATUS_ERR bit (0-100).
     /// 100 means the fused stream is running on COARSE only.
     pub fine_err_pct: u8,
-    /// FINE pairing-resync drop counter (widened v3: uint32, was uint16).
+    /// FINE pairing-resync drop counter (u16 on the wire, saturates at 65535).
     pub drop_fine: u32,
-    /// COARSE pairing-resync drop counter (widened v3: uint32, was uint16).
+    /// COARSE pairing-resync drop counter (u16 on the wire, saturates at 65535).
     pub drop_coarse: u32,
     /// OR of all MASTER_STATUS (0x2D) bytes seen on the FINE ADAQ since boot.
     /// 0xFF = FINE ADAQ did not initialise. Bit map: 7=MASTER_ERR 6=ADC_ERR
     /// 5=DIG_ERR 4=CLK_QUAL 3=FILT_SAT 2=FILT_UNSETTLED 1=SPI_ERR 0=POR.
     pub fine_diag_sticky: u8,
-    /// Extension v3 (bytes 40-59): USB streaming performance counters.
-    /// 0 when not reported (payload < 60 bytes).
+    /// Extension v3 (bytes 36-55): USB streaming performance counters.
+    /// 0 when not reported (payload < 56 bytes).
     pub frames_tx: u32,
     pub bytes_per_sec: u32,
     pub fifo_drop_frames: u32,
     pub ring_high_water: u32,
     pub wave_i_index_lo: u32,
-    /// Extension v7 (bytes 100-103): board temperatures, 0.1 C. None when sensor absent.
+    /// Extension v7 (bytes 96-99): board temperatures, 0.1 C. None when sensor absent.
     pub board_temp_analog_c: Option<f32>,
     pub board_temp_power_c: Option<f32>,
-    /// Extension v8 (byte 104): per-range current calibration validity.
+    /// Extension v8 (byte 100): per-range current calibration validity.
     /// bit0=HI calibrated, bit1=MID calibrated, bit2=LO calibrated.
     pub cal_have_hi: bool,
     pub cal_have_mid: bool,
     pub cal_have_lo: bool,
+    /// Extension v9 (bytes 112-115): FINE conversions the ADC produced but the
+    /// P4 never captured, cumulative since the stream started. None before v9.
+    /// (v9 bytes 104-111 carry u32 drop counters, decoded into drop_fine /
+    /// drop_coarse above so they no longer saturate at 65535.)
+    pub missed_conversions: Option<u32>,
 }
 
 /// One digital event marker (flag or trigger), decoded from the 16-byte wire
@@ -444,41 +465,50 @@ fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
                 cal_have_hi: false,
                 cal_have_mid: false,
                 cal_have_lo: false,
+                missed_conversions: None,
             };
+            // Offsets follow usb_status_payload_t in usb_proto.h; the golden
+            // fixture test (status_matches_firmware_fixture) pins them.
             // Extension v1 (bytes 20-27): input-rail sense.
             if p.len() >= 28 {
                 s.in_voltage = rd_f32(p, 20);
                 s.in_current = rd_f32(p, 24);
             }
-            // Extension v2 (bytes 28-39): FINE ADC health, widened drop counters (v3).
-            if p.len() >= 40 {
+            // Extension v2 (bytes 28-35): FINE ADC health; drop counters are u16 (saturating).
+            if p.len() >= 36 {
                 s.adaq_ok_bits     = p[28];
                 s.fine_err_pct     = p[29];
-                s.drop_fine        = rd_u32(p, 30);
-                s.drop_coarse      = rd_u32(p, 34);
-                s.fine_diag_sticky = p[38];
+                s.drop_fine        = rd_u16(p, 30) as u32;
+                s.drop_coarse      = rd_u16(p, 32) as u32;
+                s.fine_diag_sticky = p[34];
             }
-            // Extension v3 (bytes 40-59): USB streaming performance counters.
-            if p.len() >= 60 {
-                s.frames_tx = rd_u32(p, 40);
-                s.bytes_per_sec = rd_u32(p, 44);
-                s.fifo_drop_frames = rd_u32(p, 48);
-                s.ring_high_water = rd_u32(p, 52);
-                s.wave_i_index_lo = rd_u32(p, 56);
+            // Extension v3 (bytes 36-55): USB streaming performance counters.
+            if p.len() >= 56 {
+                s.frames_tx = rd_u32(p, 36);
+                s.bytes_per_sec = rd_u32(p, 40);
+                s.fifo_drop_frames = rd_u32(p, 44);
+                s.ring_high_water = rd_u32(p, 48);
+                s.wave_i_index_lo = rd_u32(p, 52);
             }
-            // Extension v7 (bytes 100-103): board temperatures, 0.1 C.
-            if p.len() >= 104 {
-                let t0 = rd_u16(p, 100) as i16;
-                let t1 = rd_u16(p, 102) as i16;
+            // Extension v7 (bytes 96-99): board temperatures, 0.1 C.
+            if p.len() >= 100 {
+                let t0 = rd_u16(p, 96) as i16;
+                let t1 = rd_u16(p, 98) as i16;
                 s.board_temp_analog_c = if t0 == 0x7FFF { None } else { Some(t0 as f32 / 10.0) };
                 s.board_temp_power_c  = if t1 == 0x7FFF { None } else { Some(t1 as f32 / 10.0) };
             }
-            // Extension v8 (byte 104): per-range calibration validity.
-            if p.len() >= 105 {
-                let cal_have = p[104];
+            // Extension v8 (byte 100): per-range calibration validity.
+            if p.len() >= 101 {
+                let cal_have = p[100];
                 s.cal_have_hi  = (cal_have & 0x01) != 0;
                 s.cal_have_mid = (cal_have & 0x02) != 0;
                 s.cal_have_lo  = (cal_have & 0x04) != 0;
+            }
+            // Extension v9 (bytes 104-115): u32 drop counters + missed conversions.
+            if p.len() >= 116 {
+                s.drop_fine = rd_u32(p, 104);
+                s.drop_coarse = rd_u32(p, 108);
+                s.missed_conversions = Some(rd_u32(p, 112));
             }
             DaqRecord::Status(s)
         }
@@ -697,6 +727,60 @@ mod tests {
             }
             _ => panic!("wrong record"),
         }
+    }
+
+    /// Golden STATUS record generated by gcc from usb_proto.h
+    /// (tests/firmware_host/gen_daq_status_fixture.py): every field distinct.
+    #[test]
+    fn status_matches_firmware_fixture() {
+        let raw: &[u8] = include_bytes!("../../../../tests/fixtures/daq/status.bin");
+        let meta: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../tests/fixtures/daq/status.json")).unwrap();
+        let f = |name: &str| meta["fields"][name]["value"].as_f64().unwrap();
+        let (rec, _) = parse_frame(&data_frame(REC_STATUS, raw)).unwrap();
+        let s = match rec {
+            DaqRecord::Status(s) => s,
+            _ => panic!("wrong record"),
+        };
+        let mut bad = Vec::new();
+        let mut chk = |name: &str, got: f64, want: f64| {
+            // Relative: f32 fields (temperatures in 0.1 C) cannot hold 1e-6 absolute.
+            if (got - want).abs() > 1e-6 * want.abs().max(1.0) {
+                bad.push(format!("{name}: got {got}, want {want}"));
+            }
+        };
+        chk("sample_rate", s.sample_rate as f64, f("sample_rate"));
+        chk("overflow_count", s.overflow_count as f64, f("overflow_count"));
+        chk("range", s.range as f64, f("range"));
+        chk("vdut_set", s.vdut_set as f64, f("vdut_set"));
+        chk("ilimit_set", s.ilimit_set as f64, f("ilimit_set"));
+        chk("in_voltage", s.in_voltage as f64, f("in_voltage"));
+        chk("in_current", s.in_current as f64, f("in_current"));
+        chk("adaq_ok_bits", s.adaq_ok_bits as f64, f("adaq_ok_bits"));
+        chk("fine_err_pct", s.fine_err_pct as f64, f("fine_err_pct"));
+        chk("drop_fine32", s.drop_fine as f64, f("drop_fine32"));
+        chk("drop_coarse32", s.drop_coarse as f64, f("drop_coarse32"));
+        chk("missed_conversions", s.missed_conversions.unwrap_or(u32::MAX) as f64, f("missed_conversions"));
+        chk("fine_diag_sticky", s.fine_diag_sticky as f64, f("fine_diag_sticky"));
+        chk("frames_tx", s.frames_tx as f64, f("frames_tx"));
+        chk("bytes_per_sec", s.bytes_per_sec as f64, f("bytes_per_sec"));
+        chk("fifo_drop_frames", s.fifo_drop_frames as f64, f("fifo_drop_frames"));
+        chk("ring_high_water", s.ring_high_water as f64, f("ring_high_water"));
+        chk("wave_i_index_lo", s.wave_i_index_lo as f64, f("wave_i_index_lo"));
+        chk("t_board0_c10", s.board_temp_analog_c.unwrap_or(f32::NAN) as f64 * 10.0, f("t_board0_c10"));
+        chk("t_board1_c10", s.board_temp_power_c.unwrap_or(f32::NAN) as f64 * 10.0, f("t_board1_c10"));
+        let cal = f("cal_have_rcal") as u8;
+        chk("cal_have_hi", s.cal_have_hi as u8 as f64, (cal & 1) as f64);
+        chk("cal_have_mid", s.cal_have_mid as u8 as f64, ((cal >> 1) & 1) as f64);
+        chk("cal_have_lo", s.cal_have_lo as u8 as f64, ((cal >> 2) & 1) as f64);
+        assert!(bad.is_empty(), "STATUS fields decoded wrong:\n{}", bad.join("\n"));
+
+        // Append-only: a v8 frame (first 104 bytes) still decodes, with the
+        // saturating u16 drop counters and no missed count.
+        let (rec8, _) = parse_frame(&data_frame(REC_STATUS, &raw[..104])).unwrap();
+        let DaqRecord::Status(s8) = rec8 else { panic!("wrong record") };
+        assert_eq!(s8.drop_fine as f64, f("drop_fine"));
+        assert_eq!(s8.missed_conversions, None);
     }
 
     #[test]

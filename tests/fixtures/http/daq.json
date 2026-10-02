@@ -1,0 +1,37 @@
+{
+  "fwMajor": 1,
+  "fwMinor": 0,
+  "ok": true,
+  "power": {
+    "available": false,
+    "currentA": null,
+    "energyMwh": null,
+    "powerW": null,
+    "voltageV": null
+  },
+  "present": true,
+  "rails": [
+    {
+      "en": false,
+      "id": 0,
+      "ma": 0,
+      "mv": 0,
+      "st": 0
+    },
+    {
+      "en": false,
+      "id": 0,
+      "ma": 0,
+      "mv": 0,
+      "st": 0
+    },
+    {
+      "en": false,
+      "id": 0,
+      "ma": 0,
+      "mv": 0,
+      "st": 0
+    }
+  ],
+  "typeName": "DAQ"
+}

@@ -499,6 +499,7 @@ QuickSetupStatus quicksetup_apply(uint8_t slot, QuickSetupApplyReport *report)
     if (!adgs_set_api_all_safe(states)) {
         ESP_LOGE(TAG, "MUX programming refused by the U17-S3 / U23 interlock - "
                       "quick setup MUX state NOT applied");
+        add_failed(report, "mux");
     }
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {

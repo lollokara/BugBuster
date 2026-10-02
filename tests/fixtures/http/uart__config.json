@@ -1,0 +1,16 @@
+{
+  "bridges": [
+    {
+      "baudrate": 115200,
+      "connected": false,
+      "dataBits": 8,
+      "enabled": false,
+      "id": 0,
+      "parity": 0,
+      "rxPin": 2,
+      "stopBits": 0,
+      "txPin": 1,
+      "uartNum": 1
+    }
+  ]
+}

@@ -7,7 +7,8 @@ import { signal } from "@preact/signals";
 import { GlassCard } from "../../components/GlassCard";
 import { BigValue } from "../../components/BigValue";
 import { api, PairingRequiredError } from "../../api/client";
-import { deviceMac } from "../../state/signals";
+import { deviceMac, pollIntervalFor } from "../../state/signals";
+import { daqView } from "./daqView";
 
 const daqStatus = signal<any>(null);
 const vdutStatus = signal<any>(null);
@@ -34,34 +35,28 @@ export function DAQ() {
       } catch {
         /* Device may not have DAQ HAT */
       }
-      if (alive) setTimeout(tick, 1000);
+      if (alive) setTimeout(tick, pollIntervalFor(1000));
     };
     tick();
     return () => { alive = false; };
   }, []);
 
-  const present = daqStatus.value?.present ?? false;
-  const hatType = daqStatus.value?.type ?? 0;
-  const hatVersion = daqStatus.value?.version ?? "—";
+  const view = daqView(daqStatus.value, vdutStatus.value);
+  const present = view.present;
+  const vdutEnabled = view.vdut.enabled;
+  const vdutVMeas = view.vdut.measuredV;
+  const vdutIMeas = view.vdut.measuredA;
+  const vdutPower = view.vdut.powerW;
 
-  const vdutEnabled = vdutStatus.value?.enabled ?? false;
-  const vdutVMeas = vdutStatus.value?.voltage_v ?? 0;
-  const vdutIMeas = vdutStatus.value?.current_a ?? 0;
-  const vdutPower = vdutVMeas * vdutIMeas;
-
-  // WEB-1: Calibration status from firmware (P4-1)
-  const calHaveHi = vdutStatus.value?.cal_have_hi ?? false;
-  const calHaveMid = vdutStatus.value?.cal_have_mid ?? false;
-  const calHaveLo = vdutStatus.value?.cal_have_lo ?? false;
-  const anyUncalibrated = !calHaveHi || !calHaveMid || !calHaveLo;
-
-  const range = vdutStatus.value?.range ?? "unknown";
-  const rangeCalibrated = (
-    range === "hi" ? calHaveHi :
-    range === "mid" ? calHaveMid :
-    range === "lo" ? calHaveLo :
-    false
-  );
+  // Seed the setpoint inputs from the device once, instead of the hard-coded
+  // 3.3 V / 500 mA defaults.
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (seeded || !vdutStatus.value) return;
+    if (view.vdut.setpointV !== null) setVdutVoltage(view.vdut.setpointV);
+    if (view.vdut.currentLimitMa !== null) setVdutCurrentLimit(view.vdut.currentLimitMa);
+    setSeeded(true);
+  }, [vdutStatus.value, seeded]);
 
   const toggleEnable = async () => {
     if (!mac) return;
@@ -113,18 +108,15 @@ export function DAQ() {
       <GlassCard title="DAQ HAT Status">
         <div class="kv-row">
           <span>Type</span>
-          <span class="mono">{hatType === 0x10 ? "DAQ HAT" : `0x${hatType.toString(16)}`}</span>
+          <span class="mono">{view.typeLabel}</span>
         </div>
         <div class="kv-row">
           <span>Version</span>
-          <span class="mono">{hatVersion}</span>
+          <span class="mono">{view.version}</span>
         </div>
-        {anyUncalibrated && (
-          <div style="margin-top: 1rem; padding: 0.5rem; background: rgba(245, 158, 11, 0.1); border-left: 3px solid #f59e0b; color: #f59e0b;">
-            ⚠ One or more current ranges are UNCALIBRATED. Current and energy readings carry an uncompensated offset.
-            <div style="margin-top: 0.5rem; font-size: 0.875rem;">
-              Calibration status: HI={calHaveHi ? "✓" : "✗"}, MID={calHaveMid ? "✓" : "✗"}, LO={calHaveLo ? "✓" : "✗"}
-            </div>
+        {view.calibration === "unknown" && (
+          <div class="text-dim" style="margin-top: 0.5rem; font-size: 0.875rem;">
+            Current-range calibration state is not reported over HTTP.
           </div>
         )}
       </GlassCard>
@@ -184,23 +176,20 @@ export function DAQ() {
             unit="V"
           />
           <BigValue
-            label={rangeCalibrated ? "Current" : "Current (UNCALIBRATED)"}
+            label="Current"
             value={vdutIMeas.toFixed(6)}
             unit="A"
-            highlight={!rangeCalibrated}
           />
           <BigValue
-            label={rangeCalibrated ? "Power" : "Power (UNCALIBRATED)"}
+            label="Power"
             value={vdutPower.toFixed(6)}
             unit="W"
-            highlight={!rangeCalibrated}
           />
         </div>
         <div class="kv-row" style="margin-top: 1rem;">
-          <span>Current Range</span>
-          <span class="mono">
-            {range}
-            {!rangeCalibrated && <span style="color: #f59e0b;"> ⚠ UNCAL</span>}
+          <span>Fault</span>
+          <span class="mono" style={view.vdut.fault ? "color: #ef4444;" : ""}>
+            {view.vdut.fault ? "FAULT" : "none"}
           </span>
         </div>
       </GlassCard>

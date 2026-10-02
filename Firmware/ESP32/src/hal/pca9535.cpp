@@ -38,6 +38,37 @@ static bool s_is_pcal9535a = false;         // True if PCAL9535A detected (enhan
 // so a stale stamp cannot mask the next enable's real fault.
 static uint32_t s_efuse_enable_ts_ms[4] = { 0, 0, 0, 0 };
 
+// PWR-02: a FLT that is already asserted when the e-fuse is enabled (output
+// shorted) produces ONE edge, inside the blackout, which is suppressed. The
+// level never changes afterwards, so the edge-driven check_changes() never
+// saw it again. A suppressed FLT now sets a re-check flag and arms a one-shot
+// wake for the end of the blackout, where FLT is evaluated as a level.
+static bool s_flt_recheck[4] = { false, false, false, false };
+static esp_timer_handle_t s_blackout_timer = NULL;
+static TaskHandle_t s_isr_task = NULL;
+
+static void blackout_timer_cb(void * /*arg*/)
+{
+    if (s_isr_task) xTaskNotifyGive(s_isr_task);
+}
+
+// Arm (or pull forward) the one-shot wake. Without a timer or poll task the
+// 2 s fallback poll still performs the level check, just later.
+static void arm_blackout_recheck(uint32_t delay_ms)
+{
+    if (!s_blackout_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = blackout_timer_cb;
+        args.name = "pca_blk";
+        if (esp_timer_create(&args, &s_blackout_timer) != ESP_OK) {
+            s_blackout_timer = NULL;
+            return;
+        }
+    }
+    esp_timer_stop(s_blackout_timer);  // ESP_ERR_INVALID_STATE when idle is fine
+    esp_timer_start_once(s_blackout_timer, (uint64_t)delay_ms * 1000ULL);
+}
+
 static bool read_reg(uint8_t reg, uint8_t *val)
 {
     return i2c_bus_write_read(PCA9535_I2C_ADDR, &reg, 1, val, 1, 50);
@@ -286,6 +317,7 @@ static bool set_efuse_bit_internal(uint8_t logical_ch, bool on)
         s_efuse_enable_ts_ms[logical_ch] = millis_now();
     } else {
         s_efuse_enable_ts_ms[logical_ch] = 0;
+        s_flt_recheck[logical_ch] = false;
     }
 
     bool ok = pca9535_set_bit(1, bit, on);
@@ -460,6 +492,29 @@ const char* pca9535_status_name(PcaStatus status)
 
 // --- Fault detection ---
 
+// Report an e-fuse FLT transition / level and run the auto-disable path.
+static void report_efuse_flt(uint8_t logical, bool faulted, uint32_t now)
+{
+    PcaFaultEvent evt = {
+        .type = faulted ? PCA_FAULT_EFUSE_TRIP : PCA_FAULT_EFUSE_CLEAR,
+        .channel = logical,
+        .timestamp_ms = now,
+    };
+    if (s_fault_cfg.log_events) {
+        ESP_LOGW(TAG, "EFUSE_%d %s", logical + 1, faulted ? "FAULT — tripped!" : "CLEARED");
+    }
+
+    // Auto-disable faulted e-fuse. Use the internal helper so the
+    // enable-timestamp is cleared and any future user re-arm gets
+    // its own blackout window.
+    if (faulted && s_fault_cfg.auto_disable_efuse) {
+        ESP_LOGW(TAG, "Auto-disabling EFUSE_%d", logical + 1);
+        set_efuse_bit_internal(logical, false);
+    }
+
+    if (s_fault_cb) s_fault_cb(&evt);
+}
+
 static void check_changes(uint8_t old_input0, uint8_t new_input0,
                            uint8_t old_input1, uint8_t new_input1)
 {
@@ -533,36 +588,38 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
                                      logical + 1,
                                      (unsigned)s_fault_cfg.efuse_enable_blackout_ms,
                                      (unsigned)dt);
+                            s_flt_recheck[logical] = true;
+                            arm_blackout_recheck(s_fault_cfg.efuse_enable_blackout_ms - dt + 1);
                             continue;
                         }
                     }
                 }
-                PcaFaultEvent evt = {
-                    .type = faulted ? PCA_FAULT_EFUSE_TRIP : PCA_FAULT_EFUSE_CLEAR,
-                    .channel = logical,
-                    .timestamp_ms = now,
-                };
-                if (s_fault_cfg.log_events) {
-                    ESP_LOGW(TAG, "EFUSE_%d %s", logical + 1, faulted ? "FAULT — tripped!" : "CLEARED");
-                }
-
-                // Auto-disable faulted e-fuse. Use the internal helper so the
-                // enable-timestamp is cleared and any future user re-arm gets
-                // its own blackout window.
-                if (faulted && s_fault_cfg.auto_disable_efuse) {
-                    ESP_LOGW(TAG, "Auto-disabling EFUSE_%d", logical + 1);
-                    set_efuse_bit_internal(logical, false);
-                }
-
-                if (s_fault_cb) s_fault_cb(&evt);
+                if (!faulted) s_flt_recheck[logical] = false;
+                report_efuse_flt(logical, faulted, now);
             }
         }
+    }
+
+    // PWR-02: blackout over -> evaluate FLT as a level for every channel whose
+    // FLT edge was suppressed. A short present since enable trips here.
+    for (uint8_t logical = 0; logical < 4; logical++) {
+        if (!s_flt_recheck[logical]) continue;
+        if (!s_state.efuse_en[logical]) { s_flt_recheck[logical] = false; continue; }
+        uint32_t stamp = s_efuse_enable_ts_ms[logical];
+        if (stamp != 0 && (uint32_t)(now - stamp) < s_fault_cfg.efuse_enable_blackout_ms) continue;
+        s_flt_recheck[logical] = false;
+        if (s_state.efuse_flt[logical]) report_efuse_flt(logical, true, now);
     }
 }
 
 void pca9535_set_fault_config(const PcaFaultConfig *cfg)
 {
     if (cfg) s_fault_cfg = *cfg;
+}
+
+void pca9535_get_fault_config(PcaFaultConfig *cfg)
+{
+    if (cfg) *cfg = s_fault_cfg;
 }
 
 void pca9535_register_fault_callback(pca9535_fault_cb_t cb)
@@ -580,8 +637,6 @@ bool pca9535_any_fault_active(void)
 }
 
 // --- Interrupt-driven input monitoring ---
-
-static TaskHandle_t s_isr_task = NULL;
 
 static void IRAM_ATTR pca_isr_handler(void* arg)
 {
