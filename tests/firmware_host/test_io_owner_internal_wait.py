@@ -20,7 +20,8 @@ PRELUDE = r"""
 #include "io_owner.h"
 static int g_sleeps = 0, g_release_after = -1;
 static uint32_t g_slept_ms = 0;
-extern "C" void io_owner_test_sleep_ms(uint32_t ms) {
+extern "C" void (*io_owner_test_sleep_hook)(uint32_t ms);
+static void test_sleep(uint32_t ms) {
     g_sleeps++; g_slept_ms += ms;
     if (g_release_after >= 0 && g_sleeps >= g_release_after) io_owner_force_release(14);
 }
@@ -28,6 +29,7 @@ extern "C" void io_owner_test_sleep_ms(uint32_t ms) {
 
 MAIN = r"""
 int main(void) {
+    io_owner_test_sleep_hook = test_sleep;
     io_owner_init();
     io_owner_acquire(14, IO_OWNER_INTERNAL, 0xFF, 0, 5000, 0);
     g_release_after = 3;
@@ -65,7 +67,6 @@ def _run() -> str:
     ).strip()
 
 
-@pytest.mark.xfail(strict=True, reason="IO9-MONITOR")
 def test_external_claim_waits_out_the_supply_monitor():
     out = _run()
     fields = dict(kv.split("=") for kv in out.split())
