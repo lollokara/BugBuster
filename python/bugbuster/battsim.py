@@ -426,13 +426,19 @@ class RunHistory:
 
 
 def merge_tiers(q15: List[HistRec], m1: List[HistRec], s1: List[HistRec]) -> List[HistRec]:
-    """Best resolution per time range: s1 over m1 over q15 (each tier covers a suffix)."""
-    out: List[HistRec] = []
-    m1_start = (m1[0].t_s - m1[0].dt_s) if m1 else math.inf
-    s1_start = (s1[0].t_s - s1[0].dt_s) if s1 else math.inf
-    out += [r for r in q15 if r.t_s <= min(m1_start, s1_start)]
-    out += [r for r in m1 if r.t_s <= s1_start]
-    out += s1
+    """Best resolution per time range: s1 over m1 over q15.
+
+    s1 is only dumped at pause/stop, so while a run is live it can sit in the
+    middle of m1 - keep coarser records on both sides of each finer tier.
+    """
+    def outside(recs: List[HistRec], fine: List[HistRec]) -> List[HistRec]:
+        if not fine:
+            return recs
+        lo, hi = fine[0].t_s - fine[0].dt_s, fine[-1].t_s
+        return [r for r in recs if r.t_s <= lo or r.t_s - r.dt_s >= hi]
+
+    out = outside(outside(q15, m1), s1) + outside(m1, s1) + list(s1)
+    out.sort(key=lambda r: r.t_s)
     return out
 
 

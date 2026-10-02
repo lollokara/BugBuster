@@ -19,8 +19,19 @@ struct BatterySimTab: View {
     @State private var showNew = false
     @State private var pendingDelete: Int?
     @State private var pollTask: Task<Void, Never>?
+    @State private var liveTail: [BsRec] = []
+    @State private var syncing = false
+    @State private var scrubbing = false
 
     private var wide: Bool { sizeClass == .regular }
+
+    /// Synced history plus status-poll points newer than the last stored record.
+    private var displayed: BsHistory? {
+        guard var h = history else { return nil }
+        let last = h.recs.last?.t ?? -1
+        h.recs += liveTail.filter { $0.t > last }
+        return h
+    }
     private var client: BattSimClient { BattSimClient(connectionManager) }
     private static let presets: [(String, Double)] = [("1h", 3600), ("6h", 21600), ("1d", 86400), ("7d", 604800), ("30d", 2_592_000), ("All", 0)]
 
@@ -44,6 +55,7 @@ struct BatterySimTab: View {
             .padding(.top, 12)
             .padding(.bottom, 110)
         }
+        .scrollDisabled(scrubbing)
         .onAppear { startPolling() }
         .onDisappear { pollTask?.cancel() }
         .sheet(isPresented: $showNew) {
@@ -110,8 +122,8 @@ struct BatterySimTab: View {
         VStack(alignment: .leading, spacing: 10) {
             toolbar
             ZStack {
-                if let h = history {
-                    BatteryHistoryChart(history: h, window: $window, logCurrent: logCurrent,
+                if let h = displayed {
+                    BatteryHistoryChart(history: h, window: $window, scrubbing: $scrubbing, logCurrent: logCurrent,
                                         wallEpoch: wallClock && h.meta.createdEpoch > 0 ? Double(h.meta.createdEpoch) : nil,
                                         compact: !wide)
                 } else {
@@ -127,9 +139,10 @@ struct BatterySimTab: View {
                         .allowsHitTesting(false)
                 }
             }
+            .frame(maxWidth: .infinity)
             .frame(height: wide ? 520 : 380)
-            if let h = history {
-                BsNavigator(history: h, window: $window, logCurrent: logCurrent).frame(height: wide ? 46 : 40)
+            if let h = displayed {
+                BsNavigator(history: h, window: $window, scrubbing: $scrubbing, logCurrent: logCurrent).frame(height: wide ? 46 : 40)
                 Text("Drag on the chart to read values. Pinch to zoom, drag the strip to pan, double-tap for the whole run.")
                     .font(.system(size: 10)).foregroundColor(.secondary)
             }
@@ -277,12 +290,12 @@ struct BatterySimTab: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Window statistics").font(.system(size: 15, weight: .bold))
                 Spacer()
-                if let h = history, let s = BattSim.stats(h, window.lowerBound, window.upperBound) {
+                if let h = displayed, let s = BattSim.stats(h, window.lowerBound, window.upperBound) {
                     Text("\(BattSim.duration(s.duration)) from +\(BattSim.duration(s.tStart)) - \(s.points) points")
                         .font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
                 }
             }
-            if let h = history, let s = BattSim.stats(h, window.lowerBound, window.upperBound) {
+            if let h = displayed, let s = BattSim.stats(h, window.lowerBound, window.upperBound) {
                 let cols = wide ? [GridItem(.adaptive(minimum: 180), spacing: 10)]
                     : [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
                 let duty = s.iMax > 0 ? String(format: "%.2f %%", s.iAvg / s.iMax * 100) : "-"
@@ -470,10 +483,10 @@ struct BatterySimTab: View {
         return h.meta.runId == r.runId && (r.meta.map { $0.createdEpoch == h.meta.createdEpoch } ?? true)
     }
 
-    private var fullSpan: Double { history.map { $0.bounds.upperBound - $0.bounds.lowerBound } ?? 0 }
+    private var fullSpan: Double { displayed.map { $0.bounds.upperBound - $0.bounds.lowerBound } ?? 0 }
 
     private func presetSelected(_ secs: Double) -> Bool {
-        guard let h = history else { return false }
+        guard let h = displayed else { return false }
         let b = h.bounds
         if secs <= 0 { return abs(window.lowerBound - b.lowerBound) < 1 && abs(window.upperBound - b.upperBound) < 1 }
         return secs < fullSpan && abs(window.upperBound - b.upperBound) < 1
@@ -492,9 +505,10 @@ struct BatterySimTab: View {
             while !Task.isCancelled {
                 if let s = try? await client.status() {
                     status = s
-                    // Follow: re-sync the open live run once a minute (only appended bytes are fetched).
-                    if tick % 30 == 29, follow, openFromDevice, busy == nil, s.state == 2, history?.meta.runId == s.runId {
-                        await open(s.runId)
+                    if openFromDevice, s.state == 2, history?.meta.runId == s.runId {
+                        appendLive(s)
+                        // m1 gains a record per minute; only appended bytes are fetched.
+                        if tick % 30 == 29, busy == nil, !syncing { await open(s.runId, quiet: true) }
                     }
                 }
                 tick += 1
@@ -507,19 +521,37 @@ struct BatterySimTab: View {
         do { runs = try await client.listRuns() } catch { message = error.localizedDescription }
     }
 
-    private func open(_ id: Int) async {
-        let prev = history, prevWindow = window
-        busy = "Opening run #\(id)..."
-        message = nil
+    private func open(_ id: Int, quiet: Bool = false) async {
+        let prev = displayed, prevWindow = window
+        if quiet { syncing = true } else { busy = "Opening run #\(id)..."; message = nil }
         do {
             let files = try await client.syncRun(id) { name, done, total in
-                Task { @MainActor in busy = "Downloading \(name) \(Int(Double(done) / Double(max(total, 1)) * 100)) %" }
+                if !quiet { Task { @MainActor in busy = "Downloading \(name) \(Int(Double(done) / Double(max(total, 1)) * 100)) %" } }
             }
             apply(try BattSim.buildHistory(files), previous: openFromDevice ? prev : nil, previousWindow: prevWindow)
             openFromDevice = true
-            cached = BattSim.cachedRuns()
-        } catch { message = error.localizedDescription }
+            if !quiet { cached = BattSim.cachedRuns() }
+        } catch { if !quiet { message = error.localizedDescription } }
         busy = nil
+        syncing = false
+    }
+
+    private func appendLive(_ s: BsStatus) {
+        guard let h = history else { return }
+        let t = Double(s.elapsedS)
+        let lastT = liveTail.last?.t ?? h.recs.last?.t ?? 0
+        guard t > lastT else { return }
+        let before = displayed?.bounds
+        let pinned = follow && before.map { abs(window.upperBound - $0.upperBound) < 1 } ?? false
+        // Gaps longer than this break the trace instead of being bridged.
+        let maxDt: Double = liveTail.isEmpty ? 120 : 10
+        liveTail.append(BsRec(t: t, dt: min(t - lastT, maxDt), vAvg: s.vMeas, vMin: s.vMeas, vMax: s.vMeas, soc: s.socPct,
+                              iAvg: s.iMeas, iMin: s.iMeas, iMax: s.iMeas, flags: 0, qDut: nil, qUsed: 0,
+                              eDut: s.eDutJ ?? h.recs.last?.eDut, tier: 2))
+        if pinned, let d = displayed {
+            let span = window.upperBound - window.lowerBound
+            window = d.clampWindow(d.bounds.upperBound - span, d.bounds.upperBound)
+        }
     }
 
     private func openCached(_ c: BsCachedRun) {
@@ -533,6 +565,8 @@ struct BatterySimTab: View {
     private func apply(_ h: BsHistory, previous: BsHistory?, previousWindow: ClosedRange<Double>) {
         let same = previous.map { $0.meta.runId == h.meta.runId && $0.meta.createdEpoch == h.meta.createdEpoch } ?? false
         history = h
+        let lastT = h.recs.last?.t ?? 0
+        if same { liveTail.removeAll { $0.t <= lastT } } else { liveTail = [] }
         guard same, let previous else { window = h.bounds; return }
         let span = previousWindow.upperBound - previousWindow.lowerBound
         if follow && abs(previousWindow.upperBound - previous.bounds.upperBound) < 1 {
@@ -572,13 +606,13 @@ struct BatterySimTab: View {
     }
 
     private func preset(_ secs: Double) {
-        guard let h = history else { return }
+        guard let h = displayed else { return }
         let b = h.bounds
         window = secs <= 0 ? b : h.clampWindow(b.upperBound - secs, b.upperBound)
     }
 
     private func zoom(_ factor: Double) {
-        guard let h = history else { return }
+        guard let h = displayed else { return }
         let mid = (window.lowerBound + window.upperBound) / 2, half = (window.upperBound - window.lowerBound) / 2 * factor
         window = h.clampWindow(mid - half, mid + half)
     }
@@ -629,11 +663,13 @@ struct BsButtonStyle: ButtonStyle {
 struct BatteryHistoryChart: View {
     let history: BsHistory
     @Binding var window: ClosedRange<Double>
+    @Binding var scrubbing: Bool
     let logCurrent: Bool
     let wallEpoch: Double?
     let compact: Bool
     @State private var pinchBase: ClosedRange<Double>?
     @State private var cursorX: CGFloat?
+    @State private var horizontal: Bool?
 
     private var left: CGFloat { compact ? 50 : 62 }
     private let axisH: CGFloat = 20, gap: CGFloat = 8
@@ -655,10 +691,18 @@ struct BatteryHistoryChart: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 2).onChanged { g in
-                guard pinchBase == nil else { return }
-                cursorX = min(max(g.location.x, left), left + plotW)
-            })
+            // Simultaneous + axis lock: vertical swipes still scroll the page, horizontal ones scrub.
+            .simultaneousGesture(DragGesture(minimumDistance: 6)
+                .onChanged { g in
+                    guard pinchBase == nil else { return }
+                    if horizontal == nil {
+                        horizontal = abs(g.translation.width) > abs(g.translation.height)
+                        scrubbing = horizontal == true
+                    }
+                    guard horizontal == true else { return }
+                    cursorX = min(max(g.location.x, left), left + plotW)
+                }
+                .onEnded { _ in horizontal = nil; scrubbing = false })
             .simultaneousGesture(MagnifyGesture()
                 .onChanged { m in
                     let base = pinchBase ?? window
@@ -847,8 +891,10 @@ private struct CursorBubble: View {
 private struct BsNavigator: View {
     let history: BsHistory
     @Binding var window: ClosedRange<Double>
+    @Binding var scrubbing: Bool
     let logCurrent: Bool
     @State private var start: (ClosedRange<Double>, Double)?
+    @State private var horizontal: Bool?
 
     var body: some View {
         GeometryReader { geo in
@@ -881,8 +927,13 @@ private struct BsNavigator: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
+            .simultaneousGesture(DragGesture(minimumDistance: 4)
                 .onChanged { g in
+                    if horizontal == nil {
+                        horizontal = abs(g.translation.width) > abs(g.translation.height)
+                        scrubbing = horizontal == true
+                    }
+                    guard horizontal == true else { return }
                     let toT = { (px: CGFloat) in b.lowerBound + Double(px / w) * full }
                     if start == nil { start = (window, toT(g.startLocation.x)) }
                     guard let st = start else { return }
@@ -890,7 +941,12 @@ private struct BsNavigator: View {
                     let a = base.contains(st.1) ? base.lowerBound + toT(g.location.x) - st.1 : toT(g.location.x) - span / 2
                     window = history.clampWindow(a, a + span)
                 }
-                .onEnded { _ in start = nil })
+                .onEnded { _ in start = nil; horizontal = nil; scrubbing = false })
+            .onTapGesture { loc in
+                let span = window.upperBound - window.lowerBound
+                let t = b.lowerBound + Double(loc.x / w) * full
+                window = history.clampWindow(t - span / 2, t + span / 2)
+            }
         }
     }
 }

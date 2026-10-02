@@ -249,6 +249,8 @@ select {
     background-repeat: no-repeat; background-position: right 8px center;
 }
 option { background: var(--surface-1); color: var(--label-1); }
+optgroup { background: var(--surface-1); color: var(--label-3); font-style: normal; font-weight: 600; }
+option:checked { background: var(--accent); color: #fff; }
 .dropdown-sm, select.dropdown-sm { height: var(--ctl-h-sm); font-size: var(--fs-footnote); max-width: 120px; }
 .number-input-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .number-input { width: 96px; text-align: right; cursor: text; }

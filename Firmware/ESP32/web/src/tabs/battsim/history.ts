@@ -143,13 +143,14 @@ export function deriveCurrent(recs: Rec[]): void {
 }
 
 export function mergeTiers(q15: Rec[], m1: Rec[], s1: Rec[]): Rec[] {
-  const m1Start = m1.length ? m1[0]!.t - m1[0]!.dt : Infinity;
-  const s1Start = s1.length ? s1[0]!.t - s1[0]!.dt : Infinity;
-  return [
-    ...q15.filter((r) => r.t <= Math.min(m1Start, s1Start)),
-    ...m1.filter((r) => r.t <= s1Start),
-    ...s1,
-  ];
+  // s1 is only dumped at pause/stop, so while a run is live it can sit inside m1:
+  // keep coarser records on both sides of each finer tier.
+  const outside = (recs: Rec[], fine: Rec[]) => {
+    if (!fine.length) return recs;
+    const lo = fine[0]!.t - fine[0]!.dt, hi = fine[fine.length - 1]!.t;
+    return recs.filter((r) => r.t <= lo || r.t - r.dt >= hi);
+  };
+  return [...outside(outside(q15, m1), s1), ...outside(m1, s1), ...s1].sort((a, b) => a.t - b.t);
 }
 
 export interface History { meta: BsMeta; events: BsEvent[]; recs: Rec[]; q15Interval: number }

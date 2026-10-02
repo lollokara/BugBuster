@@ -329,11 +329,19 @@ fn derive_current(recs: &mut [Rec]) {
 }
 
 fn merge_tiers(q15: Vec<Rec>, m1: Vec<Rec>, s1: Vec<Rec>) -> Vec<Rec> {
-    let m1_start = m1.first().map(|r| r.t - r.dt).unwrap_or(f64::INFINITY);
-    let s1_start = s1.first().map(|r| r.t - r.dt).unwrap_or(f64::INFINITY);
-    let mut out: Vec<Rec> = q15.into_iter().filter(|r| r.t <= m1_start.min(s1_start)).collect();
-    out.extend(m1.into_iter().filter(|r| r.t <= s1_start));
+    // s1 is only dumped at pause/stop, so while a run is live it can sit inside m1:
+    // keep coarser records on both sides of each finer tier.
+    let cover = |f: &[Rec]| match (f.first(), f.last()) {
+        (Some(a), Some(b)) => (a.t - a.dt, b.t),
+        _ => (f64::INFINITY, f64::NEG_INFINITY),
+    };
+    let (m_lo, m_hi) = cover(&m1);
+    let (s_lo, s_hi) = cover(&s1);
+    let out_of = |r: &Rec, lo: f64, hi: f64| r.t <= lo || r.t - r.dt >= hi;
+    let mut out: Vec<Rec> = q15.into_iter().filter(|r| out_of(r, m_lo, m_hi) && out_of(r, s_lo, s_hi)).collect();
+    out.extend(m1.into_iter().filter(|r| out_of(r, s_lo, s_hi)));
     out.extend(s1);
+    out.sort_by(|a, b| a.t.total_cmp(&b.t));
     out
 }
 

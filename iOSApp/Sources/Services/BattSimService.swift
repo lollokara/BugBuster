@@ -183,9 +183,13 @@ enum BattSim {
             m1 += parseRecords(files[name]!, version: meta.version, nominalDt: 60, tier: 1)
         }
         let s1 = parseRecords(files["s1.bin"] ?? Data(), version: meta.version, nominalDt: 1, tier: 2)
-        let m1Start = m1.first.map { $0.t - $0.dt } ?? .infinity
-        let s1Start = s1.first.map { $0.t - $0.dt } ?? .infinity
-        var recs = q15.filter { $0.t <= min(m1Start, s1Start) } + m1.filter { $0.t <= s1Start } + s1
+        // s1 is only dumped at pause/stop, so while a run is live it can sit inside m1:
+        // keep coarser records on both sides of each finer tier.
+        func outside(_ recs: [BsRec], _ fine: [BsRec]) -> [BsRec] {
+            guard let a = fine.first, let b = fine.last else { return recs }
+            return recs.filter { $0.t <= a.t - a.dt || $0.t - $0.dt >= b.t }
+        }
+        var recs = (outside(outside(q15, m1), s1) + outside(m1, s1) + s1).sorted { $0.t < $1.t }
         if meta.version >= 2 {
             var prev: BsRec?
             for i in recs.indices {
