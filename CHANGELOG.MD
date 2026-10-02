@@ -361,6 +361,26 @@
   | DESK-28 | a 30 Hz `adc-stream` event with no listener, re-emitting stale data after the stream stopped; the ADC tab never stopped its stream | event removed; the tab stops the stream it started |
   | DESK-DIAG-RAW (found during IOS-23) | desktop HTTP read `diagnostics[].raw`, firmware sends `rawCode`: raw codes were always 0 | reads `rawCode` |
 
+- **Offline OTA for every target (2026-10 audit, M6, C6-26).** The DAQ HAT's
+  USB vendor OTA (0x8C-0x8F) was kept and fixed instead of retired, so the
+  device can be updated with WiFi down. Verified on the board:
+
+  | Target | Route | Result |
+  |---|---|---|
+  | DAQ C6 | P4 USB `303A:4001`: BEGIN/DATA/END then new `OTA_APPLY` (0x90) | 1.35 MB staged, SHA-verified and pushed in 144 s; the P4-console `c6relay push` step is gone |
+  | DAQ P4 | P4 USB, new target 3: `OTA_REBOOT` (0x92) + `OTA_CONFIRM` (0x91) | 1.1 MB in ~9 s (HTTP route 60-90 s); unconfirmed images roll back |
+  | S3 app / SPIFFS / RP2040 | BBP 0x77 on CDC0, new `bugbuster.usb_ota` | S3 2.1 MB in 25 s, came back VALID; SPIFFS 4 MB in 30 s |
+
+  Firmware: every vendor OTA command is answered with a new `USB_REC_OTA_ACK`
+  (0x08) record (DATA: every 16 frames, the host resumes from `done_bytes`);
+  the work runs on a `usb_ota` worker (internal-RAM stack, core 0), not the
+  TinyUSB task; acquisition stops for the transfer; a C6 image must be merged
+  (bootloader + partition table) and product ids are checked; the dead S3
+  relay target is rejected. Hosts: `bugbuster.daq_usb_ota`, `bugbuster.usb_ota`,
+  MCP `ota_upload_p4` / `ota_upload_c6` / `ota_upload_firmware` /
+  `ota_upload_spiffs` take `transport="usb"`. Also fixed: the Python DAQ reader
+  treated a quiet endpoint on Windows (errno 10060) as fatal.
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
