@@ -167,6 +167,14 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Done, host tests | BUS-011, BUS-016, MCP-4, DESK-9 |
    | Already done | PY-4 (M1) |
    | Carried over | DESK-3, DESK-4 / WEB-3, IOS-5, DAQ-13 |
+
+   **Plan M10 / M9 status (2026-10-02, branch `audit/2026-10-m9-closeout`).**
+
+   | Status | Items |
+   |---|---|
+   | Done, measured on hardware | IO-17, AN-08, AN-15 (ch3 + MCP), BUS-017 |
+   | Done, host tests | IO-23, DAQ-07 (MCP half), MCP-34, MCP-25 (OTA/cal tools), IO-19 |
+   | Still open | AN-15 firmware voltage clamp for raw codes (needs calibrated prediction + bench), DAQ-07 USB range lock through the registry (P4), MCP-25 rest (`daq_set_source`/`daq_power_setup`/`daq_set_setting` bounds, `require_hat` HAT type), MCP-26, IO-14/15/16, IO-24, PWR-12/13/15, BUS-007/008/013/014/015, C6-5/24/30/31/35/38/40, PLT-11/18, IOS-22, DESK-29/30, LA-13/14, TEST-3/5/6/7 |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
@@ -689,25 +697,16 @@ what to build, how to prove it. Effort S/M/L.
 
 ## Items the 2026-10-01 audit found already fixed or wrong
 
-Each was checked by an audit agent against source; confirm then move to
-`CHANGELOG.MD` or delete.
+2026-10-02 (M9): P4-3, P4-4, MCP-9, PY-10, DESK-5, WEB-4, WEB-10, IOS-3,
+IOS-4, IOS-9, IOS-12 and IOS-14 were re-read against source and are recorded in
+`CHANGELOG.MD`; the stale `.mex` facts were corrected. Still open:
 
 | Item | Finding |
 |---|---|
-| P4-3 | Fixed: product-ID check precedes `esp_ota_begin()` (`ota.c:63-80`). |
-| P4-4 | x8 fixed (`adaq7769.c:316-325`); x16 was never a 16-bit mode - refuted. |
-| MCP-9 | Fixed (`bugbuster_mcp/config.py` now names LTM8078). |
-| PY-10 | Docstring fixed (`client.py:~2371` says RAM-only); name unchanged. |
-| DESK-5 | Fixed: `ota_upload_daq` (`commands.rs:~807`), UI `diag.rs:1105-1172`. |
-| WEB-4 | Fixed: P4/C6 upload exists in the web UI. |
-| WEB-10 | Fixed: `IoOwnershipCard.tsx`, `FaultsCard.tsx` exist. |
-| IOS-3, IOS-4, IOS-9 | Fixed per `CLIENTS-WEB-IOS.md`. IOS-11 mostly fixed. |
-| IOS-12 | Wrong: VDUT routes exist (`api_core.cpp:465-516`). |
-| IOS-14 | Likely non-issue: ATS exempts IP literals and `.local`. |
+| IOS-11 | Mostly fixed (SignalPath has a confirm); rails/OTA/reset still to check. |
 | RP-1, RP-3, RP-4 | Addressed in source (RP-3 bounded by cal-window clamp, `bb_hat_v2.c:511-562`); still needs hardware to close. |
 | PROTO-4 | Partly fixed: `0xEF` and external bus IDs now in `bbp.rs`; still missing `0xF5-0xFD`, `0x64/0x65`, `0x47`, `EVT 0x88`, `0x0C MEM_STATUS`. |
 | PROTO-8 | Not dead: `simulated_device.py:55` uses `ESP32_FW_VERSION`. Update, do not delete. |
-| `.mex` docs | `scripting-runtime.md` lists two fixed bugs as open; `esp32-firmware.md` says BBP v9/v10 (source: 11); `desktop-app.md` says 172 commands and describes a tab-switch claim that no longer exists; web manifest says 8 tabs (`App.tsx` has 9). |
 
 ---
 
@@ -745,9 +744,9 @@ Code is on the device. The behaviour has not been provoked.
 | C6-11 watchdog | **Cannot work as configured** - task WDT panic is off (see C6-23). Fix, then induce a hang. |
 | C6-9 link-lost banner | Banner is transient and fabricated numbers keep rendering (see C6-22). Fix first. |
 | C6-1 DDP `RSP_ERR` | Send a deliberately truncated DDP frame. |
-| FEAT-9 MUX rollback | Trigger the interlock (self-test active + U17 S3 write) and confirm the shadow is unchanged. The `[0,0,0,4]` residue is gone, which is not the same thing. |
+| FEAT-9 MUX rollback | Proven 2026-10-01 by the IO-8 bench run in M3: interlock-refused closes return `ERR_ADGS_ROUTE_REJECTED` and the shadow follows the hardware. Remove at release. |
 | DESK-1 STOP on disconnect | Run the desktop app against the device and pull the link. |
-| Web UI | Built, but not uploaded to SPIFFS or opened on the device. |
+| Web UI | Uploaded to SPIFFS several times in M5/M6 (HTTP and USB); scope SSE and pollers checked live (WEB-28). Every tab not yet opened on the device. |
 
 ---
 

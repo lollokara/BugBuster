@@ -415,6 +415,28 @@
   IOS-5 (iOS parity, needs a Mac), DAQ-13 (per-range meter calibration over
   BBP: writes calibration NVS and needs a bench reference).
 
+- **P2/P3 sweep (2026-10 audit, M10).** Each with an A/B test; S3 firmware
+  flashed and the marked rows checked on the board.
+
+  | ID | Was | Now |
+  |---|---|---|
+  | IO-17 | Python HTTP `set_alert_mask` and `set_din_config` sent snake_case keys the firmware never reads, so masks were written as zero | camelCase keys; a test reads the key list out of `webserver.cpp`. Board: mask set, read back, restored |
+  | IO-23 | MCP `set_board("../x")` loaded any readable `.json` as a board profile | bare names only; docs say pin entries are not enforced |
+  | AN-15 | MCP `idac_control` skipped the VADJ limits, profile locks and 12 V gate, could move VLOGIC, and took only codes 0..127; BBP `IDAC_SET_CODE` accepted the unconnected channel 3 | VADJ1/2 only, same validators as `set_supply_voltage`, signed codes, refused on locked rails; ch3 rejected (board: `INVALID_CHANNEL`). Firmware-side voltage clamp for raw codes carried over: the nominal formula disagrees with the hardware |
+  | AN-08 | BBP rejected < 0.1 Hz but HTTP, Python, MCP, desktop and web took 0.01 Hz (HTTP then ran at 0.1 Hz) | 0.1-100 Hz everywhere (board: HTTP 400 at 0.05 Hz) |
+  | DAQ-07 (MCP half) | `daq_set_current_range("high")` locked the 50 mohm range, which every report calls `lo`; `coarse`/`fine` collided with sample-source names | `ua` / `ma` / `a` or the report names `hi` / `mid` / `lo` |
+  | MCP-34 | capture store could hold ~2 GB (8 x 4 M samples) | also evicts by a 512 MB estimate; newest always kept |
+  | MCP-25 (part) | `ota_upload_spiffs/p4/c6`, `daq_cal_start`, `hat_calibrate_start/import` had no gate | `confirm=True` and a WARNING first line; P4/C6 uploads check the file exists |
+  | IO-19 | every `write_digital` / `configure_io` warned "VADJ1 power-good lost" while VADJ1 was off | only enabled rails are checked |
+  | BUS-017 | every external I2C/SPI failure came back as TIMEOUT | NACK -> `I2C NACK: no device acknowledged 0xNN`, stuck bus -> TIMEOUT, held mutex -> BUSY (board: NACK on an empty bus) |
+
+- **Already fixed when the 2026-10-01 audit reported them** (re-read 2026-10-02):
+  P4-3 (product-ID check precedes `esp_ota_begin()`), P4-4 (x8 fixed; x16 was
+  never a 16-bit mode), MCP-9 (`config.py` names LTM8078), PY-10
+  (`idac_cal_clear` documented as RAM-only), DESK-5 (`ota_upload_daq` + UI),
+  WEB-4 (P4/C6 upload in the web UI), WEB-10 (`IoOwnershipCard`,
+  `FaultsCard`), IOS-3, IOS-4, IOS-9; IOS-12 and IOS-14 were not bugs.
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the
