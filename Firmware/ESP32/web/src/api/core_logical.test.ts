@@ -13,7 +13,7 @@ function stubFetch(status: number, body: unknown) {
 describe("TR-11b logical failures", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.fails("rejects a POST answered 200 {ok:false}", async () => {
+  it("rejects a POST answered 200 {ok:false}", async () => {
     stubFetch(200, { ok: false, error: "channel must be 0-3" });
     await expect(request("/api/channel/9/dac", { method: "POST", body: {} }))
       .rejects.toBeInstanceOf(HttpError);

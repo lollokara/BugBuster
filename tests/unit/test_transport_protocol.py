@@ -125,7 +125,8 @@ def test_script_delete_http_raises_on_error():
     client._usb = False
     client._admin_token = "a" * 64
 
-    with pytest.raises(RuntimeError, match="script_delete failed: File not found"):
+    # TR-11b: the transport raises first, with the device's message.
+    with pytest.raises(RuntimeError, match="File not found"):
         client.script_delete("nonexistent.py")
 
 

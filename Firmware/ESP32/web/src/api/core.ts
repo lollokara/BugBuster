@@ -181,7 +181,16 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
 
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const data = (await res.json()) as T;
+  // TR-11b: an older firmware answers a failed action 200 {ok:false}; the
+  // current one answers 4xx (handled above). GET replies may legitimately
+  // carry ok:false as status data, so only actions are checked.
+  if (method !== "GET" && data && typeof data === "object" && (data as { ok?: unknown }).ok === false) {
+    const d = data as { error?: unknown; err?: unknown };
+    const msg = typeof d.error === "string" ? d.error : typeof d.err === "string" ? d.err : "request failed";
+    throw new HttpError(res.status, "Request failed", msg);
+  }
+  return data;
 }
 
 export async function adminRawFetch(mac: string, path: string, init: RequestInit = {}): Promise<Response> {

@@ -427,19 +427,13 @@ impl HttpTransport {
     async fn post_json_slow(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.slow_client.post(&url).json(body).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.client.post(&url).json(body).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     /// POST with a per-request timeout override. Used for commands that the
@@ -461,10 +455,7 @@ impl HttpTransport {
             .json(body)
             .send()
             .await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} from {}", resp.status(), path));
-        }
-        Ok(resp.json().await?)
+        action_json(resp, path).await
     }
 
     /// Map channel function string from webserver to numeric ID used by BBP.
@@ -2215,7 +2206,6 @@ mod logical_failure_tests {
     /// TR-11b: an action answered 200 {"ok":false} (old firmware) or 4xx (new)
     /// must be an error; a 4xx carries the device's message.
     #[test]
-    #[ignore = "TR-11b"]
     fn both_failure_forms_are_errors() {
         let f = super::logical_failure;
         assert_eq!(f(200, &json!({"ok": false, "error": "busy"})).as_deref(), Some("busy"));
@@ -2226,9 +2216,34 @@ mod logical_failure_tests {
     }
 }
 
-/// TR-11b: Some(message) when a POST reply means failure.
-fn logical_failure(_status: u16, _json: &Value) -> Option<String> {
+/// TR-11b: Some(message) when a POST reply means failure: any 4xx/5xx (current
+/// firmware) or 200 {"ok": false} (older firmware).
+fn logical_failure(status: u16, json: &Value) -> Option<String> {
+    let msg = ["error", "err", "message"]
+        .iter()
+        .find_map(|k| json.get(*k).and_then(|v| v.as_str()))
+        .map(str::to_string);
+    if status >= 400 {
+        return Some(msg.unwrap_or_else(|| format!("HTTP {}", status)));
+    }
+    if json.get("ok").and_then(|v| v.as_bool()) == Some(false) {
+        return Some(msg.unwrap_or_else(|| "device refused the request".to_string()));
+    }
     None
+}
+
+/// Parse a POST reply, turning either failure form into an error.
+async fn action_json(resp: reqwest::Response, path: &str) -> Result<Value> {
+    let status = resp.status().as_u16();
+    let json: Value = if status >= 400 {
+        resp.json().await.unwrap_or(Value::Null)
+    } else {
+        resp.json().await?
+    };
+    if let Some(m) = logical_failure(status, &json) {
+        return Err(anyhow!("{} ({})", m, path));
+    }
+    Ok(json)
 }
 
 #[cfg(test)]

@@ -29,6 +29,33 @@ log = logging.getLogger(__name__)
 ADMIN_TOKEN_HEADER = "X-BugBuster-Admin-Token"
 
 
+class HTTPLogicalError(requests.HTTPError, RuntimeError):
+    """A device action failed (TR-11b). Raised for a 4xx/5xx reply and for an
+    older firmware's 200 ``{"ok": false}``; the message is the device's own.
+    Also a RuntimeError, which is what the client's own ok-checks raised."""
+
+
+def _check_action(r: Any) -> Any:
+    """Return the parsed JSON of a POST/DELETE reply, raising on failure in
+    either form. Non-JSON 2xx replies come back as ``{}``."""
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    msg = None
+    if isinstance(data, dict):
+        msg = data.get("error") or data.get("err") or data.get("message")
+    if r.status_code >= 400:
+        raise HTTPLogicalError(
+            f"HTTP {r.status_code}: {msg or getattr(r, 'reason', '')}", response=r)
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise HTTPLogicalError(f"device refused: {msg or 'ok=false'}", response=r)
+    if data is None:
+        log.warning("Non-JSON response from %s: %s", getattr(r, "url", "?"), r.text[:200])
+        return {}
+    return data
+
+
 class HTTPTransport:
     """
     Communicates with a BugBuster device over its WiFi HTTP REST API.
@@ -150,12 +177,7 @@ class HTTPTransport:
             headers=merged_headers or None,
             timeout=self._timeout,
         )
-        r.raise_for_status()
-        try:
-            return r.json()
-        except ValueError:
-            log.warning("Non-JSON response from %s: %s", url, r.text[:200])
-            return {}
+        return _check_action(r)
 
     def delete(self, path: str, params: Optional[dict] = None,
                headers: Optional[dict] = None) -> Any:
@@ -178,12 +200,7 @@ class HTTPTransport:
             headers=merged_headers or None,
             timeout=self._timeout,
         )
-        r.raise_for_status()
-        try:
-            return r.json()
-        except ValueError:
-            log.warning("Non-JSON response from %s: %s", url, r.text[:200])
-            return {}
+        return _check_action(r)
 
     # ------------------------------------------------------------------
     # Pairing / device identity

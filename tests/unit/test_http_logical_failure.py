@@ -43,7 +43,6 @@ def _transport(resp):
     return t
 
 
-@pytest.mark.xfail(strict=True, reason="TR-11b")
 @pytest.mark.parametrize("status", [200, 400])
 def test_post_failure_raises_with_device_message(status):
     t = _transport(_Resp(status, {"ok": False, "error": "channel must be 0-3"}))
@@ -51,7 +50,6 @@ def test_post_failure_raises_with_device_message(status):
         t.post("/channel/9/dac", {"value": 1})
 
 
-@pytest.mark.xfail(strict=True, reason="TR-11b")
 def test_delete_ok_false_raises():
     t = _transport(_Resp(200, {"ok": False, "err": "not found"}))
     with pytest.raises(http_mod.HTTPLogicalError, match="not found"):
