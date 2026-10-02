@@ -1910,7 +1910,9 @@ class BugBuster:
         if not self._usb:
             raise NotImplementedError("deferred bus jobs are currently available over USB BBP only")
         resp = self._usb_cmd(CmdId.EXT_JOB_GET, struct.pack("<I", job_id & 0xFFFFFFFF))
+        _require_resp_len(resp, 8, "EXT_JOB_GET")
         result_len = struct.unpack_from("<H", resp, 6)[0]
+        _require_resp_len(resp, 8 + result_len, "EXT_JOB_GET")
         return {
             "job_id": struct.unpack_from("<I", resp, 0)[0],
             "status": resp[4],
@@ -3129,11 +3131,15 @@ class BugBuster:
         :param voltage_mv: Target voltage in millivolts (e.g. 27100 for 27.1 V).
         """
         self._require_hat_present()
+        if not 0 <= rail_id <= 0xFF:
+            raise ValueError(f"rail_id must be 0-255, got {rail_id}")
+        if not 0 <= int(voltage_mv) <= 0xFFFF:
+            raise ValueError(f"voltage_mv must be 0-65535, got {voltage_mv}")
         if not self._usb:
             self._http_post("/hat/v2/rail/voltage", {"railId": rail_id, "voltageMv": int(voltage_mv)})
             return self.hat_get_rail_status()
 
-        payload = struct.pack('<BH', rail_id & 0xFF, int(voltage_mv) & 0xFFFF)
+        payload = struct.pack('<BH', rail_id, int(voltage_mv))
         self._usb_cmd(CmdId.HAT_SET_RAIL_VOLTAGE, payload)
         return self.hat_get_rail_status()
 
@@ -4354,7 +4360,8 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.WIFI_CONNECT, payload)
             return bool(resp[0])
         else:
-            return self._http_post("/wifi/connect", {"ssid": ssid, "password": password})
+            reply = self._http_post("/wifi/connect", {"ssid": ssid, "password": password})
+            return bool(reply.get("success")) if isinstance(reply, dict) else bool(reply)
 
     def wifi_scan(self) -> list[dict]:
         """Scan for nearby WiFi networks. Returns list of {ssid, rssi, auth}."""
@@ -4518,13 +4525,18 @@ class BugBuster:
         self._require_usb("register_write")
         self._usb_cmd(CmdId.REGISTER_WRITE, struct.pack('<BH', address & 0xFF, value & 0xFFFF))
 
-    def set_spi_clock(self, clock_hz: int) -> None:
+    def set_spi_clock(self, clock_hz: int) -> bool:
         """
         Adjust the AD74416H SPI clock speed at runtime. **USB only.**
         Valid range: 100 kHz to 20 MHz.
+
+        Returns ``True`` if the firmware's scratch-register readback at the new
+        clock matched, ``False`` if it did not.
         """
         self._require_usb("set_spi_clock")
-        self._usb_cmd(CmdId.SET_SPI_CLOCK, struct.pack('<I', clock_hz))
+        resp = self._usb_cmd(CmdId.SET_SPI_CLOCK, struct.pack('<I', clock_hz))
+        _require_resp_len(resp, 5, "SET_SPI_CLOCK")
+        return bool(resp[4])
 
     def set_level_shifter_oe(self, on: bool) -> None:
         """Enable or disable the TXS0108E level-shifter output enable."""

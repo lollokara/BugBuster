@@ -153,7 +153,7 @@
  "set_gpio_value": "(self, gpio: int, value: bool) -> None",
  "set_level_shifter_oe": "(self, on: bool) -> None",
  "set_rtd_config": "(self, channel: int, current: bugbuster.constants.RtdCurrent = <RtdCurrent.MA_1: 1>) -> None",
- "set_spi_clock": "(self, clock_hz: int) -> None",
+ "set_spi_clock": "(self, clock_hz: int) -> bool",
  "set_uart_config": "(self, bridge_id: int = 0, uart_num: int = 1, tx_pin: int = 1, rx_pin: int = 2, baudrate: int = 115200, data_bits: int = 8, parity: int = 0, stop_bits: int = 0, enabled: bool = False) -> None",
  "set_vout_range": "(self, channel: int, range_: bugbuster.constants.VoutRange) -> None",
  "set_watchdog": "(self, enable: bool = False, timeout_code: int = 9) -> None",

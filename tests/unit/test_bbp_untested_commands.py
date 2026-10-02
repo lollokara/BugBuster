@@ -123,8 +123,6 @@ def test_ext_job_get_is_usb_only():
     client._http_post.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: ext_job_get has no _require_resp_len; a truncated "
-                   "reply leaks struct.error or silently returns short data")
 @pytest.mark.parametrize("rsp", [
     b"\x01\x00\x00\x00\x03\x03",                       # header cut before result_len
     _job_rsp(1, 3, 1, b"\x01\x02", result_len=5),      # result_len exceeds the bytes sent
@@ -202,8 +200,6 @@ def test_hat_set_rail_voltage_http_body_and_status_decode():
                                           "current_ma": 50, "status": 0, "target_mv": 12000}]}
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: hat_set_rail_voltage masks rail_id & 0xFF and "
-                   "voltage_mv & 0xFFFF; out-of-range values silently wrap to another rail/voltage")
 @pytest.mark.parametrize("rail,mv", [(1, -1), (1, 70000), (257, 5000)],
                          ids=["negative-mv", "mv-over-u16", "rail-wraps-to-1"])
 def test_hat_set_rail_voltage_usb_rejects_out_of_range(rail, mv):
@@ -213,8 +209,6 @@ def test_hat_set_rail_voltage_usb_rejects_out_of_range(rail, mv):
     client._usb_cmd.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: HTTP hat_set_rail_voltage forwards any int; "
-                   "api_rail_voltage casts voltageMv to uint16_t so -1 becomes 65535 mV")
 def test_hat_set_rail_voltage_http_rejects_negative_mv():
     client = _http(hat=True, get={"rails": []})
     with pytest.raises(ValueError):
@@ -311,8 +305,6 @@ def test_wifi_connect_http_body():
         "/wifi/connect", {"ssid": "lab", "password": "secret"})
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: HTTP wifi_connect returns the raw "
-                   "{'success','ip'} dict instead of a bool; a failed connect is truthy")
 @pytest.mark.parametrize("success", [True, False])
 def test_wifi_connect_http_returns_bool(success):
     client = _http(post={"success": success, "ip": "10.0.0.2" if success else ""})
@@ -350,8 +342,6 @@ def test_set_spi_clock_is_usb_only():
     client._http_post.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: set_spi_clock discards the reply; a failed "
-                   "scratch-register verify (match=0) is reported as success")
 def test_set_spi_clock_reports_failed_verify():
     client = _usb(struct.pack("<IB", 20_000_000, 0))
     try:
