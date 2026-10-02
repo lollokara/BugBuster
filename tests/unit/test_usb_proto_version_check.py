@@ -24,4 +24,4 @@ def test_match_is_silent(caplog):
 
 
 def test_connect_runs_the_check():
-    assert "check_proto_version(self.proto_version)" in inspect.getsource(usb.USBTransport.connect)
+    assert "check_proto_version(resp[4])" in inspect.getsource(usb.USBTransport.connect)

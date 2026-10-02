@@ -238,7 +238,7 @@ class USBTransport:
 
         self.proto_version = resp[4]
         self.fw_version    = (resp[5], resp[6], resp[7])
-        check_proto_version(self.proto_version)
+        check_proto_version(resp[4])
         if len(resp) >= 14:
             self.mac = bytes(resp[8:14])
             mac_str  = ":".join(f"{b:02x}" for b in self.mac)
