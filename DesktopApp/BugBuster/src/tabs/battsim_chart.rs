@@ -196,14 +196,19 @@ fn series(view: &BsView, lane: Lane) -> (&[f64], &[f64], &[f64]) {
 
 fn y_range(lo: &[f64], hi: &[f64], log: bool) -> (f64, f64) {
     let f = |x: f64| if log { x.max(1e-10).log10() } else { x };
+    // Log axis: zero / negative readings (output off, offset) would stretch it to 1e-10.
+    let ok = |x: f64| x.is_finite() && (!log || x > 0.0);
     let mut mn = f64::INFINITY;
     let mut mx = f64::NEG_INFINITY;
     for (&a, &b) in lo.iter().zip(hi) {
-        if a.is_finite() { mn = mn.min(f(a)); }
-        if b.is_finite() { mx = mx.max(f(b)); }
+        if ok(a) { mn = mn.min(f(a)); }
+        if ok(b) { mx = mx.max(f(b)); }
+    }
+    if log && !mn.is_finite() && mx.is_finite() {
+        mn = mx - 3.0;
     }
     if !mn.is_finite() || !mx.is_finite() {
-        return (0.0, 1.0);
+        return if log { (-9.0, 0.0) } else { (0.0, 1.0) };
     }
     if (mx - mn).abs() < 1e-12 {
         let pad = if log { 0.5 } else { mx.abs().max(1e-9) * 0.05 };
@@ -289,8 +294,13 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         // Y grid + labels.
         ctx.set_text_align("right");
         if log {
+            let every = ((y1 - y0) / (lh / 24.0).max(1.0)).ceil().max(1.0) as i64;
             let mut d = y0.ceil();
             while d <= y1 {
+                if (d as i64).rem_euclid(every) != 0 {
+                    d += 1.0;
+                    continue;
+                }
                 let y = fy(10f64.powf(d));
                 ctx.set_stroke_style_str(&sep);
                 ctx.begin_path();
@@ -354,6 +364,7 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         ctx.set_stroke_style_str(&marker);
         ctx.set_fill_style_str(&marker);
         ctx.set_text_align("left");
+        let mut last_label = f64::NEG_INFINITY;
         for e in &v.events {
             let x = xof(e.t_s as f64).round() + 0.5;
             let _ = ctx.set_line_dash(&js_sys::Array::of2(&3.0.into(), &3.0.into()));
@@ -362,7 +373,14 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
             ctx.line_to(x, ch - AXIS_H);
             ctx.stroke();
             let _ = ctx.set_line_dash(&js_sys::Array::new());
-            let _ = ctx.fill_text(event_name(e), x + 3.0, ch - AXIS_H - 4.0);
+            if x - last_label < 48.0 {
+                continue;
+            }
+            let label = event_name(e);
+            let wl = ctx.measure_text(label).map(|m| m.width()).unwrap_or(40.0);
+            let lx = if x + 3.0 + wl > lay.plot_x + lay.plot_w { x - 3.0 - wl } else { x + 3.0 };
+            let _ = ctx.fill_text(label, lx, ch - AXIS_H - 4.0);
+            last_label = x;
         }
     }
 

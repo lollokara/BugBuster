@@ -25,6 +25,7 @@ web-sys = { version = "0.3", features = [
     "console",
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
+    "TextMetrics",
     "HtmlSelectElement",
     "HtmlInputElement",
     "HtmlElement",

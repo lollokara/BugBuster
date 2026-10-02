@@ -4,7 +4,6 @@
 // =============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { GlassCard } from "../../components/GlassCard";
 import { PairingRequiredError } from "../../api/client";
 import { deviceMac, pollIntervalFor } from "../../state/signals";
 import * as dev from "./device";
@@ -71,15 +70,19 @@ function draw(c: HTMLCanvasElement, v: View | null, h: History | null, t0: numbe
     const log = ln.key === "i" && logI;
     const f = (x: number) => (log ? Math.log10(Math.max(x, 1e-10)) : x);
     let y0 = Infinity, y1 = -Infinity;
-    lo.forEach((x) => { if (Number.isFinite(x)) y0 = Math.min(y0, f(x)); });
-    hi.forEach((x) => { if (Number.isFinite(x)) y1 = Math.max(y1, f(x)); });
-    if (!Number.isFinite(y0)) { y0 = 0; y1 = 1; }
+    // Log axis: zero / negative readings (output off, offset) would stretch it to 1e-10.
+    lo.forEach((x) => { if (Number.isFinite(x) && (!log || x > 0)) y0 = Math.min(y0, f(x)); });
+    hi.forEach((x) => { if (Number.isFinite(x) && (!log || x > 0)) y1 = Math.max(y1, f(x)); });
+    if (log && !Number.isFinite(y0)) av.forEach((x) => { if (x > 0) y0 = Math.min(y0, f(x)); });
+    if (!Number.isFinite(y0) || !Number.isFinite(y1)) { y0 = log ? -9 : 0; y1 = log ? 0 : 1; }
     const pad = y1 - y0 < 1e-12 ? (log ? 0.5 : Math.max(Math.abs(y1), 1e-9) * 0.05) : (y1 - y0) * 0.06;
     y0 -= pad; y1 += pad;
     const fy = (x: number) => top + lh - ((f(x) - y0) / (y1 - y0)) * lh;
     g.textAlign = "right";
     if (log) {
+      const every = Math.max(1, Math.ceil((y1 - y0) / Math.max(1, lh / 24)));
       for (let d = Math.ceil(y0); d <= y1; d++) {
+        if (d % every !== 0) continue;
         const y = Math.round(fy(10 ** d)) + 0.5;
         g.strokeStyle = grid; g.beginPath(); g.moveTo(LEFT, y); g.lineTo(LEFT + pw, y); g.stroke();
         g.fillStyle = lab; g.fillText(fmtSi(10 ** d, "A"), LEFT - 5, y + 4);
@@ -106,11 +109,16 @@ function draw(c: HTMLCanvasElement, v: View | null, h: History | null, t0: numbe
   });
   if (h) {
     g.strokeStyle = g.fillStyle = cssVar(c, "var(--rose)"); g.textAlign = "left"; g.setLineDash([3, 3]);
+    let lastLabel = -Infinity;
     for (const e of h.events) {
       if (e.t < t0 || e.t > t1) continue;
       const x = Math.round(xof(e.t)) + 0.5;
       g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H - AXIS); g.stroke();
-      g.fillText(EVENT_NAMES[e.code] ?? "event", x + 3, H - AXIS - 4);
+      if (x - lastLabel < 48) continue;
+      const label = EVENT_NAMES[e.code] ?? "event";
+      const wl = g.measureText(label).width;
+      g.fillText(label, x + 3 + wl > LEFT + pw ? x - 3 - wl : x + 3, H - AXIS - 4);
+      lastLabel = x;
     }
     g.setLineDash([]);
   }
@@ -218,112 +226,143 @@ export function BattSim() {
     return { i, t: v.t[i]! };
   }, [hoverX, v]);
 
+  const presets: [string, number][] = [["1h", 3600], ["6h", 21600], ["1d", 86400], ["7d", 604800], ["30d", 2592000], ["All", 0]];
+  const span = win[1] - win[0];
+  const [lo, hiB] = bounds();
+  const activePreset = !hist ? "" : Math.abs(win[0] - lo) < 1 && Math.abs(win[1] - hiB) < 1 ? "All"
+    : Math.abs(win[1] - hiB) < 1 ? presets.find(([, sec]) => sec && Math.abs(sec - span) < 1)?.[0] ?? "" : "";
+  const tile = (title: string, rows: [string, string][], cls = "") => (
+    <div class={"bsw-tile " + cls}>
+      <div class="bsw-tile-t">{title}</div>
+      {rows.map(([k, val]) => <div class="bsw-tile-r"><span>{k}</span><b class="mono">{val}</b></div>)}
+    </div>
+  );
+
   const state = st?.state ?? 0;
   return (
-    <div class="tab-container bsw">
-      <h2>Battery Simulator</h2>
-      <GlassCard title="Live" actions={
+    <div class="bsw">
+      {/* ---- Live status + run controls ---- */}
+      <section class="glass-card bsw-bar">
+        <span class={"bsw-st s" + state}>{STATE_NAMES[state] ?? "?"}</span>
+        {!st ? <span class="text-dim">Battery simulator not reachable (DAQ HAT with battery-sim firmware required).</span> : <>
+          {state !== 0 && <>
+            <span class="bsw-kv"><i>Run</i><b class="mono">#{st.runId}</b></span>
+            <span class="bsw-kv"><i>Battery</i><b class="mono">{CHEM_NAMES[st.chem] ?? "?"} {st.cells}S {st.capacityMah} mAh</b></span>
+            <span class="bsw-soc" title="State of charge"><span style={`width:${Math.min(100, Math.max(0, st.socPct))}%`} /><b class="mono">{st.socPct.toFixed(1)} %</b></span>
+            <span class="bsw-kv"><i>Voltage</i><b class="mono">{fmtSi(st.vMeas, "V")}</b></span>
+            <span class="bsw-kv"><i>Current</i><b class="mono">{fmtSi(st.iMeas, "A")}</b></span>
+            <span class="bsw-kv"><i>Elapsed</i><b class="mono">{fmtDuration(st.elapsedS)}</b></span>
+            <span class="bsw-kv" title="From the last 30 min of total drain"><i>Remaining</i><b class="mono">{st.remainingS === null ? "-" : (st.provisional ? "~" : "") + fmtDuration(st.remainingS)}</b></span>
+          </>}
+          <span class="bsw-kv"><i>Storage</i><b class="mono">{fmtBytes(st.fsUsed)} / {fmtBytes(st.fsTotal)}</b></span>
+        </>}
+        <span class="bsw-spacer" />
         <div class="bsw-actions">
           <button class="btn primary" disabled={state !== 1} onClick={() => act(ACT.start)}>Start</button>
           <button class="btn" disabled={state !== 2} onClick={() => act(ACT.pause)}>Pause</button>
           <button class="btn" disabled={state !== 1 && state !== 2} onClick={() => act(ACT.stop)}>Stop</button>
           <button class="btn" disabled={state === 0} onClick={() => act(ACT.unload)}>Unload</button>
           <button class="btn" disabled={state === 2} onClick={() => setShowNew(true)}>New run</button>
-        </div>}>
-        {!st ? <div class="text-dim">Battery simulator not reachable (DAQ HAT and firmware with battery-sim support required).</div> : (
-          <div class="bsw-live">
-            <span class={"pill bsw-st s" + state}>{STATE_NAMES[state] ?? "?"}</span>
-            {state !== 0 && <>
-              <span class="bsw-kv"><i>Run</i><b class="mono">#{st.runId}</b></span>
-              <span class="bsw-kv"><i>{CHEM_NAMES[st.chem] ?? "?"}</i><b class="mono">{st.cells}S {st.capacityMah} mAh</b></span>
-              <span class="bsw-soc"><span style={`width:${Math.min(100, Math.max(0, st.socPct))}%`} /><b class="mono">{st.socPct.toFixed(1)} %</b></span>
-              <span class="bsw-kv"><i>V</i><b class="mono">{fmtSi(st.vMeas, "V")}</b></span>
-              <span class="bsw-kv"><i>I</i><b class="mono">{fmtSi(st.iMeas, "A")}</b></span>
-              <span class="bsw-kv"><i>Elapsed</i><b class="mono">{fmtDuration(st.elapsedS)}</b></span>
-              <span class="bsw-kv"><i>Remaining</i><b class="mono">{st.remainingS === null ? "-" : (st.provisional ? "~" : "") + fmtDuration(st.remainingS)}</b></span>
-            </>}
-            <span class="bsw-kv"><i>Storage</i><b class="mono">{fmtBytes(st.fsUsed)} / {fmtBytes(st.fsTotal)}</b></span>
-          </div>)}
-        {msg && <div class="text-warn bsw-msg">{msg}</div>}
-      </GlassCard>
+        </div>
+      </section>
+      {msg && <div class="bsw-msg text-warn">{msg} <button class="btn" onClick={() => setMsg(null)}>Dismiss</button></div>}
 
-      <div class="bsw-grid">
-        <GlassCard title="Runs" actions={<button class="btn" onClick={refreshRuns}>Refresh</button>}>
-          {!runs.length && <div class="text-dim">No runs stored.</div>}
-          {[...runs].reverse().map((r) => (
-            <div key={r.runId} class={"bsw-run" + (hist?.meta.runId === r.runId ? " open" : "")}>
-              <div class="bsw-run-main" onClick={() => openRun(r.runId)}>
-                <b>#{r.runId}</b> {r.meta?.name || ""} {r.active && <span class="pill">loaded</span>}
-                <div class="text-muted bsw-sub">
-                  {r.meta ? `${CHEM_NAMES[r.meta.params.chem] ?? "?"} ${r.meta.params.cells}S ${r.meta.params.capacityMah} mAh - ${fmtDate(r.meta.createdEpoch)}` : "meta unreadable"} - {fmtBytes(r.bytes)}
-                </div>
-              </div>
-              <button class="btn" disabled={r.active} title="Load on device (paused)" onClick={() => act(ACT.load, r.runId)}>Load</button>
-              <button class="btn danger" disabled={r.active} onClick={() => { if (confirm(`Delete run #${r.runId} from the device?`)) act(ACT.del, r.runId); }}>Delete</button>
-            </div>))}
-        </GlassCard>
-
-        <GlassCard title={hist ? `Run #${hist.meta.runId} ${hist.meta.name}` : "History"} actions={
-          <div class="bsw-actions">
-            {[["1h", 3600], ["6h", 21600], ["1d", 86400], ["7d", 604800], ["30d", 2592000], ["All", 0]].map(([l, sec]) => (
-              <button key={l as string} class="btn" disabled={!hist} onClick={() => {
-                const [lo, hi] = bounds();
-                if (sec) setWindow(hi - (sec as number), hi); else setWindow(lo, hi);
+      {/* ---- History chart (full width) ---- */}
+      <section class="glass-card bsw-chart">
+        <div class="bsw-chart-head">
+          <select class="input bsw-pick" value={hist ? String(hist.meta.runId) : ""}
+            onChange={(e) => { const id = Number((e.currentTarget as HTMLSelectElement).value); if (id) openRun(id); }}>
+            <option value="">{runs.length ? "Open a run..." : "No runs stored"}</option>
+            {[...runs].reverse().map((r) => (
+              <option value={String(r.runId)}>#{r.runId} {r.meta?.name || ""}{r.active ? " (loaded)" : ""}</option>))}
+          </select>
+          {hist && <span class="text-muted bsw-chart-sub">
+            {hist.recs.length} points{hist.meta.version < 2 ? " - energy estimated (format 1)" : ""}
+          </span>}
+          <span class="bsw-spacer" />
+          <div class="segmented">
+            {presets.map(([l, sec]) => (
+              <button class={activePreset === l ? "active" : ""} disabled={!hist} onClick={() => {
+                if (sec) setWindow(hiB - sec, hiB); else setWindow(lo, hiB);
               }}>{l}</button>))}
-            <button class={"btn" + (logI ? " primary" : "")} onClick={() => setLogI(!logI)}>log I</button>
-          </div>}>
-          <div class="bsw-plot">
-            <canvas ref={cv} class="bsw-canvas"
-              onWheel={(e) => {
-                if (!hist) return;
-                e.preventDefault();
-                const tc = xToT(e.offsetX), k = e.deltaY > 0 ? 1.25 : 0.8;
-                setWindow(tc - (tc - win[0]) * k, tc + (win[1] - tc) * k);
-              }}
-              onMouseDown={(e) => { drag.current = { x0: e.offsetX, w: win, box: e.shiftKey }; }}
-              onMouseMove={(e) => {
-                setHoverX(e.offsetX);
-                const d = drag.current;
-                if (!d || !cv.current) return;
-                if (d.box) { setBox([d.x0, e.offsetX]); return; }
-                const dt = ((e.offsetX - d.x0) / (cv.current.clientWidth - LEFT - 10)) * (d.w[1] - d.w[0]);
-                setWindow(d.w[0] - dt, d.w[1] - dt);
-              }}
-              onMouseUp={() => {
-                if (box && Math.abs(box[1] - box[0]) > 4) setWindow(xToT(Math.min(...box)), xToT(Math.max(...box)));
-                drag.current = null; setBox(null);
-              }}
-              onMouseLeave={() => { setHoverX(null); drag.current = null; setBox(null); }}
-              onDblClick={() => { const [lo, hi] = bounds(); setWindow(lo, hi); }} />
-            {!hist && <div class="bsw-empty text-dim">{busy ?? "Open a run. Wheel = zoom, drag = pan, Shift+drag = zoom to range, double-click = whole run."}</div>}
-            {hist && busy && <div class="bsw-busy">{busy}</div>}
-            {hover && v && (
-              <div class="bsw-tip mono" style={`left:${(hoverX ?? 0) + 14}px`}>
-                <b>+{fmtDuration(hover.t)}</b> ({["15 min", "1 min", "1 s"][v.tier[hover.i]! % 3]})
-                <div style="color:var(--green)">{fmtSi(v.vAvg[hover.i]!, "V")} [{fmtSi(v.vMin[hover.i]!, "V")} .. {fmtSi(v.vMax[hover.i]!, "V")}]</div>
-                <div style="color:var(--amber)">{fmtSi(v.iAvg[hover.i]!, "A")} [{fmtSi(v.iMin[hover.i]!, "A")} .. {fmtSi(v.iMax[hover.i]!, "A")}]</div>
-                <div style="color:var(--purple)">{fmtSi(v.pAvg[hover.i]!, "W")}</div>
-                <div style="color:var(--blue)">SOC {v.soc[hover.i]!.toFixed(2)} %</div>
-              </div>)}
           </div>
-        </GlassCard>
+          <div class="segmented">
+            <button class={logI ? "active" : ""} onClick={() => setLogI(!logI)} title="Logarithmic current axis">log I</button>
+          </div>
+        </div>
+        <div class="bsw-plot">
+          <canvas ref={cv} class="bsw-canvas"
+            onWheel={(e) => {
+              if (!hist) return;
+              e.preventDefault();
+              const tc = xToT(e.offsetX), k = e.deltaY > 0 ? 1.25 : 0.8;
+              setWindow(tc - (tc - win[0]) * k, tc + (win[1] - tc) * k);
+            }}
+            onMouseDown={(e) => { drag.current = { x0: e.offsetX, w: win, box: e.shiftKey }; }}
+            onMouseMove={(e) => {
+              setHoverX(e.offsetX);
+              const d = drag.current;
+              if (!d || !cv.current) return;
+              if (d.box) { setBox([d.x0, e.offsetX]); return; }
+              const dt = ((e.offsetX - d.x0) / (cv.current.clientWidth - LEFT - 10)) * (d.w[1] - d.w[0]);
+              setWindow(d.w[0] - dt, d.w[1] - dt);
+            }}
+            onMouseUp={() => {
+              if (box && Math.abs(box[1] - box[0]) > 4) setWindow(xToT(Math.min(...box)), xToT(Math.max(...box)));
+              drag.current = null; setBox(null);
+            }}
+            onMouseLeave={() => { setHoverX(null); drag.current = null; setBox(null); }}
+            onDblClick={() => setWindow(lo, hiB)} />
+          {!hist && <div class="bsw-empty text-dim">{busy ?? "Pick a run above. Wheel = zoom, drag = pan, Shift+drag = zoom to a range, double-click = whole run."}</div>}
+          {hist && busy && <div class="bsw-busy">{busy}</div>}
+          {hover && v && (
+            <div class="bsw-tip mono" style={(hoverX ?? 0) > (cv.current?.clientWidth ?? 0) - 260
+              ? `right:${(cv.current?.clientWidth ?? 0) - (hoverX ?? 0) + 14}px` : `left:${(hoverX ?? 0) + 14}px`}>
+              <b>+{fmtDuration(hover.t)}</b> <span class="text-muted">({["15 min", "1 min", "1 s"][v.tier[hover.i]! % 3]})</span>
+              <div style="color:var(--green)">{fmtSi(v.vAvg[hover.i]!, "V")} [{fmtSi(v.vMin[hover.i]!, "V")} .. {fmtSi(v.vMax[hover.i]!, "V")}]</div>
+              <div style="color:var(--amber)">{fmtSi(v.iAvg[hover.i]!, "A")} [{fmtSi(v.iMin[hover.i]!, "A")} .. {fmtSi(v.iMax[hover.i]!, "A")}]</div>
+              <div style="color:var(--purple)">{fmtSi(v.pAvg[hover.i]!, "W")}</div>
+              <div style="color:var(--blue)">SOC {v.soc[hover.i]!.toFixed(2)} %</div>
+            </div>)}
+        </div>
+      </section>
 
-        <GlassCard title="Window statistics">
-          {!s ? <div class="text-dim">Open a run.</div> : (
-            <table class="kv-table bsw-stats"><tbody>
-              <tr><th>Span</th><td>{fmtDuration(s.duration)} from +{fmtDuration(s.tStart)}</td></tr>
-              <tr><th>Voltage min / avg / max</th><td>{fmtSi(s.vMin, "V")} / {fmtSi(s.vAvg, "V")} / {fmtSi(s.vMax, "V")}</td></tr>
-              <tr><th>Current min / avg / max</th><td>{fmtSi(s.iMin, "A")} / {fmtSi(s.iAvg, "A")} / {fmtSi(s.iMax, "A")}</td></tr>
-              <tr><th>Baseline (P10) / median / P99</th><td>{fmtSi(s.iP10, "A")} / {fmtSi(s.iMedian, "A")} / {fmtSi(s.iP99, "A")}</td></tr>
-              <tr><th>Power avg / peak</th><td>{fmtSi(s.pAvg, "W")} / {fmtSi(s.pMax, "W")}</td></tr>
-              <tr><th>Charge</th><td>{fmtSi(s.chargeC / 3600, "Ah")}</td></tr>
-              <tr><th>Energy{s.energyEstimated ? " (est.)" : ""}</th><td>{fmtSi(s.energyJ / 3600, "Wh")}</td></tr>
-              <tr><th>SOC</th><td>{s.socStart.toFixed(2)} {"->"} {s.socEnd.toFixed(2)} % ({s.socRatePerDay.toFixed(3)} %/day)</td></tr>
-              <tr><th>Full-battery life at avg</th><td>{fmtDuration(s.projectedLifeS)}</td></tr>
-              <tr><th>Remaining at avg</th><td>{fmtDuration(s.remainingAtAvgS)}</td></tr>
-              {(s.gaps > 0 || s.clamped > 0) && <tr><th>Data quality</th><td>{s.gaps} gap(s), {s.clamped} clamped</td></tr>}
-            </tbody></table>)}
-        </GlassCard>
+      {/* ---- Window statistics + run management ---- */}
+      <div class="bsw-lower">
+        <section class="glass-card">
+          <div class="card-header"><div class="card-title">Window statistics</div>
+            {s && <div class="text-muted bsw-chart-sub">{fmtDuration(s.duration)} from +{fmtDuration(s.tStart)}</div>}</div>
+          {!s ? <div class="text-dim">Open a run to see statistics for the visible window.</div> : (
+            <div class="bsw-tiles">
+              {tile("Voltage", [["min", fmtSi(s.vMin, "V")], ["avg", fmtSi(s.vAvg, "V")], ["max", fmtSi(s.vMax, "V")]], "c-v")}
+              {tile("Current", [["min", fmtSi(s.iMin, "A")], ["avg", fmtSi(s.iAvg, "A")], ["max", fmtSi(s.iMax, "A")]], "c-i")}
+              {tile("Current profile", [["baseline P10", fmtSi(s.iP10, "A")], ["median", fmtSi(s.iMedian, "A")], ["busy P99", fmtSi(s.iP99, "A")]], "c-i")}
+              {tile("Power", [["avg", fmtSi(s.pAvg, "W")], ["peak", fmtSi(s.pMax, "W")], ["duty avg/peak", s.iMax > 0 ? `${((s.iAvg / s.iMax) * 100).toFixed(2)} %` : "-"]], "c-p")}
+              {tile("Consumed", [["charge", fmtSi(s.chargeC / 3600, "Ah")], [s.energyEstimated ? "energy (est.)" : "energy", fmtSi(s.energyJ / 3600, "Wh")]], "c-p")}
+              {tile("State of charge", [["start", `${s.socStart.toFixed(2)} %`], ["end", `${s.socEnd.toFixed(2)} %`], ["rate", `${s.socRatePerDay.toFixed(3)} %/day`]], "c-s")}
+              {tile("Projection at window avg", [["full battery", fmtDuration(s.projectedLifeS)], ["remaining", fmtDuration(s.remainingAtAvgS)]], "c-s")}
+              {(s.gaps > 0 || s.clamped > 0) && tile("Data quality", [["gaps", String(s.gaps)], ["clamped", String(s.clamped)]])}
+            </div>)}
+        </section>
+
+        <section class="glass-card">
+          <div class="card-header"><div class="card-title">Runs on device</div>
+            <div class="card-actions"><button class="btn" onClick={refreshRuns}>Refresh</button></div></div>
+          {!runs.length && <div class="text-dim">No runs stored.</div>}
+          <div class="bsw-runs">
+            {[...runs].reverse().map((r) => (
+              <div key={r.runId} class={"bsw-run" + (hist?.meta.runId === r.runId ? " open" : "")}>
+                <div class="bsw-run-main" onClick={() => openRun(r.runId)} title="Open history">
+                  <div><b>#{r.runId}</b> {r.meta?.name || ""} {r.active && <span class="bsw-badge">loaded</span>}</div>
+                  <div class="text-muted bsw-sub">
+                    {r.meta ? `${CHEM_NAMES[r.meta.params.chem] ?? "?"} ${r.meta.params.cells}S ${r.meta.params.capacityMah} mAh - ${fmtDate(r.meta.createdEpoch)}` : "meta unreadable"} - {fmtBytes(r.bytes)}
+                  </div>
+                </div>
+                <button class="btn" disabled={r.active} title="Load on device (paused)" onClick={() => act(ACT.load, r.runId)}>Load</button>
+                <button class="btn danger" disabled={r.active} onClick={() => { if (confirm(`Delete run #${r.runId} from the device?`)) act(ACT.del, r.runId); }}>Delete</button>
+              </div>))}
+          </div>
+        </section>
       </div>
       {showNew && mac && <NewRun mac={mac} onClose={() => setShowNew(false)} onDone={() => { setShowNew(false); refreshRuns(); }} onError={setMsg} />}
     </div>

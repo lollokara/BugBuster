@@ -392,8 +392,10 @@ struct BatteryHistoryChart: View {
             guard !v.t.isEmpty else { continue }
             let log = lane.6
             let f = { (y: Double) in log ? log10(max(y, 1e-10)) : y }
-            var y0 = lane.3.map(f).filter(\.isFinite).min() ?? 0
-            var y1 = lane.5.map(f).filter(\.isFinite).max() ?? 1
+            // Log axis: zero / negative readings (output off, offset) would stretch it to 1e-10.
+            let usable = { (y: Double) in y.isFinite && (!log || y > 0) }
+            var y1 = lane.5.filter(usable).map(f).max() ?? (log ? 0 : 1)
+            var y0 = lane.3.filter(usable).map(f).min() ?? (log ? y1 - 3 : 0)
             let pad = y1 - y0 < 1e-12 ? (log ? 0.5 : max(abs(y1), 1e-9) * 0.05) : (y1 - y0) * 0.06
             y0 -= pad; y1 += pad
             let y = { (val: Double) in top + laneH - CGFloat((f(val) - y0) / (y1 - y0)) * laneH }
