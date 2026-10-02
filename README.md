@@ -324,6 +324,14 @@ cargo tauri build    # release bundle
 Screenshots and tab reference:
 [DesktopApp/BugBuster/README.md](DesktopApp/BugBuster/README.md)
 
+## iOS app
+
+The native iPhone/iPad app discovers instruments over Wi-Fi and Bluetooth;
+the connection screen also accepts a hostname/IP and admin token directly or
+scans the device QR code. BLE pairing uses the token-derived passkey shown in
+the app before the iOS system prompt. Source and build instructions are in
+[iOSApp](iOSApp).
+
 ## Firmware
 
 All four MCUs update **over the air from a GitHub release** - USB flashing is

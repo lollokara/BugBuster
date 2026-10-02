@@ -28,6 +28,7 @@
 import Foundation
 @preconcurrency import CoreBluetooth
 import Combine
+import CryptoKit
 
 /// A BugBuster device discovered over BLE. `id` is the CoreBluetooth peripheral
 /// identifier (stable per-device on this iOS install).
@@ -172,11 +173,17 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
         await readValue(Self.chrInfo)
     }
 
+    public static func pairingPasskey(token: String) -> String {
+        let digest = SHA256.hash(data: Data((token + "bb-ble-passkey").utf8))
+        let prefix = digest.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        return String(format: "%06d", prefix % 1_000_000)
+    }
+
     /// Write the admin token to the Auth characteristic. A write error from the
     /// peripheral (ATT insufficient-authentication) means the token was wrong.
     public func authenticate(token: String) async -> Bool {
         guard let data = token.data(using: .utf8) else { return false }
-        return await writeValue(Self.chrAuth, data: data, withResponse: true)
+        return await writeValue(Self.chrAuth, data: data, withResponse: true, timeout: 60.0)
     }
 
     /// Read the auth-gated compact sensor snapshot.
@@ -284,7 +291,11 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
                 self.writeConts[uuid] = cont
                 p.writeValue(data, for: c, type: .withResponse)
                 self.bleQueue.asyncAfter(deadline: .now() + timeout) {
-                    if let pending = self.writeConts[uuid] { self.writeConts[uuid] = nil; pending.resume(returning: false) }
+                    if let pending = self.writeConts[uuid] {
+                        NSLog("[BLE] write %@ timed out after %.0fs", uuid.uuidString, timeout)
+                        self.writeConts[uuid] = nil
+                        pending.resume(returning: false)
+                    }
                 }
             }
         }
@@ -407,6 +418,7 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         let uuid = characteristic.uuid
         if let c = writeConts[uuid] {
+            if let error { NSLog("[BLE] write %@ failed: %@", uuid.uuidString, error.localizedDescription) }
             writeConts[uuid] = nil
             c.resume(returning: error == nil)
         }

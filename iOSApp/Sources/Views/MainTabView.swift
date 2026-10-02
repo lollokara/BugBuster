@@ -368,22 +368,21 @@ struct BLEDevicesCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Bluetooth Devices", systemImage: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 18, weight: .bold))
+                Label("Bluetooth", systemImage: "wave.3.right")
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
                 if connectionManager.bleScanning {
-                    ProgressView().tint(.cyan)
+                    ProgressView().tint(Color(red: 0.36, green: 0.84, blue: 0.74))
                 } else {
                     Button(action: { connectionManager.startBLEScan() }) {
-                        Text("Scan")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.cyan)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Capsule().stroke(Color.cyan.opacity(0.4), lineWidth: 1))
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                            .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Scan Bluetooth devices")
                 }
             }
 
@@ -393,20 +392,25 @@ struct BLEDevicesCard: View {
                         subtitle: "Enable Bluetooth and grant permission to scan.")
             } else if connectionManager.bleDevices.isEmpty {
                 infoRow(icon: "dot.radiowaves.left.and.right",
-                        title: "Searching for devices...",
-                        subtitle: "Ensure the BugBuster hardware is powered on and nearby.")
+                        title: connectionManager.bleScanning ? "Searching nearby..." : "No Bluetooth devices found",
+                        subtitle: "Check that your instrument is powered on and nearby.")
             } else {
                 VStack(spacing: 10) {
                     ForEach(connectionManager.bleDevices) { device in
                         Button(action: { connectBLE(device) }) {
                             HStack {
+                                Image(systemName: "cpu")
+                                    .font(.system(size: 18))
+                                    .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                    .frame(width: 34, height: 34)
+                                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(device.hostname)
                                         .font(.system(size: 15, weight: .bold))
                                         .foregroundColor(.white)
                                     Text("Bluetooth LE")
                                         .font(.system(size: 12, design: .monospaced))
-                                        .foregroundColor(.cyan)
+                                        .foregroundColor(.white.opacity(0.55))
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
@@ -414,11 +418,7 @@ struct BLEDevicesCard: View {
                                     .foregroundColor(.secondary)
                             }
                             .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color.white.opacity(0.05))
-                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                            )
+                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain)
                     }
@@ -426,11 +426,7 @@ struct BLEDevicesCard: View {
             }
         }
         .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(Color.white.opacity(0.03))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.06), lineWidth: 1))
-        )
+        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
         .onAppear { connectionManager.startBLEScan() }
     }
 
@@ -438,19 +434,19 @@ struct BLEDevicesCard: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 26))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.55))
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(.white)
                 Text(subtitle)
                     .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.56))
             }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.04)))
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func connectBLE(_ device: DiscoveredDevice) {

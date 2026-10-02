@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **iOS connection screen.** Compact instrument-style header and separate
+  Wi-Fi/Bluetooth discovery lists replace the stacked glass layout. Added
+  manual hostname/IP and admin-token entry alongside QR scanning; the
+  connection form stays centered on iPad, and QR token retry uses BLE when
+  the active connection is BLE.
 - **Desktop app UI redesign.** New design system (`styles/tokens.css`):
   light and dark appearance that follows the OS with a manual override, Inter
   bundled, monospaced tabular numerics, Lucide SVG icons, no glass or glow on
@@ -26,6 +31,11 @@
 
 ### Fixed
 
+- **iOS BLE pairing.** The connection screen now shows the token-derived
+  six-digit passkey before the protected Auth write; the write waits for the
+  iOS pairing prompt and logs CoreBluetooth failures. The Xcode project also
+  includes the Keychain helper used by the refactored connection manager;
+  Overview rail failures use the manager's toast API so the app builds.
 - **Desktop HS DAQ:** the DUT supply switch started as On while the SMU
   boots Off, so enabling it took an off/on cycle; it now starts Off and
   follows the device-reported state and setpoints. A VDUT switch and setpoint

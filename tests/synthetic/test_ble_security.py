@@ -46,3 +46,22 @@ def test_python_passkey_matches_firmware_derivation():
         ' printf("%06u\\n", (unsigned)passkey_from_digest(d)); return 0; }\n')
     assert out.strip() == ble_passkey(token)
     assert re.search(r'label\[\] = "bb-ble-passkey"', read_source(BLE))
+
+
+def test_ios_pairing_matches_protected_auth_write():
+    transport = read_source("iOSApp/Sources/Services/BLETransport.swift")
+    manager = read_source("iOSApp/Sources/Services/ConnectionManager.swift")
+    dashboard = read_source("iOSApp/Sources/Views/ConnectionDashboardView.swift")
+
+    assert 'token + "bb-ble-passkey"' in transport
+    assert "digest.prefix(4).reduce(UInt32(0))" in transport
+    assert "prefix % 1_000_000" in transport
+    assert "Self.chrAuth, data: data, withResponse: true, timeout: 60.0" in transport
+    assert "blePairingPasskey = BLETransport.pairingPasskey(token: useToken)" in manager
+    assert manager.index("guard pairingAllowed else") < manager.index("ble.authenticate(token: useToken)")
+    assert "connectionManager.blePairingPasskey" in dashboard
+    assert "respondToBLEPairing(allow: true)" in dashboard
+    assert 'url.scheme == "bugbuster"' in dashboard
+    assert '.queryItems?.first(where: { $0.name == "token" })?.value' in dashboard
+    assert "connectionManager.connectBLE(device, token: token)" in dashboard
+    assert "connectionManager.connect(ip: ip, token: token)" in dashboard

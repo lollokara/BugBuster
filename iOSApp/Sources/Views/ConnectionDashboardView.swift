@@ -14,37 +14,31 @@ struct ConnectionDashboardView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [Color(red: 0.03, green: 0.05, blue: 0.10), Color(red: 0.06, green: 0.10, blue: 0.20)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                Color(red: 0.075, green: 0.08, blue: 0.09)
+                    .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 28) {
-                        VStack(spacing: 12) {
-                            Image(systemName: "bolt.shield.fill")
-                                .font(.system(size: 64))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [.cyan, .blue],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .padding(.top, 48)
-                                .shadow(color: .cyan.opacity(0.35), radius: 15)
+                    VStack(spacing: 24) {
+                        HStack(alignment: .center, spacing: 14) {
+                            Image(systemName: "bolt.horizontal.fill")
+                                .font(.system(size: 24, weight: .medium))
+                                .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                .frame(width: 52, height: 52)
+                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
 
-                            Text("BugBuster")
-                                .font(.system(size: 38, weight: .bold, design: .rounded))
-                                .foregroundColor(.white)
-                                .tracking(1)
-
-                            Text("Bench Instrument Controller")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(.secondary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("BugBuster")
+                                    .font(.system(size: 27, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.white)
+                                Text("CONNECT TO INSTRUMENT")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.52))
+                            }
+                            Spacer(minLength: 0)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 28)
 
                         if let error = errorMessage {
                             Text(error)
@@ -61,39 +55,36 @@ struct ConnectionDashboardView: View {
                         }
 
                         if connectionManager.connectionState == .connecting {
-                            HStack(spacing: 16) {
+                            HStack(spacing: 12) {
                                 ProgressView()
-                                    .tint(.cyan)
-                                Text("Connecting to hardware...")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundColor(.primary)
+                                    .tint(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                Text("Connecting to instrument")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                                Spacer()
                             }
-                            .premiumGlassCard()
+                            .padding(16)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                             .padding(.horizontal)
                         }
 
                         if connectionManager.connectionState == .unauthorized {
-                            VStack(spacing: 20) {
-                                VStack(spacing: 12) {
-                                    Image(systemName: "lock.shield.fill")
-                                        .font(.system(size: 48))
-                                        .foregroundColor(.orange)
-                                        .shadow(color: .orange.opacity(0.4), radius: 10)
-                                        .padding(.top, 8)
-
-                                    Text("Authentication Required")
-                                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                                        .foregroundColor(.white)
-
-                                    Text("Please enter the admin access token for the device at:")
-                                        .font(.system(size: 14))
-                                        .foregroundColor(.secondary)
-                                        .multilineTextAlignment(.center)
-                                        .padding(.horizontal)
-
-                                    Text(connectionManager.activeDevice?.ip ?? "BugBuster Board")
-                                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                                        .foregroundColor(.cyan)
+                            VStack(alignment: .leading, spacing: 18) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "lock.shield")
+                                        .font(.system(size: 19))
+                                        .foregroundColor(Color(red: 1, green: 0.72, blue: 0.42))
+                                        .frame(width: 38, height: 38)
+                                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Admin access")
+                                            .font(.system(size: 17, weight: .semibold))
+                                            .foregroundColor(.white)
+                                        Text(connectionManager.activeDevice?.hostname ?? "BugBuster")
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.56))
+                                            .lineLimit(1)
+                                    }
                                 }
 
                                 HStack(spacing: 10) {
@@ -107,17 +98,13 @@ struct ConnectionDashboardView: View {
                                     }) {
                                         Image(systemName: "qrcode.viewfinder")
                                             .font(.system(size: 20, weight: .semibold))
-                                            .foregroundColor(.cyan)
-                                            .padding(14)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .fill(Color.cyan.opacity(0.15))
-                                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cyan.opacity(0.3), lineWidth: 1))
-                                            )
+                                            .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                            .frame(width: 48, height: 48)
+                                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                                     }
                                     .buttonStyle(.plain)
+                                    .accessibilityLabel("Scan access token QR code")
                                 }
-                                .padding(.horizontal)
 
                                 HStack(spacing: 14) {
                                     Button(action: {
@@ -129,11 +116,7 @@ struct ConnectionDashboardView: View {
                                             .foregroundColor(.white)
                                             .frame(maxWidth: .infinity)
                                             .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .fill(Color.white.opacity(0.08))
-                                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.12), lineWidth: 1))
-                                            )
+                                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                                     }
                                     .buttonStyle(.plain)
 
@@ -155,51 +138,40 @@ struct ConnectionDashboardView: View {
                                     }) {
                                         Text("Authenticate")
                                             .font(.system(size: 15, weight: .bold))
-                                            .foregroundColor(.black)
+                                            .foregroundColor(Color(red: 0.075, green: 0.08, blue: 0.09))
                                             .frame(maxWidth: .infinity)
                                             .padding()
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 12)
-                                                    .fill(
-                                                        LinearGradient(
-                                                            colors: [Color.cyan, Color.blue],
-                                                            startPoint: .top,
-                                                            endPoint: .bottom
-                                                        )
-                                                    )
-                                                    .shadow(color: .cyan.opacity(0.3), radius: 6, x: 0, y: 2)
-                                            )
+                                            .background(Color(red: 0.36, green: 0.84, blue: 0.74), in: RoundedRectangle(cornerRadius: 8))
                                     }
                                     .buttonStyle(.plain)
+                                    .disabled(manualToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                 }
-                                .padding(.horizontal)
-                                .padding(.bottom, 12)
                             }
-                            .premiumGlassCard()
+                            .padding(20)
+                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                             .padding(.horizontal)
                         } else {
-                            VStack(spacing: 24) {
+                            VStack(spacing: 16) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     HStack {
-                                        Text("Discovered Devices")
-                                            .font(.system(size: 18, weight: .bold))
+                                        Label("Wi-Fi", systemImage: "wifi")
+                                            .font(.system(size: 16, weight: .semibold))
                                             .foregroundColor(.white)
                                         Spacer()
                                         if connectionManager.isSearching {
                                             ProgressView()
-                                                .tint(.cyan)
+                                                .tint(Color(red: 0.36, green: 0.84, blue: 0.74))
                                         } else {
                                             Button(action: {
                                                 connectionManager.startDiscovery()
                                             }) {
-                                                Text("Scan")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(.cyan)
-                                                    .padding(.horizontal, 12)
-                                                    .padding(.vertical, 6)
-                                                    .background(Capsule().stroke(Color.cyan.opacity(0.4), lineWidth: 1))
+                                                Image(systemName: "arrow.clockwise")
+                                                    .font(.system(size: 15, weight: .semibold))
+                                                    .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                                    .frame(width: 32, height: 32)
                                             }
                                             .buttonStyle(.plain)
+                                            .accessibilityLabel("Scan Wi-Fi devices")
                                         }
                                     }
 
@@ -209,17 +181,17 @@ struct ConnectionDashboardView: View {
                                                 .font(.system(size: 26))
                                                 .foregroundColor(.secondary)
                                             VStack(alignment: .leading, spacing: 4) {
-                                                Text("Searching Bonjour...")
+                                                Text(connectionManager.isSearching ? "Searching nearby..." : "No Wi-Fi devices found")
                                                     .font(.system(size: 14, weight: .semibold))
-                                                    .foregroundColor(.primary)
-                                                Text("Ensure hardware is powered & on same Wi-Fi.")
+                                                    .foregroundColor(.white)
+                                                Text("Check that your instrument is on this network.")
                                                     .font(.system(size: 12))
-                                                    .foregroundColor(.secondary)
+                                                    .foregroundColor(.white.opacity(0.56))
                                             }
                                         }
                                         .padding()
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.04)))
+                                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
                                     } else {
                                         VStack(spacing: 10) {
                                             ForEach(connectionManager.discoveredDevices) { device in
@@ -247,13 +219,18 @@ struct ConnectionDashboardView: View {
                                                     }
                                                 }) {
                                                     HStack {
+                                                        Image(systemName: "cpu")
+                                                            .font(.system(size: 18))
+                                                            .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                                                            .frame(width: 34, height: 34)
+                                                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                                                         VStack(alignment: .leading, spacing: 4) {
                                                             Text(device.hostname)
                                                                 .font(.system(size: 15, weight: .bold))
                                                                 .foregroundColor(.white)
                                                             Text(device.ip)
                                                                 .font(.system(size: 12, design: .monospaced))
-                                                                .foregroundColor(.cyan)
+                                                                .foregroundColor(.white.opacity(0.55))
                                                         }
                                                         Spacer()
                                                         Image(systemName: "chevron.right")
@@ -261,11 +238,7 @@ struct ConnectionDashboardView: View {
                                                             .foregroundColor(.secondary)
                                                     }
                                                     .padding()
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 14)
-                                                            .fill(Color.white.opacity(0.05))
-                                                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                                                    )
+                                                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                                                 }
                                                 .buttonStyle(.plain)
                                             }
@@ -273,15 +246,56 @@ struct ConnectionDashboardView: View {
                                     }
                                 }
                                 .padding()
-                                .background(
-                                    RoundedRectangle(cornerRadius: 18)
-                                        .fill(Color.white.opacity(0.03))
-                                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.06), lineWidth: 1))
-                                )
+                                .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
 
                                 BLEDevicesCard(manualToken: $manualToken, errorMessage: $errorMessage)
                             }
-                            .premiumGlassCard()
+                            .padding(.horizontal)
+                        }
+
+                        if connectionManager.connectionState != .unauthorized {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Connect manually", systemImage: "point.3.connected.trianglepath.dotted")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+
+                                TextField("IP address or hostname", text: $manualIp)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .keyboardType(.URL)
+                                    .premiumGlassInput()
+                                SecureField("Admin access token", text: $manualToken)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .premiumGlassInput()
+
+                                Button {
+                                    Task {
+                                        let success = await connectionManager.connect(ip: manualIp, token: manualToken)
+                                        if !success {
+                                            errorMessage = connectionManager.connectionState == .unauthorized
+                                                ? "Admin token required for this instrument."
+                                                : "Could not connect to \(manualIp)."
+                                        } else {
+                                            errorMessage = nil
+                                        }
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text("Connect by IP")
+                                        Spacer()
+                                        Image(systemName: "arrow.right")
+                                    }
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(Color(red: 0.075, green: 0.08, blue: 0.09))
+                                    .padding(14)
+                                    .background(Color(red: 0.36, green: 0.84, blue: 0.74), in: RoundedRectangle(cornerRadius: 8))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(manualIp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || connectionManager.connectionState == .connecting)
+                            }
+                            .padding(20)
+                            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
                             .padding(.horizontal)
                         }
 
@@ -290,21 +304,16 @@ struct ConnectionDashboardView: View {
                         }) {
                             HStack(spacing: 12) {
                                 Image(systemName: "qrcode.viewfinder")
-                                    .font(.system(size: 22, weight: .semibold))
-                                Text("Scan Device QR Code")
-                                    .font(.system(size: 16, weight: .bold))
+                                    .font(.system(size: 19, weight: .medium))
+                                Text("Scan device QR code")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 12, weight: .semibold))
                             }
-                            .foregroundColor(.cyan)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color.cyan.opacity(0.12))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 14)
-                                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1.5)
-                                    )
-                            )
+                            .foregroundColor(Color(red: 0.36, green: 0.84, blue: 0.74))
+                            .padding(16)
+                            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                             .padding(.horizontal)
                         }
                         .buttonStyle(.plain)
@@ -314,22 +323,14 @@ struct ConnectionDashboardView: View {
                             connectionManager.connectMock()
                         }) {
                             HStack(spacing: 12) {
-                                Image(systemName: "wand.and.stars")
-                                    .font(.system(size: 20, weight: .semibold))
-                                Text("Use Mock Device (Debug)")
-                                    .font(.system(size: 15, weight: .bold))
+                                Image(systemName: "cpu")
+                                    .font(.system(size: 17, weight: .medium))
+                                Text("Demo instrument")
+                                    .font(.system(size: 14, weight: .medium))
                             }
-                            .foregroundColor(.purple)
+                            .foregroundColor(.white.opacity(0.55))
                             .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(Color.purple.opacity(0.12))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 14)
-                                            .stroke(Color.purple.opacity(0.35), lineWidth: 1.5)
-                                    )
-                            )
+                            .padding(12)
                             .padding(.horizontal)
                         }
                         .buttonStyle(.plain)
@@ -338,6 +339,8 @@ struct ConnectionDashboardView: View {
                         Spacer(minLength: 0)
                             .padding(.bottom, 48)
                     }
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .navigationTitle("Connect")
@@ -349,6 +352,15 @@ struct ConnectionDashboardView: View {
                 })
                 .environmentObject(connectionManager)
             }
+        }
+        .alert("Bluetooth Pairing", isPresented: Binding(
+            get: { connectionManager.blePairingPasskey != nil },
+            set: { _ in }
+        )) {
+            Button("Cancel", role: .cancel) { connectionManager.respondToBLEPairing(allow: false) }
+            Button("Pair") { connectionManager.respondToBLEPairing(allow: true) }
+        } message: {
+            Text("Enter code \(connectionManager.blePairingPasskey ?? "") when iOS asks to pair with BugBuster.")
         }
         .onAppear {
             if let savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip") {
@@ -366,10 +378,26 @@ struct ConnectionDashboardView: View {
 
     private func parseScannedCode(_ code: String) {
         if connectionManager.connectionState == .unauthorized {
-            manualToken = code
+            let token: String
+            if let url = URL(string: code), url.scheme == "bugbuster" {
+                token = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "token" })?.value ?? ""
+            } else {
+                token = code.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard !token.isEmpty else {
+                errorMessage = "QR code has no admin access token."
+                return
+            }
+            manualToken = token
             Task {
-                let ip = connectionManager.activeDevice?.ip ?? manualIp
-                let success = await connectionManager.connect(ip: ip, token: code)
+                let success: Bool
+                if connectionManager.transport == .ble, let device = connectionManager.activeDevice {
+                    success = await connectionManager.connectBLE(device, token: token)
+                } else {
+                    let ip = connectionManager.activeDevice?.ip ?? manualIp
+                    success = await connectionManager.connect(ip: ip, token: token)
+                }
                 if !success {
                     errorMessage = "Authentication failed. Invalid token scanned."
                 } else {
