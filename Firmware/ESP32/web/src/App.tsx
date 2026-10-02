@@ -27,6 +27,7 @@ const System = lazy(() => import("./tabs/system/System").then((m) => ({ default:
 const Scripts = lazy(() => import("./tabs/scripts/Scripts").then((m) => ({ default: m.Scripts })));
 const Voltages = lazy(() => import("./tabs/voltages/Voltages").then((m) => ({ default: m.Voltages })));
 const DAQ = lazy(() => import("./tabs/daq/DAQ").then((m) => ({ default: m.DAQ }))); // WEB-1
+const BattSim = lazy(() => import("./tabs/battsim/BattSim").then((m) => ({ default: m.BattSim })));
 
 type TabId =
   | "overview"
@@ -36,6 +37,7 @@ type TabId =
   | "signal"
   | "voltages"
   | "daq"
+  | "battery"
   | "system"
   | "scripts";
 
@@ -47,6 +49,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "signal", label: "Signal Path" },
   { id: "voltages", label: "Voltages" },
   { id: "daq", label: "DAQ" }, // WEB-1
+  { id: "battery", label: "Battery" },
   { id: "system", label: "System" },
   { id: "scripts", label: "Scripts" },
 ];
@@ -198,6 +201,11 @@ export function App() {
           {activeTab.value === "daq" && (
             <ErrorBoundary key="daq">
               <DAQ />
+            </ErrorBoundary>
+          )}
+          {activeTab.value === "battery" && (
+            <ErrorBoundary key="battery">
+              <BattSim />
             </ErrorBoundary>
           )}
           {activeTab.value === "system" && (

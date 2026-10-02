@@ -1,0 +1,36 @@
+/* Battery simulator tab */
+.bsw-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.bsw-live { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.bsw-kv { display: inline-flex; flex-direction: column; line-height: 1.15; }
+.bsw-kv > i { font-style: normal; font-size: 11px; color: var(--text-muted); }
+.bsw-st.s1 { border-color: var(--amber); color: var(--amber); }
+.bsw-st.s2 { border-color: var(--green); color: var(--green); }
+.bsw-st.s3 { border-color: var(--rose); color: var(--rose); }
+.bsw-soc {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 100px; height: 22px; border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg1);
+}
+.bsw-soc > span { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(52, 211, 153, 0.3); }
+.bsw-soc > b { position: relative; font-size: 12px; }
+.bsw-msg { margin-top: 8px; }
+.bsw-grid { display: grid; grid-template-columns: 280px 1fr 320px; gap: 12px; align-items: start; }
+@media (max-width: 1200px) { .bsw-grid { grid-template-columns: 1fr; } }
+.bsw-run { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: var(--radius-sm); }
+.bsw-run.open { background: var(--glow-subtle); outline: 1px solid var(--border-bright); }
+.bsw-run-main { flex: 1; min-width: 0; cursor: pointer; }
+.bsw-sub { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bsw-plot { position: relative; height: 560px; }
+.bsw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.bsw-empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; pointer-events: none; }
+.bsw-busy { position: absolute; top: 6px; right: 8px; font-size: 11px; color: var(--text-dim); }
+.bsw-tip {
+  position: absolute; top: 6px; pointer-events: none; z-index: 2; white-space: nowrap;
+  padding: 6px 8px; font-size: 11px; border-radius: var(--radius-sm);
+  background: var(--glass-bright); border: 1px solid var(--border-bright);
+}
+.bsw-stats th { white-space: nowrap; }
+.bsw-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); }
+.bsw-dialog { width: min(560px, calc(100vw - 32px)); }
+.bsw-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 10px 0; }
+.bsw-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
