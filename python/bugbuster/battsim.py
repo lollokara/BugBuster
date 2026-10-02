@@ -176,6 +176,7 @@ class BsStatus:
     q_peuk_c: float
     fs_total: int
     fs_used: int
+    e_dut_j: Optional[float] = None   # status v2
 
     @property
     def state_name(self) -> str:
@@ -197,7 +198,8 @@ def parse_status(raw: bytes) -> BsStatus:
         elapsed_s=f[10], remaining_s=f[11] if flags & FLAG_REMAIN_OK else None,
         v_target=f[12], v_meas=f[13], i_meas=f[14], i_avg=f[15],
         q_used_c=f[16] * 1e-9, q_dut_c=f[17] * 1e-9, q_ext_c=f[18] * 1e-9,
-        q_sd_c=f[19] * 1e-9, q_peuk_c=f[20] * 1e-9, fs_total=f[21], fs_used=f[22])
+        q_sd_c=f[19] * 1e-9, q_peuk_c=f[20] * 1e-9, fs_total=f[21], fs_used=f[22],
+        e_dut_j=struct.unpack_from("<q", raw, 88)[0] * 1e-6 if len(raw) >= 96 else None)
 
 
 @dataclass

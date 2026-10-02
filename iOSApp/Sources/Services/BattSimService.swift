@@ -15,6 +15,7 @@ struct BsStatus: Equatable {
     var state = 0, flags = 0, lastError = 0, runId = 0, chem = 0, cells = 0, capacityMah = 0
     var socPct = 0.0, elapsedS = 0, remainingS: Int?, provisional = false
     var vMeas = 0.0, iMeas = 0.0, vTarget = 0.0, iAvg = 0.0, fsTotal = 0, fsUsed = 0
+    var eDutJ: Double?
 }
 
 struct BsMeta: Equatable {
@@ -121,7 +122,8 @@ enum BattSim {
                         cells: b.u8(7), capacityMah: b.u32(8), socPct: Double(b.u16(12)) / 100,
                         elapsedS: b.u32(16), remainingS: flags & 0x40 != 0 ? b.u32(20) : nil,
                         provisional: flags & 0x01 != 0, vMeas: b.f32(28), iMeas: b.f32(32),
-                        vTarget: b.f32(24), iAvg: b.f32(36), fsTotal: b.u32(80), fsUsed: b.u32(84))
+                        vTarget: b.f32(24), iAvg: b.f32(36), fsTotal: b.u32(80), fsUsed: b.u32(84),
+                        eDutJ: b.count >= 96 ? Double(b.i64(88)) * 1e-6 : nil)
     }
 
     static func parseMeta(_ d: Data) throws -> BsMeta {

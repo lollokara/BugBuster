@@ -23,7 +23,7 @@ export interface BsStatus {
   state: number; flags: number; lastError: number; runId: number; chem: number; cells: number;
   capacityMah: number; socPct: number; profileMask: number; elapsedS: number;
   remainingS: number | null; provisional: boolean; vTarget: number; vMeas: number; iMeas: number;
-  iAvg: number; qUsedC: number; fsTotal: number; fsUsed: number;
+  iAvg: number; qUsedC: number; fsTotal: number; fsUsed: number; eDutJ: number | null;
 }
 
 export interface BsMeta { runId: number; version: number; createdEpoch: number; name: string; params: BsParams }
@@ -68,6 +68,7 @@ export function parseStatus(b: Uint8Array): BsStatus {
     vTarget: d.getFloat32(24, true), vMeas: d.getFloat32(28, true), iMeas: d.getFloat32(32, true),
     iAvg: d.getFloat32(36, true), qUsedC: Number(d.getBigInt64(40, true)) * 1e-9,
     fsTotal: d.getUint32(80, true), fsUsed: d.getUint32(84, true),
+    eDutJ: b.length >= 96 ? Number(d.getBigInt64(88, true)) * 1e-6 : null,
   };
 }
 

@@ -18,6 +18,7 @@ pub fn fmt_si(v: f64, unit: &str) -> String {
     if !v.is_finite() {
         return "-".into();
     }
+    let v = if v.abs() < 1e-12 { 0.0 } else { v };
     let a = v.abs();
     let (scale, p) = if a == 0.0 {
         (1.0, "")
@@ -278,9 +279,11 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         ctx.set_stroke_style_str(&sep);
         ctx.stroke_rect(lay.plot_x + 0.5, top + 0.5, lay.plot_w - 1.0, lh - 1.0);
         ctx.set_text_align("left");
-        ctx.set_fill_style_str(&lab3);
-        let _ = ctx.fill_text(lane.label(), lay.plot_x + 6.0, top + 13.0);
-        let Some(v) = view else { continue };
+        let Some(v) = view else {
+            ctx.set_fill_style_str(&lab3);
+            let _ = ctx.fill_text(lane.label(), lay.plot_x + 6.0, top + 13.0);
+            continue;
+        };
         if v.t.is_empty() {
             continue;
         }
@@ -357,6 +360,13 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         }
         ctx.stroke();
         ctx.restore();
+        // Lane title on a backdrop so traces never run through it.
+        let tw = ctx.measure_text(lane.label()).map(|m| m.width()).unwrap_or(40.0);
+        ctx.set_fill_style_str(&css("--surface-plot"));
+        ctx.fill_rect(lay.plot_x + 1.0, top + 1.0, tw + 12.0, 17.0);
+        ctx.set_text_align("left");
+        ctx.set_fill_style_str(&lab2);
+        let _ = ctx.fill_text(lane.label(), lay.plot_x + 6.0, top + 13.0);
     }
 
     // Run events across every lane.

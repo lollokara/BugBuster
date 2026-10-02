@@ -127,6 +127,8 @@ pub struct BsStatus {
     pub q_peuk_c: f64,
     pub fs_total: u32,
     pub fs_used: u32,
+    /// Status v2: integrated DUT energy (J).
+    pub e_dut_j: Option<f64>,
 }
 
 fn parse_status(b: &[u8]) -> CmdResult<BsStatus> {
@@ -157,6 +159,7 @@ fn parse_status(b: &[u8]) -> CmdResult<BsStatus> {
         q_peuk_c: i64le(b, 72) as f64 * 1e-9,
         fs_total: u32le(b, 80),
         fs_used: u32le(b, 84),
+        e_dut_j: (b.len() >= 96).then(|| i64le(b, 88) as f64 * 1e-6),
     })
 }
 

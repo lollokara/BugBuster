@@ -58,6 +58,8 @@ pub struct BsStatus {
     pub q_peuk_c: f64,
     pub fs_total: u32,
     pub fs_used: u32,
+    #[serde(default)]
+    pub e_dut_j: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -562,6 +564,7 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 <span class="bs-kv"><span>"I"</span><b>{fmt_si(s.i_meas as f64, "A")}</b></span>
                                 <span class="bs-kv"><span>"Elapsed"</span><b>{fmt_duration(s.elapsed_s as f64)}</b></span>
                                 <span class="bs-kv" title="From the last 30 min of total drain"><span>"Remaining"</span><b>{if prov { format!("~{remain}") } else { remain }}</b></span>
+                                {s.e_dut_j.map(|e| view! { <span class="bs-kv" title="Integrated DUT energy"><span>"Energy"</span><b>{fmt_energy_wh(e)}</b></span> })}
                             })}
                             <span class="bs-spacer"></span>
                             <span class="bs-kv" class:bs-warn=store_low title="battlog flash usage"><span>"Storage"</span><b>{store_txt}</b></span>
@@ -589,68 +592,42 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             })}
 
             <div class="bs-body">
-                // ---- Run browser ----
-                <aside class="bs-runs">
-                    <div class="bs-runs-head">
-                        <span class="group-title">"Runs on device"</span>
-                        <button class="btn btn-xs btn-ghost" title="Refresh" on:click=move |_| refresh_runs()><Icon name="refresh-cw" size=13 /></button>
-                    </div>
-                    <div class="bs-run-list">
-                        {move || {
-                            let list = runs.get();
-                            if list.is_empty() {
-                                return view! { <div class="bs-muted bs-pad">"No runs stored."</div> }.into_any();
-                            }
-                            let open_run = open_run_list.clone();
-                            list.into_iter().rev().map(|r| {
-                                let open_run = open_run.clone();
-                                let id = r.run_id;
-                                let loaded = r.active;
-                                let bytes = r.bytes;
-                                let m = r.meta.unwrap_or_default();
-                                let is_open = move || open.get().map(|o| o.meta.run_id == id && o.dir.contains(&format!("r{id:05}-"))).unwrap_or(false);
-                                let title = if m.name.is_empty() { format!("Run {id}") } else { m.name.clone() };
-                                view! {
-                                    <div class="bs-run" class:open=is_open class:active=loaded>
-                                        <div class="bs-run-main" on:click=move |_| open_run(Some(id), None)>
-                                            <div class="bs-run-title"><b>{format!("#{id}")}</b><span>{title}</span>
-                                                {loaded.then(|| view! { <span class="badge bs-live">"loaded"</span> })}</div>
-                                            <div class="bs-run-sub">{format!("{} {}S {} mAh - {} - {}", chem_name(m.params.chem), m.params.cells, m.params.capacity_mah, fmt_date(m.created_epoch), fmt_bytes(bytes))}</div>
-                                        </div>
-                                        <div class="bs-run-actions">
-                                            <button class="btn btn-xs btn-ghost" title="Load on device (PAUSED)" disabled=loaded on:click=move |_| act(ACT_LOAD, Some(id))><Icon name="upload" size=12 /></button>
-                                            <button class="btn btn-xs btn-ghost" title="Delete from device" disabled=loaded on:click=move |_| confirm_delete.set(Some(id))><Icon name="trash-2" size=12 /></button>
-                                        </div>
-                                    </div>
-                                }
-                            }).collect_view().into_any()
-                        }}
-                    </div>
-                    <div class="bs-runs-head"><span class="group-title">"On this PC"</span></div>
-                    <div class="bs-run-list">
-                        {move || {
-                            let open_run = open_run_cached.clone();
-                            cached.get().into_iter().map(|r| {
-                                let open_run = open_run.clone();
-                                let m = r.meta.clone().unwrap_or_default();
-                                let dir = r.cached_dir.clone().unwrap_or_default();
-                                view! {
-                                    <div class="bs-run cached" on:click=move |_| open_run(None, Some(dir.clone()))>
-                                        <div class="bs-run-title"><b>{format!("#{}", m.run_id)}</b><span>{m.name.clone()}</span></div>
-                                        <div class="bs-run-sub">{format!("{} - {}", fmt_date(m.created_epoch), fmt_bytes(r.bytes))}</div>
-                                    </div>
-                                }
-                            }).collect_view()
-                        }}
-                    </div>
-                </aside>
-
-                // ---- Chart ----
+                // ---- Chart (full width) ----
                 <section class="bs-main">
                     <div class="bs-toolbar">
+                        <select class="dropdown bs-pick" aria-label="Run"
+                            on:change={
+                                let open_run = open_run_list.clone();
+                                move |ev| {
+                                    let v = event_target_value(&ev);
+                                    if let Some(id) = v.strip_prefix("d:").and_then(|s| s.parse::<u16>().ok()) {
+                                        open_run(Some(id), None);
+                                    } else if let Some(dir) = v.strip_prefix("c:") {
+                                        open_run(None, Some(dir.to_string()));
+                                    }
+                                }
+                            }>
+                            <option value="" prop:selected=move || open.get().is_none()>
+                                {move || if runs.get().is_empty() && cached.get().is_empty() { "No runs stored" } else { "Open a run..." }}
+                            </option>
+                            <optgroup label="On device">
+                                {move || runs.get().into_iter().rev().map(|r| {
+                                    let id = r.run_id;
+                                    let name = r.meta.as_ref().map(|m| m.name.clone()).unwrap_or_default();
+                                    let sel = move || open.get().map(|o| o.meta.run_id == id && o.dir.contains(&format!("r{id:05}-"))).unwrap_or(false);
+                                    view! { <option value=format!("d:{id}") prop:selected=sel>{format!("#{id} {name}{}", if r.active { " (loaded)" } else { "" })}</option> }
+                                }).collect_view()}
+                            </optgroup>
+                            <optgroup label="On this PC">
+                                {move || cached.get().into_iter().map(|r| {
+                                    let m = r.meta.clone().unwrap_or_default();
+                                    let dir = r.cached_dir.clone().unwrap_or_default();
+                                    view! { <option value=format!("c:{dir}")>{format!("#{} {} - {}", m.run_id, m.name, fmt_date(m.created_epoch))}</option> }
+                                }).collect_view()}
+                            </optgroup>
+                        </select>
                         {move || open.get().map(|o| view! {
-                            <span class="bs-open-title"><b>{format!("Run #{}", o.meta.run_id)}</b>
-                                <span class="bs-muted">{format!(" {} - {} points{}", o.meta.name, o.points, if o.energy_exact { "" } else { " - energy estimated (v1 record)" })}</span></span>
+                            <span class="bs-muted">{format!("{} points{}", o.points, if o.energy_exact { "" } else { " - energy estimated (format 1)" })}</span>
                         })}
                         <span class="bs-spacer"></span>
                         <div class="seg" role="group" aria-label="Window">
@@ -661,11 +638,13 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <button on:click={let p = preset.clone(); move |_| p(2592000.0)}>"30d"</button>
                             <button on:click={let p = preset.clone(); move |_| p(0.0)}>"All"</button>
                         </div>
+                        <span class="bs-sep"></span>
                         <button class="btn btn-sm" class:btn-tinted=move || log_i.get() on:click=move |_| log_i.update(|v| *v = !*v) title="Logarithmic current axis">"log I"</button>
                         <button class="btn btn-sm" class:btn-tinted=move || wall.get() on:click=move |_| wall.update(|v| *v = !*v) title="Wall-clock axis (approximate: assumes no pauses)">"Clock"</button>
                         <button class="btn btn-sm" class:btn-tinted=move || follow.get() on:click=move |_| follow.update(|v| *v = !*v) title="Keep the newest data in view while the run is active">"Follow"</button>
-                        <button class="btn btn-sm" disabled=move || open.get().is_none() on:click=move |_| export("csv")>"CSV"</button>
-                        <button class="btn btn-sm" disabled=move || open.get().is_none() on:click=move |_| export("json")>"JSON"</button>
+                        <span class="bs-sep"></span>
+                        <button class="btn btn-sm" disabled=move || open.get().is_none() on:click=move |_| export("csv")><Icon name="file-down" size=13 />"CSV"</button>
+                        <button class="btn btn-sm" disabled=move || open.get().is_none() on:click=move |_| export("json")><Icon name="file-down" size=13 />"JSON"</button>
                     </div>
                     <div class="bs-plot" data-lanes=lanes_count>
                         <canvas node_ref=canvas_ref class="bs-canvas"
@@ -676,7 +655,7 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <div class="bs-empty">
                                 {move || match sync.get() {
                                     Some(p) => view! { <span>{format!("Downloading {} - {} / {}", p.file, fmt_bytes(p.done), fmt_bytes(p.total))}</span> }.into_any(),
-                                    None => view! { <span>{if busy.get() { "Opening run..." } else { "Open a run to explore its history. Wheel to zoom, drag to pan, Shift+drag to zoom to a range, double-click for the whole run." }}</span> }.into_any(),
+                                    None => view! { <span>{if busy.get() { "Opening run..." } else { "Pick a run above. Wheel to zoom, drag to pan, Shift+drag to zoom to a range, double-click for the whole run." }}</span> }.into_any(),
                                 }}
                             </div>
                         })}
@@ -686,9 +665,11 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         {move || hover_info().map(|(t, va, vn, vx, ia, imn, imx, p, soc, tier)| {
                             let tl = if wall.get() { open.get().map(|o| chart::fmt_wall(o.meta.created_epoch as f64 + t, true)).unwrap_or_default() } else { format!("+{}", fmt_duration(t)) };
                             let res = ["15 min", "1 min", "1 s"][tier as usize % 3];
-                            let left = format!("left:{}px", hover_x.get().unwrap_or(0.0) + 14.0);
+                            let hx = hover_x.get().unwrap_or(0.0);
+                            let w = canvas_ref.get().map(|c| c.client_width() as f64).unwrap_or(0.0);
+                            let pos = if hx > w - 280.0 { format!("right:{}px", w - hx + 14.0) } else { format!("left:{}px", hx + 14.0) };
                             view! {
-                                <div class="bs-tip" style=left>
+                                <div class="bs-tip" style=pos>
                                     <div class="bs-tip-t">{tl}<span class="bs-muted">{format!(" ({res})")}</span></div>
                                     <div><i class="dq-dot s-voltage"></i>{format!("{}  [{} .. {}]", fmt_si(va, "V"), fmt_si(vn, "V"), fmt_si(vx, "V"))}</div>
                                     <div><i class="dq-dot s-current"></i>{format!("{}  [{} .. {}]", fmt_si(ia, "A"), fmt_si(imn, "A"), fmt_si(imx, "A"))}</div>
@@ -700,79 +681,79 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     </div>
                 </section>
 
-                // ---- Stats inspector ----
-                <aside class="bs-stats">
-                    {move || {
-                        let Some(v) = view_data.get() else {
-                            return view! { <div class="bs-muted bs-pad">"Statistics for the visible window appear here."</div> }.into_any();
-                        };
-                        let s = v.stats;
-                        let cap = open.get().map(|o| o.meta.params.capacity_mah).unwrap_or(0);
-                        let e_lbl = if s.energy_estimated { "Energy (est.)" } else { "Energy" };
-                        view! {
-                            <div class="group">
-                                <div class="group-header"><span class="group-title">"Window"</span></div>
-                                <div class="kv">
-                                    <span>"Span"</span><b>{fmt_duration(s.duration_s)}</b>
-                                    <span>"From"</span><b>{format!("+{}", fmt_duration(s.t_start_s))}</b>
-                                    <span>"Points"</span><b>{s.points.to_string()}</b>
-                                </div>
-                            </div>
-                            <div class="group">
-                                <div class="group-header"><span class="group-title"><i class="dq-dot s-voltage"></i>" Voltage"</span></div>
-                                <div class="kv">
-                                    <span>"Min"</span><b>{fmt_si(s.v_min, "V")}</b>
-                                    <span>"Average"</span><b>{fmt_si(s.v_avg, "V")}</b>
-                                    <span>"Max"</span><b>{fmt_si(s.v_max, "V")}</b>
-                                </div>
-                            </div>
-                            <div class="group">
-                                <div class="group-header"><span class="group-title"><i class="dq-dot s-current"></i>" Current"</span></div>
-                                <div class="kv">
-                                    <span>"Min"</span><b>{fmt_si(s.i_min, "A")}</b>
-                                    <span>"Average"</span><b>{fmt_si(s.i_avg, "A")}</b>
-                                    <span>"Max"</span><b>{fmt_si(s.i_max, "A")}</b>
-                                    <span title="10th percentile of interval means - the sleep floor">"Baseline (P10)"</span><b>{fmt_si(s.i_p10, "A")}</b>
-                                    <span>"Median"</span><b>{fmt_si(s.i_median, "A")}</b>
-                                    <span title="99th percentile of interval means">"Busy (P99)"</span><b>{fmt_si(s.i_p99, "A")}</b>
-                                </div>
-                            </div>
-                            <div class="group">
-                                <div class="group-header"><span class="group-title"><i class="dq-dot s-power"></i>" Power and energy"</span></div>
-                                <div class="kv">
-                                    <span>"Avg power"</span><b>{fmt_si(s.p_avg, "W")}</b>
-                                    <span>"Peak power"</span><b>{fmt_si(s.p_max, "W")}</b>
-                                    <span>"Charge"</span><b>{fmt_charge_ah(s.charge_c)}</b>
-                                    <span>{e_lbl}</span><b>{fmt_energy_wh(s.energy_j)}</b>
-                                    <span>"Duty (avg/peak)"</span><b>{if s.i_max > 0.0 { format!("{:.2} %", s.i_avg / s.i_max * 100.0) } else { "-".into() }}</b>
-                                </div>
-                            </div>
-                            <div class="group">
-                                <div class="group-header"><span class="group-title">"Battery"</span></div>
-                                <div class="kv">
-                                    <span>"SOC"</span><b>{format!("{:.2} -> {:.2} %", s.soc_start, s.soc_end)}</b>
-                                    <span>"SOC rate"</span><b>{format!("{:.3} %/day", s.soc_rate_pct_per_day)}</b>
-                                    <span title="Nameplate capacity at this window's average drain">"Full-battery life"</span><b>{fmt_duration(s.projected_life_s)}</b>
-                                    <span title="Remaining SOC at this window's average drain">"Remaining at avg"</span><b>{fmt_duration(s.remaining_at_avg_s)}</b>
-                                    <span>"Capacity"</span><b>{format!("{cap} mAh")}</b>
-                                </div>
-                            </div>
-                            {(s.gaps > 0 || s.clamped > 0).then(|| view! {
-                                <div class="callout">{format!("{} interval(s) with dropped samples, {} with clamped current.", s.gaps, s.clamped)}</div>
+                // ---- Window statistics + run management ----
+                <div class="bs-lower">
+                    <section class="bs-stats">
+                        <div class="bs-sec-head">
+                            <span class="group-title">"Window statistics"</span>
+                            {move || view_data.get().map(|v| view! {
+                                <span class="bs-muted">{format!("{} from +{} - {} points", fmt_duration(v.stats.duration_s), fmt_duration(v.stats.t_start_s), v.stats.points)}</span>
                             })}
-                            <div class="group">
-                                <div class="group-header"><span class="group-title">"Events"</span></div>
-                                <div class="bs-events">
-                                    {if v.events.is_empty() { view! { <span class="bs-muted">"None in window"</span> }.into_any() } else {
-                                        v.events.iter().map(|e| view! {
-                                            <div class="bs-event"><span>{format!("+{}", fmt_duration(e.t_s as f64))}</span><b>{chart::event_name(e)}</b></div>
-                                        }).collect_view().into_any()
-                                    }}
+                        </div>
+                        {move || {
+                            let Some(v) = view_data.get() else {
+                                return view! { <div class="bs-muted">"Open a run to see statistics for the visible window."</div> }.into_any();
+                            };
+                            let s = v.stats;
+                            let tile = |title: &'static str, cls: &'static str, rows: Vec<(&'static str, String)>| view! {
+                                <div class=format!("bs-tile {cls}")>
+                                    <div class="bs-tile-t">{title}</div>
+                                    {rows.into_iter().map(|(k, val)| view! { <div class="bs-tile-r"><span>{k}</span><b>{val}</b></div> }).collect_view()}
                                 </div>
-                            </div>
-                        }.into_any()
-                    }}
-                </aside>
+                            };
+                            let duty = if s.i_max > 0.0 { format!("{:.2} %", s.i_avg / s.i_max * 100.0) } else { "-".into() };
+                            view! {
+                                <div class="bs-tiles">
+                                    {tile("Voltage", "c-v", vec![("min", fmt_si(s.v_min, "V")), ("avg", fmt_si(s.v_avg, "V")), ("max", fmt_si(s.v_max, "V"))])}
+                                    {tile("Current", "c-i", vec![("min", fmt_si(s.i_min, "A")), ("avg", fmt_si(s.i_avg, "A")), ("max", fmt_si(s.i_max, "A"))])}
+                                    {tile("Current profile", "c-i", vec![("baseline P10", fmt_si(s.i_p10, "A")), ("median", fmt_si(s.i_median, "A")), ("busy P99", fmt_si(s.i_p99, "A"))])}
+                                    {tile("Power", "c-p", vec![("avg", fmt_si(s.p_avg, "W")), ("peak", fmt_si(s.p_max, "W")), ("duty avg/peak", duty)])}
+                                    {tile("Consumed", "c-p", vec![("charge", fmt_charge_ah(s.charge_c)), (if s.energy_estimated { "energy (est.)" } else { "energy" }, fmt_energy_wh(s.energy_j))])}
+                                    {tile("State of charge", "c-s", vec![("start", format!("{:.2} %", s.soc_start)), ("end", format!("{:.2} %", s.soc_end)), ("rate", format!("{:.3} %/day", s.soc_rate_pct_per_day))])}
+                                    {tile("Projection at window avg", "c-s", vec![("full battery", fmt_duration(s.projected_life_s)), ("remaining", fmt_duration(s.remaining_at_avg_s))])}
+                                    {(s.gaps > 0 || s.clamped > 0).then(|| tile("Data quality", "", vec![("gaps", s.gaps.to_string()), ("clamped", s.clamped.to_string())]))}
+                                    {(!v.events.is_empty()).then(|| tile("Events in window", "", v.events.iter().take(4).map(|e| (chart::event_name(e), format!("+{}", fmt_duration(e.t_s as f64)))).collect()))}
+                                </div>
+                            }.into_any()
+                        }}
+                    </section>
+
+                    <aside class="bs-runs">
+                        <div class="bs-sec-head">
+                            <span class="group-title">"Runs on device"</span>
+                            <button class="btn btn-xs btn-ghost" title="Refresh" on:click=move |_| refresh_runs()><Icon name="refresh-cw" size=13 /></button>
+                        </div>
+                        <div class="bs-run-list">
+                            {move || {
+                                let list = runs.get();
+                                if list.is_empty() {
+                                    return view! { <div class="bs-muted">"No runs stored."</div> }.into_any();
+                                }
+                                let open_run = open_run_cached.clone();
+                                list.into_iter().rev().map(|r| {
+                                    let open_run = open_run.clone();
+                                    let id = r.run_id;
+                                    let loaded = r.active;
+                                    let bytes = r.bytes;
+                                    let m = r.meta.unwrap_or_default();
+                                    let is_open = move || open.get().map(|o| o.meta.run_id == id && o.dir.contains(&format!("r{id:05}-"))).unwrap_or(false);
+                                    let title = if m.name.is_empty() { format!("Run {id}") } else { m.name.clone() };
+                                    view! {
+                                        <div class="bs-run" class:open=is_open class:active=loaded>
+                                            <div class="bs-run-main" title="Open history" on:click=move |_| open_run(Some(id), None)>
+                                                <div class="bs-run-title"><b>{format!("#{id}")}</b><span>{title}</span>
+                                                    {loaded.then(|| view! { <span class="badge bs-live">"loaded"</span> })}</div>
+                                                <div class="bs-run-sub">{format!("{} {}S {} mAh - {} - {}", chem_name(m.params.chem), m.params.cells, m.params.capacity_mah, fmt_date(m.created_epoch), fmt_bytes(bytes))}</div>
+                                            </div>
+                                            <button class="btn btn-xs" title="Load on device (PAUSED)" disabled=loaded on:click=move |_| act(ACT_LOAD, Some(id))>"Load"</button>
+                                            <button class="btn btn-xs btn-ghost" title="Delete from device" disabled=loaded on:click=move |_| confirm_delete.set(Some(id))><Icon name="trash-2" size=13 /></button>
+                                        </div>
+                                    }
+                                }).collect_view().into_any()
+                            }}
+                        </div>
+                    </aside>
+                </div>
             </div>
 
             {move || confirm_delete.get().map(|id| view! {
