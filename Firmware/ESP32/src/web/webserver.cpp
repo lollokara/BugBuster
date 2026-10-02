@@ -194,8 +194,19 @@ static esp_err_t check_admin_auth(httpd_req_t *req)
 // Helper: send a cJSON object as an HTTP response (deletes root after send)
 // -----------------------------------------------------------------------------
 
+// TR-11b: a failed action used to answer 200 {"ok":false}, which clients
+// that only look at the status code took for success. A non-GET reply whose
+// top-level "ok" is false is now sent as 400 (body unchanged). GET replies
+// keep 200: there "ok":false is status data (e.g. no HAT fitted).
+static int logical_failure_status(httpd_req_t *req, const cJSON *root, int code)
+{
+    if (code != 200 || req->method == HTTP_GET || !root) return code;
+    return cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(root, "ok")) ? 400 : code;
+}
+
 static esp_err_t send_json(httpd_req_t *req, cJSON *root, int code = 200)
 {
+    code = logical_failure_status(req, root, code);
     char *body = cJSON_PrintUnformatted(root);
     if (!body) {
         cJSON_Delete(root);
@@ -241,6 +252,11 @@ static int upload_recv(httpd_req_t *req, char *buf, size_t len)
 
 static esp_err_t send_raw_json(httpd_req_t *req, const char *body, int code = 200)
 {
+    if (code == 200 && req->method != HTTP_GET && body && strstr(body, "\"ok\":false")) {
+        cJSON *parsed = cJSON_Parse(body);
+        code = logical_failure_status(req, parsed, code);
+        cJSON_Delete(parsed);
+    }
     char origin_buf[96];
     set_cors_headers(req, origin_buf, sizeof(origin_buf));
     httpd_resp_set_type(req, "application/json");
