@@ -46,8 +46,12 @@
 
 .dg-hint { margin: 0; font-size: var(--fs-footnote); color: var(--label-2); line-height: 1.5; }
 .dg-status { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-footnote); color: var(--label-2); }
+.dg-status.tone-text-green { color: var(--c-green-text); font-weight: var(--fw-medium); }
 .dg-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
-.dg-msg { min-height: 18px; font-size: var(--fs-footnote); color: var(--label-2); }
+.dg-msg { font-size: var(--fs-footnote); color: var(--label-2); }
+.dg-msg:empty { display: none; }
+.dg-msg.tone-text-red { color: var(--c-red-text); }
+.dg-msg.tone-text-green { color: var(--c-green-text); }
 .dg-sub { margin: 0; font-size: var(--fs-footnote); font-weight: var(--fw-semibold); color: var(--label-2); }
 .dg-kv { row-gap: var(--s-2); font-size: var(--fs-footnote); }
 .dg-kv dd { margin: 0; text-align: right; min-width: 0; overflow-wrap: anywhere; }
@@ -164,12 +168,12 @@
 
 .sg-bar {
     display: flex; flex-wrap: wrap; align-items: center; flex-shrink: 0;
-    gap: 6px var(--s-3); padding: var(--s-2) var(--s-3);
+    gap: 6px var(--s-4); padding: var(--s-2) var(--s-3);
     background: var(--surface-1); border-bottom: 0.5px solid var(--sep);
 }
 .sg-group { display: inline-flex; align-items: center; gap: 6px; }
 .sg-cap { font-size: var(--fs-caption); font-weight: var(--fw-semibold); color: var(--label-2); margin-right: 2px; }
-.sg-divider { width: 0.5px; height: 20px; background: var(--sep-strong); }
+.sg-divider { display: none; }
 
 .sg-tog {
     display: inline-flex; align-items: center; gap: 6px;

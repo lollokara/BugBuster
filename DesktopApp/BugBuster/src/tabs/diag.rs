@@ -1019,6 +1019,9 @@ fn FirmwareSection() -> impl IntoView {
                     >
                         {move || if ota_active.get() { "Update in progress..." } else { "Perform update" }}
                     </button>
+                    {move || (!ota_active.get() && !update_esp32.get() && !update_rp2040.get()).then(|| view! {
+                        <p class="dg-hint">"Tick at least one device to enable the update."</p>
+                    })}
                     {move || ota_active.get().then(|| view! { <OtaProgressBar ota_progress=ota_progress /> })}
                 </div>
             </div>
