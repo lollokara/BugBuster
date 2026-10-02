@@ -29,7 +29,6 @@ const OP_STATUS: u8 = 0;
 const OP_LIST_RUNS: u8 = 1;
 const OP_RUN_DIR: u8 = 2;
 const OP_READ: u8 = 3;
-const OP_PROFILE: u8 = 4;
 const OP_SET_EPOCH: u8 = 5;
 const CHUNK_USB: usize = 236;
 const CHUNK_HTTP: usize = 2048;
@@ -910,31 +909,6 @@ pub fn bs_export(path: String, format: String, st: State<'_, BattSimState>) -> C
 pub async fn bs_set_epoch(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(map_err)?.as_secs() as u32;
     bs_req(&mgr, OP_SET_EPOCH, &now.to_le_bytes()).await.map(|_| ())
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BsProfile {
-    pub slot: u8,
-    pub name: String,
-    pub params: BsParams,
-}
-
-#[tauri::command]
-pub async fn bs_profiles(mask: u16, mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<BsProfile>> {
-    let mut out = Vec::new();
-    for slot in 0..16u8 {
-        if mask & (1 << slot) == 0 {
-            continue;
-        }
-        let raw = bs_req(&mgr, OP_PROFILE, &[slot]).await?;
-        if raw.len() < 52 {
-            continue;
-        }
-        let end = raw[..24].iter().position(|&c| c == 0).unwrap_or(24);
-        out.push(BsProfile { slot, name: String::from_utf8_lossy(&raw[..end]).into_owned(), params: parse_params(&raw[24..52]) });
-    }
-    Ok(out)
 }
 
 /// Battery definition to write before NEW RUN / profile save. Unset fields are left alone.

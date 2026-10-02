@@ -455,12 +455,14 @@ final class BattSimClient {
 
     func readRange(run: Int, file: Int, offset: Int, size: Int, progress: ((Int) -> Void)? = nil) async throws -> Data {
         var out = Data()
+        // BLE tunnel replies are notify-framed; smaller chunks keep each one well inside the 6 s request timeout.
+        let chunk = cm.transport == .ble ? 1024 : 2048
         while out.count < size {
-            let want = min(size - out.count, 2048)
+            let want = min(size - out.count, chunk)
             let c = try await post("/api/daq/bs/read", ["run": run, "file": file, "off": offset + out.count, "len": want])
             out.append(c)
             progress?(out.count)
-            if c.isEmpty || c.count < min(want, 2048) { break }
+            if c.isEmpty || c.count < want { break }
         }
         return out
     }

@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**135 tools in 18 groups, 6 resources, 4 prompt workflows.**
+**141 tools in 19 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -127,6 +127,7 @@ Claude Code, or your client's tool inspector. The groups:
 | `daq` | 12 | Power Profiler Pro HAT: settings, source control, measurement, `observe_daq` (bounded summary), energy/charge reset, triggers |
 | `daq_power` | 17 | Power-consumption profiling over the P4's own USB-HS data plane: capture (blocking and async), energy/state/periodicity report, window zoom, A/B compare, marker windows, CSV export, supply/range/rate/stability control |
 | `daq_cal` | 4 | Power Profiler Pro HAT calibration flow |
+| `battsim` | 6 | Battery simulator on the DAQ HAT: live status, stored runs, run summary (V/I/P/SOC stats over a window), JSON/CSV export, run definition, start/pause/stop/load/delete (`delete` needs `confirm=True`) |
 | `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
 | `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |
 | `advanced` | 3 | `mux_control`, `register_access`, `idac_control` - risk-gated |

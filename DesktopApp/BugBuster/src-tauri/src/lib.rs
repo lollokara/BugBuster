@@ -233,7 +233,6 @@ pub fn run() {
             battsim::bs_view,
             battsim::bs_export,
             battsim::bs_set_epoch,
-            battsim::bs_profiles,
             battsim::bs_configure,
             battsim::bs_action,
             daq_commands::daq_vdut_set_enable,

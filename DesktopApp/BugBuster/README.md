@@ -18,7 +18,7 @@ cargo tauri build    # release bundle
 
 ## Tabs
 
-22 tabs in five categories, shown in a collapsible sidebar. `Ctrl/Cmd+K` opens a
+23 tabs in five categories, shown in a collapsible sidebar. `Ctrl/Cmd+K` opens a
 command palette that jumps to any view or action. Appearance follows the OS
 (light or dark) with a manual override in the toolbar.
 
@@ -27,7 +27,7 @@ command palette that jumps to any view or action. Appearance follows the OS
 | **Overview** | Dashboard · Board Map · Voltages & Cal · Faults · Diagnostics |
 | **Analog** | ADC · VDAC · IDAC · IIN |
 | **Digital** | GPIO · DIN · DOUT · HV IO · IO Expander |
-| **Instruments** | Scope · Logic Analyzer · HS DAQ · WaveGen · Signal Path |
+| **Instruments** | Scope · Logic Analyzer · HS DAQ · Battery Sim · WaveGen · Signal Path |
 | **System** | HAT · USB PD · UART |
 
 <table>
@@ -84,7 +84,7 @@ src/                       Leptos frontend (WASM)
 
 src-tauri/src/             Tauri backend (Rust)
   lib.rs                   Plugin setup, command registration
-  commands.rs              154 Tauri commands
+  commands.rs              164 Tauri commands
   connection_manager.rs    Transport lifecycle, state polling
   usb_transport.rs         BBP over USB CDC (COBS framing)
   http_transport.rs        REST over WiFi, re-encoded to BBP binary

@@ -92,8 +92,7 @@
   remaining time from the last 30 min) and an accelerating slider editor.
   DDP bumped to v10 (`DDP_CMD_SET_BATTSIM`).
   **The P4 partition table changed (OTA slots 5 -> 3 MiB): one wired flash per
-  board is required.** Host transport (BBP/HTTP/MCP history download, JSON
-  export) is not built yet.
+  board is required.**
 - Battery simulator history format v2 (`BS_FMT_VERSION` 2): 48 B records with
   cumulative DUT charge, all-source charge and an exact DUT energy integral
   (block-mean V*I folded into int64 nJ on the charge tick base), the seconds
@@ -107,6 +106,18 @@
   Status adds `e_dut_uj` (96 B, version 2) and `BS_FLAG_STORE_LOW`. Runs
   created by older firmware load read-only (START refused). P4 CLI `bs`
   (status, rec, ev, selftest, crash).
+- Battery simulator host transport and UIs. BBP `DAQ_CONFIG` sub-op 0x0B and
+  HTTP `POST /api/daq/bs`, `/api/daq/bs/read`, `/api/daq/config` reach the P4
+  through HAT command 0x7B (P4 worker with an 8 KiB read-ahead cache, about
+  14 KB/s). Python `client.battsim` (status, runs, incremental mirror, merged
+  history, window stats, JSON/CSV export) and 6 `battsim_*` MCP tools. Desktop
+  Battery Sim tab, web Battery tab and iOS Battery section: live status and
+  controls, new-run dialog, run browser with a local mirror (only appended
+  bytes are re-read), step-rendered V/I/P/SOC lanes with min/max envelopes,
+  log current axis, wall-clock axis, follow mode, zoom and pan, hover/scrub
+  readout, window statistics (min/avg/max, P10/median/P99 current, charge,
+  energy, SOC rate, projected life) and CSV/JSON export. The 1 s tier only
+  reaches flash on pause/stop, so coarser records on both sides of it are kept.
 
 ## [3.0.0] - 2026-10-02
 

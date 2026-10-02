@@ -121,6 +121,11 @@ struct ConnectionDashboardView: View {
                                     .buttonStyle(.plain)
 
                                     Button(action: {
+                                        let entered = manualToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if entered.count == 6, entered.allSatisfy(\.isNumber) {
+                                            errorMessage = "That is the 6-digit Bluetooth pairing code. Enter it in the iOS \"Bluetooth Pairing Request\" prompt, not here. This field needs the 64-character admin token."
+                                            return
+                                        }
                                         Task {
                                             let success: Bool
                                             if connectionManager.transport == .ble, let dev = connectionManager.activeDevice {
@@ -353,14 +358,16 @@ struct ConnectionDashboardView: View {
                 .environmentObject(connectionManager)
             }
         }
-        .alert("Bluetooth Pairing", isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { connectionManager.blePairingPasskey != nil },
+            // Only the buttons answer: SwiftUI also clears this when the view is swapped mid-connect.
             set: { _ in }
         )) {
-            Button("Cancel", role: .cancel) { connectionManager.respondToBLEPairing(allow: false) }
-            Button("Pair") { connectionManager.respondToBLEPairing(allow: true) }
-        } message: {
-            Text("Enter code \(connectionManager.blePairingPasskey ?? "") when iOS asks to pair with BugBuster.")
+            BlePasskeySheet(passkey: connectionManager.blePairingPasskey ?? "",
+                            onPair: { connectionManager.respondToBLEPairing(allow: true) },
+                            onCancel: { connectionManager.respondToBLEPairing(allow: false) })
+                .presentationDetents([.medium, .large])
+                .interactiveDismissDisabled()
         }
         .onAppear {
             if let savedIp = UserDefaults.standard.string(forKey: "bugbuster_ip") {
@@ -426,6 +433,58 @@ struct ConnectionDashboardView: View {
             if !success {
                 errorMessage = "Failed to connect using QR credentials"
             }
+        }
+    }
+}
+
+/// Shows the 6-digit BLE passkey before iOS raises its own pairing prompt.
+/// The prompt wants this code, not the 64-character admin token.
+private struct BlePasskeySheet: View {
+    let passkey: String
+    let onPair: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "lock.shield").font(.system(size: 34)).foregroundColor(.cyan)
+            Text("Bluetooth pairing code").font(.title3.bold())
+            Text(passkey.map(String.init).joined(separator: " "))
+                .font(.system(size: 44, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 22).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cyan.opacity(0.15)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.cyan.opacity(0.6), lineWidth: 1.5))
+                .textSelection(.enabled)
+                .accessibilityLabel("Pairing code \(passkey)")
+            VStack(alignment: .leading, spacing: 8) {
+                step("1", "Tap Pair below.")
+                step("2", "iOS shows \"Bluetooth Pairing Request\" asking for a code.")
+                step("3", "Type these 6 digits (or paste - the code is copied for you). Do not enter the admin token.")
+            }
+            .frame(maxWidth: 420, alignment: .leading)
+            HStack(spacing: 12) {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .buttonStyle(.bordered).controlSize(.large)
+                Button {
+                    UIPasteboard.general.string = passkey
+                    onPair()
+                } label: {
+                    Label("Copy code & Pair", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.borderedProminent).tint(.cyan).controlSize(.large)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.075, green: 0.08, blue: 0.09).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+    }
+
+    private func step(_ n: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(n).font(.system(size: 12, weight: .bold)).foregroundColor(.black)
+                .frame(width: 20, height: 20).background(Circle().fill(Color.cyan))
+            Text(text).font(.system(size: 14)).foregroundColor(.secondary)
         }
     }
 }

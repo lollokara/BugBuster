@@ -75,6 +75,14 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
     private var connectCont: CheckedContinuation<Bool, Never>?
     private var readConts: [CBUUID: CheckedContinuation<Data?, Never>] = [:]
     private var writeConts: [CBUUID: CheckedContinuation<Bool, Never>] = [:]
+    /// ATT error of the last failed write (insufficientAuthentication = link not paired/bonded).
+    public private(set) var lastWriteError: CBATTError.Code?
+    /// Set when iOS reports the device dropped our bond; only "Forget This Device" in Settings recovers it.
+    public private(set) var staleBond = false
+
+    private func noteBondError(_ error: Error?) {
+        if (error as? CBError)?.code == .peerRemovedPairingInformation { staleBond = true }
+    }
 
     // API tunnel reassembly (keyed by request id).
     private var reqIdCounter: UInt8 = 0
@@ -135,6 +143,7 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
                 }
                 if self.connectCont != nil { self.connectCont?.resume(returning: false); self.connectCont = nil }
                 self.connectCont = cont
+                self.staleBond = false
                 self.peripheral = entry.peripheral
                 entry.peripheral.delegate = self
                 self.chars.removeAll()
@@ -335,11 +344,13 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         NSLog("[BLE] didFailToConnect: %@", error?.localizedDescription ?? "unknown")
+        noteBondError(error)
         if let c = connectCont { connectCont = nil; c.resume(returning: false) }
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         NSLog("[BLE] didDisconnect: %@", error?.localizedDescription ?? "clean")
+        noteBondError(error)
         // Fail any in-flight operations.
         if let c = connectCont { connectCont = nil; c.resume(returning: false) }
         if let c = tunnelCont { tunnelCont = nil; c.resume(returning: nil) }
@@ -419,6 +430,7 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
         let uuid = characteristic.uuid
         if let c = writeConts[uuid] {
             if let error { NSLog("[BLE] write %@ failed: %@", uuid.uuidString, error.localizedDescription) }
+            lastWriteError = (error as? CBATTError)?.code
             writeConts[uuid] = nil
             c.resume(returning: error == nil)
         }

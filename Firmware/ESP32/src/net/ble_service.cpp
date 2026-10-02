@@ -31,8 +31,11 @@
 #include "host/ble_hs.h"
 #include "host/ble_att.h"
 #include "host/util/util.h"
+#include "host/ble_store.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+
+extern "C" void ble_store_config_init(void);
 
 #include "auth.h"
 #include "bbp.h"
@@ -156,8 +159,8 @@ static int chr_auth_access(uint16_t conn_handle, uint16_t attr_handle,
         s_authed = ok;
     }
     ESP_LOGI(TAG, "auth write: %s", ok ? "OK" : "REJECT");
-    // Wrong token is an authentication failure, not a malformed write.
-    return ok ? 0 : BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+    // Not INSUFFICIENT_AUTHEN: iOS reports that as a pairing failure, so a wrong token must look different.
+    return ok ? 0 : BLE_ATT_ERR_WRITE_NOT_PERMITTED;
 }
 
 // Copy the writable payload of a GATT write into a NUL-terminated buffer.
@@ -608,6 +611,10 @@ static int bb_gap_event(struct ble_gap_event *event, void *arg)
             s_conn_handle = event->connect.conn_handle;
             s_authed = false;
             ESP_LOGI(TAG, "central connected (handle %d)", s_conn_handle);
+            // Ask for encryption up front: iOS then shows its passkey prompt (or reuses the bond)
+            // instead of relying on a failed protected write to trigger pairing.
+            int src = ble_gap_security_initiate(s_conn_handle);
+            if (src != 0) ESP_LOGW(TAG, "security initiate rc=%d", src);
         } else {
             // Failed connection — resume advertising.
             bb_advertise();
@@ -634,6 +641,20 @@ static int bb_gap_event(struct ble_gap_event *event, void *arg)
             if (rc != 0) ESP_LOGW(TAG, "passkey inject failed rc=%d", rc);
         }
         return 0;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        // Non-zero after an S3 bond wipe: the central still holds the old key and must forget the device.
+        ESP_LOGI(TAG, "encryption change status=%d", event->enc_change.status);
+        return 0;
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        // The central lost its bond ("Forget device"): drop ours and let it pair again.
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
 
     default:
         return 0;
@@ -700,6 +721,9 @@ bool ble_service_init(void)
     ble_hs_cfg.sm_sc          = 1;
     ble_hs_cfg.sm_our_key_dist  = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    // Bonds must survive reboots/OTA, or bonded centrals fail encryption with a stale key.
+    ble_hs_cfg.store_status_cb  = ble_store_util_status_rr;
+    ble_store_config_init();
 
     ble_svc_gap_init();
     ble_svc_gatt_init();

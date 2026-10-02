@@ -527,7 +527,13 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         let linked = await ble.connect(id: bleId)
         guard linked else {
             NSLog("[BLE] connectBLE: GATT link/discovery failed")
-            updateOnMain { self.connectionState = .error }
+            let stale = ble.staleBond
+            updateOnMain {
+                self.connectionState = .error
+                if stale {
+                    self.showToast("\(device.hostname) no longer has this device's pairing keys (its firmware or bond store was reset). Open Settings > Bluetooth, tap (i) next to \(device.hostname), choose Forget This Device, then connect again.", type: .error)
+                }
+            }
             return false
         }
 
@@ -566,13 +572,26 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             return false
         }
 
-        let authed = await ble.authenticate(token: useToken)
+        var authed = await ble.authenticate(token: useToken)
+        // The first protected write only triggers the iOS pairing prompt and fails; retry while the user enters the code.
+        var waited = 0
+        while !authed, waited < 60, ble.isConnected,
+              ble.lastWriteError == .insufficientAuthentication || ble.lastWriteError == .insufficientEncryption {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            waited += 2
+            authed = await ble.authenticate(token: useToken)
+        }
         NSLog("[BLE] connectBLE: authenticate -> %@", authed ? "OK" : "REJECTED")
         if !authed {
+            let code = ble.lastWriteError
+            let bondProblem = code == .insufficientAuthentication || code == .insufficientEncryption
             updateOnMain {
                 self.connectionState = .unauthorized
                 self.adminToken = useToken
                 self.activeDevice = device
+                self.showToast(bondProblem
+                    ? "Bluetooth pairing failed. If BugBuster was reflashed, open Settings > Bluetooth, tap (i) next to \(device.hostname), choose Forget This Device, then connect again and enter the passkey."
+                    : "BugBuster rejected the admin token.", type: .error)
             }
             return false
         }
