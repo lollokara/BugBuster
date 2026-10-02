@@ -1,6 +1,6 @@
 // Screenshot + health report harness for the BugBuster desktop frontend (mock IPC, no hardware).
 // Usage: node shoot.mjs [--url http://localhost:1431] [--hat daq|la|none] [--theme light|dark|both]
-//                       [--only viewId,viewId] [--out shots] [--size 1440x900]
+//                       [--only viewId,viewId] [--out shots] [--size 1440x900] [--clean]
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +19,7 @@ function parseArgs(argv) {
     else if (k === '--only') { o.only = v.split(',').map((s) => s.trim()).filter(Boolean); i++; }
     else if (k === '--out') { o.out = v; i++; }
     else if (k === '--size') { [o.w, o.h] = v.split('x').map(Number); i++; }
+    else if (k === '--clean') { o.clean = true; }
   }
   return o;
 }
@@ -112,6 +113,9 @@ async function runOne(browser, hat, theme) {
   // Trunk's livereload socket would reload the page whenever a screenshot lands inside the watched tree.
   await context.addInitScript(`(function(){ var O = window.WebSocket; function W(u, p){ if (String(u).indexOf('.well-known/trunk/ws') >= 0) { return { close: function(){}, send: function(){}, addEventListener: function(){}, removeEventListener: function(){}, readyState: 0 }; } return p === undefined ? new O(u) : new O(u, p); } W.prototype = O.prototype; W.CONNECTING = 0; W.OPEN = 1; W.CLOSING = 2; W.CLOSED = 3; window.WebSocket = W; })();`);
   await context.addInitScript({ path: path.join(here, 'mock_ipc.js') });
+  if (opts.clean) {
+    await context.addInitScript(`document.addEventListener('DOMContentLoaded', function(){ var s = document.createElement('style'); s.textContent = '.toast-container{display:none!important}'; document.head.appendChild(s); });`);
+  }
   await context.addInitScript(`(function(){ if (document.hidden) { window.requestAnimationFrame = function(cb){ return setTimeout(function(){ cb(performance.now()); }, 16); }; } })();`);
   const page = await context.newPage();
 

@@ -297,6 +297,16 @@ Constants live in `python/bugbuster_mcp/config.py`. Full matrix:
       <br/><sub><b>Logic Analyzer</b> - UART / I²C / SPI decoders</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center">
+      <img src="Docs/Images/screenshots/screenshot_hs_daq.png" alt="HS DAQ" width="420"/>
+      <br/><sub><b>HS DAQ</b> - voltage, current and power streaming with triggers</sub>
+    </td>
+    <td align="center">
+      <img src="Docs/Images/screenshots/screenshot_scope.png" alt="Scope" width="420"/>
+      <br/><sub><b>Scope</b> - 4-ch ADC scope with measurements</sub>
+    </td>
+  </tr>
 </table>
 
 Tauri v2 + Leptos 0.7, 22 tabs. Build from source:

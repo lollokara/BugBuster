@@ -2,7 +2,37 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop app UI redesign.** New design system (`styles/tokens.css`):
+  light and dark appearance that follows the OS with a manual override, Inter
+  bundled, monospaced tabular numerics, Lucide SVG icons, no glass or glow on
+  content. Xcode-style shell: sidebar source list (collapsible), unified
+  toolbar, right-hand inspectors on instrument views, and a Cmd/Ctrl-K command
+  palette that jumps to any view or action. All 22 views rebuilt on the new
+  primitives (`components/ui.rs`); every control, IPC call, confirmation and
+  IO-claim path is preserved (checked per view by an IPC-usage diff).
+  Notable view changes: Saleae-style Logic Analyzer with a theme-aware canvas
+  and decoder inspector; Signal Path as an accessible SVG schematic (switch
+  state shown by shape and label, not colour only); Diagnostics split into
+  Health / Channels / Firmware / WiFi / App Update; Voltages shows setpoint
+  vs measured with calibration in its own guarded section; Board Map gains a
+  pin inspector with owner and live value; HAT view explains the DAQ HAT case.
+  Toasts moved bottom-right, deduplicated, at most three.
+- **UI harness.** `DesktopApp/BugBuster/tests/ui-harness` mocks Tauri IPC in
+  the browser (`mock_ipc.js`) and screenshots every view per HAT type and
+  theme with a console/page-error report (`shoot.mjs`, `--size` for window
+  sizes).
+
 ### Fixed
+
+- **Desktop:** Logic Analyzer Clear (and Run All with no capture) passed
+  `u64::MAX` to the bridge and panicked the WASM app; UART selects showed the
+  first option instead of the stored setting; Diagnostics release-notes
+  preview could split a UTF-8 character and panic; IDAC Set showed the stale
+  mount-time value until the next tab visit.
+- **`check_doc_counts.py`** counted command-palette tuples as desktop tabs;
+  it now counts the `CATEGORIES` table only.
 
 - **HTTP route `/api/hat/v2/swd/detect`** was never dispatched by the
   `/api/hat/*` POST handler and returned 404 (ESP32).
