@@ -390,6 +390,7 @@ fn RailCell(
             <div class="bm-rail-top">
                 <span class="bm-rail-dot" aria-hidden="true"></span>
                 <span class="bm-rail-name">{label}</span>
+                <span class="bm-rail-sub">"Profile setpoint"</span>
             </div>
             <div class="bm-rail-ctl">
                 <input type="number" step="0.1" class="bm-rail-input"

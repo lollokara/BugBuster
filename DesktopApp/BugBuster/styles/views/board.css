@@ -27,6 +27,7 @@
 .bm-rail-top { display: flex; align-items: center; gap: var(--s-2); }
 .bm-rail-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rc); flex-shrink: 0; }
 .bm-rail-name { font-size: var(--fs-footnote); font-weight: var(--fw-semibold); color: var(--label-2); }
+.bm-rail-sub { margin-left: auto; font-size: var(--fs-caption); color: var(--label-2); }
 .bm-rail-ctl { display: flex; align-items: center; gap: 6px; }
 .bm-rail-input {
     width: 84px; text-align: right;
