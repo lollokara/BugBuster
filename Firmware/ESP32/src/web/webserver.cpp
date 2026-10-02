@@ -3263,7 +3263,7 @@ static esp_err_t handle_post_wavegen_start(httpd_req_t *req)
     if (ch < 0 || ch > 3) return send_error(req, 400, "Invalid channel");
     if (wf < 0 || wf > 3) return send_error(req, 400, "Invalid waveform");
     if (mode < 0 || mode > 1) return send_error(req, 400, "Invalid mode");
-    if (freq < 0.01 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
+    if (freq < 0.1 || freq > 100.0) return send_error(req, 400, "Frequency out of range");
     double max_out = (mode == WAVEGEN_CURRENT) ? IOUT_MAX_MA : VOUT_BIPOLAR_OFFSET_V;
     if (amp < 0.0 || amp > max_out) return send_error(req, 400, "Amplitude out of range");
     if (off < -max_out || off > max_out) return send_error(req, 400, "Offset out of range");

@@ -37,7 +37,7 @@ toy.
 **What it is not.** It will not replace a scope with real bandwidth. The logic
 analyzer streams 4 channels at up to 1 MHz over USB (125 MHz single-channel is
 capture-then-download, not live), the ADC tops out at 4.8 kSPS/channel, and the
-waveform generator covers 0.01–100 Hz. It is built for embedded bring-up, power
+waveform generator covers 0.1–100 Hz. It is built for embedded bring-up, power
 profiling, and protocol debugging - not RF or high-speed signal integrity work.
 
 ## Why
@@ -162,7 +162,7 @@ HATs, auto-detected at boot. The mainboard works standalone.
 |---|---|
 | **Measure** | 4-ch 24-bit ADC - voltage (0–12 V), current (4–20 mA), resistance, RTD; up to 4.8 kSPS/ch |
 | **Drive** | 4-ch 16-bit DAC - 0–11 V / ±12 V, or 0–25 mA |
-| **Generate** | Sine / square / triangle / sawtooth, 0.01–100 Hz |
+| **Generate** | Sine / square / triangle / sawtooth, 0.1–100 Hz |
 | **Digital IO** | 12 level-shifted IOs, 1.8–5 V VLOGIC, MUX-routed, debounced counters |
 | **Route** | 32-switch MUX - 4× ADGS2414D octal SPST, break-before-make |
 | **Power** | VADJ1/VADJ2 adjustable 3–15 V (capped by the negotiated USB-PD voltage), USB-PD 5–20 V, 4 e-fuses |

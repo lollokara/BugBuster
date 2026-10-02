@@ -3792,7 +3792,7 @@ class BugBuster:
 
         *channel*   — output channel (0–3).
         *waveform*  — :class:`WaveformType` (SINE, SQUARE, TRIANGLE, SAWTOOTH).
-        *freq_hz*   — frequency in Hz (0.01–100 Hz supported).
+        *freq_hz*   — frequency in Hz (0.1–100 Hz; the firmware rejects lower).
         *amplitude* — peak amplitude in volts or milliamps depending on *mode*.
         *offset*    — DC offset in the same units as *amplitude*.
         *mode*      — :class:`OutputMode` (VOLTAGE or CURRENT).
@@ -3806,8 +3806,8 @@ class BugBuster:
             raise ValueError("channel must be 0-3")
         waveform = WaveformType(waveform)
         mode = OutputMode(mode)
-        if not 0.01 <= float(freq_hz) <= 100.0:
-            raise ValueError("freq_hz must be 0.01-100.0")
+        if not 0.1 <= float(freq_hz) <= 100.0:
+            raise ValueError("freq_hz must be 0.1-100.0")
         max_out = 25.0 if mode == OutputMode.CURRENT else 12.0
         if not 0.0 <= float(amplitude) <= max_out:
             raise ValueError(f"amplitude must be 0.0-{max_out}")

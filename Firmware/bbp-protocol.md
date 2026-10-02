@@ -2192,7 +2192,7 @@ Start waveform generation on a channel. Automatically sets channel function.
 ```
 0       channel         u8      Channel (0-3)
 1       waveform        u8      0=sine, 1=square, 2=triangle, 3=sawtooth
-2       freq_hz         f32     Frequency in Hz (0.01-100)
+2       freq_hz         f32     Frequency in Hz (0.1-100)
 6       amplitude       f32     Amplitude (V or mA depending on mode)
 10      offset          f32     DC offset
 14      mode            u8      0=voltage, 1=current

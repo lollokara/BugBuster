@@ -23,13 +23,11 @@ def test_firmware_bbp_minimum_is_0_1_hz():
     assert "freq_hz < 0.1f" in _src("Firmware/ESP32/src/bbp/cmds/cmd_streaming.cpp")
 
 
-@pytest.mark.xfail(strict=True, reason="AN-08")
 def test_http_route_rejects_below_0_1_hz():
     body = _src("Firmware/ESP32/src/web/webserver.cpp")
     assert re.search(r"freq\s*<\s*0\.1\s*\|\|\s*freq\s*>\s*100", body)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-08")
 def test_python_client_rejects_0_05_hz():
     client = bb.BugBuster.__new__(bb.BugBuster)
     client._usb = True
@@ -39,14 +37,12 @@ def test_python_client_rejects_0_05_hz():
     client._usb_cmd.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="AN-08")
 def test_mcp_rejects_0_05_hz():
     from bugbuster_mcp.tools.waveform import start_waveform
     with pytest.raises(ValueError, match="0.1-100"):
         start_waveform(io=3, waveform="sine", freq_hz=0.05, amplitude=1.0)
 
 
-@pytest.mark.xfail(strict=True, reason="AN-08")
 def test_desktop_and_web_clamp_to_0_1_hz():
     assert "v.clamp(0.1, 100.0)" in _src("DesktopApp/BugBuster/src/tabs/wavegen.rs")
     panel = _src("Firmware/ESP32/web/src/tabs/scope/ScopePanel.tsx")

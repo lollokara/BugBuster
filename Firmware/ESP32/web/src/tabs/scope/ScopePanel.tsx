@@ -179,7 +179,7 @@ export function ScopePanel() {
         channel: wgChannel,
         waveform: wgWaveform,
         mode: wgMode,
-        freq_hz: Math.min(100, Math.max(0.01, wgFreq)),
+        freq_hz: Math.min(100, Math.max(0.1, wgFreq)),
         amplitude: wgAmplitude,
         offset: wgOffset,
       });
@@ -321,7 +321,7 @@ export function ScopePanel() {
               class="input"
               type="number"
               step="0.01"
-              min={0.01}
+              min={0.1}
               max={100}
               value={String(wgFreq)}
               onInput={(e) =>

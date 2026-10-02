@@ -117,12 +117,12 @@ def start_waveform(
 
     The IO must be configured as ANALOG_OUT with configure_io first.
     Only one waveform can run at a time. The firmware continuously updates
-    the DAC at the requested frequency (0.01-100 Hz).
+    the DAC at the requested frequency (0.1-100 Hz).
 
     Parameters:
     - io: IO number — must be 3, 6, 9, or 12 (analog-capable IOs).
     - waveform: Shape — "sine", "square", "triangle", or "sawtooth".
-    - freq_hz: Frequency in Hz (0.01 to 100.0).
+    - freq_hz: Frequency in Hz (0.1 to 100.0).
     - amplitude: Peak amplitude in volts. The waveform spans
                  [offset - amplitude, offset + amplitude].
     - offset: DC offset in volts (default 0.0).
@@ -137,9 +137,9 @@ def start_waveform(
         raise ValueError(
             f"Unknown waveform {waveform!r}. Use: sine, square, triangle, sawtooth."
         )
-    if not (0.01 <= freq_hz <= 100.0):
+    if not (0.1 <= freq_hz <= 100.0):
         raise ValueError(
-            f"Frequency {freq_hz} Hz out of range. Supported: 0.01-100 Hz."
+            f"Frequency {freq_hz} Hz out of range. Supported: 0.1-100 Hz."
         )
     if amplitude < 0:
         raise ValueError("Amplitude must be non-negative.")
