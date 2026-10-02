@@ -84,7 +84,7 @@ input[aria-invalid="true"]:focus, select[aria-invalid="true"]:focus { border-col
 }
 
 /* ---- USB PD ---- */
-.sy-pd, .sy-uart { max-width: 1080px; margin: 0 auto; width: 100%; }
+.sy-pd, .sy-uart { max-width: 1160px; width: 100%; }
 .sy-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-footnote); color: var(--label-1); font-weight: var(--fw-medium); }
 .sy-pd-readouts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-4); }
 @media (max-width: 900px) { .sy-pd-readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

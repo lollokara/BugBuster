@@ -172,4 +172,5 @@
 }
 .la-st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .la-st-text { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-.la-st-cursor { color: var(--series-marker); margin-left: auto; font-weight: var(--fw-medium); }
+.la-st-cursor { color: var(--label-2); margin-left: auto; font-weight: var(--fw-medium); }
+.la-st-cursor.is-set { color: var(--series-marker); }

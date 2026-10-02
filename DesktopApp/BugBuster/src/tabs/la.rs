@@ -3013,7 +3013,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 "No capture".to_string()
                             }}
                         </span>
-                        <span class="la-st la-st-cursor">
+                        <span class=if cursor.is_some() { "la-st la-st-cursor is-set" } else { "la-st la-st-cursor" }>
                             {if let Some(cs) = cursor {
                                 let sr = info.as_ref().map(|i| i.sample_rate_hz as f64).unwrap_or(1.0);
                                 let t = if sr > 0.0 { cs as f64 / sr } else { 0.0 };

@@ -442,9 +442,9 @@ pub fn App() -> impl IntoView {
                 // other toasts auto-dismiss after 3 s as before.
                 let dismiss_ms: u32 = if kind == "err" { 10_000 } else { 3_000 };
                 set_toasts.update(|t| {
+                    t.retain(|(m, k, _)| !(m == &msg && k == &kind));
                     t.push((msg, kind, now));
-                    // Keep max 5 toasts
-                    if t.len() > 5 {
+                    if t.len() > 3 {
                         t.remove(0);
                     }
                 });
