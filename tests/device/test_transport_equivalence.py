@@ -35,8 +35,25 @@ def test_channel_function_equivalent_across_transports(usb_device, http_device, 
 
 
 def test_device_info_equivalent_across_transports(usb_device, http_device):
-    # Found by this gate: BBP GET_DEVICE_INFO read registers 0x46-0x48, the
-    # HTTP route the real silicon registers 0x7B/0x7D/0x7E.
     a, b = usb_device.get_device_info(), http_device.get_device_info()
     assert (a.spi_ok, a.silicon_rev, a.silicon_id0, a.silicon_id1) == \
            (b.spi_ok, b.silicon_rev, b.silicon_id0, b.silicon_id1)
+
+
+# Read-only views of the same state. Values that move on their own (die
+# temperature, ADC readings, uptime) are left out.
+_RO_VIEWS = [
+    ("get_faults", lambda r: (r["alert_status"], r["alert_mask"], r["supply_alert_mask"],
+                              [(c["alert"], c["mask"]) for c in r["channels"]])),
+    ("wifi_get_status", lambda r: (r["connected"], r["sta_ip"], r["ap_ip"], r["ap_mac"])),
+    ("hat_get_status", lambda r: (r["detected"], r["type"], r["fw_version"])),
+    ("get_status", lambda r: (r["spi_ok"], [(c["function"], c["adc_range"], c["adc_rate"], c["adc_mux"])
+                                            for c in r["channels"]])),
+]
+
+
+@pytest.mark.parametrize("method,view", _RO_VIEWS, ids=[m for m, _ in _RO_VIEWS])
+def test_read_views_equivalent_across_transports(usb_device, http_device, method, view):
+    a = view(getattr(usb_device, method)())
+    b = view(getattr(http_device, method)())
+    assert a == b
