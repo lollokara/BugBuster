@@ -390,9 +390,6 @@ def test_discover_network_import_error_branch(tools):
     assert res["devices"] == [] and "bugbuster[network]" in res["hint"] and res["network_error"]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: discover_mdns raises ImportError at CALL time when zeroconf "
-                                       "is missing, but the tool only guards the import statement, so the "
-                                       "error escapes and the USB scan results are lost")
 def test_discover_without_zeroconf_degrades_gracefully(tools):
     with patch("bugbuster.discovery.list_usb_ports", return_value=_PORTS), \
          patch("bugbuster.discovery.discover_mdns", side_effect=ImportError("zeroconf is not installed")):

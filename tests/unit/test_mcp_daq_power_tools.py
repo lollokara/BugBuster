@@ -738,9 +738,6 @@ def test_window_unknown_capture(env):
         env.t["daq_power_window"]("nope")
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: daq_power_window builds the slice "
-                   "without device_status, so a window over an uncalibrated "
-                   "range is not flagged uncalibrated while the full report is")
 def test_window_keeps_calibration_standing(env):
     cap = _make_cap(n=100, rate=100.0, meta=0,
                     device_status={"cal_have_hi": False, "cal_have_mid": True,
@@ -787,10 +784,6 @@ def test_compare_unknown_capture(env):
         env.t["daq_power_compare"](a, "missing")
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: daq_power_compare reads "
-                   "integrate()['duration_s'], a key integrate never returns "
-                   "(it has duration_total_s), so duration_s and "
-                   "energy_per_second_j are always 0")
 def test_compare_normalises_by_duration(env):
     a = daq_power._store_capture(_make_cap(n=1000, rate=1000.0, lo=2e-3, hi=2e-3))
     b = daq_power._store_capture(_make_cap(n=500, rate=1000.0, lo=1e-3, hi=1e-3))
@@ -925,9 +918,6 @@ def test_export_unknown_capture(env, tmp_path):
     assert not (tmp_path / "n.csv").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: daq_power_export reports "
-                   "rows=min(sample_count, max_rows) unclamped, so a negative "
-                   "max_rows writes 0 rows but returns a negative row count")
 def test_export_negative_max_rows_reports_zero_rows(env, tmp_path):
     cid = daq_power._store_capture(_make_cap(n=20))
     path = tmp_path / "neg.csv"

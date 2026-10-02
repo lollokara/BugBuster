@@ -381,12 +381,15 @@ def register(mcp) -> None:
         # the minimum USB-C PD profile before setting the DC-DC converter.
         rail_status = bb.hat_set_rail_voltage(rail_id, voltage_mv)
 
-        return {
+        result = {
             "success":    True,
             "rail_id":    rail_id,
             "voltage_mv": voltage_mv,
             "rail_status": rail_status,
         }
+        if preflight.get("warnings"):
+            result["warnings"] = list(preflight["warnings"])
+        return result
 
     @mcp.tool()
     def hat_set_led_state(
@@ -440,10 +443,11 @@ def register(mcp) -> None:
         bb = session.get_client()
         require_hat(bb)
         ok = bb.hat_la_set_route(route_id)
+        route = "low-speed" if route_id == 0 else "high-speed"
         return {
             "success": ok,
             "route_id": route_id,
-            "message": f"LA route set to {'low-speed' if route_id == 0 else 'high-speed'}."
+            "message": f"LA route set to {route}." if ok else f"HAT refused the {route} LA route.",
         }
 
     @mcp.tool()

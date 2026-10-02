@@ -489,7 +489,9 @@ def capture_adc_snapshot_start(
     Returns: job_id, status ("pending").
     """
     if lease_handle is not None:
-        _verify_lease_covers(lease_handle, list(range(12, 16)))
+        from .analog import _ANALOG_IO_TO_SLOT
+        require_analog_io(io, "capture_adc_snapshot_start")
+        _verify_lease_covers(lease_handle, [_ANALOG_IO_TO_SLOT[io]])
     job_id = _new_job()
     _run_job(job_id, capture_adc_snapshot, io, duration_s, n_samples)
     return {"job_id": job_id, "status": "pending"}

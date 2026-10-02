@@ -485,8 +485,6 @@ def test_adc_job_lease_on_all_analog_slots_accepted(sync_threads):
     cap.assert_called_once_with(6, 0.5, 7)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: capture_adc_snapshot_start demands a lease on all four "
-                                       "analog slots (12-15) instead of the captured IO's own slot")
 def test_adc_job_lease_on_own_slot_is_enough(sync_threads):
     with patch.dict(io_owner._active_leases, {"h": [12]}, clear=True), \
          patch.object(waveform, "capture_adc_snapshot", return_value={}):

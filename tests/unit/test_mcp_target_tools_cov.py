@@ -183,9 +183,6 @@ def test_release_bootloader_warnings(env):
     assert res["success"] is False and len(res["warnings"]) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: release_bootloader defaults boot_io=2 while enter_bootloader "
-                                       "defaults (and holds low) boot_io=1, so default-arg calls never "
-                                       "release the BOOT pin")
 def test_bootloader_default_boot_io_match(env):
     tools, _, _ = env
     enter = inspect.signature(tools["enter_bootloader"]).parameters["boot_io"].default

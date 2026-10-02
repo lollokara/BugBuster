@@ -119,8 +119,8 @@ def register(mcp) -> None:
         - rx_io=3    : IO3 ← ESP32-C6 TX  (BugBuster listens)
 
         Parameters:
-        - boot_io:        BugBuster IO driving the target BOOT/GPIO0 pin. Default 2.
-        - tx_io:          BugBuster IO connected to the target RX pin. Default 1.
+        - boot_io:        BugBuster IO driving the target BOOT/GPIO0 pin. Default 1.
+        - tx_io:          BugBuster IO connected to the target RX pin. Default 2.
         - rx_io:          BugBuster IO connected to the target TX pin. Default 3.
         - baudrate:       UART baud rate. Default 115200.
         - supply_voltage: Target supply voltage (V). Default 5.0.
@@ -187,7 +187,7 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def release_bootloader(
-        boot_io: int = 2,
+        boot_io: int = 1,
         rail:    int = 1,
     ) -> dict:
         """
@@ -196,7 +196,7 @@ def register(mcp) -> None:
         Call this after flashing to reboot into the application.
 
         Parameters:
-        - boot_io: BugBuster IO connected to the target BOOT/GPIO0 pin. Default 2.
+        - boot_io: BugBuster IO connected to the target BOOT/GPIO0 pin. Default 1 (same as enter_bootloader).
         - rail:    VADJ rail (1 or 2). Default 1.
 
         Returns: success, boot_io, warnings.

@@ -281,8 +281,6 @@ def test_rail_voltage_preflight_blocks(env):
     bb.hat_set_rail_voltage.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: hat_set_rail_voltage drops preflight warnings (e.g. a failed "
-                                       "calibration) that hat_set_rail_enable surfaces and gates")
 def test_rail_voltage_surfaces_preflight_warnings(env):
     tools, bb = env
     bb.hat_calibrate_status.return_value = {"state": 3}
@@ -327,8 +325,6 @@ def test_la_route_invalid(env):
     bb.hat_la_set_route.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: hat_la_set_route reports 'LA route set to ...' even when the "
-                                       "HAT refused the change (success=False)")
 def test_la_route_failure_message(env):
     tools, bb = env
     bb.hat_la_set_route.return_value = False

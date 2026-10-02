@@ -423,12 +423,12 @@ def register(mcp) -> None:
         if network:
             try:
                 from bugbuster.discovery import discover_mdns
+                devs = discover_mdns(timeout=float(timeout_s))
             except ImportError as e:
                 out["network_error"] = str(e)
                 out["hint"] = 'pip install "bugbuster[network]"'
                 out["devices"] = []
                 return out
-            devs = discover_mdns(timeout=float(timeout_s))
             out["count"] = len(devs)
             out["devices"] = [
                 {

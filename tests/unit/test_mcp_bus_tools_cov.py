@@ -179,9 +179,6 @@ def test_spi_flash_read_address_range(env):
     bb.bus.spi_transfer.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: _check_len accepts 256 but the client/BBP length field is "
-                                       "one byte (ext_i2c_read requires 1-255), so length=256 passes "
-                                       "MCP validation and fails later in struct.pack")
 def test_i2c_read_rejects_256_bytes_up_front(env):
     tools, bb = env
     with pytest.raises(ValueError):
