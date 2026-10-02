@@ -1,4 +1,6 @@
+import CoreTransferable
 import Foundation
+import UniformTypeIdentifiers
 
 // Battery simulator (DAQ HAT P4) host access: wire decoders, run-file mirror,
 // merged history, decimated views and window statistics.
@@ -329,6 +331,93 @@ enum BattSim {
         if step >= 3600 { return d > 0 ? "\(d)d \(p2(h))h" : "\(h)h" }
         if step >= 60 { return d > 0 ? "\(d)d \(p2(h)):\(p2(m))" : "\(p2(h)):\(p2(m))" }
         return d > 0 || h > 0 ? "\(d * 24 + h):\(p2(m)):\(p2(sec))" : "\(p2(m)):\(p2(sec))"
+    }
+
+    /// Wall-clock tick label; dates appear on day boundaries or when ticks are a day apart.
+    static func wallLabel(_ unix: Double, step: Double) -> String {
+        let d = Date(timeIntervalSince1970: unix)
+        let cal = Calendar.current
+        if step >= 86400 || (cal.component(.hour, from: d) == 0 && cal.component(.minute, from: d) == 0 && step >= 60) {
+            return d.formatted(.dateTime.day().month(.abbreviated))
+        }
+        return step < 60 ? d.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute().second())
+            : d.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute())
+    }
+
+    static func wallFull(_ unix: Double) -> String {
+        Date(timeIntervalSince1970: unix).formatted(.dateTime.day().month(.abbreviated).hour(.twoDigits(amPM: .omitted)).minute().second())
+    }
+
+    // MARK: Export
+
+    static func csv(_ h: BsHistory) -> String {
+        var s = "t_s,unix_s,dt_s,v_avg_V,v_min_V,v_max_V,i_avg_A,i_min_A,i_max_A,p_avg_W,soc_pct,tier,flags,q_used_C,e_dut_J\n"
+        let ep = Double(h.meta.createdEpoch)
+        for r in h.recs {
+            s += "\(Int(r.t)),\(ep > 0 ? String(Int(ep + r.t)) : ""),\(Int(r.dt)),\(r.vAvg),\(r.vMin),\(r.vMax),"
+            s += "\(r.iAvg),\(r.iMin),\(r.iMax),\(r.vAvg * r.iAvg),\(r.soc),\(r.tier),\(r.flags),\(r.qUsed),\(r.eDut.map { "\($0)" } ?? "")\n"
+        }
+        return s
+    }
+
+    static func json(_ h: BsHistory) -> Data {
+        let m = h.meta, p = m.params
+        let doc: [String: Any] = [
+            "run_id": m.runId, "version": m.version, "name": m.name, "created_epoch": m.createdEpoch,
+            "params": ["chem": chemNames.indices.contains(p.chem) ? chemNames[p.chem] : "\(p.chem)", "cells": p.cells, "capacity_mah": p.capacityMah,
+                       "start_soc_pct": p.startSocPct, "self_discharge": p.sdEnable, "external_load_ua": p.extEnable ? p.extLoadUa : 0],
+            "events": h.events.map { ["t_s": $0.t, "event": $0.name, "a": $0.a, "b": $0.b] },
+            "records": h.recs.map { r -> [String: Any] in
+                ["t_s": r.t, "dt_s": r.dt, "v_avg": r.vAvg, "v_min": r.vMin, "v_max": r.vMax, "i_avg": r.iAvg,
+                 "i_min": r.iMin, "i_max": r.iMax, "soc_pct": r.soc, "tier": r.tier, "flags": r.flags,
+                 "q_used_c": r.qUsed, "e_dut_j": r.eDut ?? NSNull()]
+            },
+        ]
+        return (try? JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+    }
+
+    // MARK: Local mirror
+
+    static var cacheRoot: URL? {
+        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("battsim", isDirectory: true)
+    }
+
+    static func cachedRuns() -> [BsCachedRun] {
+        guard let root = cacheRoot,
+              let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        return dirs.compactMap { d in
+            guard let raw = try? Data(contentsOf: d.appendingPathComponent("meta.bin")), let meta = try? parseMeta(raw) else { return nil }
+            let files = (try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+            let bytes = files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+            return BsCachedRun(dir: d, meta: meta, bytes: bytes)
+        }
+        .sorted { ($0.meta.createdEpoch, $0.meta.runId) > ($1.meta.createdEpoch, $1.meta.runId) }
+    }
+
+    static func loadCached(_ dir: URL) -> [String: Data] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        var out: [String: Data] = [:]
+        for f in files where f.pathExtension == "bin" { out[f.lastPathComponent] = try? Data(contentsOf: f) }
+        return out
+    }
+}
+
+struct BsCachedRun: Identifiable {
+    var id: String { dir.path }
+    let dir: URL, meta: BsMeta, bytes: Int
+}
+
+struct BsExportFile: Transferable {
+    let history: BsHistory, csv: Bool
+    var fileName: String { "battsim-run\(history.meta.runId).\(csv ? "csv" : "json")" }
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .data) { e in
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(e.fileName)
+            try (e.csv ? Data(BattSim.csv(e.history).utf8) : BattSim.json(e.history)).write(to: url, options: .atomic)
+            return SentTransferredFile(url)
+        }
     }
 }
 
