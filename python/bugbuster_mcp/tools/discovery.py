@@ -354,6 +354,10 @@ def register(mcp) -> None:
             name: The name of the board profile (from list_boards).
         """
         import os
+        # IO-23: a bare file stem only - no separators, drive or "..".
+        if not name or os.path.basename(name) != name or "/" in name or "\\" in name \
+                or os.path.isabs(name) or name.startswith("."):
+            return f"Error: invalid board profile name '{name}'. Use a name from list_boards."
         profile_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "board_profiles")
         profile_path = os.path.join(profile_dir, f"{name}.json")
         

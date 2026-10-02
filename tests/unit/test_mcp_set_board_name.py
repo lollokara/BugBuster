@@ -42,7 +42,6 @@ def _outside_profile(tmp_path) -> str:
     return os.path.splitext(os.path.relpath(target, os.path.abspath(profile_dir)))[0]
 
 
-@pytest.mark.xfail(strict=True, reason="IO-23")
 def test_relative_traversal_is_rejected(set_board, tmp_path):
     name = _outside_profile(tmp_path)
     result = set_board(name)
@@ -50,7 +49,6 @@ def test_relative_traversal_is_rejected(set_board, tmp_path):
     assert "outside" not in result
 
 
-@pytest.mark.xfail(strict=True, reason="IO-23")
 def test_absolute_path_is_rejected(set_board, tmp_path):
     target = tmp_path / "evil.json"
     target.write_text('{"name": "evil", "description": "outside"}', encoding="utf-8")
