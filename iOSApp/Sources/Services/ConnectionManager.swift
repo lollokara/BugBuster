@@ -60,6 +60,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     @Published public var bleAvailable: Bool = false
     /// True while a BLE scan is active (mirrors BLETransport.isScanning).
     @Published public var bleScanning: Bool = false
+    @Published public var blePairingPasskey: String? = nil
+    private var blePairingContinuation: CheckedContinuation<Bool, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var blePollTask: Task<Void, Never>? = nil
     
@@ -552,6 +554,18 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             return false
         }
 
+        let pairingAllowed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            Task { @MainActor in
+                self.blePairingContinuation = continuation
+                self.blePairingPasskey = BLETransport.pairingPasskey(token: useToken)
+            }
+        }
+        guard pairingAllowed else {
+            ble.disconnect()
+            updateOnMain { self.connectionState = .disconnected }
+            return false
+        }
+
         let authed = await ble.authenticate(token: useToken)
         NSLog("[BLE] connectBLE: authenticate -> %@", authed ? "OK" : "REJECTED")
         if !authed {
@@ -580,6 +594,13 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
         startBLEPolling()
         return true
+    }
+
+    public func respondToBLEPairing(allow: Bool) {
+        guard let continuation = blePairingContinuation else { return }
+        blePairingContinuation = nil
+        blePairingPasskey = nil
+        continuation.resume(returning: allow)
     }
     
     @discardableResult

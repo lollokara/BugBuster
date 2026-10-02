@@ -30,6 +30,7 @@
 		72205E65D91FFED897042A95 /* AppSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119CBEAE1BC796A98E90F29D /* AppSections.swift */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
+		7FA190A1B219A3C41D5E6F70 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
@@ -74,6 +75,7 @@
 		55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveRootView.swift; sourceTree = "<group>"; };
 		5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqMeasurementsCard.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				30CE02C081BB4C8A5DE3486B /* DaqExport.swift */,
 				08A9988F8F3540297C3821CA /* DaqLinkState.swift */,
 				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
+				7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */,
 				282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */,
 				52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */,
 				29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */,
@@ -297,6 +300,7 @@
 				358D54C496EB885CEE42D7FC /* DaqMeasurementsCard.swift in Sources */,
 				2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
+				7FA190A1B219A3C41D5E6F70 /* KeychainHelper.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
 				B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,

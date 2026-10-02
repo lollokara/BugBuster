@@ -118,7 +118,7 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Status | Items |
    |---|---|
    | Fixed, verified on hardware | TR-2, PLT-01, PLT-06, PLT-10, WEB-25, WEB-24 (idle state only - READY state needs the DAQ WiFi stream up), BBP-TXQ, BBP-STDOUT, HAT-RESET (last three found on hardware during M2) |
-   | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; needs a phone and the iOS prompt) |
+  | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; iOS now displays the derived passkey and waits for pairing, but needs a phone handshake) |
    | Refuted | WEB-NULL - all 17 dereferences already guarded; gate added |
    | Fixed, verified on hardware (measured) | PLT-07 - uPython stack had 1964 B left after one HTTPS `bugbuster.http_get`; now 8 KiB, 4060 B left. The task is now in stack telemetry |
 
