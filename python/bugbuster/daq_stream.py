@@ -721,7 +721,9 @@ class DaqStream:
         logic). With ``trigger_current_a``, the host triggers when the current
         crosses that level (``trigger_edge`` "rising" or "falling"), no IO
         needed. ``pre_trigger_s`` keeps that much data from before the trigger
-        (DAQ-10); ``PowerCapture.trigger_offset`` is the trigger's index.
+        (DAQ-10); ``PowerCapture.trigger_offset`` is the trigger's index. The
+        pre-roll only holds data received since this call started, so a
+        trigger in the first ``pre_trigger_s`` gets a shorter one.
         """
         if trigger_edge not in ("rising", "falling"):
             raise ValueError("trigger_edge must be 'rising' or 'falling'")
