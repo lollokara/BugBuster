@@ -184,8 +184,6 @@ def test_destructive_tool_propagates_firmware_errors(env, tool, method, result, 
 
 @pytest.mark.parametrize("tool, method, result, _word", _DESTRUCTIVE, ids=_IDS)
 @pytest.mark.parametrize("slot", [4, 256])
-@pytest.mark.xfail(strict=True, reason="BUG: slot is not range-checked (0..3); the client masks it "
-                                       "with & 0xFF so slot=256 silently targets slot 0")
 def test_destructive_tool_rejects_out_of_range_slot(env, tool, method, result, _word, slot):
     getattr(env.bb, method).return_value = result
     with pytest.raises(ValueError):

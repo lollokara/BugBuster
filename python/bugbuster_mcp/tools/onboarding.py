@@ -15,6 +15,12 @@ from __future__ import annotations
 from .. import session
 
 
+def _check_slot(slot: int) -> None:
+    from bugbuster.client import BugBuster
+    if not 0 <= int(slot) < BugBuster._QS_SLOT_COUNT:
+        raise ValueError(f"slot must be 0..{BugBuster._QS_SLOT_COUNT - 1}, got {slot}")
+
+
 def register(mcp) -> None:
 
     @mcp.tool()
@@ -114,6 +120,7 @@ def register(mcp) -> None:
                 "quicksetup_get first, then pass i_understand_the_risk=True."
             )
         bb = session.get_client()
+        _check_slot(slot)
         return bb.quicksetup_save(slot)
 
     @mcp.tool()
@@ -141,6 +148,7 @@ def register(mcp) -> None:
                 "i_understand_the_risk=True."
             )
         bb = session.get_client()
+        _check_slot(slot)
         return bb.quicksetup_apply(slot)
 
     @mcp.tool()
@@ -163,4 +171,5 @@ def register(mcp) -> None:
                 "i_understand_the_risk=True."
             )
         bb = session.get_client()
+        _check_slot(slot)
         return bb.quicksetup_delete(slot)

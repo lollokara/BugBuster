@@ -206,8 +206,6 @@ def test_set_source_requires_at_least_one_argument(env):
     env.bb.daq.set.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: daq_set_source writes voltage before validating "
-                                       "current_limit_ma, leaving the supply half-configured on error")
 def test_set_source_validates_everything_before_writing(env):
     with pytest.raises(ValueError):
         env.t["daq_set_source"](voltage_mv=3300, current_limit_ma=5000)
@@ -356,8 +354,6 @@ def test_set_io_role_propagates_client_validation(env):
     pytest.param({"edge": "sideways"}, id="edge"),
     pytest.param({"source": "optical"}, id="source"),
 ])
-@pytest.mark.xfail(strict=True, reason="BUG: unknown role/edge/source raises KeyError, "
-                                       "not a ValueError naming the valid choices")
 def test_set_io_role_bad_enum_is_a_value_error(env, kwargs):
     with pytest.raises(ValueError):
         env.t["daq_set_io_role"](io=3, **kwargs)
@@ -376,8 +372,6 @@ def test_set_trigger_logic_defaults_to_or(env):
     env.bb.daq_trigger.set_logic.assert_called_once_with(DaqTrigLogic.OR)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: unknown trigger logic raises KeyError, "
-                                       "not a ValueError naming 'or'/'and'")
 def test_set_trigger_logic_bad_value_is_a_value_error(env):
     with pytest.raises(ValueError):
         env.t["daq_set_trigger_logic"](logic="xor")

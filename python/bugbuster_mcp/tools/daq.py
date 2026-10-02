@@ -36,6 +36,14 @@ def _key_by_name(name: str):
         raise ValueError(f"unknown DAQ setting '{name}'. Valid: {valid}") from exc
 
 
+def _enum_by_name(enum, name: str, what: str):
+    try:
+        return enum[name.strip().upper()]
+    except KeyError as exc:
+        valid = ", ".join(m.name.lower() for m in enum)
+        raise ValueError(f"unknown {what} '{name}'. Valid: {valid}") from exc
+
+
 def register(mcp) -> None:
 
     @mcp.tool()
@@ -120,24 +128,22 @@ def register(mcp) -> None:
         require_hat(bb)
 
         applied: dict[str, object] = {}
+        if voltage_mv is not None and not (_VDUT_MIN_MV <= int(voltage_mv) <= _VDUT_MAX_MV):
+            raise ValueError(f"voltage_mv must be {_VDUT_MIN_MV}..{_VDUT_MAX_MV}")
+        if current_limit_ma is not None and not (_ILIMIT_MIN_MA <= int(current_limit_ma) <= _ILIMIT_MAX_MA):
+            raise ValueError(f"current_limit_ma must be {_ILIMIT_MIN_MA}..{_ILIMIT_MAX_MA}")
+        if voltage_mv is None and current_limit_ma is None and enable is None:
+            raise ValueError("specify at least one of voltage_mv, "
+                             "current_limit_ma, enable")
         if voltage_mv is not None:
-            if not (_VDUT_MIN_MV <= int(voltage_mv) <= _VDUT_MAX_MV):
-                raise ValueError(
-                    f"voltage_mv must be {_VDUT_MIN_MV}..{_VDUT_MAX_MV}")
             bb.daq.set(DaqKey.DUT_VOLTAGE_MV, int(voltage_mv))
             applied["voltage_mv"] = int(voltage_mv)
         if current_limit_ma is not None:
-            if not (_ILIMIT_MIN_MA <= int(current_limit_ma) <= _ILIMIT_MAX_MA):
-                raise ValueError(
-                    f"current_limit_ma must be {_ILIMIT_MIN_MA}..{_ILIMIT_MAX_MA}")
             bb.daq.set(DaqKey.DUT_ILIMIT_MA, int(current_limit_ma))
             applied["current_limit_ma"] = int(current_limit_ma)
         if enable is not None:
             bb.daq.set(DaqKey.SOURCE_ENABLE, bool(enable))
             applied["enabled"] = bool(enable)
-        if not applied:
-            raise ValueError("specify at least one of voltage_mv, "
-                             "current_limit_ma, enable")
         return applied
 
     @mcp.tool()
@@ -224,9 +230,9 @@ def register(mcp) -> None:
         from bugbuster.daq_config import DaqTrigRole, DaqTrigEdge, DaqTrigSource
         bb = session.get_client()
         require_hat(bb)
-        r = DaqTrigRole[role.strip().upper()]
-        e = DaqTrigEdge[edge.strip().upper()]
-        s = DaqTrigSource[source.strip().upper()]
+        r = _enum_by_name(DaqTrigRole, role, "role")
+        e = _enum_by_name(DaqTrigEdge, edge, "edge")
+        s = _enum_by_name(DaqTrigSource, source, "source")
         bb.daq_trigger.set_io(io, r, e, s, threshold_v)
         cfg = bb.daq_trigger.get_io(io)
         cfg["role"] = cfg["role"].name.lower()
@@ -243,7 +249,7 @@ def register(mcp) -> None:
         from bugbuster.daq_config import DaqTrigLogic
         bb = session.get_client()
         require_hat(bb)
-        lg = DaqTrigLogic[logic.strip().upper()]
+        lg = _enum_by_name(DaqTrigLogic, logic, "logic")
         bb.daq_trigger.set_logic(lg)
         return {"logic": lg.name.lower()}
 
