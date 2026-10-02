@@ -53,7 +53,8 @@ def derive() -> dict[str, int]:
     # 20 because three tabs share a single line - that wrong number then shipped
     # into three READMEs.
     app_rs = _read("DesktopApp/BugBuster/src/app.rs")
-    counts["desktop_tabs"] = len(re.findall(r'\("[a-z_0-9]+",\s*"', app_rs))
+    nav = re.search(r"const CATEGORIES\b.*?\n\];", app_rs, re.S)
+    counts["desktop_tabs"] = len(re.findall(r'\("[a-z_0-9]+",\s*"', nav.group(0) if nav else app_rs))
 
     counts["tauri_commands"] = sum(
         len(re.findall(r"#\[tauri::command\]", p.read_text(encoding="utf-8", errors="ignore")))
