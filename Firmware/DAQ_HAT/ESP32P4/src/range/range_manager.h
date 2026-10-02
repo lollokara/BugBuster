@@ -41,8 +41,10 @@ typedef struct {
 #define AR_ISR_UP_MID  (1u << 2)
 #define AR_ISR_DN_MID  (1u << 3)
 
-// FINE current that confirms a HI-latch overload (the latch trips at 1.434 mA).
-#define AR_HI_CONFIRM_A  1.0e-3f
+// HI range at high V_DUT clips at ~0.83 mA (bench, 12.8 V): up above this,
+// back down only below AR_HI_DOWN_MAX_A (hysteresis).
+#define AR_HI_CONFIRM_A   0.70e-3f
+#define AR_HI_DOWN_MAX_A  0.45e-3f
 
 typedef struct {
     gpio_num_t bypass51_pin;
@@ -82,17 +84,18 @@ typedef struct {
     // consumed by every step, so a missing FINE sample fails safe to the latch.
     bool     hi_note_valid;
     bool     hi_note_over;
+    bool     mid_note_valid;
+    float    mid_note_amps;
     uint8_t  hi_over_run;                    // consecutive FINE over-range samples
     volatile uint32_t hi_latch_vetoed;      // HI latch set while FINE read in range
 } range_manager_t;
 
 esp_err_t       range_manager_init(range_manager_t *rm);
 current_range_t range_manager_step(range_manager_t *rm);
-// Before each step while in HI: report the FINE reading for this sample. The
-// HI SR latch only releases below 325 mV of CSA output, and the CSA offset
-// rises with V_DUT, so above ~12 V a latch set by a switching transient never
-// releases at zero load. The latch then forces HI->MID only when FINE agrees
-// (over AR_HI_CONFIRM_A) or FINE is invalid/saturated.
+// Before each step while in HI or MID: report the FINE reading for this sample
+// (HI or MID shunt, matching the current range). In HI it drives the up-range
+// (the latch alone is unreliable above ~12 V: the HI path clips below the latch
+// trip and a transient-set latch never releases); in MID it gates the down-range.
 void            range_manager_note_hi(range_manager_t *rm, float fine_amps, bool fine_ok);
 current_range_t range_manager_poll(range_manager_t *rm);
 current_range_t range_manager_current(const range_manager_t *rm);

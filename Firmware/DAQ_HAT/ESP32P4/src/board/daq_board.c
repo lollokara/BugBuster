@@ -2810,12 +2810,13 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // drives the bypass GPIOs when warranted.  It must be called every sample
     // so the lock/confirm counters advance correctly even when one of the two
     // ADC streams is absent.
+    current_range_t pre_rng = range_manager_current(&b->range);
     if (fine && b->adaq_ok[ADAQ_ROLE_FINE] &&
-        range_manager_current(&b->range) == RANGE_HI) {
+        (pre_rng == RANGE_HI || pre_rng == RANGE_MID)) {
         float hv = adaq7769_code_to_volts(&b->adaq[ADAQ_ROLE_FINE],
-                                          fine->value - base_offset_adc(b, (uint8_t)RANGE_HI));
+                                          fine->value - base_offset_adc(b, (uint8_t)pre_rng));
         range_manager_note_hi(&b->range,
-                              range_manager_volts_to_amps(&b->range, RANGE_HI, hv),
+                              range_manager_volts_to_amps(&b->range, pre_rng, hv),
                               fast_sample_good(fine));
     }
     fusion_input_t in = {
