@@ -2,12 +2,17 @@
 
 ## [Unreleased]
 
-Versions set for the next release (MAJOR, 2026-10 audit; not tagged yet):
-ESP32 `6.0.0` (`esp-fw-v6.0.0`), DAQ HAT P4 / C6 `3.0.0` (`daq-fw-v3.0.0`),
-desktop `3.0.0` (`desktop-v3.0.0`). RP2040 HAT stays `5.0`. Breaking for
-clients: BBP `PROTO_VERSION` 12, DAQ USB stream v2 / DDP v9, HTTP failed
-actions answer 400, camelCase-only JSON keys, MCP OTA/calibration tools need
-`confirm=True`.
+## [3.0.0] - 2026-10-02
+
+Major release closing the 2026-10 audit (M0-M10). Components: ESP32 `6.0.0`
+(`esp-fw-v6.0.0`), DAQ HAT P4 / C6 `3.0.0` (`daq-fw-v3.0.0`), desktop `3.0.0`
+(`desktop-v3.0.0`). RP2040 HAT unchanged at `5.0`.
+
+**Breaking for clients:** BBP `PROTO_VERSION` 12 (desktop app and Python
+library warn on a mismatch), DAQ USB stream v2 / DDP v9, HTTP failed actions
+answer 400 instead of 200, JSON keys are camelCase only, waveform range is
+0.1-100 Hz, MCP OTA and calibration tools need `confirm=True`. Update the
+S3, P4 and C6 firmware together with the desktop app and Python library.
 
 ### Added
 
@@ -242,6 +247,19 @@ actions answer 400, camelCase-only JSON keys, MCP OTA/calibration tools need
   back to the bundled backend, which removes the Zadig step entirely.
 
 ### Fixed
+
+- **Writes to IO9 intermittently refused ("IO slot owned by another
+  session").** The supply monitor holds IO9's slot for ~0.5 s every 5 s; a
+  client claim or auto-claim landing in that window was refused. Claims now
+  wait up to 700 ms for the monitor to finish (`IO_OWNER_INTERNAL_WAIT_MS`).
+  After a measurement the monitor also re-applied channel C's HIGH_IMP route,
+  silently undoing raw MUX writes made meanwhile (IO-24); it no longer does.
+  Board: channel and MUX device tests green 3/3.
+- **Python library never compared the BBP protocol version.** It now warns on
+  a mismatch, as the desktop app does.
+- **C6 task watchdog panic was off in local builds.** A stale generated
+  `sdkconfig.esp32c6` kept `CONFIG_ESP_TASK_WDT_PANIC=n` / 5 s; regenerated
+  (panic on, 10 s). `check_sdkconfig_effective.py` catches this.
 
 - **Host-side correctness pass (2026-10 audit, Wave A).** Every fix ships with
   a test that fails on the previous code. Verified in the unit, simulator,
