@@ -121,21 +121,10 @@ def make_merged_image(build_dir: str, full: bool) -> bytes:
     return bytes(image)
 
 
-def open_daq_usb():
-    dev = usb.core.find(idVendor=DAQ_VID, idProduct=DAQ_PID)
-    if dev is None:
-        print(f"ERROR: P4 DAQ USB device not found (VID={DAQ_VID:04X} PID={DAQ_PID:04X})")
-        sys.exit(1)
-    try:
-        if dev.is_kernel_driver_active(DAQ_IFACE):
-            dev.detach_kernel_driver(DAQ_IFACE)
-    except (NotImplementedError, usb.core.USBError):
-        pass  # macOS: no kernel driver claiming a vendor interface, nothing to detach
-    usb.util.claim_interface(dev, DAQ_IFACE)
-    return dev
-
-
 def main():
+    # C6-26: the acked sender lives in the Python library now; this script only
+    # assembles the merged image. It stages, applies and waits for the push,
+    # so the old "run c6relay push on the P4 console" step is gone.
     args = sys.argv[1:]
     full = "--full" in args
     args = [a for a in args if a != "--full"]
@@ -144,42 +133,24 @@ def main():
 
     print(f"Build dir: {build_dir}")
     image = make_merged_image(build_dir, full)
-    sha256 = hashlib.sha256(image).digest()
+    print(f"sha256 {hashlib.sha256(image).hexdigest()[:16]}...")
 
-    dev = open_daq_usb()
-    print(f"Opened P4 DAQ USB device, claimed interface {DAQ_IFACE}")
-
-    seq = 0
-
-    # ota_meta_t: u32 image_size, u32 version_u32, u8 sha256[32], char product_id[16]
-    product_id = FW_PRODUCT_ID[:16].ljust(16, b"\x00")
-    meta = struct.pack("<II32s16s", len(image), 0, sha256, product_id)
-    payload = meta + bytes([RELAY_TARGET_C6])
-    dev.write(DAQ_EP_OUT, encode_command(seq, USB_CMD_OTA_BEGIN, payload))
-    seq += 1
-    print(f"Sent OTA_BEGIN: image_size={len(image)} sha256={sha256.hex()[:16]}... target=C6")
+    repo = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
+    sys.path.insert(0, os.path.join(repo, "python"))
+    from bugbuster.daq_usb_ota import usb_ota_upload  # noqa: E402
 
     t0 = time.time()
-    offset = 0
-    while offset < len(image):
-        chunk = image[offset: offset + DATA_CHUNK]
-        payload = struct.pack("<I", offset) + chunk
-        dev.write(DAQ_EP_OUT, encode_command(seq, USB_CMD_OTA_DATA, payload))
-        seq += 1
-        offset += len(chunk)
-        if seq % 64 == 0 or offset == len(image):
-            pct = 100.0 * offset / len(image)
-            elapsed = time.time() - t0
-            rate = (offset / 1024.0) / elapsed if elapsed > 0 else 0
-            print(f"  staged {offset}/{len(image)} ({pct:5.1f}%)  {rate:6.1f} KB/s", end="\r")
 
+    def progress(stage, done, total):
+        print(f"  {stage:6s} {done}/{total} ({100.0 * done / max(total, 1):5.1f}%)", end="\r")
+
+    res = usb_ota_upload(image, "c6", progress=progress)
     print()
-    dev.write(DAQ_EP_OUT, encode_command(seq, USB_CMD_OTA_END, b""))
-    print("Sent OTA_END (P4 now verifying SHA-256 over the staged image)")
-    print()
-    print("Next: on the P4 debug console, run:")
-    print("    c6relay status   # confirm state=STAGED, staged_bytes == image_size")
-    print("    c6relay push     # push the staged image to the C6")
+    print(f"Done in {time.time() - t0:.0f} s: {res}")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":

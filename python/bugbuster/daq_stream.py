@@ -56,6 +56,7 @@ REC_FFT = 0x04
 REC_MARKER = 0x05
 REC_STATUS = 0x06
 REC_WAVE_V = 0x07
+REC_OTA_ACK = 0x08   # reply to every CMD_OTA_* (C6-26)
 
 # Control commands (PC -> device)
 CMD_START = 0x80
@@ -67,6 +68,28 @@ CMD_RESET_STATS = 0x85
 CMD_FFT_CONFIG = 0x86
 CMD_SET_SOURCE = 0x87
 CMD_ARM = 0x88
+CMD_RANGE_CAL_START = 0x89
+CMD_RANGE_CAL_ACK = 0x8A
+CMD_RANGE_CAL_ABORT = 0x8B
+# OTA over the vendor link (C6-26), see bugbuster.daq_usb_ota.
+CMD_OTA_BEGIN = 0x8C
+CMD_OTA_DATA = 0x8D
+CMD_OTA_END = 0x8E
+CMD_OTA_ABORT = 0x8F
+CMD_OTA_APPLY = 0x90
+CMD_OTA_CONFIRM = 0x91
+CMD_OTA_REBOOT = 0x92
+CMD_OTA_STATUS = 0x93
+
+OTA_TARGET_C6 = 1
+OTA_TARGET_P4 = 3
+OTA_ACK_WINDOW = 16
+OTA_ERRORS = {
+    0: "ok", -1: "failed", -2: "unsupported target", -3: "image rejected",
+    -4: "busy", -5: "offset mismatch", -6: "verify failed", -7: "bad state",
+    -8: "device queue full",
+}
+OTA_ERR_OFFSET = -5
 
 # meta byte bit layout (WAVE_I only)
 META_RANGE_MASK = 0x03
@@ -181,6 +204,32 @@ class StatusRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         return dict(self.raw)
+
+
+@dataclass
+class OtaAckRecord:
+    """usb_ota_ack_t: the device's answer to a CMD_OTA_* command."""
+    cmd: int
+    status: int          # 0 ok, < 0 OTA_ERRORS
+    target: int          # OTA_TARGET_* (0 = no session)
+    state: int           # C6: relay_state_t, P4: ota_state_t
+    done_bytes: int      # resume point
+    image_size: int
+    pushed_bytes: int    # C6 push progress
+    fw_version: int      # running P4 firmware, (major << 16) | (minor << 8) | patch
+    flags: int
+
+    @property
+    def pending_verify(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def fw_version_str(self) -> str:
+        v = self.fw_version
+        return f"{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+
+
+_OTA_ACK = struct.Struct("<BbBBIIIIB3x")      # 24 bytes
 
 
 _WAVE_HDR = struct.Struct("<QQIHBB")          # 24 bytes
@@ -332,6 +381,11 @@ def parse_frame(buf, off: int = 0) -> Tuple[Optional[Any], int]:
 
     if rec_type == REC_STATS:
         return StatusRecord({"stats": _parse_stats(p)}), total
+
+    if rec_type == REC_OTA_ACK:
+        if len(p) < _OTA_ACK.size:
+            return None, total
+        return OtaAckRecord(*_OTA_ACK.unpack_from(p, 0)), total
 
     return None, total
 
@@ -589,7 +643,11 @@ class DaqStream:
         try:
             data = self._dev.read(DAQ_EP_IN, self.READ_CHUNK, timeout_ms)
         except Exception as exc:
-            if "timeout" in str(exc).lower() or getattr(exc, "errno", None) == 110:
+            # libusb on Windows reports a quiet endpoint as errno 10060
+            # "Operation timed out", which the plain "timeout" match missed.
+            msg = str(exc).lower()
+            if ("timeout" in msg or "timed out" in msg
+                    or getattr(exc, "errno", None) in (110, 10060)):
                 data = b""
             else:
                 raise DaqStreamError(f"DAQ bulk read failed: {exc}") from exc

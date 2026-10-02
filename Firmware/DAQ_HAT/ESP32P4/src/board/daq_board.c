@@ -655,6 +655,10 @@ static void daq_ctrl_task(void *arg)
 }
 
 // Control commands from the PC. Bound to b->usb via usb_stream_set_cmd_cb.
+static void usb_ota_enqueue(daq_board_t *b, usb_rec_type_t cmd,
+                            const uint8_t *payload, uint16_t len);
+static esp_err_t usb_ota_start(daq_board_t *b);
+
 static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                             uint16_t len, void *user)
 {
@@ -742,50 +746,18 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
         case USB_CMD_RANGE_CAL_ABORT:
             range_cal_abort(&b->range_cal);
             break;
-        case USB_CMD_OTA_BEGIN: {
-            // Direct desktop->P4 staging ingest (bypasses S3/WiFi entirely).
-            // Trailing byte selects the eventual relay destination
-            // (RELAY_TARGET_C6 / _S3); default to C6 if the host omits it,
-            // reject an unrecognized value (matches the S3-link OTA_BEGIN path).
-            if (len < sizeof(ota_meta_t)) {
-                ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: payload too short");
-                break;
-            }
-            ota_meta_t meta;
-            memcpy(&meta, payload, sizeof(meta));
-            relay_target_t target = RELAY_TARGET_C6;
-            if (len > sizeof(meta)) {
-                uint8_t raw_target = payload[sizeof(meta)];
-                if (raw_target != RELAY_TARGET_C6 && raw_target != RELAY_TARGET_S3) {
-                    ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: unrecognized relay target %u", raw_target);
-                    break;
-                }
-                target = (relay_target_t)raw_target;
-            }
-            if (relay_stage_begin(target, &meta) != ESP_OK) {
-                ESP_LOGE(TAG, "USB_CMD_OTA_BEGIN: relay_stage_begin failed");
-            }
-            break;
-        }
-        case USB_CMD_OTA_DATA: {
-            if (len < 4) {
-                ESP_LOGE(TAG, "USB_CMD_OTA_DATA: payload too short");
-                break;
-            }
-            uint32_t offset;
-            memcpy(&offset, payload, sizeof(offset));
-            if (relay_stage_write(offset, payload + 4, len - 4) != ESP_OK) {
-                ESP_LOGE(TAG, "USB_CMD_OTA_DATA: relay_stage_write failed");
-            }
-            break;
-        }
+        case USB_CMD_OTA_BEGIN:
+        case USB_CMD_OTA_DATA:
         case USB_CMD_OTA_END:
-            if (relay_stage_end() != ESP_OK) {
-                ESP_LOGE(TAG, "USB_CMD_OTA_END: relay_stage_end/verify failed");
-            }
-            break;
         case USB_CMD_OTA_ABORT:
-            relay_stage_reset(RELAY_FAILED);
+        case USB_CMD_OTA_APPLY:
+        case USB_CMD_OTA_CONFIRM:
+        case USB_CMD_OTA_REBOOT:
+        case USB_CMD_OTA_STATUS:
+            // C6-26: flash erase/write, the SHA read-back and NVS persists
+            // must not run on the TinyUSB task (prio 13, possibly a PSRAM
+            // stack). Copy to the OTA worker; it answers with OTA_ACK.
+            usb_ota_enqueue(b, cmd, payload, len);
             break;
         case USB_CMD_SET_RATE:
             // Deferred to ctrl task: stop_fast has vTaskDelay + SPI writes +
@@ -831,6 +803,9 @@ esp_err_t daq_board_usb_start(daq_board_t *b)
         }
     }
     usb_stream_set_cmd_cb(&b->usb, usb_cmd_handler, b);
+    if (usb_ota_start(b) != ESP_OK) {
+        ESP_LOGE(TAG, "usb ota worker start failed (vendor OTA disabled)");
+    }
     esp_err_t err = usb_backend_start(&b->usb);
     b->usb_ok = (err == ESP_OK);
     if (b->usb_ok) {
@@ -1221,6 +1196,293 @@ static void relay_apply_task(void *arg)
     s_relay_apply_busy = false;
     daq_c6_release();
     vTaskDeleteWithCaps(NULL);   // must match xTaskCreatePinnedToCoreWithCaps
+}
+
+// Start a push of the staged C6 image on relay_apply_task. Shared by
+// HATP_CMD_DAQ_RELAY_APPLY (S3) and USB_CMD_OTA_APPLY (C6-26). Returns 0 when
+// the worker started, -1 when busy or nothing valid is staged.
+static int relay_apply_start(daq_board_t *b)
+{
+    if (s_relay_apply_busy) return -1;       // a push is already running
+    if (!daq_c6_claim("relay_apply")) return -1;
+
+    // Gate on RELAY_STAGED: relay_stage only reaches that state after
+    // its SHA-256 check passes, so any other state means the image is
+    // partial or unverified. RELAY_PUSHING is accepted too -- that is
+    // the resume case after a P4 reset mid-push, which relay_c6_push()
+    // handles from the NVS-persisted pushed_bytes.
+    relay_status_t rs;
+    relay_stage_get_status(&rs);
+    if (rs.target != RELAY_TARGET_C6) { daq_c6_release(); return -1; }
+    if (rs.state != RELAY_STAGED && rs.state != RELAY_PUSHING) { daq_c6_release(); return -1; }
+
+    // Set before the create: xTaskCreate() returning pdPASS does not
+    // mean the task has run, so clearing this on the task side only
+    // would leave a window for a second APPLY to slip through.
+    // The stack MUST be internal RAM. This build sets
+    // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y, so a plain
+    // xTaskCreate() may place it in PSRAM -- and relay_c6_push()
+    // persists pushed_bytes to NVS, which disables the D-cache across
+    // both cores while it writes. PSRAM is reached through that same
+    // cache, so a PSRAM stack frame is corrupted inside that window
+    // (see patterns/firmware-autoupdate.md).
+    s_relay_apply_busy = true;
+    if (xTaskCreatePinnedToCoreWithCaps(
+            relay_apply_task, "relay_apply", 8192, b, 5, NULL, /*core=*/0,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+        s_relay_apply_busy = false;
+        daq_c6_release();
+        return -1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// C6-26: OTA over the P4's own USB vendor link (no S3, no WiFi).
+//
+// usb_cmd_handler() copies every USB_CMD_OTA_* frame into s_uota_q; this
+// worker (internal-RAM stack, see relay_apply_start) does the flash work and
+// answers each command with a USB_REC_OTA_ACK. Targets: C6 (staged, then
+// pushed by OTA_APPLY) and P4 itself (written to the next OTA slot; the host
+// sends OTA_REBOOT, reconnects, then OTA_CONFIRM; an unconfirmed image rolls
+// back on the next reset). The S3 updates over BBP 0x77 on its own CDC0.
+// ---------------------------------------------------------------------------
+#define USB_OTA_Q_DEPTH   8
+#define USB_OTA_MSG_MAX   512
+
+typedef struct {
+    uint8_t  cmd;
+    uint16_t len;
+    uint8_t  data[USB_OTA_MSG_MAX];
+} usb_ota_msg_t;
+
+static QueueHandle_t s_uota_q;
+static uint8_t       s_uota_target;             // USB_OTA_TARGET_* or 0
+static bool          s_uota_fast_was_running;
+static uint32_t      s_uota_data_frames;
+
+static void usb_ota_ack(daq_board_t *b, uint8_t cmd, int8_t status)
+{
+    usb_ota_ack_t a;
+    memset(&a, 0, sizeof(a));
+    a.cmd = cmd;
+    a.status = status;
+    a.fw_version = FW_VERSION_U32;
+
+    ota_status_t os;
+    ota_get_status(&os);
+    if (os.pending_verify) a.flags |= USB_OTA_FLAG_PENDING_VERIFY;
+
+    relay_status_t rs;
+    relay_stage_get_status(&rs);
+    uint8_t target = s_uota_target;
+    if (target == 0 && rs.target == RELAY_TARGET_C6 && rs.state != RELAY_IDLE) {
+        target = USB_OTA_TARGET_C6;      // report a staged / pushing C6 image
+    }
+    a.target = target;
+    if (target == USB_OTA_TARGET_P4) {
+        a.state = (uint8_t)os.state;
+        a.done_bytes = os.received;
+        a.image_size = os.image_size;
+    } else if (target == USB_OTA_TARGET_C6) {
+        a.state = (uint8_t)rs.state;
+        a.done_bytes = rs.staged_bytes;
+        a.image_size = rs.image_size;
+        a.pushed_bytes = rs.pushed_bytes;
+    }
+    (void)usb_stream_send_reply(&b->usb, USB_REC_OTA_ACK, &a, sizeof(a));
+}
+
+static void usb_ota_restore_fast(daq_board_t *b)
+{
+    if (s_uota_fast_was_running) {
+        daq_board_run_fast(b, DAQ_RING_CAPACITY);
+        s_uota_fast_was_running = false;
+    }
+}
+
+// The relay engine pushes a C6 image to flash offset 0, so it must be a merged
+// image (bootloader at 0, partition table at 0x8000), never an app-only build.
+static bool usb_ota_c6_staged_is_merged(void)
+{
+    uint8_t head = 0, pt[2] = {0};
+    if (relay_stage_read(0, &head, 1) != 1) return false;
+    if (relay_stage_read(0x8000, pt, 2) != 2) return false;
+    return head == 0xE9 && pt[0] == 0xAA && pt[1] == 0x50;
+}
+
+static void usb_ota_handle(daq_board_t *b, const usb_ota_msg_t *m)
+{
+    switch (m->cmd) {
+    case USB_CMD_OTA_BEGIN: {
+        if (s_uota_target != 0) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_BUSY); return; }
+        if (m->len < sizeof(ota_meta_t)) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_FAILED); return; }
+        ota_meta_t meta;
+        memcpy(&meta, m->data, sizeof(meta));
+        uint8_t target = (m->len > sizeof(meta)) ? m->data[sizeof(meta)] : USB_OTA_TARGET_C6;
+        const char *want = (target == USB_OTA_TARGET_C6) ? "bb-daq-c6"
+                         : (target == USB_OTA_TARGET_P4) ? FW_PRODUCT_ID : NULL;
+        if (!want) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_TARGET); return; }
+        if (strncmp(meta.product_id, want, sizeof(meta.product_id)) != 0) {
+            ESP_LOGE(TAG, "usb ota: product '%.16s' != '%s'", meta.product_id, want);
+            usb_ota_ack(b, m->cmd, USB_OTA_ERR_IMAGE);
+            return;
+        }
+        if (target == USB_OTA_TARGET_C6 && s_relay_apply_busy) {
+            usb_ota_ack(b, m->cmd, USB_OTA_ERR_BUSY);
+            return;
+        }
+        s_uota_fast_was_running = b->fast_running;
+        if (s_uota_fast_was_running) daq_board_stop_fast(b);
+        esp_err_t err = (target == USB_OTA_TARGET_C6)
+                            ? relay_stage_begin(RELAY_TARGET_C6, &meta)
+                            : ota_begin(&meta);
+        if (err != ESP_OK) {
+            usb_ota_restore_fast(b);
+            usb_ota_ack(b, m->cmd, err == ESP_ERR_INVALID_STATE ? USB_OTA_ERR_BUSY
+                                                                : USB_OTA_ERR_FAILED);
+            return;
+        }
+        s_uota_target = target;
+        s_uota_data_frames = 0;
+        usb_ota_ack(b, m->cmd, USB_OTA_OK);
+        return;
+    }
+    case USB_CMD_OTA_DATA: {
+        if (s_uota_target == 0) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_STATE); return; }
+        if (m->len < 4) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_FAILED); return; }
+        uint32_t offset;
+        memcpy(&offset, m->data, sizeof(offset));
+        uint32_t have;
+        if (s_uota_target == USB_OTA_TARGET_C6) {
+            relay_status_t rs;
+            relay_stage_get_status(&rs);
+            have = rs.staged_bytes;
+        } else {
+            have = ota_received();
+        }
+        if (offset != have) {
+            // A lost or duplicated frame: tell the host where to resume.
+            usb_ota_ack(b, m->cmd, USB_OTA_ERR_OFFSET);
+            return;
+        }
+        esp_err_t err = (s_uota_target == USB_OTA_TARGET_C6)
+                            ? relay_stage_write(offset, m->data + 4, m->len - 4)
+                            : ota_write(offset, m->data + 4, m->len - 4);
+        if (err != ESP_OK) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_FAILED); return; }
+        if ((++s_uota_data_frames % USB_OTA_ACK_WINDOW) == 0) usb_ota_ack(b, m->cmd, USB_OTA_OK);
+        return;
+    }
+    case USB_CMD_OTA_END: {
+        if (s_uota_target == 0) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_STATE); return; }
+        int8_t st = USB_OTA_OK;
+        if (s_uota_target == USB_OTA_TARGET_C6) {
+            if (relay_stage_end() != ESP_OK) {
+                st = USB_OTA_ERR_VERIFY;
+            } else if (!usb_ota_c6_staged_is_merged()) {
+                ESP_LOGE(TAG, "usb ota: staged C6 image is not a merged image");
+                relay_stage_reset(RELAY_FAILED);
+                st = USB_OTA_ERR_IMAGE;
+            }
+        } else if (ota_end() != ESP_OK) {
+            st = USB_OTA_ERR_VERIFY;
+        }
+        // The ack reports the final state, so it goes out before the target
+        // is cleared. Acquisition resumes either way: a P4 image only runs
+        // after OTA_REBOOT, and the device stays usable if the host leaves.
+        usb_ota_ack(b, m->cmd, st);
+        s_uota_target = 0;
+        usb_ota_restore_fast(b);
+        return;
+    }
+    case USB_CMD_OTA_ABORT: {
+        if (s_uota_target == USB_OTA_TARGET_P4) {
+            ota_abort();
+        } else if (s_uota_target == USB_OTA_TARGET_C6) {
+            relay_stage_reset(RELAY_FAILED);
+        } else {
+            // No USB session: never disturb an S3-driven push in progress.
+            usb_ota_ack(b, m->cmd, s_relay_apply_busy ? USB_OTA_ERR_BUSY : USB_OTA_OK);
+            return;
+        }
+        s_uota_target = 0;
+        usb_ota_restore_fast(b);
+        usb_ota_ack(b, m->cmd, USB_OTA_OK);
+        return;
+    }
+    case USB_CMD_OTA_APPLY:
+        if (s_uota_target != 0) { usb_ota_ack(b, m->cmd, USB_OTA_ERR_STATE); return; }
+        usb_ota_ack(b, m->cmd, relay_apply_start(b) == 0 ? USB_OTA_OK : USB_OTA_ERR_STATE);
+        return;
+    case USB_CMD_OTA_CONFIRM:
+        usb_ota_ack(b, m->cmd, ota_confirm() == ESP_OK ? USB_OTA_OK : USB_OTA_ERR_FAILED);
+        return;
+    case USB_CMD_OTA_REBOOT:
+        if (s_uota_target != 0 || s_relay_apply_busy) {
+            usb_ota_ack(b, m->cmd, USB_OTA_ERR_BUSY);
+            return;
+        }
+        usb_ota_ack(b, m->cmd, USB_OTA_OK);
+        vTaskDelay(pdMS_TO_TICKS(300));   // let the ack leave the TX FIFO
+        esp_restart();
+        return;
+    case USB_CMD_OTA_STATUS:
+    default:
+        usb_ota_ack(b, m->cmd, USB_OTA_OK);
+        return;
+    }
+}
+
+static void usb_ota_task(void *arg)
+{
+    daq_board_t *b = (daq_board_t *)arg;
+    static usb_ota_msg_t m;   // worker-only; keeps 512 B off the stack
+    for (;;) {
+        if (xQueueReceive(s_uota_q, &m, portMAX_DELAY) == pdTRUE) {
+            usb_ota_handle(b, &m);
+        }
+    }
+}
+
+static void usb_ota_enqueue(daq_board_t *b, usb_rec_type_t cmd,
+                            const uint8_t *payload, uint16_t len)
+{
+    if (!s_uota_q || len > USB_OTA_MSG_MAX) {
+        usb_ota_ack(b, (uint8_t)cmd, USB_OTA_ERR_QUEUE);
+        return;
+    }
+    // On the caller's stack: both the TinyUSB task and the TCP stream task
+    // feed this parser, so a shared static buffer would race.
+    usb_ota_msg_t m;
+    m.cmd = (uint8_t)cmd;
+    m.len = len;
+    if (len) memcpy(m.data, payload, len);
+    // Blocking briefly is the back-pressure: the host waits for acks anyway.
+    if (xQueueSend(s_uota_q, &m, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        usb_ota_ack(b, (uint8_t)cmd, USB_OTA_ERR_QUEUE);
+    }
+}
+
+static esp_err_t usb_ota_start(daq_board_t *b)
+{
+    if (s_uota_q) return ESP_OK;
+    s_uota_q = xQueueCreateWithCaps(USB_OTA_Q_DEPTH, sizeof(usb_ota_msg_t),
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_uota_q) return ESP_ERR_NO_MEM;
+    // Internal-RAM stack: the worker persists relay progress to NVS (cache
+    // disabled on both cores), same rule as relay_apply_task. Core 0 at prio
+    // 13: core 1 belongs to the busy ADAQ capture tasks and daq_fast (12) is
+    // CPU-bound on core 0, so anything lower never runs (bench: a prio-5
+    // worker on core 1 answered nothing). Flash work only happens with
+    // daq_fast stopped (OTA_BEGIN), so it does not starve acquisition.
+    if (xTaskCreatePinnedToCoreWithCaps(usb_ota_task, "usb_ota", 6144, b, 13, NULL,
+                                        /*core=*/0,
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+        vQueueDeleteWithCaps(s_uota_q);
+        s_uota_q = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 // True from the moment a bring-up task is created until it exits, on every
@@ -2175,42 +2437,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             return 20;
         }
 
-        case HATP_CMD_DAQ_RELAY_APPLY: {
+        case HATP_CMD_DAQ_RELAY_APPLY:
             // Push the already-staged C6 image. Replies immediately; the S3
             // watches progress via HATP_CMD_OTA_STATUS's relay_pushed_bytes.
-            if (s_relay_apply_busy) return -1;       // a push is already running
-            if (!daq_c6_claim("relay_apply")) return -1;
-
-            // Gate on RELAY_STAGED: relay_stage only reaches that state after
-            // its SHA-256 check passes, so any other state means the image is
-            // partial or unverified. RELAY_PUSHING is accepted too -- that is
-            // the resume case after a P4 reset mid-push, which relay_c6_push()
-            // handles from the NVS-persisted pushed_bytes.
-            relay_status_t rs;
-            relay_stage_get_status(&rs);
-            if (rs.target != RELAY_TARGET_C6) { daq_c6_release(); return -1; }
-            if (rs.state != RELAY_STAGED && rs.state != RELAY_PUSHING) { daq_c6_release(); return -1; }
-
-            // Set before the create: xTaskCreate() returning pdPASS does not
-            // mean the task has run, so clearing this on the task side only
-            // would leave a window for a second APPLY to slip through.
-            // The stack MUST be internal RAM. This build sets
-            // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y, so a plain
-            // xTaskCreate() may place it in PSRAM -- and relay_c6_push()
-            // persists pushed_bytes to NVS, which disables the D-cache across
-            // both cores while it writes. PSRAM is reached through that same
-            // cache, so a PSRAM stack frame is corrupted inside that window
-            // (see patterns/firmware-autoupdate.md).
-            s_relay_apply_busy = true;
-            if (xTaskCreatePinnedToCoreWithCaps(
-                    relay_apply_task, "relay_apply", 8192, b, 5, NULL, /*core=*/0,
-                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
-                s_relay_apply_busy = false;
-                daq_c6_release();
-                return -1;
-            }
-            return 0;
-        }
+            return relay_apply_start(b);
 
         case HATP_CMD_DAQ_C6_VERSION: {
             // Answers from the DDP link's cached GET_INFO reply -- never issues a

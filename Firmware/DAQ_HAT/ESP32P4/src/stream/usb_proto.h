@@ -61,6 +61,7 @@ typedef enum {
     USB_REC_MARKER   = 0x05,   // digital event marker (from S3, later)
     USB_REC_STATUS   = 0x06,   // device status / heartbeat
     USB_REC_WAVE_V   = 0x07,   // struct-of-arrays voltage waveform block
+    USB_REC_OTA_ACK  = 0x08,   // usb_ota_ack_t, reply to every USB_CMD_OTA_* (C6-26)
 
     USB_CMD_START        = 0x80,
     USB_CMD_STOP         = 0x81,
@@ -75,12 +76,58 @@ typedef enum {
     USB_CMD_RANGE_CAL_ACK   = 0x8A, // no payload (advance past PROMPT)
     USB_CMD_RANGE_CAL_ABORT = 0x8B, // no payload
 
-    // Direct desktop -> P4 `staging` ingest (bypasses S3/WiFi entirely).
-    USB_CMD_OTA_BEGIN       = 0x8C, // payload: ota_meta_t + target byte (RELAY_TARGET_C6/_S3)
-    USB_CMD_OTA_DATA        = 0x8D, // payload: u32 offset + firmware bytes
-    USB_CMD_OTA_END         = 0x8E, // no payload; finalizes + verifies staged image
+    // Direct desktop -> P4 OTA over this link (no S3, no WiFi). C6-26: every
+    // command is answered with a USB_REC_OTA_ACK (DATA: every
+    // USB_OTA_ACK_WINDOW frames and on any error), handled on a dedicated
+    // worker task, never on the TinyUSB task.
+    USB_CMD_OTA_BEGIN       = 0x8C, // payload: ota_meta_t + target byte (USB_OTA_TARGET_*)
+    USB_CMD_OTA_DATA        = 0x8D, // payload: u32 offset + firmware bytes (<= 508)
+    USB_CMD_OTA_END         = 0x8E, // no payload; finalizes + verifies the image
     USB_CMD_OTA_ABORT       = 0x8F, // no payload
+    USB_CMD_OTA_APPLY       = 0x90, // no payload; C6: push the staged image
+    USB_CMD_OTA_CONFIRM     = 0x91, // no payload; P4: mark the running image valid
+    USB_CMD_OTA_REBOOT      = 0x92, // no payload; P4: reboot into the new image
+    USB_CMD_OTA_STATUS      = 0x93, // no payload; reply is an ack snapshot
 } usb_rec_type_t;
+
+// ---- OTA over the vendor link (C6-26) ---------------------------------------
+// BEGIN target byte. 2 (S3) is rejected: the S3 updates over BBP 0x77 on CDC0.
+#define USB_OTA_TARGET_C6     1u   // staged in `staging`, pushed by OTA_APPLY
+#define USB_OTA_TARGET_P4     3u   // written straight to the P4's next OTA slot
+
+#define USB_OTA_ACK_WINDOW   16u   // DATA frames per ack
+
+// usb_ota_ack_t.status
+#define USB_OTA_OK             0
+#define USB_OTA_ERR_FAILED    (-1)  // generic failure (see device log)
+#define USB_OTA_ERR_TARGET    (-2)  // unknown / unsupported target
+#define USB_OTA_ERR_IMAGE     (-3)  // product id or image layout rejected
+#define USB_OTA_ERR_BUSY      (-4)  // another session / push is live
+#define USB_OTA_ERR_OFFSET    (-5)  // DATA offset != done_bytes; resend from there
+#define USB_OTA_ERR_VERIFY    (-6)  // size or SHA-256 mismatch at END
+#define USB_OTA_ERR_STATE     (-7)  // command not valid in the current state
+#define USB_OTA_ERR_QUEUE     (-8)  // worker queue full, frame dropped
+
+// usb_ota_ack_t.flags
+#define USB_OTA_FLAG_PENDING_VERIFY 0x01u  // P4 runs an unconfirmed image
+
+typedef struct __attribute__((packed)) {
+    uint8_t  cmd;            // 0  command being answered (USB_CMD_OTA_*)
+    int8_t   status;         // 1  USB_OTA_OK or USB_OTA_ERR_*
+    uint8_t  target;         // 2  USB_OTA_TARGET_* of the session (0 = none)
+    uint8_t  state;          // 3  C6: relay_state_t; P4: ota_state_t
+    uint32_t done_bytes;     // 4  bytes accepted so far (resume point)
+    uint32_t image_size;     // 8
+    uint32_t pushed_bytes;   // 12 C6 push progress
+    uint32_t fw_version;     // 16 running P4 firmware, FW_VERSION_U32
+    uint8_t  flags;          // 20 USB_OTA_FLAG_*
+    uint8_t  _pad[3];        // 21
+} usb_ota_ack_t;             // 24 bytes
+
+#ifndef __cplusplus
+_Static_assert(sizeof(usb_ota_ack_t) == 24, "usb_ota_ack_t is 24 bytes on the wire");
+#endif
+
 
 // ---- WAVE_I / WAVE_V records -------------------------------------------------
 // Common 24-byte header for both SoA waveform records. WAVE_I payload

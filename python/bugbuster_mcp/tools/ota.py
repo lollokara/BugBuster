@@ -182,20 +182,36 @@ def register(mcp) -> None:
             raise RuntimeError(f"SPIFFS upload failed: {e}") from e
         return r
 
+    def _usb_upload(path: str, target: str) -> dict:
+        from bugbuster.daq_usb_ota import DaqUsbOtaError, usb_ota_upload
+        with open(path, "rb") as f:
+            image = f.read()
+        try:
+            return usb_ota_upload(image, target)
+        except (DaqUsbOtaError, OSError) as e:
+            raise RuntimeError(f"{target.upper()} USB upload failed: {e}") from e
+
     @mcp.tool()
     def ota_upload_p4(
         path: str,
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
+        transport: str = "http",
     ) -> dict:
         """
-        Push a locally built ESP32-P4 image to the DAQ HAT over HTTP.
+        Push a locally built ESP32-P4 image to the DAQ HAT.
+
+        transport="http" (default): through the S3 over WiFi. transport="usb":
+        straight over the P4's own USB port (303A:4001), no WiFi needed; needs
+        that port cabled to this PC and not held by another client.
 
         Returns only after the P4 has been reset and the new version confirmed
         running. Takes 60-90 s. The DAQ stream drops briefly during the reset.
         The reset turns the DUT supply OFF; if it was on, the result has a
         ``warnings`` list saying so - re-enable it afterwards if needed.
         """
+        if transport == "usb":
+            return _usb_upload(path, "p4")
         ota = _make_ota(host, admin_token)
         try:
             return ota.upload_p4(path)
@@ -207,14 +223,18 @@ def register(mcp) -> None:
         path: str,
         host: Optional[str] = None,
         admin_token: Optional[str] = None,
+        transport: str = "http",
     ) -> dict:
         """
-        Push a locally built ESP32-C6 image to the DAQ HAT over HTTP.
+        Push a locally built ESP32-C6 image to the DAQ HAT.
 
         `path` must be a MERGED image from flash offset 0 (bootloader +
         partition table + app); an app-only binary is rejected by the device
-        because it would brick the C6. Takes ~3 minutes.
+        because it would brick the C6. Takes ~3 minutes. transport="usb"
+        stages it over the P4's own USB port instead of WiFi.
         """
+        if transport == "usb":
+            return _usb_upload(path, "c6")
         ota = _make_ota(host, admin_token)
         try:
             return ota.upload_c6(path)

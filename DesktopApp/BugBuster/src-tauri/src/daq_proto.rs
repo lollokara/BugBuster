@@ -37,6 +37,9 @@ pub const REC_FFT: u8 = 0x04;
 pub const REC_MARKER: u8 = 0x05;
 pub const REC_STATUS: u8 = 0x06;
 pub const REC_WAVE_V: u8 = 0x07;
+/// Reply to every CMD_OTA_* (C6-26); not decoded by the desktop yet.
+#[allow(dead_code)]
+pub const REC_OTA_ACK: u8 = 0x08;
 
 pub const CMD_START: u8 = 0x80;
 pub const CMD_STOP: u8 = 0x81;
@@ -47,6 +50,19 @@ pub const CMD_RESET_STATS: u8 = 0x85;
 pub const CMD_FFT_CONFIG: u8 = 0x86;
 pub const CMD_SET_SOURCE: u8 = 0x87;
 pub const CMD_ARM: u8 = 0x88;
+// OTA over the vendor link (C6-26). The Python library (bugbuster.daq_usb_ota)
+// is the sender today; kept here so the four usb_proto.h copies agree.
+#[allow(dead_code)]
+pub mod ota {
+    pub const CMD_OTA_BEGIN: u8 = 0x8C;
+    pub const CMD_OTA_DATA: u8 = 0x8D;
+    pub const CMD_OTA_END: u8 = 0x8E;
+    pub const CMD_OTA_ABORT: u8 = 0x8F;
+    pub const CMD_OTA_APPLY: u8 = 0x90;
+    pub const CMD_OTA_CONFIRM: u8 = 0x91;
+    pub const CMD_OTA_REBOOT: u8 = 0x92;
+    pub const CMD_OTA_STATUS: u8 = 0x93;
+}
 
 // MARKER kind codes (usb_marker_payload_t.kind).
 pub const MARK_KIND_FLAG: u8 = 0;

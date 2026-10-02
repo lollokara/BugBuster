@@ -178,6 +178,11 @@ def _case_body(cmd: str, span: int = 2200) -> str:
     which turns a real assertion into a false failure (or worse, a false pass)."""
     assert f"case {cmd}" in BOARD, f"{cmd} not dispatched"
     start = BOARD.index(f"case {cmd}")
+    # C6-26: RELAY_APPLY delegates to relay_apply_start(), shared with the USB
+    # OTA_APPLY path; the guarantees live in that function now.
+    if cmd == "HATP_CMD_DAQ_RELAY_APPLY" and "relay_apply_start(b)" in BOARD[start:start + 300]:
+        fn = BOARD.index("static int relay_apply_start(")
+        return BOARD[fn: BOARD.index("\n}\n", fn) + 2]
     open_brace = BOARD.find("{", start)
     if open_brace < 0 or open_brace > start + 200:
         return BOARD[start:start + span]     # braceless case: fall back to span

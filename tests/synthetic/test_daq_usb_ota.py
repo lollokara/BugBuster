@@ -10,7 +10,6 @@ import re
 import struct
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 P4 = ROOT / "Firmware" / "DAQ_HAT" / "ESP32P4" / "src"
@@ -23,7 +22,6 @@ def _usb_cmd_handler(src: str) -> str:
     return src[start: src.index("\n}\n", start)]
 
 
-@pytest.mark.xfail(strict=True, reason="C6-26")
 def test_proto_defines_ack_and_new_commands():
     h = PROTO.read_text(encoding="utf-8")
     for name, val in [("USB_REC_OTA_ACK", "0x08"), ("USB_CMD_OTA_APPLY", "0x90"),
@@ -33,7 +31,6 @@ def test_proto_defines_ack_and_new_commands():
     assert "usb_ota_ack_t" in h and "USB_OTA_TARGET_P4" in h
 
 
-@pytest.mark.xfail(strict=True, reason="C6-26")
 def test_tinyusb_handler_only_enqueues_ota_work():
     body = _usb_cmd_handler(BOARD.read_text(encoding="utf-8"))
     assert "usb_ota_enqueue" in body
@@ -42,7 +39,6 @@ def test_tinyusb_handler_only_enqueues_ota_work():
         assert forbidden not in body, forbidden
 
 
-@pytest.mark.xfail(strict=True, reason="C6-26")
 def test_worker_has_internal_stack_and_answers_every_command():
     src = BOARD.read_text(encoding="utf-8")
     m = re.search(r"xTaskCreatePinnedToCoreWithCaps\(usb_ota_task[^;]*MALLOC_CAP_INTERNAL", src, re.S)
@@ -57,7 +53,6 @@ def test_worker_has_internal_stack_and_answers_every_command():
     assert "usb_ota_c6_staged_is_merged" in handle
 
 
-@pytest.mark.xfail(strict=True, reason="C6-26")
 def test_python_decoder_parses_ota_ack():
     from bugbuster import daq_stream as ds
 

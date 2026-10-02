@@ -298,6 +298,16 @@ esp_err_t usb_stream_send_frame(usb_stream_t *s, usb_rec_type_t type,
                                 const void *payload, uint16_t len);
 
 /**
+ * @brief (any task) Send a small reply record (<= USB_REPLY_MAX bytes) built in
+ *        a caller-stack buffer and written in ONE transport write. Does not
+ *        touch frame_buf, tx_seq or the batch, so it is safe off the producer
+ *        task (C6-26 OTA acks). Sent even when streaming is off; seq is 0.
+ */
+#define USB_REPLY_MAX 64u
+esp_err_t usb_stream_send_reply(usb_stream_t *s, usb_rec_type_t type,
+                                const void *payload, uint16_t len);
+
+/**
  * @brief Append one fused sample to the WAVE_I batch; auto-flushes a frame
  *        when the batch fills. Call at the (decimated) waveform rate.
  * @param fo   fused current result (amps/range/source/saturated).
