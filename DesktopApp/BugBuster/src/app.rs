@@ -1062,7 +1062,7 @@ pub fn App() -> impl IntoView {
                                 "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
                                 "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
                                 "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
-                                "hat" => view! { <HatTab state=device_state /> }.into_any(),
+                                "hat" => view! { <HatTab state=device_state hat_kind=hat_kind /> }.into_any(),
                                 "la" => view! { <LaTab state=device_state /> }.into_any(),
                                 "daq" => view! { <DaqTab state=device_state /> }.into_any(),
                                 _ => view! { <div>"Unknown view"</div> }.into_any(),

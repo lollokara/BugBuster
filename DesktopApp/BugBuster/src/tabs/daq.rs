@@ -319,8 +319,8 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
             if !alive.load(Ordering::SeqCst) {
                 return;
             }
-            let Some(gl_c) = gl_canvas.get() else { return };
-            let Some(ov_c) = overlay.get() else { return };
+            let Some(gl_c) = gl_canvas.get_untracked() else { return };
+            let Some(ov_c) = overlay.get_untracked() else { return };
             let gl_canvas_el: HtmlCanvasElement = gl_c.unchecked_into();
             let ov_canvas: HtmlCanvasElement = ov_c.unchecked_into();
             let dpr = web_sys::window()
@@ -413,7 +413,7 @@ pub fn DaqTab(state: ReadSignal<crate::tauri_bridge::DeviceState>) -> impl IntoV
         if !alive.load(Ordering::SeqCst) {
             return;
         }
-        let Some(ov_c) = overlay.get() else { return };
+        let Some(ov_c) = overlay.get_untracked() else { return };
         let ov_canvas: HtmlCanvasElement = ov_c.unchecked_into();
         let dpr = web_sys::window()
             .map(|w| w.device_pixel_ratio())

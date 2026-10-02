@@ -403,7 +403,7 @@ kbd, .kbd {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-2);
     padding: var(--s-10) var(--s-6); text-align: center; color: var(--label-2);
 }
-.empty-state svg { width: 32px; height: 32px; color: var(--label-3); margin-bottom: var(--s-1); }
+.empty-state > svg { width: 32px; height: 32px; color: var(--label-3); margin-bottom: var(--s-1); }
 .empty-state h3 { font-size: var(--fs-headline); font-weight: var(--fw-semibold); color: var(--label-1); }
 .empty-state p { font-size: var(--fs-body); max-width: 420px; }
 

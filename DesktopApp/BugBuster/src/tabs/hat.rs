@@ -26,7 +26,7 @@ fn HealthCell(label: &'static str, ok: bool, value: String, #[prop(optional)] pl
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+pub fn HatTab(state: ReadSignal<DeviceState>, hat_kind: ReadSignal<crate::app::HatKind>) -> impl IntoView {
     let (hat, set_hat) = signal(HatStatus::default());
     let (caps, set_caps) = signal(None::<HatCaps>);
     let (la_route, set_la_route_sig) = signal(0u8);
@@ -409,10 +409,15 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             // ── No HAT ────────────────────────────────────────────────────────
             {move || if !hat.get().detected {
+                let daq = hat_kind.get() == crate::app::HatKind::Daq;
+                let (title, message) = if daq {
+                    ("DAQ HAT attached", "This page controls the LA HAT (target rails, SWD, routing, shifted I/O). The DAQ HAT is operated from HS DAQ and Voltages & Cal.")
+                } else {
+                    ("No HAT detected", "Connect a HAT board to the expansion header, then click Refresh.")
+                };
                 view! {
                     <div class="group">
-                        <EmptyState icon="cpu" title="No HAT detected"
-                            message="Connect a HAT board to the expansion header, then click Refresh.">
+                        <EmptyState icon="cpu" title=title message=message>
                             <button class="btn btn-sm"
                                 on:click=move |_| {
                                     spawn_local(async move {
