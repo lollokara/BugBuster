@@ -1228,13 +1228,14 @@ def daq_load_ohms(request):
     return request.config.getoption("--daq-load-ohms")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def daq_bbp(request):
     """The Python client over the S3 mainboard's CDC0, for the DAQ control plane.
 
-    Session-scoped to match `daq_link`: CDC0 holds a single-client lock, so
-    reconnecting per test is both slow and a good way to collide with anything
-    else that wants the port.
+    Module-scoped: CDC0 holds a single-client lock, so reconnecting per test is
+    slow, but a session-scoped handle kept COM6 open for every later module and
+    their `usb_device` connects failed with PermissionError (seen 2026-10-02 on
+    test_transport_equivalence, which sorts after test_17).
     """
     port = request.config.getoption("--device-usb")
     if not port:

@@ -56,6 +56,17 @@ def test_set_high_imp(device):
 # VOUT
 # ---------------------------------------------------------------------------
 
+def _readback_settled(device, ch, timeout_s=1.0):
+    """USB DAC writes are queued behind the VOUT function change (MUX dead
+    time), so poll the readback instead of a fixed 50 ms sleep."""
+    deadline = time.monotonic() + timeout_s
+    code = device.get_dac_readback(ch)
+    while code == 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
+        code = device.get_dac_readback(ch)
+    return code
+
+
 def test_vout_set_and_readback(device):
     """
     Configure ch0 to VOUT, set 5.0 V, and verify get_dac_readback() returns a non-zero code.
@@ -65,9 +76,7 @@ def test_vout_set_and_readback(device):
     device.set_channel_function(0, ChannelFunction.VOUT)
     device.set_vout_range(0, VoutRange.UNIPOLAR)
     device.set_dac_voltage(0, 5.0)
-    time.sleep(0.05)
-
-    code = device.get_dac_readback(0)
+    code = _readback_settled(device, 0)
     assert isinstance(code, int), f"DAC readback must be int, got {type(code)}"
     assert code != 0, "DAC readback code should be non-zero after setting 5.0 V"
     assert 0 < code <= 0xFFFF, f"DAC code out of range: {code:#06x}"
@@ -83,8 +92,7 @@ def test_vout_range_unipolar(device):
     device.set_vout_range(0, VoutRange.UNIPOLAR)
     # 3.3 V is well within unipolar range
     device.set_dac_voltage(0, 3.3)
-    time.sleep(0.05)
-    code = device.get_dac_readback(0)
+    code = _readback_settled(device, 0)
     assert code > 0, "DAC code should be > 0 for 3.3 V unipolar"
     _safe_high_imp(device, 0)
     assert_no_faults(device)

@@ -105,7 +105,14 @@ def test_adc_stream_sample_rate(usb_device):
     Measure actual ADC events received over 1 second.
     With default settings, we expect at least 5 events per second
     (conservative — actual rate depends on firmware ADC configuration).
+
+    Samples are only pushed on a fresh conversion, so ch0 must be converting:
+    a HIGH_IMP channel yields no events (this used to pass only because the
+    supply monitor kept CH C converting every second, before IO-25).
     """
+    from bugbuster.constants import ChannelFunction
+    usb_device.set_channel_function(0, ChannelFunction.VIN)
+    time.sleep(0.3)
     events = []
     start = time.monotonic()
 
@@ -115,6 +122,7 @@ def test_adc_stream_sample_rate(usb_device):
     usb_device.start_adc_stream([0], divider=1, callback=on_data)
     time.sleep(1.0)
     usb_device.stop_adc_stream()
+    usb_device.set_channel_function(0, ChannelFunction.HIGH_IMP)
 
     elapsed = time.monotonic() - start
     rate = len(events) / elapsed

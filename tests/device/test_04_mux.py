@@ -35,6 +35,32 @@ def _restore_all_open(device):
         pass
 
 
+# The supply monitor routes one rail through U23 every 5 s (IO-25). While it
+# does, closing U17-S3 (device 2, bit 2) is refused by the interlock - correct
+# behaviour, but it makes any pattern touching that bit time-dependent.
+_U23_WINDOW_S = 7.0
+
+
+def _is_route_rejected(exc) -> bool:
+    from bugbuster.constants import ErrorCode
+    if getattr(exc, "code", None) == ErrorCode.ADGS_ROUTE_REJECTED:
+        return True
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 409 or "HTTP 409" in str(exc)
+
+
+def _set_all_retrying(device, pattern):
+    """mux_set_all that waits out a U23 self-test window."""
+    deadline = time.monotonic() + _U23_WINDOW_S
+    while True:
+        try:
+            return device.mux_set_all(pattern)
+        except Exception as exc:
+            if not _is_route_rejected(exc) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.2)
+
+
 # ---------------------------------------------------------------------------
 # Get all switches
 # ---------------------------------------------------------------------------
@@ -143,7 +169,7 @@ def test_mux_round_trip(device):
     Uses a checkerboard pattern: device 0 = 0xAA, device 1 = 0x55, etc.
     """
     pattern = [0xAA, 0x55, 0xAA, 0x55]
-    device.mux_set_all(pattern)
+    _set_all_retrying(device, pattern)
     time.sleep(0.15)
 
     readback = device.mux_get()
@@ -168,9 +194,7 @@ def test_mux_per_device_control(device):
     supply monitor owns U23 intermittently even when worker is off.
     """
     import time as _time
-    from bugbuster.constants import CmdId, ErrorCode
-    from bugbuster.transport.usb import DeviceError
-    from requests.exceptions import HTTPError
+    from bugbuster.constants import CmdId
 
     # Disable selftest worker before device 2 to avoid U17-S3 interlock
     selftest_was_on = False
@@ -193,28 +217,9 @@ def test_mux_per_device_control(device):
         for dev_idx in range(4):
             target = [0xFF if i == dev_idx else 0x00 for i in range(4)]
 
-            # Device 2 may return BUSY due to U17-S3 interlock even with worker
-            # off (supply monitor owns U23 intermittently). Retry with backoff.
-            max_retries = 3 if dev_idx == 2 else 0
-            for attempt in range(max_retries + 1):
-                try:
-                    device.mux_set_all(target)
-                    break  # Success
-                except (DeviceError, HTTPError) as exc:
-                    is_busy = False
-                    if isinstance(exc, DeviceError):
-                        # USB: interlock refusal = ADGS_ROUTE_REJECTED (0x13, MUX-4)
-                        is_busy = exc.code == ErrorCode.ADGS_ROUTE_REJECTED
-                    elif isinstance(exc, HTTPError):
-                        # HTTP: check status code
-                        is_busy = exc.response.status_code == 409
-
-                    if is_busy and attempt < max_retries:
-                        # Transient BUSY - retry with backoff
-                        _time.sleep(0.05 * (attempt + 1))
-                        continue
-                    # Persistent BUSY or other error - fail
-                    raise
+            # Device 2 may be refused by the U17-S3 interlock even with the
+            # worker off (the supply monitor owns U23 for a window every 5 s).
+            _set_all_retrying(device, target)
 
             _time.sleep(0.15)
 
@@ -281,7 +286,7 @@ def test_mux_device2_interlock_reports_correctly(device, request):
     if _sim_mode:
         pytest.skip("Simulator does not implement U17-S3 interlock")
     import time as _time
-    from bugbuster.constants import CmdId, ErrorCode
+    from bugbuster.constants import CmdId
     from bugbuster.transport.usb import DeviceError
     from requests.exceptions import HTTPError
 
@@ -293,19 +298,22 @@ def test_mux_device2_interlock_reports_correctly(device, request):
 
     _time.sleep(0.1)  # Let worker settle
 
-    # Try to close U17-S3 (device 2, bit 2) while selftest is active
+    # Try to close U17-S3 (device 2, bit 2) while selftest is active. The
+    # supply monitor only holds U23 for a short window every 5 s (IO-25), so
+    # keep trying for one full period; a close outside the window is correct.
     target = [0x00, 0x00, 0x04, 0x00]  # U17_S3_MASK = 0x04
 
     got_busy = False
-    try:
-        device.mux_set_all(target)
-    except (DeviceError, HTTPError) as exc:
-        if isinstance(exc, DeviceError):
-            # USB: ADGS_ROUTE_REJECTED (0x13, MUX-4)
-            got_busy = exc.code == ErrorCode.ADGS_ROUTE_REJECTED
-        elif isinstance(exc, HTTPError):
-            # HTTP: 409 Conflict
-            got_busy = exc.response.status_code == 409
+    deadline = _time.monotonic() + _U23_WINDOW_S
+    while not got_busy and _time.monotonic() < deadline:
+        try:
+            device.mux_set_all(target)
+            device.mux_set_all(ALL_OPEN)
+        except (DeviceError, HTTPError) as exc:
+            got_busy = _is_route_rejected(exc)
+            if not got_busy:
+                raise
+        _time.sleep(0.05)
 
     # Disable selftest worker for cleanup
     if hasattr(device, "_usb") and device._usb:  # noqa: SLF001
