@@ -4,11 +4,12 @@ HAT meter over N seconds). A: neither existed."""
 
 import itertools
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 from bugbuster_mcp import session
 from bugbuster_mcp.tools import analog, daq
+from tests.unit._mock_client import make_client_mock, make_hal_mock
 
 
 class DummyMCP:
@@ -47,7 +48,7 @@ class TestObserve(unittest.TestCase):
                 self.addCleanup(p.stop)
 
     def test_observe_adc_summarises_voltage(self):
-        hal = MagicMock()
+        hal = make_hal_mock()
         vals = itertools.cycle([1.0, 2.0, 3.0])
         hal.read_voltage.side_effect = lambda io: next(vals)
         with patch("bugbuster_mcp.session.get_hal", return_value=hal), \
@@ -59,7 +60,7 @@ class TestObserve(unittest.TestCase):
         self.assertGreaterEqual(r["count"], 3)
 
     def test_observe_daq_summarises_each_field(self):
-        bb = MagicMock()
+        bb = make_client_mock()
         seq = itertools.cycle([{"current_a": 0.1, "voltage_v": 5.0}, {"current_a": 0.3, "voltage_v": 5.0}])
         bb.daq.measure.side_effect = lambda: next(seq)
         with patch("bugbuster_mcp.session.get_client", return_value=bb), \

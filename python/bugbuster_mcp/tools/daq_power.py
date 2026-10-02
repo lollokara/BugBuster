@@ -103,7 +103,11 @@ def _open_stream():
 
 
 def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
-                trigger_timeout_s: float) -> Dict[str, Any]:
+                trigger_timeout_s: float, pre_trigger_s: float = 0.0,
+                trigger_current_a: float | None = None,
+                trigger_edge: str = "rising") -> Dict[str, Any]:
+    if not (0.0 <= pre_trigger_s <= 10.0):
+        raise ValueError("pre_trigger_s must be 0..10")
     stream = _open_stream()
     try:
         cap = stream.capture(
@@ -111,6 +115,9 @@ def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
             max_samples=sample_limit,
             wait_for_trigger=wait_for_trigger,
             trigger_timeout_s=trigger_timeout_s,
+            pre_trigger_s=pre_trigger_s,
+            trigger_current_a=trigger_current_a,
+            trigger_edge=trigger_edge,
         )
     finally:
         stream.close()
@@ -122,6 +129,7 @@ def _do_capture(duration_s: float, sample_limit: int, wait_for_trigger: bool,
         "duration_s": cap.duration_s,
         "dropped_samples": cap.dropped_samples,
         "markers": len(cap.markers),
+        "trigger_offset": cap.trigger_offset,
         "next": f"Call daq_power_report(capture_id='{capture_id}') for the "
                 f"energy/state analysis.",
     }
@@ -429,6 +437,9 @@ def register(mcp) -> None:
         duration_s: float = 2.0,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 10.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: float | None = None,
+        trigger_edge: str = "rising",
     ) -> dict:
         """
         Record a block of DUT current and voltage from the DAQ HAT data plane.
@@ -438,17 +449,24 @@ def register(mcp) -> None:
         server - only a capture_id comes back, which daq_power_report,
         daq_power_window and daq_power_export then work on.
 
-        With wait_for_trigger=True the capture discards everything before the
-        TRIGGER marker, so t=0 is the DUT event. Configure the trigger IO with
+        With wait_for_trigger=True the capture starts at the TRIGGER marker,
+        so t=0 is the DUT event. Configure the trigger IO with
         daq_set_io_role(role="trigger") and arm it with daq_arm() first.
+        trigger_current_a triggers instead when the DUT current crosses that
+        level (trigger_edge "rising"/"falling"), no IO needed.
+        pre_trigger_s keeps that much data from before the trigger; the
+        result's trigger_offset is the trigger's sample index.
 
         Parameters:
-        - duration_s: capture length in seconds (0.001..120).
+        - duration_s: capture length after the trigger, seconds (0.001..120).
         - wait_for_trigger: start the window at the trigger marker.
         - trigger_timeout_s: give up if the trigger never fires.
+        - pre_trigger_s: 0..10 s of history kept before the trigger.
+        - trigger_current_a: software current-threshold trigger (A).
+        - trigger_edge: "rising" (default) or "falling".
 
         Returns: capture_id, sample_count, sample_rate_sps, duration_s,
-        dropped_samples, marker count.
+        dropped_samples, marker count, trigger_offset.
         """
         if not (0.001 <= duration_s <= MAX_CAPTURE_DURATION_S):
             raise ValueError(f"duration_s must be 0.001..{MAX_CAPTURE_DURATION_S}")
@@ -457,13 +475,17 @@ def register(mcp) -> None:
                 "Captures longer than 10 s block the tool call - use "
                 "daq_power_capture_start / _status / _result instead.")
         return _do_capture(duration_s, MAX_CAPTURE_SAMPLES,
-                           wait_for_trigger, trigger_timeout_s)
+                           wait_for_trigger, trigger_timeout_s,
+                           pre_trigger_s, trigger_current_a, trigger_edge)
 
     @mcp.tool()
     def daq_power_capture_start(
         duration_s: float = 30.0,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 60.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: float | None = None,
+        trigger_edge: str = "rising",
     ) -> dict:
         """
         Start a long power capture in the background and return immediately.
@@ -490,7 +512,8 @@ def register(mcp) -> None:
         def _worker():
             try:
                 res = _do_capture(duration_s, MAX_CAPTURE_SAMPLES,
-                                  wait_for_trigger, trigger_timeout_s)
+                                  wait_for_trigger, trigger_timeout_s,
+                                  pre_trigger_s, trigger_current_a, trigger_edge)
                 with _lock:
                     _jobs[job_id].update(status="done", result=res)
             except Exception as exc:

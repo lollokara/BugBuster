@@ -7,11 +7,12 @@ printed after the first poll was lost, and none of the script file tools existed
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 from bugbuster_mcp import session
 from bugbuster_mcp.tools.scripting import register
+from tests.unit._mock_client import make_client_mock
 
 
 class DummyMCP:
@@ -37,7 +38,7 @@ class TestScriptingTools(unittest.TestCase):
         session.configure(transport="usb", port="/dev/null", vlogic=3.3)
         self.mcp = DummyMCP()
         register(self.mcp)
-        self.bb = MagicMock()
+        self.bb = make_client_mock()
         p = patch("bugbuster_mcp.session.get_client", return_value=self.bb)
         p.start()
         self.addCleanup(p.stop)

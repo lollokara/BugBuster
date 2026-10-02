@@ -415,6 +415,9 @@ class PowerCapture:
     device_status: Dict[str, Any] = field(default_factory=dict)
     rate_source: str = "wave_header"
     rate_warning: Optional[str] = None
+    # DAQ-10: index into current[] of the trigger sample (0 without pre-roll,
+    # None for an untriggered capture).
+    trigger_offset: Optional[int] = None
 
     @property
     def sample_count(self) -> int:
@@ -707,19 +710,50 @@ class DaqStream:
         start_stream: bool = True,
         wait_for_trigger: bool = False,
         trigger_timeout_s: float = 10.0,
+        pre_trigger_s: float = 0.0,
+        trigger_current_a: Optional[float] = None,
+        trigger_edge: str = "rising",
     ) -> PowerCapture:
         """Record ``duration_s`` of fused measurement data.
 
-        With ``wait_for_trigger``, samples before the TRIGGER marker are
-        discarded and the capture window starts at t=0 (arm the trigger engine
-        over BBP first - the S3 owns the IO event logic).
+        With ``wait_for_trigger``, the capture starts at the TRIGGER marker
+        (arm the trigger engine over BBP first - the S3 owns the IO event
+        logic). With ``trigger_current_a``, the host triggers when the current
+        crosses that level (``trigger_edge`` "rising" or "falling"), no IO
+        needed. ``pre_trigger_s`` keeps that much data from before the trigger
+        (DAQ-10); ``PowerCapture.trigger_offset`` is the trigger's index.
         """
+        if trigger_edge not in ("rising", "falling"):
+            raise ValueError("trigger_edge must be 'rising' or 'falling'")
         if start_stream:
             self.start()
+        soft = trigger_current_a is not None
         acc = CaptureAccumulator(max_samples=max_samples)
-        triggered = not wait_for_trigger
+        triggered = not (wait_for_trigger or soft)
         deadline_trig = time.monotonic() + trigger_timeout_s
-        deadline: Optional[float] = None if wait_for_trigger else time.monotonic() + duration_s
+        deadline: Optional[float] = None if not triggered else time.monotonic() + duration_s
+        history: Deque[Any] = deque()   # waveform records seen before the trigger
+        hist_samples = 0
+        rate_hint = 0.0
+        prev_i: Optional[float] = None
+
+        def _start_at(trig_index: int, recs: List[Any]) -> CaptureAccumulator:
+            rate = rate_hint or 1.0
+            pre_n = int(round(max(0.0, pre_trigger_s) * rate))
+            first = trig_index - pre_n
+            new = CaptureAccumulator(max_samples=max_samples)
+            for r in recs:
+                if isinstance(r, WaveIRecord):
+                    end = r.start_index + len(r.current)
+                    if end <= first:
+                        continue
+                    k = max(0, first - r.start_index)
+                    r = WaveIRecord(r.start_index + k, r.timestamp_us, r.sample_rate,
+                                    r.decimation, r.current[k:], r.meta[k:])
+                new.feed(r)
+            if new.cap.start_index is not None:
+                new.cap.trigger_offset = max(0, trig_index - new.cap.start_index)
+            return new
 
         try:
             while True:
@@ -732,13 +766,45 @@ class DaqStream:
                     break
                 if acc.full:
                     break
-                for rec in self.read_records(timeout_ms=100):
+                batch = self.read_records(timeout_ms=100)
+                for n, rec in enumerate(batch):
                     if not triggered:
-                        if isinstance(rec, MarkerRecord) and rec.kind == MARK_KIND_TRIGGER:
+                        trig_index: Optional[int] = None
+                        if isinstance(rec, WaveIRecord):
+                            rate_hint = float(rec.sample_rate) / max(1, rec.decimation)
+                            if soft and trigger_current_a is not None:
+                                thr = float(trigger_current_a)
+                                for j, v in enumerate(rec.current):
+                                    if prev_i is not None and (
+                                        (trigger_edge == "rising" and prev_i < thr <= v)
+                                        or (trigger_edge == "falling" and prev_i > thr >= v)):
+                                        trig_index = rec.start_index + j
+                                        break
+                                    prev_i = v
+                            history.append(rec)
+                            hist_samples += len(rec.current)
+                            # keep only what the pre-roll can use (plus one record)
+                            while (len(history) > 1 and isinstance(history[0], WaveIRecord)
+                                   and hist_samples - len(history[0].current)
+                                   >= max(0.0, pre_trigger_s) * (rate_hint or 1.0)):
+                                hist_samples -= len(history.popleft().current)
+                        elif isinstance(rec, WaveVRecord):
+                            history.append(rec)
+                        elif (not soft and isinstance(rec, MarkerRecord)
+                              and rec.kind == MARK_KIND_TRIGGER):
+                            trig_index = rec.sample_index
+                        if trig_index is not None:
                             triggered = True
-                            acc = CaptureAccumulator(max_samples=max_samples)
+                            acc = _start_at(trig_index, list(history))
+                            if isinstance(rec, MarkerRecord):
+                                acc.feed(rec)
+                            if acc.cap.trigger_offset is None:
+                                acc.cap.trigger_offset = 0
                             deadline = time.monotonic() + duration_s
-                            acc.feed(rec)
+                            # the rest of this batch belongs to the capture
+                            for rest in batch[n + 1:]:
+                                acc.feed(rest)
+                            break
                         continue
                     acc.feed(rec)
                     # A single read can return a large batch; without this the
