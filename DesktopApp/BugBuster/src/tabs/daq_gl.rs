@@ -30,8 +30,11 @@ pub struct Lane<'a> {
     /// Value range mapped to [y_bottom, y_top].
     pub lo: f32,
     pub hi: f32,
-    /// Base RGB colour (0..1).
+    /// Base RGB colour (0..1); also the FINE-source colour when tinted.
     pub color: [f32; 3],
+    /// COARSE / BLEND source colours (0..1), used when `tint` is set.
+    pub coarse: [f32; 3],
+    pub blend: [f32; 3],
     /// Tint by fusion source when `source` is set.
     pub tint: bool,
 }
@@ -106,10 +109,11 @@ impl GlRenderer {
     /// Render all lanes. `width`/`height` are the canvas pixel dimensions;
     /// `x0`/`x1` are the left/right pixel bounds of the plot area (the area to
     /// the left of `x0` is reserved for lane labels and drawn by the overlay).
-    pub fn render(&self, width: f32, height: f32, x0: f32, x1: f32, lanes: &[Lane]) {
+    /// `bg` is the plot background (0..1), taken from the active theme.
+    pub fn render(&self, width: f32, height: f32, x0: f32, x1: f32, bg: [f32; 3], lanes: &[Lane]) {
         let ctx = &self.ctx;
         ctx.viewport(0, 0, width as i32, height as i32);
-        ctx.clear_color(0.04, 0.06, 0.10, 1.0);
+        ctx.clear_color(bg[0], bg[1], bg[2], 1.0);
         ctx.clear(Gl::COLOR_BUFFER_BIT);
         if width <= 0.0 || height <= 0.0 {
             return;
@@ -153,9 +157,9 @@ impl GlRenderer {
 
                 let color = if lane.tint {
                     match lane.source.and_then(|s| s.get(i)).copied().unwrap_or(0) {
-                        1 => [0.96, 0.62, 0.12], // COARSE — amber
-                        2 => [0.66, 0.33, 0.97], // BLEND — purple
-                        _ => lane.color,         // FINE — base
+                        1 => lane.coarse, // COARSE
+                        2 => lane.blend,  // BLEND
+                        _ => lane.color,  // FINE - base
                     }
                 } else {
                     lane.color

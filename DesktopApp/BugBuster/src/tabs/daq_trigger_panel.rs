@@ -1,13 +1,14 @@
 // =============================================================================
 // daq_trigger_panel.rs — DAQ Trigger / Flag configuration panel.
 //
-// A slide-in panel for the DAQ tab. Presents the 12 mainboard IOs as 4 connector
-// blocks of 3 IOs each (the physical layout), badging the analog-capable HV IOs
-// (3/6/9/12 → AD74416H) vs the LV digital IOs. Each IO can be tagged Off / Flag
-// / Trigger with an edge selector; HV IOs additionally choose a digital or
-// analog (voltage-threshold) source. A VLOGIC slider sets the logic-rail voltage
-// (reuses the existing hat_set_io_voltage path), and the arm controls combine
-// triggers with OR / AND logic plus a pre-trigger depth.
+// Inspector content for the DAQ tab (the host provides the inspector chrome and
+// title). Presents the 12 mainboard IOs as 4 connector blocks of 3 IOs each (the
+// physical layout), badging the analog-capable HV IOs (3/6/9/12 → AD74416H) vs
+// the LV digital IOs. Each IO can be tagged Off / Flag / Trigger with an edge
+// selector; HV IOs additionally choose a digital or analog (voltage-threshold)
+// source. A VLOGIC slider sets the logic-rail voltage (reuses the existing
+// hat_set_io_voltage path), and the arm controls combine triggers with OR / AND
+// logic plus a pre-trigger depth.
 //
 // All state is mirrored from / pushed to the S3 trigger engine over BBP
 // (CMD_DAQ_TRIG); edge events are forwarded to the P4 as USB MARKER records.
@@ -15,6 +16,8 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::tauri_bridge::{
     daq_arm, daq_get_trig_state, daq_set_io_role, daq_set_trig_logic, send_hat_set_io_voltage,
@@ -38,16 +41,16 @@ fn is_hv(io: u8) -> bool {
     matches!(io, 3 | 6 | 9 | 12)
 }
 
-fn role_color(role: u8) -> &'static str {
+fn role_class(role: u8) -> &'static str {
     match role {
-        ROLE_FLAG => "#ec4899",    // pink — distinct from Fine/Coarse/Blend/track colours
-        ROLE_TRIGGER => "#22d3ee", // cyan — the trigger-panel accent
-        _ => "#475569",
+        ROLE_FLAG => "dq-role-dot role-flag",
+        ROLE_TRIGGER => "dq-role-dot role-trig",
+        _ => "dq-role-dot",
     }
 }
 
 #[component]
-pub fn TriggerPanel(open: RwSignal<bool>) -> impl IntoView {
+pub fn TriggerPanel(open: Signal<bool>) -> impl IntoView {
     // 12 IO configs (index 0 = IO1). Defaults: all Off / rising / digital.
     let ios = RwSignal::new(vec![DaqTrigIoCfg::default(); 12]);
     let logic = RwSignal::new(LOGIC_OR);
@@ -59,13 +62,24 @@ pub fn TriggerPanel(open: RwSignal<bool>) -> impl IntoView {
     // VLOGIC rail in millivolts (1.8–5.0 V).
     let vlogic_mv = RwSignal::new(3300u32);
 
+    let alive = Arc::new(AtomicBool::new(true));
+    on_cleanup({
+        let alive = alive.clone();
+        move || alive.store(false, Ordering::SeqCst)
+    });
+
     // Pull the current engine state from the device when the panel opens.
     Effect::new(move |_| {
         if !open.get() {
             return;
         }
+        let alive = alive.clone();
         spawn_local(async move {
-            if let Some(st) = daq_get_trig_state().await {
+            let st = daq_get_trig_state().await;
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Some(st) = st {
                 apply_state(&st, ios, logic, armed, fired);
             }
         });
@@ -101,107 +115,86 @@ pub fn TriggerPanel(open: RwSignal<bool>) -> impl IntoView {
     };
 
     view! {
-        <div class="daq-trig-panel"
-            style=move || format!(
-                "width:{};min-width:0;overflow:hidden;transition:width 0.3s ease;background:#0f172a;border-radius:8px;",
-                if open.get() { "360px" } else { "0px" })
-        >
-            <div class="daq-set" style="width:360px;padding:12px;overflow-y:auto;height:100%;box-sizing:border-box;">
-                <div class="daq-panel-head" style="color:#22d3ee;">
-                    <span class="daq-panel-title">"Triggers / Flags"</span>
-                    <button class="daq-panel-close" on:click=move |_| open.set(false)>"✕"</button>
-                </div>
-
-                // ---- VLOGIC slider --------------------------------------------------
-                <section class="daq-card">
-                    <div class="daq-field col">
-                        <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
-                            <span>"VLOGIC (digital IO level)"</span>
-                            <strong style="color:#22d3ee;">
-                                {move || format!("{:.2} V", vlogic_mv.get() as f64 / 1000.0)}
-                            </strong>
-                        </div>
-                        <input type="range" min="1800" max="5000" step="100"
-                            style="width:100%;accent-color:#22d3ee;"
-                            prop:value=move || vlogic_mv.get().to_string()
-                            on:input=move |ev| {
-                                if let Ok(v) = event_target_value(&ev).parse::<u32>() { apply_vlogic(v); }
-                            }
-                        />
-                    </div>
-                </section>
-
-                // ---- Trigger logic + arm -------------------------------------------
-                <section class="daq-card">
-                    <h3>"Trigger"</h3>
-                    <div class="daq-field col">
-                        <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
-                            <span>"Combine"</span>
-                            <em style="font-style:normal;color:#64748b;font-size:11px;">
-                                {move || if logic.get() == LOGIC_AND { "all fire" } else { "first fires" }}
-                            </em>
-                        </div>
-                        <div class="daq-seg neon-cyan">
-                            <button class:active=move || logic.get() == LOGIC_OR
-                                on:click=move |_| set_logic(LOGIC_OR)>"OR"</button>
-                            <button class:active=move || logic.get() == LOGIC_AND
-                                on:click=move |_| set_logic(LOGIC_AND)>"AND"</button>
-                        </div>
-                    </div>
-                    <div class="daq-field">
-                        <span style="color:#94a3b8;">"Pre-trigger"</span>
-                        <div class="daq-step">
-                            <input class="daq-num" type="number" min="0" max="5000" step="10"
-                                prop:value=move || pre_ms.get().to_string()
-                                on:input=move |ev| {
-                                    if let Ok(v) = event_target_value(&ev).parse::<u32>() { pre_ms.set(v); }
-                                } />
-                            <span class="daq-unit">"ms"</span>
-                        </div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-                        <button
-                            class=move || if armed.get() { "daq-power-btn on" } else { "daq-power-btn off" }
-                            style="flex:1;margin-bottom:0;"
-                            on:click=toggle_arm>
-                            <span class="dot"></span>
-                            {move || if armed.get() { "Armed — disarm" } else { "Arm trigger" }}
-                        </button>
-                        <span style=move || format!(
-                            "font-size:10px;font-weight:800;letter-spacing:1px;padding:5px 10px;border-radius:10px;{}",
-                            if fired.get() { "color:#22d3ee;background:#22d3ee1a;border:1px solid #22d3ee66;" }
-                            else if armed.get() { "color:#34d399;background:#10b9811a;border:1px solid #10b98166;" }
-                            else { "color:#64748b;background:#1e293b66;border:1px solid #33415566;" })>
-                            {move || if fired.get() { "TRIGGERED" } else if armed.get() { "ARMED" } else { "IDLE" }}
-                        </span>
-                    </div>
-                </section>
-
-                // ---- 4 connector blocks × 3 IOs ------------------------------------
-                {move || {
-                    (0..4).map(|blk| {
-                        let rail = if blk < 2 { "VADJ1" } else { "VADJ2" };
-                        view! {
-                            <section class="daq-card" style="padding-top:7px;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                    <h3 style="margin:0;">{format!("Block {}", blk + 1)}</h3>
-                                    <span style="font-size:9px;font-weight:700;letter-spacing:1px;color:#64748b;">{rail}</span>
-                                </div>
-                                {(0..3).map(|pos| {
-                                    let io = (blk * 3 + pos + 1) as u8;
-                                    view!{ <IoRow io=io ios=ios push_io=Callback::new(move |(i, c)| push_io(i, c))/> }
-                                }).collect_view()}
-                            </section>
-                        }
-                    }).collect_view()
-                }}
-
-                <p style="color:#64748b;font-size:11px;line-height:1.5;margin-top:4px;">
-                    "Flags mark events as vertical lines on the acquisition + timeline (kept through every zoom level). \
-                     Triggers start the capture window on the selected edge."
-                </p>
+        // ---- Arm ------------------------------------------------------------
+        <section class="inspector-section">
+            <div class="dq-section-head">
+                <h4>"Trigger"</h4>
+                <span class=move || if fired.get() { "badge tone-blue" } else if armed.get() { "badge tone-green" } else { "badge" }
+                    role="status">
+                    {move || if fired.get() { "Triggered" } else if armed.get() { "Armed" } else { "Idle" }}
+                </span>
             </div>
-        </div>
+            <div class="row">
+                <span class="row-label">"Combine"
+                    <span class="row-hint">{move || if logic.get() == LOGIC_AND { "All triggers must fire" } else { "First trigger fires" }}</span>
+                </span>
+                <div class="seg seg-sm" role="radiogroup" aria-label="Trigger combine logic">
+                    <button class:active=move || logic.get() == LOGIC_OR
+                        on:click=move |_| set_logic(LOGIC_OR)>"OR"</button>
+                    <button class:active=move || logic.get() == LOGIC_AND
+                        on:click=move |_| set_logic(LOGIC_AND)>"AND"</button>
+                </div>
+            </div>
+            <div class="row">
+                <span class="row-label">"Pre-trigger"<span class="row-hint">"Samples kept before the event"</span></span>
+                <span class="dq-num-unit">
+                    <input class="dq-num" type="number" min="0" max="5000" step="10" aria-label="Pre-trigger depth in milliseconds"
+                        prop:value=move || pre_ms.get().to_string()
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<u32>() { pre_ms.set(v); }
+                        } />
+                    <span class="dq-unit">"ms"</span>
+                </span>
+            </div>
+            <button type="button"
+                class=move || if armed.get() { "btn btn-sm btn-block btn-tinted tone-orange" } else { "btn btn-sm btn-block btn-primary" }
+                on:click=toggle_arm>
+                {move || if armed.get() { "Disarm trigger" } else { "Arm trigger" }}
+            </button>
+        </section>
+
+        // ---- VLOGIC ---------------------------------------------------------
+        <section class="inspector-section">
+            <h4>"Logic level"</h4>
+            <div class="dq-field">
+                <div class="dq-field-head">
+                    <span class="row-label">"VLOGIC"<span class="row-hint">"Digital IO level"</span></span>
+                    <span class="row-value">{move || format!("{:.2} V", vlogic_mv.get() as f64 / 1000.0)}</span>
+                </div>
+                <input type="range" min="1800" max="5000" step="100" aria-label="VLOGIC in millivolts"
+                    prop:value=move || vlogic_mv.get().to_string()
+                    on:input=move |ev| {
+                        if let Ok(v) = event_target_value(&ev).parse::<u32>() { apply_vlogic(v); }
+                    }
+                />
+            </div>
+        </section>
+
+        // ---- 4 connector blocks × 3 IOs ------------------------------------
+        {move || {
+            (0..4).map(|blk| {
+                let rail = if blk < 2 { "VADJ1" } else { "VADJ2" };
+                view! {
+                    <section class="inspector-section">
+                        <div class="dq-section-head">
+                            <h4>{format!("Block {}", blk + 1)}</h4>
+                            <span class="badge">{rail}</span>
+                        </div>
+                        {(0..3).map(|pos| {
+                            let io = (blk * 3 + pos + 1) as u8;
+                            view!{ <IoRow io=io ios=ios push_io=Callback::new(move |(i, c)| push_io(i, c))/> }
+                        }).collect_view()}
+                    </section>
+                }
+            }).collect_view()
+        }}
+
+        <section class="inspector-section">
+            <p class="row-hint">
+                "Flags mark events as vertical lines on the acquisition and timeline (kept through every zoom level). \
+                 Triggers start the capture window on the selected edge."
+            </p>
+        </section>
     }
 }
 
@@ -251,72 +244,74 @@ fn IoRow(
     };
 
     view! {
-        <div style="padding:6px 0;border-top:1px solid #16233c;">
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                <span style=move || format!(
-                    "width:8px;height:8px;border-radius:50%;background:{};box-shadow:0 0 6px {};",
-                    role_color(cfg().role), role_color(cfg().role))></span>
-                <strong style="color:#e2e8f0;min-width:38px;font-size:12px;">{format!("IO{}", io)}</strong>
-                <span style=move || format!(
-                    "font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;{}",
-                    if hv { "color:#fb7185;border:1px solid #fb718566;background:#fb71851a;" }
-                    else { "color:#38bdf8;border:1px solid #38bdf866;background:#38bdf81a;" })>
-                    {if hv { "HV 12V" } else { "LV" }}
+        <div class="dq-io-row">
+            <div class="dq-io-head">
+                <span class=move || role_class(cfg().role) aria-hidden="true"></span>
+                <strong class="dq-io-name">{format!("IO{}", io)}</strong>
+                <span class=if hv { "badge tone-orange" } else { "badge" }
+                    title=if hv { "Analog-capable high-voltage IO (AD74416H)" } else { "Low-voltage digital IO" }>
+                    {if hv { "HV 12 V" } else { "LV" }}
                 </span>
-                <div style="flex:1;"></div>
-                // Role segmented control — each button tinted by its role colour.
-                <div class="daq-seg" style="flex:0 0 auto;max-width:150px;">
-                    {[("Off", ROLE_OFF), ("Flag", ROLE_FLAG), ("Trig", ROLE_TRIGGER)].iter().map(|(lbl, r)| {
+                <span class="dq-spacer"></span>
+                <div class="seg seg-sm" role="radiogroup" aria-label=format!("IO{} role", io)>
+                    {[("Off", ROLE_OFF), ("Flag", ROLE_FLAG), ("Trigger", ROLE_TRIGGER)].iter().map(|(lbl, r)| {
                         let r = *r;
                         view!{
                             <button class:active=move || cfg().role == r
-                                style=move || if cfg().role == r {
-                                    format!("flex:0 0 auto;padding:5px 10px;background:{c};border-color:{c};color:#fff;box-shadow:0 0 9px {c}80;", c = role_color(r))
-                                } else { "flex:0 0 auto;padding:5px 10px;".to_string() }
                                 on:click=move |_| set_role(r)>{*lbl}</button>
                         }
                     }).collect_view()}
                 </div>
             </div>
 
-            // Edge + (HV) source/threshold row — only when not Off.
+            // Edge + (HV) source/threshold rows - only when not Off.
             <Show when=move || cfg().role != ROLE_OFF>
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-left:14px;">
-                    <span style="color:#64748b;font-size:11px;min-width:34px;">"Edge"</span>
-                    <div class="daq-seg neon-slate" style="flex:0 0 auto;width:108px;">
-                        {[("↑", EDGE_RISING), ("↓", EDGE_FALLING), ("⇅", EDGE_ANY)].iter().map(|(lbl, e)| {
-                            let e = *e;
-                            view!{
-                                <button class:active=move || cfg().edge == e
-                                    on:click=move |_| set_edge(e)>{*lbl}</button>
-                            }
-                        }).collect_view()}
+                <div class="dq-io-opts">
+                    <div class="row">
+                        <span class="row-label">"Edge"</span>
+                        <div class="seg seg-sm" role="radiogroup" aria-label=format!("IO{} edge", io)>
+                            {[("Rising", EDGE_RISING), ("Falling", EDGE_FALLING), ("Any", EDGE_ANY)].iter().map(|(lbl, e)| {
+                                let e = *e;
+                                view!{
+                                    <button class:active=move || cfg().edge == e
+                                        on:click=move |_| set_edge(e)>{*lbl}</button>
+                                }
+                            }).collect_view()}
+                        </div>
                     </div>
 
                     {move || hv.then(|| view!{
-                        <div class="daq-seg neon-purple" style="flex:0 0 auto;width:96px;">
-                            <button class:active=move || cfg().source == SRC_DIGITAL
-                                on:click=move |_| set_source(SRC_DIGITAL)>"Dig"</button>
-                            <button class:active=move || cfg().source == SRC_ANALOG
-                                on:click=move |_| set_source(SRC_ANALOG)>"Ana"</button>
+                        <div class="row">
+                            <span class="row-label">"Source"</span>
+                            <div class="seg seg-sm" role="radiogroup" aria-label=format!("IO{} source", io)>
+                                <button class:active=move || cfg().source == SRC_DIGITAL
+                                    on:click=move |_| set_source(SRC_DIGITAL)>"Digital"</button>
+                                <button class:active=move || cfg().source == SRC_ANALOG
+                                    on:click=move |_| set_source(SRC_ANALOG)>"Analog"</button>
+                            </div>
                         </div>
                     })}
 
                     {move || (hv && cfg().source == SRC_ANALOG).then(|| view!{
-                        <div style="display:flex;align-items:center;gap:8px;width:100%;margin-top:4px;box-sizing:border-box;">
-                            <span style="color:#64748b;font-size:11px;min-width:58px;">"Threshold"</span>
+                        <div class="dq-field">
+                            <div class="dq-field-head">
+                                <span class="row-label">"Threshold"</span>
+                                <span class="dq-num-unit">
+                                    <input class="dq-num" type="number" step="0.05" min="0" max="12"
+                                        aria-label=format!("IO{} threshold in volts", io)
+                                        prop:value=move || format!("{:.2}", cfg().threshold_v)
+                                        on:input=move |ev| {
+                                            if let Ok(v) = event_target_value(&ev).parse::<f32>() { set_threshold(v); }
+                                        } />
+                                    <span class="dq-unit">"V"</span>
+                                </span>
+                            </div>
                             <input type="range" min="0" max="12" step="0.05"
-                                prop:value=move || format!("{:.2}", cfg().threshold_v)
-                                on:input=move |ev| {
-                                    if let Ok(v) = event_target_value(&ev).parse::<f32>() { set_threshold(v); }
-                                }
-                                style="flex:1;min-width:80px;accent-color:#a855f7;" />
-                            <input class="daq-num" type="number" step="0.05" min="0" max="12" style="width:56px;"
+                                aria-label=format!("IO{} threshold slider", io)
                                 prop:value=move || format!("{:.2}", cfg().threshold_v)
                                 on:input=move |ev| {
                                     if let Ok(v) = event_target_value(&ev).parse::<f32>() { set_threshold(v); }
                                 } />
-                            <span class="daq-unit">"V"</span>
                         </div>
                     })}
                 </div>
