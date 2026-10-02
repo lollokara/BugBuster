@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **HTTP route `/api/hat/v2/swd/detect`** was never dispatched by the
+  `/api/hat/*` POST handler and returned 404 (ESP32).
+- **Python client over HTTP.** `get_diagnostics` read the wrong key,
+  `hat_get_rail_status` ignored `ok:false`, `hat_la_set_route` posted to the
+  wrong path, `quicksetup_get` returned an error body as data, and
+  `selftest_auto_calibrate` returned the raw reply instead of the USB shape.
+  The HTTP transport returns non-JSON bodies as text and sends `bytes`/`str`
+  bodies raw.
+- **Python client.** `wifi_connect` over HTTP returned the reply dict, so a
+  failed connect was truthy (also made the MCP `wifi_connect` tool always
+  report success). `set_spi_clock` now returns the scratch-register readback
+  result instead of `None`. `hat_set_rail_voltage` rejects a rail or mV value
+  that does not fit the wire format instead of wrapping it. `ext_job_get`
+  raises `ProtocolError` on a truncated reply.
+- **MCP tools.** `daq_power` window/export/normalisation errors,
+  `capture_adc_snapshot_start` checked the IO lease against the wrong slot,
+  `discover_devices` crashed without the optional mDNS dependency, I2C
+  length limits (1-255), `hat_set_rail_voltage` dropped preflight warnings,
+  `release_bootloader` used the wrong default boot IO.
+- **Tests.** The `set_board` path traversal test failed on CI runners where
+  the checkout and temp dir sit on different drives.
+
+### Added
+
+- Unit, simulator and contract coverage for the MCP tool layer, the HTTP
+  route table versus the Python client, BBP event frames, and previously
+  untested BBP commands.
+
 ## [3.0.0] - 2026-10-02
 
 Major release closing the 2026-10 audit (M0-M10). Components: ESP32 `6.0.0`
