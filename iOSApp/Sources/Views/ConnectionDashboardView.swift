@@ -358,6 +358,24 @@ struct ConnectionDashboardView: View {
                 .environmentObject(connectionManager)
             }
         }
+        .overlay(alignment: .top) {
+            if let code = connectionManager.blePairingHint {
+                HStack(spacing: 12) {
+                    Image(systemName: "lock.shield").foregroundColor(.cyan)
+                    Text("Bluetooth pairing code").font(.system(size: 13, weight: .semibold)).foregroundColor(.secondary)
+                    Text(code.map(String.init).joined(separator: " "))
+                        .font(.system(size: 24, weight: .bold, design: .monospaced)).foregroundColor(.white)
+                }
+                .padding(.horizontal, 18).padding(.vertical, 10)
+                .background(Capsule().fill(Color(red: 0.1, green: 0.12, blue: 0.14)))
+                .overlay(Capsule().stroke(Color.cyan.opacity(0.7), lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityLabel("Bluetooth pairing code \(code)")
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: connectionManager.blePairingHint)
         .sheet(isPresented: Binding(
             get: { connectionManager.blePairingPasskey != nil },
             // Only the buttons answer: SwiftUI also clears this when the view is swapped mid-connect.

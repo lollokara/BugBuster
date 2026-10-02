@@ -61,6 +61,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// True while a BLE scan is active (mirrors BLETransport.isScanning).
     @Published public var bleScanning: Bool = false
     @Published public var blePairingPasskey: String? = nil
+    /// Code kept on screen (top banner) while the iOS pairing alert covers the centre.
+    @Published public var blePairingHint: String? = nil
     private var blePairingContinuation: CheckedContinuation<Bool, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var blePollTask: Task<Void, Never>? = nil
@@ -560,10 +562,17 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             return false
         }
 
-        let pairingAllowed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            Task { @MainActor in
-                self.blePairingContinuation = continuation
-                self.blePairingPasskey = BLETransport.pairingPasskey(token: useToken)
+        let pairedKey = "bb_ble_paired_\(normMac)"
+        let passkey = BLETransport.pairingPasskey(token: useToken)
+        // Bonded before: iOS reuses the stored keys, so skip the code sheet entirely.
+        let alreadyPaired = !normMac.isEmpty && UserDefaults.standard.bool(forKey: pairedKey)
+        var pairingAllowed = true
+        if !alreadyPaired {
+            pairingAllowed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                Task { @MainActor in
+                    self.blePairingContinuation = continuation
+                    self.blePairingPasskey = BLETransport.pairingPasskey(token: useToken)
+                }
             }
         }
         guard pairingAllowed else {
@@ -577,10 +586,13 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         var waited = 0
         while !authed, waited < 60, ble.isConnected,
               ble.lastWriteError == .insufficientAuthentication || ble.lastWriteError == .insufficientEncryption {
+            updateOnMain { self.blePairingHint = passkey }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             waited += 2
             authed = await ble.authenticate(token: useToken)
         }
+        updateOnMain { self.blePairingHint = nil }
+        if !normMac.isEmpty { UserDefaults.standard.set(authed, forKey: pairedKey) }
         NSLog("[BLE] connectBLE: authenticate -> %@", authed ? "OK" : "REJECTED")
         if !authed {
             let code = ble.lastWriteError
@@ -618,6 +630,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     public func respondToBLEPairing(allow: Bool) {
         guard let continuation = blePairingContinuation else { return }
         blePairingContinuation = nil
+        if allow { blePairingHint = blePairingPasskey }
         blePairingPasskey = nil
         continuation.resume(returning: allow)
     }
