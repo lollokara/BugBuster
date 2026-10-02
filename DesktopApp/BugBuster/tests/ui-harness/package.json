@@ -1,0 +1,13 @@
+{
+  "name": "bugbuster-ui-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock-IPC screenshot harness for the BugBuster desktop frontend",
+  "type": "module",
+  "scripts": {
+    "shoot": "node shoot.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.59.1"
+  }
+}

@@ -1,3 +1,4 @@
+use crate::components::ui::Switch;
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
@@ -8,87 +9,94 @@ pub const SLOTS: &[u8] = &[];
 #[component]
 pub fn GpioTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">"ESP32 Direct Digital IO status and control. These 12 IOs are routed through the analog MUX matrix to the terminal blocks."</div>
-            <div class="channel-grid">
-                {move || {
-                    let ds = state.get();
-                    ds.gpio.into_iter().enumerate().map(|(i, g)| {
-                        let gpio_idx = i as u8;
-                        let mode_name = GPIO_MODE_OPTIONS.iter()
-                            .find(|(c, _)| *c == g.mode)
-                            .map(|(_, n)| *n).unwrap_or("?");
+        <div class="view">
+            <section class="group group-flush">
+                <div class="group-header">
+                    <div class="group-title">"Digital IO"</div>
+                    <span class="group-subtitle">"12 IOs routed through the analog MUX to the terminal blocks"</span>
+                </div>
+                <table class="table io-table io-table-gpio">
+                    <thead>
+                        <tr>
+                            <th>"IO"</th>
+                            <th>"Mode"</th>
+                            <th>"Direction"</th>
+                            <th>"Input"</th>
+                            <th>"Output"</th>
+                            <th>"Pull-down"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {move || {
+                            let ds = state.get();
+                            ds.gpio.into_iter().enumerate().map(|(i, g)| {
+                                let gpio_idx = i as u8;
+                                let mode_name = GPIO_MODE_OPTIONS.iter()
+                                    .find(|(c, _)| *c == g.mode)
+                                    .map(|(_, n)| *n).unwrap_or("?");
+                                let direction = match g.mode {
+                                    1 => "Output",
+                                    2 => "Input",
+                                    0 => "High-Z",
+                                    _ => "Other",
+                                };
+                                let is_output = g.mode == 1;
 
-                        view! {
-                            <div class="card">
-                                <div class="card-header">
-                                    <span class="channel-label">{format!("IO {}", i + 1)}</span>
-                                    <span class="channel-func">{mode_name}</span>
-                                </div>
-                                <div class="card-body">
-                                    // Mode selector
-                                    <div class="config-row">
-                                        <label>"Mode"</label>
-                                        <select class="dropdown"
-                                            prop:value=g.mode.to_string()
-                                            on:change=move |e| {
-                                                let mode: u8 = event_target_value(&e).parse().unwrap_or(0);
-                                                send_gpio_config(gpio_idx, mode, g.pulldown);
-                                            }
-                                        >
-                                            {GPIO_MODE_OPTIONS.iter().filter(|(c, _)| *c <= 2).map(|(code, name)| {
-                                                view! { <option value=code.to_string()>{*name}</option> }
-                                            }).collect::<Vec<_>>()}
-                                        </select>
-                                    </div>
-
-                                    // Input display
-                                    <div class="config-row">
-                                        <label>"Input"</label>
-                                        <div class="led-wrap">
-                                            <div class="led"
-                                                class:led-on=g.input
-                                                style=if g.input {
-                                                    "background: var(--green); box-shadow: 0 0 8px var(--green)"
-                                                } else { "" }
-                                            ></div>
-                                            <span class="led-label">{if g.input { "HIGH" } else { "LOW" }}</span>
-                                        </div>
-                                    </div>
-
-                                    // Output toggle (when mode = OUTPUT)
-                                    {if g.mode == 1 {
-                                        Some(view! {
-                                            <div class="config-row">
-                                                <label>"Output"</label>
-                                                <button class="do-toggle do-toggle-sm" class:do-on=g.output
-                                                    on:click=move |_| {
-                                                        send_gpio_value(gpio_idx, !g.output);
-                                                    }
-                                                >
-                                                    {if g.output { "HIGH" } else { "LOW" }}
-                                                </button>
-                                            </div>
-                                        })
-                                    } else { None }}
-
-                                    // Pulldown toggle
-                                    <div class="config-row">
-                                        <label>"Pull-down"</label>
-                                        <label class="toggle-wrap">
-                                            <div class="toggle" class:active=g.pulldown
-                                                on:click=move |_| {
-                                                    send_gpio_config(gpio_idx, g.mode, !g.pulldown);
+                                view! {
+                                    <tr>
+                                        <td class="io-name">{format!("IO {}", i + 1)}</td>
+                                        <td>
+                                            <select
+                                                aria-label=format!("IO {} mode", i + 1)
+                                                title=mode_name
+                                                prop:value=g.mode.to_string()
+                                                on:change=move |e| {
+                                                    let mode: u8 = event_target_value(&e).parse().unwrap_or(0);
+                                                    send_gpio_config(gpio_idx, mode, g.pulldown);
                                                 }
-                                            ><div class="toggle-thumb"></div></div>
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                    }).collect::<Vec<_>>()
-                }}
-            </div>
+                                            >
+                                                {GPIO_MODE_OPTIONS.iter().filter(|(c, _)| *c <= 2 || *c == g.mode).map(|(code, name)| {
+                                                    view! { <option value=code.to_string()>{*name}</option> }
+                                                }).collect::<Vec<_>>()}
+                                            </select>
+                                        </td>
+                                        <td><span class="chip">{direction}</span></td>
+                                        <td>
+                                            <span class="io-state">
+                                                <span class="dot" class:tone-green=g.input aria-hidden="true"></span>
+                                                {if g.input { "High" } else { "Low" }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {if is_output {
+                                                view! {
+                                                    <span class="io-state">
+                                                        <Switch
+                                                            checked=Signal::derive(move || g.output)
+                                                            on_change=Callback::new(move |v: bool| send_gpio_value(gpio_idx, v))
+                                                            aria_label="Output level"
+                                                        />
+                                                        {if g.output { "High" } else { "Low" }}
+                                                    </span>
+                                                }.into_any()
+                                            } else {
+                                                view! { <span class="subtle">"-"</span> }.into_any()
+                                            }}
+                                        </td>
+                                        <td>
+                                            <Switch
+                                                checked=Signal::derive(move || g.pulldown)
+                                                on_change=Callback::new(move |v: bool| send_gpio_config(gpio_idx, g.mode, v))
+                                                aria_label="Pull-down"
+                                            />
+                                        </td>
+                                    </tr>
+                                }
+                            }).collect::<Vec<_>>()
+                        }}
+                    </tbody>
+                </table>
+            </section>
         </div>
     }
 }

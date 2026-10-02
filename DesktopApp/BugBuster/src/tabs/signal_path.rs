@@ -1,9 +1,8 @@
+use crate::components::icons::Icon;
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Serialize;
-use wasm_bindgen::JsCast;
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
 /// Signal Path does not claim analog slots merely for viewing the MUX map.
 pub const SLOTS: &[u8] = &[];
@@ -46,22 +45,13 @@ fn send_pca_control(control: u8, on: bool) {
 
 // EfuseState and IoExpState come from tauri_bridge::* (canonical types with all fields)
 
-const PRESETS: &[(&str, [u8; 4])] = &[
-    ("All Open", [0x00; 4]),
-    ("GPIO Direct", [0x51; 4]),
-    ("ADC Read", [0x04; 4]),
-    ("External", [0x08; 4]),
+const PRESETS: &[(&str, [u8; 4], &str)] = &[
+    ("All Open", [0x00; 4], "Open every switch on all four MUX devices"),
+    ("GPIO Direct", [0x51; 4], "S1, S5 and S7 closed: each IO drives its pin directly"),
+    ("ADC Read", [0x04; 4], "S3 closed: route each port to its ADC channel"),
+    ("External", [0x08; 4], "S4 closed: route each port to its external connector"),
 ];
 
-const C_GPIO: &str = "#22c55e"; // Green - direct GPIO
-const C_GPIO_R: &str = "#eab308"; // Yellow - GPIO via 2kΩ
-const C_ADC: &str = "#3b82f6"; // Blue - ADC
-const C_EXT: &str = "#f97316"; // Orange - external
-const C_BG: &str = "#070d1a";
-const C_CHIP: &str = "#0e1629";
-const C_CHIP_BD: &str = "#1e3050";
-
-const ACCENTS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
 const MUX_REF: [&str; 4] = ["U10", "U11", "U17", "U16"];
 // IO_Block 3/4 sit on swapped ADGS2414D device indices (confirmed by hardware
 // probing). SYNC: python/bugbuster/hal.py DEFAULT_ROUTING, bus_planner.cpp
@@ -70,13 +60,10 @@ const MUX_DEVICE_BY_LOGICAL: [usize; 4] = [0, 1, 3, 2];
 
 // Switch input topology:
 // GPIO pairs: IO goes through level shifter, then SPLITS:
-//   S1 = direct (green), S2 = via 2kΩ (yellow)  — same IO
-//   S5 = direct (green), S6 = via 2kΩ (yellow)  — same IO
-//   S7 = direct (green), S8 = via 2kΩ (yellow)  — same IO
+//   S1 = direct, S2 = via 2kΩ  — same IO
+//   S5 = direct, S6 = via 2kΩ  — same IO
+//   S7 = direct, S8 = via 2kΩ  — same IO
 // Non-GPIO: S3 = ADC channel, S4 = external connector
-//
-// type: p=gpio pair direct, q=gpio pair resistor, a=adc, e=ext
-// GPIO label names (one per pair, shown before LS)
 const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
     ["IO3", "IO2", "IO1"],    // U10: pair1=S1/S2 (analog), pair2=S5/S6, pair3=S7/S8
     ["IO6", "IO5", "IO4"],    // U11
@@ -84,10 +71,418 @@ const GPIO_PAIR_LABELS: [[&str; 3]; 4] = [
     ["IO12", "IO11", "IO10"], // U16
 ];
 
-// S3 and S4 labels. Keep the operator-facing connector order natural; the
-// AD74416H C/D hardware swap is handled in the routing tables.
+// Keep the operator-facing connector order natural; the AD74416H C/D hardware
+// swap is handled in the routing tables.
 const ADC_LABELS: [&str; 4] = ["CH A", "CH B", "CH C", "CH D"];
 const EXT_LABELS: [&str; 4] = ["EXT 1", "EXT 2", "EXT 3", "EXT 4"];
+
+/// (first switch, one-past-last switch, name) of each mutually exclusive group.
+const GROUPS: [(usize, usize, &str); 3] = [(0, 4, "Main"), (4, 6, "Aux1"), (6, 8, "Aux2")];
+const PAIRS: [(usize, usize); 3] = [(0, 1), (4, 5), (6, 7)];
+
+fn kind(s: usize) -> &'static str {
+    match s {
+        0 | 4 | 6 => "direct",
+        1 | 5 | 7 => "res",
+        2 => "adc",
+        _ => "ext",
+    }
+}
+
+fn kind_label(s: usize) -> &'static str {
+    match s {
+        0 | 4 | 6 => "GPIO, direct",
+        1 | 5 | 7 => "GPIO, via 2 kΩ",
+        2 => "ADC channel",
+        _ => "External connector",
+    }
+}
+
+fn group_of(s: usize) -> usize {
+    if s < 4 {
+        0
+    } else if s < 6 {
+        1
+    } else {
+        2
+    }
+}
+
+fn source_label(ch: usize, s: usize) -> &'static str {
+    match s {
+        0 | 1 => GPIO_PAIR_LABELS[ch][0],
+        4 | 5 => GPIO_PAIR_LABELS[ch][1],
+        6 | 7 => GPIO_PAIR_LABELS[ch][2],
+        2 => ADC_LABELS[ch],
+        _ => EXT_LABELS[ch],
+    }
+}
+
+fn active_in_group(st: u8, g: usize) -> Option<usize> {
+    let (s0, s1, _) = GROUPS[g];
+    (s0..s1).find(|&s| (st >> s) & 1 != 0)
+}
+
+// ---- Schematic geometry (SVG user units) ----
+const ROW_H: f64 = 224.0;
+const TOP: f64 = 72.0;
+const IO_END: f64 = 62.0;
+const IO_W0: f64 = 68.0;
+const LS_L: f64 = 88.0;
+const LS_R: f64 = 122.0;
+const SPLIT: f64 = 138.0;
+const RES_X0: f64 = 176.0;
+const RES_X1: f64 = 208.0;
+const PORT_END: f64 = 222.0;
+const PORT_W0: f64 = 230.0;
+const CHIP_L: f64 = 250.0;
+const CHIP_R: f64 = 600.0;
+const TERM_L: f64 = 304.0;
+const TERM_R: f64 = 484.0;
+const BUS: f64 = 502.0;
+const STATE_X: f64 = 514.0;
+const EF_L: f64 = 650.0;
+const EF_R: f64 = 740.0;
+const CN_L: f64 = 800.0;
+const CN_R: f64 = 960.0;
+
+fn sw_y(s: usize) -> f64 {
+    36.0 + s as f64 * 20.0 + if s >= 4 { 8.0 } else { 0.0 } + if s >= 6 { 8.0 } else { 0.0 }
+}
+
+fn f(v: f64) -> String {
+    format!("{:.1}", v)
+}
+
+fn wire_class(s: usize, on: bool) -> String {
+    format!("sg-w sg-k-{}{}", kind(s), if on { " lit" } else { "" })
+}
+
+fn seg(class: &'static str, x1: f64, y1: f64, x2: f64, y2: f64) -> impl IntoView {
+    view! { <line class=class x1=f(x1) y1=f(y1) x2=f(x2) y2=f(y2) /> }
+}
+
+fn seg_dyn<F: Fn() -> String + Send + Sync + 'static>(
+    class: F,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+) -> impl IntoView {
+    view! { <line class=class x1=f(x1) y1=f(y1) x2=f(x2) y2=f(y2) /> }
+}
+
+fn txt(class: &'static str, x: f64, y: f64, s: String) -> impl IntoView {
+    view! { <text class=class x=f(x) y=f(y)>{s}</text> }
+}
+
+type Sel = Option<(usize, usize)>;
+
+/// Everything the schematic needs; all members are Copy handles.
+#[derive(Clone, Copy)]
+struct Ctx {
+    mux: ReadSignal<[u8; 4]>,
+    psu: ReadSignal<[bool; 2]>,
+    ef: ReadSignal<[bool; 4]>,
+    oe: ReadSignal<bool>,
+    selected: RwSignal<Sel>,
+    hover: RwSignal<Sel>,
+    /// Logical channel, switch index.
+    toggle: Callback<(usize, usize)>,
+}
+
+fn psu_block(c: Ctx, i: usize) -> impl IntoView {
+    let x = if i == 0 { 8.0 } else { 508.0 };
+    let on = move || c.psu.get()[i];
+    view! {
+        <g class=move || if on() { "sg-psu on" } else { "sg-psu" }>
+            <rect class="sg-psu-box" x=f(x) y="8" width="484" height="50" rx="8" />
+            {txt("sg-psu-t", x + 14.0, 30.0, format!("V_ADJ{}", i + 1))}
+            {txt("sg-psu-s", x + 14.0, 47.0,
+                format!("LTM8063 · DS4424 · 3–15 V · feeds P{}, P{}", 2 * i + 1, 2 * i + 2))}
+            <circle class="sg-psu-led" cx=f(x + 410.0) cy="33" r="4" />
+            <text class="sg-psu-st sg-end" x=f(x + 470.0) y="37">
+                {move || if on() { "ON" } else { "OFF" }}
+            </text>
+        </g>
+    }
+}
+
+fn ls_block(c: Ctx, pair: usize) -> impl IntoView {
+    let y0 = TOP + pair as f64 * 2.0 * ROW_H + 8.0;
+    let h = 2.0 * ROW_H - 16.0;
+    let cx = (LS_L + LS_R) / 2.0;
+    let name = if pair == 0 { "U13" } else { "U15" };
+    let mid = y0 + h / 2.0;
+    view! {
+        <g class=move || if c.oe.get() { "sg-ls on" } else { "sg-ls" }>
+            <rect class="sg-ls-box" x=f(LS_L) y=f(y0) width=f(LS_R - LS_L) height=f(h) rx="5" />
+            <text class="sg-ls-t sg-mid" x=f(cx) y=f(y0 + 16.0)>{name}</text>
+            <text class="sg-ls-s sg-mid" x=f(cx) y=f(y0 + 29.0)>"LS"</text>
+            <circle class="sg-ls-led" cx=f(cx) cy=f(mid - 6.0) r="4" />
+            <text class="sg-ls-s sg-mid" x=f(cx) y=f(mid + 12.0)>"OE"</text>
+            <text class="sg-ls-s sg-mid" x=f(cx) y=f(mid + 24.0)>
+                {move || if c.oe.get() { "ON" } else { "OFF" }}
+            </text>
+        </g>
+    }
+}
+
+fn channel_row(c: Ctx, ch: usize) -> impl IntoView {
+    let dev = MUX_DEVICE_BY_LOGICAL[ch];
+    let ry = TOP + ch as f64 * ROW_H;
+    let pi = ch / 2;
+    let ch_class = ["sg-ch-a", "sg-ch-b", "sg-ch-c", "sg-ch-d"][ch];
+    let on_fn = move |s: usize| (c.mux.get()[dev] >> s) & 1 != 0;
+
+    // --- Input network: IO -> level shifter -> split into direct / 2 kΩ ---
+    let pair_views = PAIRS
+        .iter()
+        .enumerate()
+        .map(|(pidx, &(sd, sr))| {
+            let yd = ry + sw_y(sd);
+            let yr = ry + sw_y(sr);
+            let ym = (yd + yr) / 2.0;
+            let zig = format!(
+                "M{} {} L{} {} L{} {} L{} {} L{} {} L{} {}",
+                f(RES_X0),
+                f(yr),
+                f(RES_X0 + 4.0),
+                f(yr - 4.0),
+                f(RES_X0 + 12.0),
+                f(yr + 4.0),
+                f(RES_X0 + 20.0),
+                f(yr - 4.0),
+                f(RES_X0 + 28.0),
+                f(yr + 4.0),
+                f(RES_X1),
+                f(yr),
+            );
+            view! {
+                <g>
+                    {txt("sg-io sg-end", IO_END, ym + 4.0, GPIO_PAIR_LABELS[ch][pidx].to_string())}
+                    {seg("sg-w", IO_W0, ym, LS_L, ym)}
+                    {seg("sg-w", LS_R, ym, SPLIT, ym)}
+                    {seg("sg-w", SPLIT, yd, SPLIT, yr)}
+                    {seg_dyn(move || wire_class(sd, on_fn(sd)), SPLIT, yd, TERM_L, yd)}
+                    {seg_dyn(move || wire_class(sr, on_fn(sr)), SPLIT, yr, RES_X0, yr)}
+                    <path class=move || wire_class(sr, on_fn(sr)) d=zig />
+                    {seg_dyn(move || wire_class(sr, on_fn(sr)), RES_X1, yr, TERM_L, yr)}
+                    {txt("sg-2k sg-mid", (RES_X0 + RES_X1) / 2.0, yr - 8.0, "2k".to_string())}
+                </g>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // --- ADC (S3) and external (S4) ports ---
+    let port_views = [(2usize, ADC_LABELS[ch]), (3usize, EXT_LABELS[ch])]
+        .into_iter()
+        .map(|(s, label)| {
+            let y = ry + sw_y(s);
+            let tcls = if s == 2 { "sg-port sg-end sg-k-adc" } else { "sg-port sg-end sg-k-ext" };
+            view! {
+                <g>
+                    {txt(tcls, PORT_END, y + 4.0, label.to_string())}
+                    {seg_dyn(move || wire_class(s, on_fn(s)), PORT_W0, y, TERM_L, y)}
+                </g>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // --- The eight switches ---
+    let switch_views = (0..8usize)
+        .map(|s| {
+            let y = ry + sw_y(s);
+            let src = source_label(ch, s);
+            let toggle_this = move || {
+                c.selected.set(Some((ch, s)));
+                c.toggle.run((ch, s));
+            };
+            view! {
+                <g
+                    class=move || format!(
+                        "sg-sw sg-k-{}{}{}",
+                        kind(s),
+                        if on_fn(s) { " on" } else { " off" },
+                        if c.selected.get() == Some((ch, s)) { " sel" } else { "" }
+                    )
+                    role="button"
+                    tabindex="0"
+                    aria-label=move || format!(
+                        "MUX {} switch S{}, {} {}: {}. Activate to toggle.",
+                        dev + 1, s + 1, src, kind_label(s),
+                        if on_fn(s) { "closed" } else { "open" }
+                    )
+                    aria-pressed=move || if on_fn(s) { "true" } else { "false" }
+                    on:click=move |_| toggle_this()
+                    on:keydown=move |e: leptos::ev::KeyboardEvent| {
+                        let k = e.key();
+                        if k == "Enter" || k == " " {
+                            e.prevent_default();
+                            toggle_this();
+                        }
+                    }
+                    on:mouseenter=move |_| c.hover.set(Some((ch, s)))
+                    on:mouseleave=move |_| c.hover.set(None)
+                    on:focus=move |_| c.hover.set(Some((ch, s)))
+                    on:blur=move |_| c.hover.set(None)
+                >
+                    <rect class="sg-hit" x=f(CHIP_L + 4.0) y=f(y - 9.0)
+                        width=f(CHIP_R - CHIP_L - 8.0) height="18" rx="4" />
+                    {txt("sg-lbl", CHIP_L + 12.0, y + 4.0, format!("S{}", s + 1))}
+                    <circle class="sg-term" cx=f(TERM_L) cy=f(y) r="3.2" />
+                    <line class="sg-blade" x1=f(TERM_L) y1=f(y)
+                        x2=move || f(if on_fn(s) { TERM_R } else { TERM_R - 22.0 })
+                        y2=move || f(if on_fn(s) { y } else { y - 9.0 }) />
+                    <circle class="sg-term" cx=f(TERM_R) cy=f(y) r="3.2" />
+                    <text class="sg-state" x=f(STATE_X) y=f(y + 4.0)>
+                        {move || if on_fn(s) { "ON" } else { "OFF" }}
+                    </text>
+                </g>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // --- Group buses and outputs ---
+    let group_views = GROUPS
+        .iter()
+        .enumerate()
+        .map(|(g, &(s0, s1, name))| {
+            let y0 = ry + sw_y(s0);
+            let y1 = ry + sw_y(s1 - 1);
+            let cy = (y0 + y1) / 2.0;
+            let active = move || active_in_group(c.mux.get()[dev], g);
+            let pin_y = cy;
+            let pin_no = 4 - g;
+            let pin_label = GPIO_PAIR_LABELS[ch][g];
+            let stubs = (s0..s1)
+                .map(|s| seg_dyn(move || wire_class(s, on_fn(s)), TERM_R, ry + sw_y(s), BUS, ry + sw_y(s)))
+                .collect::<Vec<_>>();
+            let pin_cls = move || match active() {
+                Some(s) => format!("sg-pin-lbl lit sg-k-{}", kind(s)),
+                None => "sg-pin-lbl".to_string(),
+            };
+            view! {
+                <g>
+                    {seg("sg-bus", BUS, y0, BUS, y1)}
+                    {stubs}
+                    {seg_dyn(
+                        move || match active() {
+                            Some(s) => format!("sg-out lit sg-k-{}", kind(s)),
+                            None => "sg-out".to_string(),
+                        },
+                        BUS, cy, CN_L, cy,
+                    )}
+                    {txt("sg-grp", CHIP_R + 6.0, cy - 6.0, name.to_string())}
+                    <rect class="sg-pin" x=f(CN_L - 4.0) y=f(pin_y - 3.0) width="8" height="6" />
+                    <text
+                        class=pin_cls
+                        x=f(CN_L + 14.0) y=f(pin_y + 4.0)
+                    >{pin_label}</text>
+                    {txt("sg-pin-num sg-end", CN_R - 10.0, pin_y + 4.0, pin_no.to_string())}
+                </g>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // --- E-fuse ---
+    let ef_state = move || {
+        let psu_on = c.psu.get()[pi];
+        let ef_on = c.ef.get()[ch];
+        if !psu_on {
+            ("sg-ef off", "NO VADJ")
+        } else if !ef_on {
+            ("sg-ef armed", "EF OFF")
+        } else {
+            ("sg-ef live", "LIVE")
+        }
+    };
+
+    // --- Connector power/GND pins ---
+    let pw_live = move || c.psu.get()[pi] && c.ef.get()[ch];
+
+    view! {
+        <g class=ch_class>
+            {(ch > 0).then(|| seg("sg-sep", 0.0, ry, 1000.0, ry))}
+
+            // MUX chip
+            <rect class="sg-chip" x=f(CHIP_L) y=f(ry + 4.0)
+                width=f(CHIP_R - CHIP_L) height=f(ROW_H - 12.0) rx="8" />
+            {txt("sg-chip-t", CHIP_L + 12.0, ry + 22.0,
+                format!("P{} · MUX {} · {}", ch + 1, dev + 1, MUX_REF[ch]))}
+            <text class="sg-reg sg-end" x=f(CHIP_R - 12.0) y=f(ry + 22.0)>
+                {move || format!("0x{:02X}", c.mux.get()[dev])}
+            </text>
+            {seg("sg-gsep", CHIP_L, ry + (sw_y(3) + sw_y(4)) / 2.0, CHIP_R, ry + (sw_y(3) + sw_y(4)) / 2.0)}
+            {seg("sg-gsep", CHIP_L, ry + (sw_y(5) + sw_y(6)) / 2.0, CHIP_R, ry + (sw_y(5) + sw_y(6)) / 2.0)}
+
+            // E-fuse block (behind the signal wires)
+            <g class=move || ef_state().0>
+                <rect class="sg-ef-box" x=f(EF_L) y=f(ry + 6.0) width=f(EF_R - EF_L)
+                    height=f(ROW_H - 14.0) rx="6" />
+                {txt("sg-ef-t sg-mid", (EF_L + EF_R) / 2.0, ry + 24.0, "E-FUSE".to_string())}
+                {txt("sg-ef-s sg-mid", (EF_L + EF_R) / 2.0, ry + 38.0, "TPS1641".to_string())}
+                <circle class="sg-ef-led" cx=f(EF_L + 14.0) cy=f(ry + 203.0) r="4" />
+                <text class="sg-ef-st" x=f(EF_L + 24.0) y=f(ry + 207.0)>{move || ef_state().1}</text>
+            </g>
+
+            // Connector
+            <rect class="sg-cn" x=f(CN_L) y=f(ry + 6.0) width=f(CN_R - CN_L)
+                height=f(ROW_H - 14.0) rx="8" />
+            {txt("sg-cn-t", CN_L + 14.0, ry + 28.0, format!("P{}", ch + 1))}
+            <rect class="sg-pin" x=f(CN_L - 4.0) y=f(ry + 41.0) width="8" height="6" />
+            {txt("sg-pin-lbl", CN_L + 14.0, ry + 48.0, "GND".to_string())}
+            {txt("sg-pin-num sg-end", CN_R - 10.0, ry + 48.0, "1".to_string())}
+            <rect class="sg-pin" x=f(CN_L - 4.0) y=f(ry + 201.0) width="8" height="6" />
+            <text class=move || if pw_live() { "sg-pin-lbl sg-pwr lit" } else { "sg-pin-lbl sg-pwr" }
+                x=f(CN_L + 14.0) y=f(ry + 208.0)>
+                {format!("V_ADJ{}", pi + 1)}
+            </text>
+            <text class=move || if pw_live() { "sg-pin-st sg-end lit" } else { "sg-pin-st sg-end" }
+                x=f(CN_R - 26.0) y=f(ry + 208.0)>
+                {move || if pw_live() { "LIVE" } else { "OFF" }}
+            </text>
+            {txt("sg-pin-num sg-end", CN_R - 10.0, ry + 208.0, "5".to_string())}
+
+            {pair_views}
+            {port_views}
+            {switch_views}
+            {group_views}
+        </g>
+    }
+}
+
+#[component]
+fn SgToggle(
+    label: String,
+    #[prop(into)] on: Signal<bool>,
+    on_click: Callback<()>,
+    title: String,
+) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class="sg-tog"
+            class:on=move || on.get()
+            aria-pressed=move || if on.get() { "true" } else { "false" }
+            title=title
+            on:click=move |_| on_click.run(())
+        >
+            <span class="sg-tog-mark" aria-hidden="true"></span>
+            <span>{label}</span>
+            <span class="sg-tog-state">{move || if on.get() { "On" } else { "Off" }}</span>
+        </button>
+    }
+}
+
+fn state_badge(on: bool, on_text: &'static str, off_text: &'static str) -> impl IntoView {
+    view! {
+        <span class=if on { "badge tone-green" } else { "badge" }>
+            <Icon name=if on { "check" } else { "minus" } size=12 />
+            {if on { on_text } else { off_text }}
+        </span>
+    }
+}
 
 #[component]
 pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
@@ -101,12 +496,10 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                       // overwrites for ~700 ms after a user action.
     let psu_inflight: [RwSignal<bool>; 2] = std::array::from_fn(|_| RwSignal::new(false));
     let ef_inflight: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
-    let cr = NodeRef::<leptos::html::Canvas>::new();
+    let selected: RwSignal<Sel> = RwSignal::new(None);
+    let hover: RwSignal<Sel> = RwSignal::new(None);
 
-    // Alive flag — flips false on tab unmount so background loops terminate.
-    // Without this, the 25 Hz canvas redraw and 500 ms PCA poll keep running
-    // forever after the user navigates away (one of the major contributors to
-    // the "100 % CPU in idle" complaint).
+    // Alive flag — flips false on tab unmount so the background poll terminates.
     let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let alive_clean = alive.clone();
     on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
@@ -247,537 +640,30 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         set_mux.set(s);
     };
 
-    let alive_draw = alive.clone();
-    spawn_local(async move {
-        loop {
-            slp(40).await;
-            if !alive_draw.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-            let Some(cv) = cr.get_untracked() else { continue };
-            let cv: HtmlCanvasElement = cv;
-            let dp = web_sys::window().unwrap().device_pixel_ratio();
-            let rc = cv.get_bounding_client_rect();
-            let (w, h) = (rc.width(), rc.height());
-            if w < 300.0 || h < 200.0 {
-                continue;
-            }
-            cv.set_width((w * dp) as u32);
-            cv.set_height((h * dp) as u32);
-            let c: CanvasRenderingContext2d =
-                cv.get_context("2d").unwrap().unwrap().dyn_into().unwrap();
-            c.scale(dp, dp).unwrap();
+    let toggle = Callback::new(move |(ch, s): (usize, usize)| tog(MUX_DEVICE_BY_LOGICAL[ch], s));
+    let ctx = Ctx { mux, psu, ef, oe, selected, hover, toggle };
+    let svg_h = TOP + 4.0 * ROW_H;
 
-            let ms = mux.get_untracked();
-            let ps = psu.get_untracked();
-            let es = ef.get_untracked();
-            let oe_on = oe.get_untracked();
-
-            c.set_fill_style_str(C_BG);
-            c.fill_rect(0.0, 0.0, w, h);
-
-            // Layout
-            let psu_h = 42.0;
-            let rt = psu_h + 10.0;
-            let ra = h - rt - 4.0; // No legend at bottom — it's in toolbar
-            let rh = ra / 4.0;
-
-            let gpio_x = w * 0.06;
-            let ls_l = w * 0.085;
-            let ls_r = w * 0.115;
-            let adc_x = w * 0.155;
-            let mux_l = w * 0.18;
-            let mux_r = w * 0.50;
-            let out_x = w * 0.52;
-            let ef_x = w * 0.63;
-            let cn_l = w * 0.76;
-            let cn_r = w * 0.95;
-
-            // PSU bars
-            psu_bar(
-                &c,
-                8.0,
-                4.0,
-                w * 0.48 - 12.0,
-                psu_h,
-                "V_ADJ1",
-                "→ P1, P2",
-                ps[0],
-            );
-            psu_bar(
-                &c,
-                w * 0.5 + 4.0,
-                4.0,
-                w * 0.48 - 12.0,
-                psu_h,
-                "V_ADJ2",
-                "→ P3, P4",
-                ps[1],
-            );
-
-            // ── LEVEL SHIFTERS (merged: U13 spans rows 0+1, U15 spans rows 2+3) ──
-            for pair in 0..2 {
-                let y1 = rt + pair as f64 * 2.0 * rh;
-                let y2 = y1 + 2.0 * rh;
-                let ls_name = if pair == 0 { "U13" } else { "U15" };
-
-                // Level shifter block spanning 2 rows
-                let ls_pad = 4.0;
-                rrect(
-                    &c,
-                    ls_l - 1.0,
-                    y1 + ls_pad,
-                    ls_r - ls_l + 2.0,
-                    (y2 - y1) - ls_pad * 2.0,
-                    3.0,
-                );
-                c.set_fill_style_str(if oe_on { "#0c1a12" } else { "#0a0f1c" });
-                c.fill();
-                c.set_stroke_style_str(if oe_on { "#1a4030" } else { "#1a2a40" });
-                c.set_line_width(1.0);
-                c.stroke();
-
-                // LS label
-                c.set_fill_style_str(if oe_on { "#22c55e" } else { "#2a3f5f" });
-                c.set_font("bold 7px monospace");
-                c.set_text_align("center");
-                let _ = c.fill_text(ls_name, (ls_l + ls_r) / 2.0, y1 + ls_pad - 2.0);
-
-                // OE indicator at bottom of LS
-                let oe_y = y2 - ls_pad - 6.0;
-                c.set_fill_style_str(if oe_on { "#22c55e" } else { "#1e293b" });
-                c.begin_path();
-                c.arc((ls_l + ls_r) / 2.0, oe_y, 3.0, 0.0, std::f64::consts::TAU)
-                    .unwrap();
-                c.fill();
-                if oe_on {
-                    c.set_fill_style_str("rgba(34,197,94,0.15)");
-                    c.begin_path();
-                    c.arc((ls_l + ls_r) / 2.0, oe_y, 7.0, 0.0, std::f64::consts::TAU)
-                        .unwrap();
-                    c.fill();
-                }
-                c.set_fill_style_str("#334155");
-                c.set_font("5px monospace");
-                let _ = c.fill_text("OE", (ls_l + ls_r) / 2.0, oe_y + 10.0);
-            }
-
-            // ── CHANNEL ROWS ──
-            for ch in 0..4usize {
-                let ry = rt + ch as f64 * rh;
-                let mux_dev = MUX_DEVICE_BY_LOGICAL[ch];
-                let st = ms[mux_dev];
-                let ac = ACCENTS[ch];
-                let pi = if ch < 2 { 0 } else { 1 };
-                let psu_on = ps[pi];
-                let ef_on = es[ch];
-
-                if ch > 0 {
-                    c.set_stroke_style_str("#111828");
-                    c.set_line_width(0.5);
-                    c.begin_path();
-                    c.move_to(0.0, ry);
-                    c.line_to(w, ry);
-                    c.stroke();
-                }
-
-                // Switch Y positions
-                let lh = (rh - 12.0) / 8.5;
-                let g = lh * 0.4;
-                let mut sy = [0.0f64; 8];
-                for s in 0..8 {
-                    let gap = if s >= 6 {
-                        g * 2.0
-                    } else if s >= 4 {
-                        g
-                    } else {
-                        0.0
-                    };
-                    sy[s] = ry + 6.0 + s as f64 * lh + gap;
-                }
-
-                // MUX chip
-                let mt = ry + 2.0;
-                let mh = rh - 4.0;
-                c.set_fill_style_str(C_CHIP);
-                c.fill_rect(mux_l, mt, mux_r - mux_l, mh);
-                c.set_stroke_style_str(C_CHIP_BD);
-                c.set_line_width(1.0);
-                c.stroke_rect(mux_l, mt, mux_r - mux_l, mh);
-
-                // Group separators
-                c.set_stroke_style_str("#162540");
-                c.set_line_width(0.5);
-                let sep1 = (sy[3] + sy[4]) / 2.0;
-                let sep2 = (sy[5] + sy[6]) / 2.0;
-                c.begin_path();
-                c.move_to(mux_l + 3.0, sep1);
-                c.line_to(mux_r - 3.0, sep1);
-                c.stroke();
-                c.begin_path();
-                c.move_to(mux_l + 3.0, sep2);
-                c.line_to(mux_r - 3.0, sep2);
-                c.stroke();
-
-                // MUX label
-                c.set_fill_style_str(ac);
-                c.set_font("bold 9px monospace");
-                c.set_text_align("center");
-                let _ = c.fill_text(
-                    &format!("MUX {} · {}", mux_dev + 1, MUX_REF[ch]),
-                    (mux_l + mux_r) / 2.0,
-                    mt + mh - 3.0,
-                );
-
-                // ── GPIO PAIRS: IO → LevelShifter → split (direct green / 2kΩ yellow) ──
-                let gpio_pairs: [(usize, usize, usize); 3] = [(0, 1, 0), (4, 5, 1), (6, 7, 2)];
-                for &(sd, sr, pi2) in &gpio_pairs {
-                    let yd = sy[sd];
-                    let yr = sy[sr];
-                    let ym = (yd + yr) / 2.0;
-                    let lbl = GPIO_PAIR_LABELS[ch][pi2];
-                    // IO label (white, before LS)
-                    c.set_font("bold 9px monospace");
-                    c.set_text_align("right");
-                    c.set_fill_style_str("#e2e8f0");
-                    let _ = c.fill_text(lbl, gpio_x, ym + 3.0);
-                    // Trace: label → LS (gray)
-                    c.set_stroke_style_str("#94a3b8");
-                    c.set_line_width(1.0);
-                    c.begin_path();
-                    c.move_to(gpio_x + 3.0, ym);
-                    c.line_to(ls_l, ym);
-                    c.stroke();
-                    c.set_fill_style_str("#94a3b8");
-                    c.begin_path();
-                    c.arc(ls_l, ym, 1.5, 0.0, std::f64::consts::TAU).unwrap();
-                    c.fill();
-                    c.begin_path();
-                    c.arc(ls_r, ym, 1.5, 0.0, std::f64::consts::TAU).unwrap();
-                    c.fill();
-                    // After LS: split
-                    let sp = ls_r + 4.0;
-                    c.set_stroke_style_str("#94a3b8");
-                    c.set_line_width(1.0);
-                    c.begin_path();
-                    c.move_to(ls_r, ym);
-                    c.line_to(sp, ym);
-                    c.stroke();
-                    c.set_stroke_style_str("#475569");
-                    c.set_line_width(0.5);
-                    c.begin_path();
-                    c.move_to(sp, yd);
-                    c.line_to(sp, yr);
-                    c.stroke();
-                    // Direct branch (green)
-                    c.set_stroke_style_str(C_GPIO);
-                    c.set_line_width(1.0);
-                    c.begin_path();
-                    c.move_to(sp, yd);
-                    c.line_to(mux_l, yd);
-                    c.stroke();
-                    // Resistor branch (yellow + zigzag)
-                    c.set_stroke_style_str(C_GPIO_R);
-                    c.set_line_width(1.0);
-                    c.begin_path();
-                    c.move_to(sp, yr);
-                    c.line_to(mux_l, yr);
-                    c.stroke();
-                    let rz = (sp + mux_l) / 2.0;
-                    draw_resistor(&c, rz - 8.0, yr, 16.0, C_GPIO_R);
-                }
-                // ── ADC (S3) ──
-                c.set_font("8px monospace");
-                c.set_text_align("right");
-                c.set_fill_style_str(C_ADC);
-                let _ = c.fill_text(ADC_LABELS[ch], adc_x, sy[2] + 3.0);
-                c.set_stroke_style_str(C_ADC);
-                c.set_line_width(1.0);
-                c.begin_path();
-                c.move_to(adc_x + 3.0, sy[2]);
-                c.line_to(mux_l, sy[2]);
-                c.stroke();
-                // ── EXT (S4) ──
-                c.set_fill_style_str(C_EXT);
-                let _ = c.fill_text(EXT_LABELS[ch], adc_x, sy[3] + 3.0);
-                c.set_stroke_style_str(C_EXT);
-                c.set_line_width(1.0);
-                c.begin_path();
-                c.move_to(adc_x + 3.0, sy[3]);
-                c.line_to(mux_l, sy[3]);
-                c.stroke();
-
-                // ── ALL 8 SWITCH BARS ──
-                for s in 0..8usize {
-                    let y = sy[s];
-                    let on = (st >> s) & 1 != 0;
-                    let bl = mux_l + 4.0;
-                    let br = mux_r - 8.0;
-                    if on {
-                        c.set_fill_style_str(ac);
-                        c.fill_rect(bl, y - 2.0, br - bl, 4.0);
-                        let glow = format!("{}44", ac);
-                        c.set_fill_style_str(&glow);
-                        c.begin_path();
-                        c.arc(br, y, 6.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
-                        c.set_fill_style_str(ac);
-                        c.begin_path();
-                        c.arc(br, y, 3.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
-                    } else {
-                        c.set_fill_style_str("#0b1322");
-                        c.fill_rect(bl, y - 1.0, br - bl, 2.0);
-                        c.set_fill_style_str("#152030");
-                        c.begin_path();
-                        c.arc(br, y, 2.0, 0.0, std::f64::consts::TAU).unwrap();
-                        c.fill();
-                    }
-                    let sc = match s {
-                        0 | 4 | 6 => C_GPIO,
-                        1 | 5 | 7 => C_GPIO_R,
-                        2 => C_ADC,
-                        3 => C_EXT,
-                        _ => "#fff",
-                    };
-                    c.set_fill_style_str(if on { sc } else { "#1e2d40" });
-                    c.set_font("bold 7px monospace");
-                    c.set_text_align("left");
-                    let _ = c.fill_text(&format!("S{}", s + 1), bl + 2.0, y + 3.0);
-                }
-
-                // Output traces — color matches the active switch's signal type
-                let grps: [(usize, usize, &str); 3] =
-                    [(0, 4, "Main"), (4, 6, "Aux1"), (6, 8, "Aux2")];
-                for &(s0, s1, lbl) in &grps {
-                    let cy = (sy[s0] + sy[s1 - 1]) / 2.0;
-                    // Find the active switch in this group and use its signal color
-                    let active_sw = (s0..s1).find(|&s| (st >> s) & 1 != 0);
-                    let any = active_sw.is_some();
-                    let tc = if let Some(s) = active_sw {
-                        match s {
-                            0 | 4 | 6 => C_GPIO,
-                            1 | 5 | 7 => C_GPIO_R,
-                            2 => C_ADC,
-                            3 => C_EXT,
-                            _ => ac,
-                        }
-                    } else {
-                        "#0c1525"
-                    };
-                    c.set_stroke_style_str(tc);
-                    c.set_line_width(if any { 1.5 } else { 0.3 });
-                    c.begin_path();
-                    c.move_to(mux_r, cy);
-                    c.line_to(ef_x - 28.0, cy);
-                    c.stroke();
-                    if any {
-                        let glow = format!("{}15", tc);
-                        c.set_stroke_style_str(&glow);
-                        c.set_line_width(6.0);
-                        c.begin_path();
-                        c.move_to(mux_r, cy);
-                        c.line_to(ef_x - 28.0, cy);
-                        c.stroke();
-                        c.set_stroke_style_str(tc);
-                        c.set_line_width(1.0);
-                        c.begin_path();
-                        c.move_to(ef_x + 28.0, cy);
-                        c.line_to(cn_l, cy);
-                        c.stroke();
-                    }
-                    c.set_fill_style_str(if any { "#e2e8f0" } else { "#253040" });
-                    c.set_font("8px monospace");
-                    c.set_text_align("left");
-                    let _ = c.fill_text(lbl, out_x, cy + 3.0);
-                }
-
-                // E-Fuse
-                let ef_w = 25.0;
-                let ef_top = ry + rh * 0.1;
-                let ef_h2 = rh * 0.75;
-                let (ef_fill, ef_bd, ef_txt) = if !psu_on {
-                    (C_CHIP, C_CHIP_BD, "#334155")
-                } else if !ef_on {
-                    ("#1a1508", "#8b6020", "#f59e0b") // Orange: PSU on, EF off
-                } else {
-                    ("#081a10", "#20603a", "#10b981") // Green: power flowing
-                };
-                rrect(&c, ef_x - ef_w, ef_top, ef_w * 2.0, ef_h2, 4.0);
-                c.set_fill_style_str(ef_fill);
-                c.fill();
-                c.set_stroke_style_str(ef_bd);
-                c.set_line_width(1.0);
-                c.stroke();
-                c.set_fill_style_str(ef_txt);
-                c.set_font("bold 7px monospace");
-                c.set_text_align("center");
-                let _ = c.fill_text("E-FUSE", ef_x, ef_top + 14.0);
-                c.set_font("6px monospace");
-                let _ = c.fill_text("TPS1641", ef_x, ef_top + 24.0);
-                c.set_fill_style_str(ef_txt);
-                c.begin_path();
-                c.arc(ef_x, ef_top + ef_h2 - 10.0, 4.0, 0.0, std::f64::consts::TAU)
-                    .unwrap();
-                c.fill();
-
-                // ── CONNECTOR ──
-                let ct = ry + 3.0;
-                let conn_h = rh - 6.0;
-                let conn_w = cn_r - cn_l;
-                rrect(&c, cn_l, ct, conn_w, conn_h, 5.0);
-                c.set_fill_style_str("#0a1222");
-                c.fill();
-                let bdc = format!("{}55", ac);
-                c.set_stroke_style_str(&bdc);
-                c.set_line_width(1.5);
-                c.stroke();
-
-                // Port name centered at top
-                c.set_fill_style_str(ac);
-                c.set_font("bold 13px Inter, sans-serif");
-                c.set_text_align("center");
-                let _ = c.fill_text(&format!("P{}", ch + 1), cn_l + conn_w / 2.0, ct + 16.0);
-
-                // Pin labels — Y positions MATCHED to output trace centers
-                let pw = psu_on && ef_on;
-                let psu_lbl = if pi == 0 { "V_ADJ1" } else { "V_ADJ2" };
-
-                // These must match the group center Ys used for output traces above
-                let main_cy = (sy[0] + sy[3]) / 2.0;
-                let aux1_cy = (sy[4] + sy[5]) / 2.0;
-                let aux2_cy = (sy[6] + sy[7]) / 2.0;
-                let main_sw = (0..4).find(|&s| (st >> s) & 1 != 0);
-                let aux1_sw = (4..6).find(|&s| (st >> s) & 1 != 0);
-                let aux2_sw = (6..8).find(|&s| (st >> s) & 1 != 0);
-                let main_on = main_sw.is_some();
-                let aux1_on = aux1_sw.is_some();
-                let aux2_on = aux2_sw.is_some();
-                let sw_color = |sw: Option<usize>| -> &str {
-                    match sw {
-                        Some(0) | Some(4) | Some(6) => C_GPIO,
-                        Some(1) | Some(5) | Some(7) => C_GPIO_R,
-                        Some(2) => C_ADC,
-                        Some(3) => C_EXT,
-                        _ => "#253040",
-                    }
-                };
-                let main_c = sw_color(main_sw);
-                let aux1_c = sw_color(aux1_sw);
-                let aux2_c = sw_color(aux2_sw);
-
-                // Connector order is GND, IOx, IOx+1, IOx+2 (analog), VCC.
-                let pin_ys = [ct + 14.0, aux2_cy, aux1_cy, main_cy, ct + conn_h - 8.0];
-                let io_labels = GPIO_PAIR_LABELS[ch];
-
-                c.set_font("bold 10px monospace");
-                c.set_text_align("left");
-                let pin_x = cn_l + 8.0;
-                let num_x = cn_r - 14.0;
-
-                // Pin 1: GND
-                c.set_font("8px monospace");
-                c.set_text_align("left");
-                c.set_fill_style_str("#1e2d40");
-                let _ = c.fill_text("GND", pin_x, pin_ys[0] + 3.0);
-                c.set_text_align("right");
-                c.set_fill_style_str("#253040");
-                c.set_font("7px monospace");
-                let _ = c.fill_text("1", num_x, pin_ys[0] + 3.0);
-
-                // Pin 2: IOx (Group C)
-                c.set_font("bold 10px monospace");
-                c.set_text_align("left");
-                c.set_fill_style_str(if aux2_on { aux2_c } else { "#253040" });
-                let _ = c.fill_text(io_labels[2], pin_x, pin_ys[1] + 4.0);
-                c.set_text_align("right");
-                c.set_fill_style_str("#334155");
-                c.set_font("7px monospace");
-                let _ = c.fill_text("2", num_x, pin_ys[1] + 3.0);
-
-                // Pin 3: IOx+1 (Group B)
-                c.set_font("bold 10px monospace");
-                c.set_text_align("left");
-                c.set_fill_style_str(if aux1_on { aux1_c } else { "#253040" });
-                let _ = c.fill_text(io_labels[1], pin_x, pin_ys[2] + 4.0);
-                c.set_text_align("right");
-                c.set_fill_style_str("#334155");
-                c.set_font("7px monospace");
-                let _ = c.fill_text("3", num_x, pin_ys[2] + 3.0);
-
-                // Pin 4: analog-capable IO (Group A)
-                c.set_font("bold 10px monospace");
-                c.set_text_align("left");
-                c.set_fill_style_str(if main_on { main_c } else { "#253040" });
-                let _ = c.fill_text(io_labels[0], pin_x, pin_ys[3] + 4.0);
-                c.set_text_align("right");
-                c.set_fill_style_str("#334155");
-                c.set_font("7px monospace");
-                let _ = c.fill_text("4", num_x, pin_ys[3] + 3.0);
-
-                // Pin 5: V_ADJ (power)
-                c.set_font("8px monospace");
-                c.set_text_align("left");
-                c.set_fill_style_str(if pw { "#ef444499" } else { "#1e2d40" });
-                let _ = c.fill_text(psu_lbl, pin_x, pin_ys[4] + 3.0);
-                c.set_text_align("right");
-                c.set_fill_style_str("#253040");
-                c.set_font("7px monospace");
-                let _ = c.fill_text("5", num_x, pin_ys[4] + 3.0);
-                c.set_fill_style_str(if pw { "#ef4444" } else { "#1e293b" });
-                c.begin_path();
-                c.arc(num_x - 10.0, pin_ys[4], 4.0, 0.0, std::f64::consts::TAU)
-                    .unwrap();
-                c.fill();
-                if pw {
-                    c.set_fill_style_str("rgba(239,68,68,0.12)");
-                    c.begin_path();
-                    c.arc(num_x - 10.0, pin_ys[4], 8.0, 0.0, std::f64::consts::TAU)
-                        .unwrap();
-                    c.fill();
-                }
-            }
-        }
-    });
-
-    let on_click = move |e: leptos::ev::MouseEvent| {
-        let Some(cv) = cr.get() else { return };
-        let cv: HtmlCanvasElement = cv.clone();
-        let r = cv.get_bounding_client_rect();
-        let (x, y, w, h) = (
-            e.client_x() as f64 - r.left(),
-            e.client_y() as f64 - r.top(),
-            r.width(),
-            r.height(),
-        );
-        let rt2 = 52.0;
-        let rh2 = (h - rt2) / 4.0;
-        let ml = w * 0.18;
-        let mr = w * 0.50;
-        if y > rt2 && x >= ml && x <= mr {
-            let ch = ((y - rt2) / rh2).floor() as usize;
-            if ch < 4 {
-                let ry = rt2 + ch as f64 * rh2;
-                let lh = (rh2 - 12.0) / 8.5;
-                let sw = ((y - ry - 6.0) / lh).clamp(0.0, 7.0) as usize;
-                tog(MUX_DEVICE_BY_LOGICAL[ch], sw);
-            }
-        }
-    };
+    let focus = move || hover.get().or(selected.get());
 
     view! {
-        <div class="tab-content signal-path-tab">
-            <div class="tab-desc">"Interactive signal routing matrix. Click switches inside the MUX to connect GPIOs, ADC channels, or external inputs to the output connectors. Only one switch per group (S1-S4, S5-S6, S7-S8) can be active at a time."</div>
-            <div class="sp-toolbar">
-                <span class="sp-title">"Signal Path"</span>
-                <div class="sp-presets">
-                    {PRESETS.iter().map(|(n, s)| { let s = *s;
-                        view! { <button class="scope-btn" on:click=move |_| pre(s)>{*n}</button> }
+        <div class="sg-root">
+            // ============ TOOLBAR ============
+            <div class="sg-bar">
+                <div class="sg-group" role="group" aria-label="Presets">
+                    <span class="sg-cap">"Presets"</span>
+                    {PRESETS.iter().map(|(n, s, tip)| { let s = *s;
+                        view! { <button type="button" class="btn btn-sm" title=*tip on:click=move |_| pre(s)>{*n}</button> }
                     }).collect::<Vec<_>>()}
                 </div>
-                <div class="sp-psu-controls">
-                    <button class="sp-oe-btn" class:sp-oe-on=move || oe.get()
-                        on:click=move |_| {
+                <div class="sg-divider"></div>
+                <div class="sg-group" role="group" aria-label="Level shifter">
+                    <span class="sg-cap">"Level shifter"</span>
+                    <SgToggle
+                        label="OE".to_string()
+                        title="Level shifter output enable (U13, U15)".to_string()
+                        on=oe
+                        on_click=Callback::new(move |_| {
                             set_oe.update(|v| *v = !*v);
                             let new_val = oe.get_untracked();
                             #[derive(serde::Serialize)]
@@ -785,33 +671,39 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             let args = serde_wasm_bindgen::to_value(&Args { on: new_val }).unwrap();
                             let label = format!("{} Level Shifter OE", if new_val { "Enable" } else { "Disable" });
                             invoke_with_feedback("set_lshift_oe", args, &label);
-                        }
-                    >"LShift OE"</button>
-                    <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[0]
-                        on:click=move |_| {
-                            let new_val = !psu.get_untracked()[0];
-                            psu_inflight[0].set(true);
-                            send_pca_control(PCA_VADJ1_EN, new_val);
-                            set_psu.update(|v| v[0] = new_val);
-                            spawn_local(async move {
-                                slp(700).await;
-                                psu_inflight[0].set(false);
-                            });
-                        }>"V_ADJ1"</button>
-                    <button class="sp-psu-btn" class:sp-psu-on=move || psu.get()[1]
-                        on:click=move |_| {
-                            let new_val = !psu.get_untracked()[1];
-                            psu_inflight[1].set(true);
-                            send_pca_control(PCA_VADJ2_EN, new_val);
-                            set_psu.update(|v| v[1] = new_val);
-                            spawn_local(async move {
-                                slp(700).await;
-                                psu_inflight[1].set(false);
-                            });
-                        }>"V_ADJ2"</button>
-                    {(0..4).map(|i| view! {
-                        <button class="sp-ef-btn" class:sp-ef-on=move || ef.get()[i]
-                            on:click=move |_| {
+                        })
+                    />
+                </div>
+                <div class="sg-divider"></div>
+                <div class="sg-group" role="group" aria-label="Supplies">
+                    <span class="sg-cap">"Supply"</span>
+                    {[(0usize, PCA_VADJ1_EN), (1usize, PCA_VADJ2_EN)].into_iter().map(|(i, id)| view! {
+                        <SgToggle
+                            label=format!("V_ADJ{}", i + 1)
+                            title=format!("Enable the V_ADJ{} supply rail", i + 1)
+                            on=Signal::derive(move || psu.get()[i])
+                            on_click=Callback::new(move |_| {
+                                let new_val = !psu.get_untracked()[i];
+                                psu_inflight[i].set(true);
+                                send_pca_control(id, new_val);
+                                set_psu.update(|v| v[i] = new_val);
+                                spawn_local(async move {
+                                    slp(700).await;
+                                    psu_inflight[i].set(false);
+                                });
+                            })
+                        />
+                    }).collect::<Vec<_>>()}
+                </div>
+                <div class="sg-divider"></div>
+                <div class="sg-group" role="group" aria-label="E-fuses">
+                    <span class="sg-cap">"E-fuse"</span>
+                    {(0..4usize).map(|i| view! {
+                        <SgToggle
+                            label=format!("EF{}", i + 1)
+                            title=format!("Arm the E-fuse of port P{}", i + 1)
+                            on=Signal::derive(move || ef.get()[i])
+                            on_click=Callback::new(move |_| {
                                 let new_val = !ef.get_untracked()[i];
                                 ef_inflight[i].set(true);
                                 send_pca_control(PCA_EFUSE_IDS[i], new_val);
@@ -820,114 +712,130 @@ pub fn SignalPathTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     slp(700).await;
                                     ef_inflight[i].set(false);
                                 });
-                            }>{format!("EF{}", i+1)}</button>
+                            })
+                        />
                     }).collect::<Vec<_>>()}
                 </div>
             </div>
-            // Legend inside toolbar area
-            <div class="sp-legend">
-                <span class="sp-leg-item" style="color: #22c55e">"● GPIO (direct)"</span>
-                <span class="sp-leg-item" style="color: #eab308">"● GPIO (2kΩ)"</span>
-                <span class="sp-leg-item" style="color: #3b82f6">"● ADC Channel"</span>
-                <span class="sp-leg-item" style="color: #f97316">"● External"</span>
-                <span class="sp-leg-item" style="color: #ef4444">"● Power"</span>
+
+            // ============ LEGEND ============
+            <div class="sg-legend">
+                <span class="sg-leg sg-k-direct"><i class="sg-leg-sw"></i>"GPIO direct"</span>
+                <span class="sg-leg sg-k-res"><i class="sg-leg-sw"></i>"GPIO via 2 kΩ"</span>
+                <span class="sg-leg sg-k-adc"><i class="sg-leg-sw"></i>"ADC channel"</span>
+                <span class="sg-leg sg-k-ext"><i class="sg-leg-sw"></i>"External"</span>
+                <span class="sg-leg sg-k-pwr"><i class="sg-leg-sw"></i>"Power"</span>
+                <span class="sg-leg-note">
+                    <span class="sg-key"><i class="sg-key-closed"></i>"Closed"</span>
+                    <span class="sg-key"><i class="sg-key-open"></i>"Open"</span>
+                </span>
+                <span class="sg-spacer"></span>
+                <span class="sg-help">"Click a switch to close or open it. One switch per group (S1-S4, S5-S6, S7-S8) can be closed."</span>
             </div>
-            <div class="sp-canvas-wrap">
-                <canvas node_ref=cr class="sp-canvas" on:click=on_click></canvas>
-            </div>
-            <div class="sp-summary">
-                {move || { let st = mux.get();
-                    (0..4).map(|ch| { let d = MUX_DEVICE_BY_LOGICAL[ch]; view! {
-                        <div class="sp-dev-summary">
-                            <span class="sp-dev-label">{format!("CH {} · MUX {} ({})", ADC_LABELS[ch].trim_start_matches("CH "), d+1, MUX_REF[ch])}</span>
-                            <div class="sp-sw-row">
-                                {(0..8).map(|s| { let on = (st[d] >> s) & 1 != 0;
-                                    view! { <button class="sp-sw-btn" class:sp-sw-on=on
-                                        on:click=move |_| tog(d, s)>{format!("S{}", s+1)}</button> }
-                                }).collect::<Vec<_>>()}
+
+            // ============ SCHEMATIC + INSPECTOR ============
+            <div class="sg-main">
+                <div class="sg-canvas">
+                    <svg class="sg-svg" viewBox=format!("0 0 1000 {}", svg_h) role="group"
+                        aria-label="MUX signal routing schematic">
+                        {psu_block(ctx, 0)}
+                        {psu_block(ctx, 1)}
+                        {ls_block(ctx, 0)}
+                        {ls_block(ctx, 1)}
+                        {(0..4usize).map(|ch| channel_row(ctx, ch)).collect::<Vec<_>>()}
+                    </svg>
+                </div>
+
+                <aside class="inspector sg-inspector" aria-label="Switch inspector">
+                    <div class="inspector-header">
+                        <span>"Inspector"</span>
+                        <span class="subtle text-caption">"ADGS2414D"</span>
+                    </div>
+                    {move || match focus() {
+                        None => view! {
+                            <div class="inspector-section">
+                                <p class="sg-note">"Hover or focus a switch to inspect it. Click a switch to close or open it."</p>
                             </div>
-                        </div>
-                    }}).collect::<Vec<_>>()
-                }}
+                        }.into_any(),
+                        Some((ch, s)) => {
+                            let dev = MUX_DEVICE_BY_LOGICAL[ch];
+                            let st = mux.get()[dev];
+                            let on = (st >> s) & 1 != 0;
+                            let g = group_of(s);
+                            let (g0, g1, gname) = GROUPS[g];
+                            let others = (g0..g1)
+                                .filter(|&o| o != s)
+                                .map(|o| format!("S{}", o + 1))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let pi = ch / 2;
+                            let psu_on = psu.get()[pi];
+                            let ef_on = ef.get()[ch];
+                            view! {
+                                <div class="inspector-section">
+                                    <div class="sg-sel-head">
+                                        <span class="sg-sel-title">{format!("S{} · {}", s + 1, source_label(ch, s))}</span>
+                                        {state_badge(on, "Closed", "Open")}
+                                    </div>
+                                    <dl class="kv sg-kv">
+                                        <dt>"Port"</dt><dd>{format!("P{}", ch + 1)}</dd>
+                                        <dt>"Device"</dt><dd>{format!("MUX {} ({})", dev + 1, MUX_REF[ch])}</dd>
+                                        <dt>"Signal"</dt><dd>{kind_label(s)}</dd>
+                                        <dt>"Group"</dt><dd>{format!("{} (S{}-S{})", gname, g0 + 1, g1)}</dd>
+                                        <dt>"Output pin"</dt><dd>{format!("{} · pin {}", GPIO_PAIR_LABELS[ch][g], 4 - g)}</dd>
+                                        <dt>"Register"</dt><dd class="sg-mono">{format!("0x{:02X} · bit {}", st, s)}</dd>
+                                    </dl>
+                                    <button type="button"
+                                        class=if on { "btn btn-sm btn-block" } else { "btn btn-sm btn-primary btn-block" }
+                                        on:click=move |_| {
+                                            selected.set(Some((ch, s)));
+                                            toggle.run((ch, s));
+                                        }
+                                    >{if on { format!("Open S{}", s + 1) } else { format!("Close S{}", s + 1) }}</button>
+                                    <p class="sg-note">
+                                        {if on {
+                                            format!("S{} is the active path of the {} group.", s + 1, gname)
+                                        } else {
+                                            format!("Closing S{} first opens {} (one switch per group).", s + 1, others)
+                                        }}
+                                    </p>
+                                </div>
+                                <div class="inspector-section">
+                                    <h4>{format!("Port P{} power", ch + 1)}</h4>
+                                    <div class="row"><span class="row-label">{format!("V_ADJ{} supply", pi + 1)}</span>{state_badge(psu_on, "On", "Off")}</div>
+                                    <div class="row"><span class="row-label">{format!("E-fuse EF{}", ch + 1)}</span>{state_badge(ef_on, "Armed", "Off")}</div>
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+                    <div class="inspector-section">
+                        <h4>"Switch matrix"</h4>
+                        {move || { let st = mux.get();
+                            (0..4usize).map(|ch| { let d = MUX_DEVICE_BY_LOGICAL[ch]; view! {
+                                <div class="sg-mx">
+                                    <span class="sg-mx-label">{format!("{} · MUX {} ({})", ADC_LABELS[ch], d + 1, MUX_REF[ch])}</span>
+                                    <div class="sg-mx-row">
+                                        {(0..8usize).map(|s| { let on = (st[d] >> s) & 1 != 0;
+                                            view! {
+                                                <button type="button" class="sg-mx-btn" class:on=on
+                                                    aria-pressed=if on { "true" } else { "false" }
+                                                    title=format!("MUX {} S{}: {}", d + 1, s + 1, if on { "closed" } else { "open" })
+                                                    on:mouseenter=move |_| hover.set(Some((ch, s)))
+                                                    on:mouseleave=move |_| hover.set(None)
+                                                    on:click=move |_| { selected.set(Some((ch, s))); toggle.run((ch, s)); }
+                                                >{format!("{}", s + 1)}</button>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                            }}).collect::<Vec<_>>()
+                        }}
+                        <p class="sg-note">"Numbers are switch indices; filled = closed."</p>
+                    </div>
+                </aside>
             </div>
         </div>
     }
-}
-
-// Draw a small resistor zigzag symbol
-fn draw_resistor(c: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, color: &str) {
-    c.set_stroke_style_str(color);
-    c.set_line_width(1.0);
-    c.begin_path();
-    let steps = 4;
-    let step_w = w / steps as f64;
-    let amp = 3.0;
-    c.move_to(x, y);
-    for i in 0..steps {
-        let sx = x + i as f64 * step_w;
-        c.line_to(sx + step_w * 0.25, y - amp);
-        c.line_to(sx + step_w * 0.75, y + amp);
-        c.line_to(sx + step_w, y);
-    }
-    c.stroke();
-    // "2k" label
-    c.set_fill_style_str(color);
-    c.set_font("5px monospace");
-    c.set_text_align("center");
-    let _ = c.fill_text("2k", x + w / 2.0, y - 5.0);
-}
-
-fn psu_bar(
-    c: &CanvasRenderingContext2d,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    name: &str,
-    feeds: &str,
-    on: bool,
-) {
-    rrect(c, x, y, w, h, 5.0);
-    c.set_fill_style_str(if on { "#180808" } else { "#0a1020" });
-    c.fill();
-    c.set_stroke_style_str(if on { "#5b1818" } else { "#182030" });
-    c.set_line_width(1.0);
-    c.stroke();
-    c.set_fill_style_str(if on { "#ef4444" } else { "#475569" });
-    c.set_font("bold 11px Inter, sans-serif");
-    c.set_text_align("left");
-    let _ = c.fill_text(name, x + 10.0, y + 16.0);
-    c.set_fill_style_str("#3b4a60");
-    c.set_font("8px monospace");
-    let _ = c.fill_text(
-        &format!("LTM8063 · DS4424 · 3–15V  {}", feeds),
-        x + 10.0,
-        y + 30.0,
-    );
-    c.set_fill_style_str(if on { "#10b981" } else { "#1e293b" });
-    c.begin_path();
-    c.arc(x + w - 20.0, y + h / 2.0, 4.0, 0.0, std::f64::consts::TAU)
-        .unwrap();
-    c.fill();
-    c.set_fill_style_str(if on { "#f59e0b" } else { "#1e293b" });
-    c.begin_path();
-    c.arc(x + w - 6.0, y + h / 2.0, 4.0, 0.0, std::f64::consts::TAU)
-        .unwrap();
-    c.fill();
-}
-
-fn rrect(c: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, r: f64) {
-    c.begin_path();
-    c.move_to(x + r, y);
-    c.line_to(x + w - r, y);
-    c.arc_to(x + w, y, x + w, y + r, r).unwrap();
-    c.line_to(x + w, y + h - r);
-    c.arc_to(x + w, y + h, x + w - r, y + h, r).unwrap();
-    c.line_to(x + r, y + h);
-    c.arc_to(x, y + h, x, y + h - r, r).unwrap();
-    c.line_to(x, y + r);
-    c.arc_to(x, y, x + r, y, r).unwrap();
-    c.close_path();
 }
 
 async fn slp(ms: u32) {

@@ -2574,3 +2574,7 @@ pub async fn daq_reset_energy() {
 pub async fn daq_reset_stats() {
     try_invoke("daq_reset_stats", JsValue::NULL).await;
 }
+
+pub async fn daq_clear_capture() -> bool {
+    try_invoke("daq_clear_capture", JsValue::NULL).await.is_some()
+}

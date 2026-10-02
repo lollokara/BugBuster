@@ -1,27 +1,32 @@
+use crate::components::icons::Icon;
+use crate::components::ui::{EmptyState, SegmentedControl, Switch};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::collections::VecDeque;
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
 
+/// Label over a status value; `ok` tints the value green and adds a status dot.
 #[component]
-fn HatPill(label: &'static str, ok: bool, value: String) -> impl IntoView {
+fn HealthCell(label: &'static str, ok: bool, value: String, #[prop(optional)] plain: bool) -> impl IntoView {
     view! {
-        <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 10px">
-            <span style="color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em">{label}</span>
-            <span style=if ok { "color: #10b981" } else { "color: var(--text-dim)" }>{value}</span>
-        </span>
+        <div class="sy-cell">
+            <span class="sy-cell-label">{label}</span>
+            <span class="sy-cell-value">
+                {(!plain).then(|| view! { <span class=if ok { "dot tone-green" } else { "dot" }></span> })}
+                <span class=if ok { "tone-text-green" } else { "" }>{value}</span>
+            </span>
+        </div>
     }
 }
 
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
+pub fn HatTab(state: ReadSignal<DeviceState>, hat_kind: ReadSignal<crate::app::HatKind>) -> impl IntoView {
     let (hat, set_hat) = signal(HatStatus::default());
     let (caps, set_caps) = signal(None::<HatCaps>);
     let (la_route, set_la_route_sig) = signal(0u8);
@@ -250,45 +255,58 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let rail_card = move |id: u8,
                           name: &'static str,
                           role: &'static str,
-                          color: &'static str,
+                          enable_label: &'static str,
                           vmin: f64,
                           vmax: f64,
                           confirmable: bool| {
         let find = move || rails.get().into_iter().find(|x| x.rail_id == id);
         let idx = id as usize;
+        let is_on = move || find().map(|x| x.enabled).unwrap_or(false);
+        let apply_class = if confirmable {
+            "btn btn-tinted tone-orange"
+        } else {
+            "btn btn-tinted"
+        };
         view! {
-            <div style=format!("border-radius: 10px; background: var(--bg-secondary); padding: 12px; border-top: 2px solid {color}")>
-                <div style=format!("font-size: 11px; font-weight: 700; color: {color}; text-transform: uppercase; letter-spacing: 0.05em")>{name}</div>
-                <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 8px; height: 24px">{role}</div>
-
-                <div style=format!("text-align: center; font-size: 30px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: {color}; letter-spacing: -1px")>
-                    {move || {
-                        let r = find();
-                        let en = r.as_ref().map(|x| x.enabled).unwrap_or(false);
-                        let mv = if en {
-                            r.as_ref().map(|x| x.voltage_mv).unwrap_or(0)
-                        } else {
-                            r.as_ref().map(|x| x.target_mv).unwrap_or(0)
-                        };
-                        format!("{:.2}V", mv as f64 / 1000.0)
-                    }}
+            <div class="group sy-rail" data-rail=idx class:is-on=is_on>
+                <div class="group-header">
+                    <span class="sy-rail-name"><span class="sy-rail-dot"></span>{name}</span>
+                    <span class=move || if is_on() { "badge tone-green" } else { "badge" }>
+                        {move || if is_on() { "On" } else { "Off" }}
+                    </span>
                 </div>
-                <div style="text-align: center; font-size: 9px; color: var(--text-dim); margin-bottom: 8px; font-family: 'JetBrains Mono', monospace">
-                    {move || {
-                        let r = find();
-                        let en = r.as_ref().map(|x| x.enabled).unwrap_or(false);
-                        let sp = r.as_ref().map(|x| x.target_mv).unwrap_or(0);
-                        let ma = r.as_ref().map(|x| x.current_ma).unwrap_or(0);
-                        if en {
-                            format!("set {:.2}V · {} mA", sp as f64 / 1000.0, ma)
-                        } else {
-                            format!("set {:.2}V · off", sp as f64 / 1000.0)
+                <div class="sy-rail-role">{role}</div>
+
+                <div class="sy-rail-main">
+                    <span class="readout-label">{move || if is_on() { "Measured" } else { "Setpoint" }}</span>
+                    <span class="sy-rail-value">
+                        {move || {
+                            let r = find();
+                            let mv = if is_on() {
+                                r.as_ref().map(|x| x.voltage_mv).unwrap_or(0)
+                            } else {
+                                r.as_ref().map(|x| x.target_mv).unwrap_or(0)
+                            };
+                            format!("{:.2}", mv as f64 / 1000.0)
+                        }}
+                        <span class="unit">"V"</span>
+                    </span>
+                </div>
+                <dl class="kv sy-rail-kv">
+                    <dt>"Setpoint"</dt>
+                    <dd>{move || format!("{:.2} V", find().map(|x| x.target_mv).unwrap_or(0) as f64 / 1000.0)}</dd>
+                    <dt>"Current"</dt>
+                    <dd>{move || if is_on() { format!("{} mA", find().map(|x| x.current_ma).unwrap_or(0)) } else { "off".to_string() }}</dd>
+                </dl>
+
+                <div class="sy-rail-field">
+                    <input type="number" class="number-input"
+                        aria-label=format!("{name} setpoint in volts")
+                        aria-invalid=move || {
+                            let bad = v_dirty[idx].get()
+                                && !(0.0..=40.0).contains(&v_in[idx].get().trim().parse::<f64>().unwrap_or(-1.0));
+                            if bad { "true" } else { "false" }
                         }
-                    }}
-                </div>
-
-                <div style="display: flex; gap: 5px; align-items: center; margin-bottom: 4px">
-                    <input type="number" class="number-input" style="flex: 1; font-size: 12px"
                         min=vmin max=vmax step="0.05"
                         prop:value=move || {
                             if v_dirty[idx].get() {
@@ -302,98 +320,112 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             v_dirty[idx].set(true);
                         }
                     />
-                    <button class="btn btn-sm"
-                        style=format!("font-size: 10px; padding: 4px 12px; background: {color}20; color: {color}; border: 1px solid {color}50")
+                    <span class="number-unit">"V"</span>
+                    <button class=apply_class
+                        title=if confirmable { "Apply the voltage setpoint (high-voltage rail)" } else { "Apply the voltage setpoint" }
                         on:click=move |_| apply_voltage(id)
                     >"Apply"</button>
                 </div>
-                <div style="font-size: 9px; height: 13px; color: #f59e0b; margin-bottom: 8px">
+                <div class="sy-hint"
+                    class:is-error=move || {
+                        v_dirty[idx].get()
+                            && !(0.0..=40.0).contains(&v_in[idx].get().trim().parse::<f64>().unwrap_or(-1.0))
+                    }
+                >
                     {move || if v_dirty[idx].get() {
                         let v: f64 = v_in[idx].get().trim().parse().unwrap_or(-1.0);
                         if (0.0..=40.0).contains(&v) {
-                            format!("→ press Apply to set {:.2} V", v)
+                            format!("Press Apply to set {:.2} V", v)
                         } else {
-                            "enter 0–36 V".to_string()
+                            "Enter 0–36 V".to_string()
                         }
                     } else {
                         String::new()
                     }}
                 </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center">
-                    <span style="font-size: 10px; color: var(--text-dim)">
-                        {move || if find().map(|x| x.enabled).unwrap_or(false) { "Enabled" } else { "Disabled" }}
-                    </span>
-                    <label class="toggle-wrap">
-                        <div class="toggle" class:active=move || find().map(|x| x.enabled).unwrap_or(false)
-                            on:click=move |_| {
+                <div class="row sy-rail-enable">
+                    <span class="row-label">{move || if is_on() { "Output enabled" } else { "Output disabled" }}</span>
+                    <span title=if confirmable { "Asks for confirmation above 3.4 V" } else { "" }>
+                        <Switch
+                            checked=Signal::derive(is_on)
+                            aria_label=enable_label
+                            on_change=Callback::new(move |_: bool| {
                                 let r = find();
                                 let cur = r.as_ref().map(|x| x.enabled).unwrap_or(false);
                                 let sp = r.as_ref().map(|x| x.target_mv).unwrap_or(0);
                                 toggle_rail(id, cur, sp, confirmable);
-                            }
-                        ><div class="toggle-thumb"></div></div>
-                    </label>
+                            })
+                        />
+                    </span>
                 </div>
             </div>
         }
     };
 
     view! {
-        <div class="tab-content">
-            <div class="tab-desc">
-                "HAT Expansion Board v2 — Target power rails, SWD target detection, routing, shifted I/O, and debug logs."
-            </div>
+        <div class="view sy-hat">
+            <p class="sy-lead">
+                "HAT expansion board: target power rails, SWD target detection, routing, shifted I/O and debug logs."
+            </p>
 
-            // ── Summary Banner ────────────────────────────────────────────────
+            // ── Status strip ──────────────────────────────────────────────────
             {move || {
                 let st  = hat.get();
                 let cp  = caps.get();
                 let fw  = format!("v{}.{}", st.fw_major, st.fw_minor);
                 let rev = cp.as_ref().map(|c| format!("v{}", c.hw_revision)).unwrap_or("—".into());
                 view! {
-                    <div class="summary-banner" style="justify-content: space-between; padding: 8px 12px; margin-bottom: 14px">
-                        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
-                            <HatPill label="Detected" ok=st.detected    value={if st.detected      { "Yes".into() } else { "No".into() }} />
-                            {move || {
-                                let connected = hat.get().connected;
-                                let errs = uart_errors.get();
-                                let (ok, label) = if connected && errs == 0 {
-                                    (true, "OK".to_string())
-                                } else if connected && errs > 0 {
-                                    (false, "Degraded".to_string())
-                                } else {
-                                    (false, "—".to_string())
-                                };
-                                view! { <HatPill label="UART" ok=ok value=label /> }
-                            }}
-                            <HatPill label="DAP"    ok=st.dap_connected    value={if st.dap_connected    { "OK".into() } else { "—".into() }} />
-                            <HatPill label="Target" ok=st.target_detected  value={if st.target_detected  { "OK".into() } else { "—".into() }} />
-                            <HatPill label="Rev" ok=true value=rev />
-                            <HatPill label="FW"  ok=true value=fw />
+                    <div class="group sy-health">
+                        <HealthCell label="Detected" ok=st.detected value=if st.detected { "Yes".into() } else { "No".into() } />
+                        {move || {
+                            let connected = hat.get().connected;
+                            let errs = uart_errors.get();
+                            let (ok, label) = if connected && errs == 0 {
+                                (true, "OK".to_string())
+                            } else if connected && errs > 0 {
+                                (false, "Degraded".to_string())
+                            } else {
+                                (false, "—".to_string())
+                            };
+                            view! { <HealthCell label="UART" ok=ok value=label /> }
+                        }}
+                        <HealthCell label="DAP" ok=st.dap_connected value=if st.dap_connected { "OK".into() } else { "—".into() } />
+                        <HealthCell label="Target" ok=st.target_detected value=if st.target_detected { "OK".into() } else { "—".into() } />
+                        <HealthCell label="Revision" ok=false value=rev plain=true />
+                        <HealthCell label="Firmware" ok=false value=fw plain=true />
+                        <div class="sy-health-actions">
+                            <button class="btn btn-sm" title="Re-read HAT status"
+                                on:click=move |_| {
+                                    spawn_local(async move {
+                                        if let Some(s) = fetch_hat_status().await { set_hat.set(s); }
+                                    });
+                                }
+                            ><Icon name="refresh-cw" size=13 />"Refresh"</button>
                         </div>
-                        <button class="btn btn-sm" style="font-size: 10px; padding: 2px 10px"
-                            on:click=move |_| {
-                                spawn_local(async move {
-                                    if let Some(s) = fetch_hat_status().await { set_hat.set(s); }
-                                });
-                            }
-                        >"Refresh"</button>
                     </div>
                 }
             }}
 
-            // ── No HAT warning ────────────────────────────────────────────────
+            // ── No HAT ────────────────────────────────────────────────────────
             {move || if !hat.get().detected {
+                let daq = hat_kind.get() == crate::app::HatKind::Daq;
+                let (title, message) = if daq {
+                    ("DAQ HAT attached", "This page controls the LA HAT (target rails, SWD, routing, shifted I/O). The DAQ HAT is operated from HS DAQ and Voltages & Cal.")
+                } else {
+                    ("No HAT detected", "Connect a HAT board to the expansion header, then click Refresh.")
+                };
                 view! {
-                    <div class="card">
-                        <div class="card-header"><span class="channel-func">"HAT v2"</span></div>
-                        <div class="card-body">
-                            <div class="mode-warning">
-                                <span class="mode-warning-icon">"!"</span>
-                                <span>"No HAT detected. Connect a HAT board to the expansion header and click Refresh."</span>
-                            </div>
-                        </div>
+                    <div class="group">
+                        <EmptyState icon="cpu" title=title message=message>
+                            <button class="btn btn-sm"
+                                on:click=move |_| {
+                                    spawn_local(async move {
+                                        if let Some(s) = fetch_hat_status().await { set_hat.set(s); }
+                                    });
+                                }
+                            ><Icon name="refresh-cw" size=13 />"Refresh"</button>
+                        </EmptyState>
                     </div>
                 }.into_any()
             } else {
@@ -402,120 +434,101 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
             <Show when=move || hat.get().detected>
 
-                // Capabilities badges
+                // Capabilities
                 {move || {
                     if let Some(cp) = caps.get() {
                         let defs: &[(u32, &str, &str)] = &[
-                            (1,  "#10b981", "Rails Control"),
-                            (2,  "#3b82f6", "RGB LEDs"),
-                            (4,  "#8b5cf6", "LA Low-Speed"),
-                            (8,  "#a855f7", "LA High-Speed"),
-                            (16, "#ec4899", "Shifted I/O"),
+                            (1,  "green",  "Rails Control"),
+                            (2,  "blue",   "RGB LEDs"),
+                            (4,  "purple", "LA Low-Speed"),
+                            (8,  "purple", "LA High-Speed"),
+                            (16, "teal",   "Shifted I/O"),
                         ];
-                        let badges = defs.iter().filter(|(f,_,_)| cp.flags & f != 0).map(|(_, col, name)| {
-                            let col = *col; let name = *name;
-                            view! {
-                                <span style=format!("background: {col}20; color: {col}; border: 1px solid {col}40; font-size: 9px; padding: 2px 7px; border-radius: 4px")>{name}</span>
-                            }
+                        let badges = defs.iter().filter(|(f,_,_)| cp.flags & f != 0).map(|(_, tone, name)| {
+                            let tone = *tone; let name = *name;
+                            view! { <span class=format!("badge tone-{tone}")>{name}</span> }
                         }).collect::<Vec<_>>();
                         view! {
-                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px">
-                                <span style="font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em">"Capabilities"</span>
+                            <div class="sy-caps">
+                                <span class="sy-caps-label">"Capabilities"</span>
                                 {badges}
                             </div>
                         }.into_any()
                     } else { ().into_any() }
                 }}
 
-                // ── Target Power Rails ──────────────────────────────────────────────
-                <div class="card" style="margin-bottom: 16px">
-                    <div class="card-header">
-                        <span>"Target Power Rails"</span>
-                        <span style="font-size: 10px; color: var(--text-dim)">"Set voltage · Apply · Enable"</span>
-                    </div>
-                    <div class="card-body" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px">
-                        {rail_card(0, "VLOGIC", "Logic rail · level-shifter reference · 1.7–5.0 V", "#10b981", 1.7, 5.0, false)}
-                        {rail_card(1, "VADJ3", "Target A power · 0–36 V", "#06b6d4", 1.8, 36.0, true)}
-                        {rail_card(2, "VADJ4", "Target B · SWD target power · 0–36 V", "#f59e0b", 1.8, 36.0, true)}
-                    </div>
+                // ── Target power rails ────────────────────────────────────────
+                <div class="section-label">"Target power rails"</div>
+                <div class="grid-3 sy-rails">
+                    {rail_card(0, "VLOGIC", "Logic rail and level-shifter reference · 1.7–5.0 V", "Enable VLOGIC", 1.7, 5.0, false)}
+                    {rail_card(1, "VADJ3", "Target A power · 0–36 V", "Enable VADJ3", 1.8, 36.0, true)}
+                    {rail_card(2, "VADJ4", "Target B and SWD target power · 0–36 V", "Enable VADJ4", 1.8, 36.0, true)}
                 </div>
 
-                // High-voltage enable confirmation modal
+                // High-voltage enable confirmation
                 {move || confirm.get().map(|(cid, cmv)| {
                     let cname = match cid { 1 => "VADJ3", 2 => "VADJ4", _ => "rail" };
                     view! {
-                        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000"
-                            on:click=move |_| confirm.set(None)
-                        >
-                            <div style="background: var(--bg-secondary); border: 1px solid #f59e0b60; border-radius: 14px; padding: 20px; max-width: 380px; box-shadow: 0 0 40px rgba(0,0,0,0.6)"
-                                on:click=move |e| e.stop_propagation()
-                            >
-                                <div style="font-size: 13px; font-weight: 700; color: #f59e0b; margin-bottom: 8px">"⚠ High-voltage enable"</div>
-                                <div style="font-size: 12px; margin-bottom: 6px">{format!("Enable {} at {:.2} V?", cname, cmv as f64 / 1000.0)}</div>
-                                <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5">"Voltages above 3.4 V can permanently damage a 3.3 V target. Confirm the connected device tolerates this level before continuing."</div>
-                                <div style="display: flex; gap: 8px; justify-content: flex-end">
-                                    <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px"
-                                        on:click=move |_| confirm.set(None)
-                                    >"Cancel"</button>
-                                    <button class="btn btn-sm" style="font-size: 11px; padding: 5px 14px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b60"
-                                        on:click=move |_| { confirm.set(None); do_enable(cid, true); }
-                                    >"Enable anyway"</button>
+                        <div class="scrim" on:click=move |_| confirm.set(None)></div>
+                        <div class="dialog sy-dialog" role="dialog" aria-modal="true" aria-labelledby="sy-hv-title">
+                            <div class="group">
+                                <div class="stack">
+                                    <div class="text-headline sy-dialog-title" id="sy-hv-title">
+                                        <Icon name="triangle-alert" size=16 />"High-voltage enable"
+                                    </div>
+                                    <div>{format!("Enable {} at {:.2} V?", cname, cmv as f64 / 1000.0)}</div>
+                                    <div class="muted text-footnote">"Voltages above 3.4 V can permanently damage a 3.3 V target. Confirm the connected device tolerates this level before continuing."</div>
+                                    <div class="hstack sy-dialog-actions">
+                                        <button class="btn" on:click=move |_| confirm.set(None)>"Cancel"</button>
+                                        <button class="btn btn-danger"
+                                            on:click=move |_| { confirm.set(None); do_enable(cid, true); }
+                                        >"Enable anyway"</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     }
                 })}
 
-                // ── Routing & SWD + Level Shifter (full width) ────────────────
-                <div class="card" style="margin-bottom: 16px">
-                    <div class="card-header"><span>"Routing & SWD"</span></div>
-                    <div class="card-body" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px">
+                // ── Routing, SWD, level shifter ───────────────────────────────
+                <div class="section-label">"Routing and SWD"</div>
+                <div class="grid-3 sy-routing">
 
-                        // LA Route
-                        <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
-                            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"LA Route"</div>
-                            <div style="display: flex; gap: 8px; margin-bottom: 8px">
-                                <button class="btn"
-                                    style=move || format!("font-size: 10px; padding: 4px 10px; flex: 1{}",
-                                        if la_route.get() == 0 { "; background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            if let Some(r) = hat_la_set_route(0).await {
-                                                set_la_route_sig.set(r);
-                                                show_toast("Route → Low-Speed (Conn2)", "ok");
-                                            }
-                                        });
-                                    }
-                                >"Low-Speed (Conn2)"</button>
-                                <button class="btn"
-                                    style=move || format!("font-size: 10px; padding: 4px 10px; flex: 1{}",
-                                        if la_route.get() == 1 { "; background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f650" } else { "" })
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            if let Some(r) = hat_la_set_route(1).await {
-                                                set_la_route_sig.set(r);
-                                                show_toast("Route → High-Speed (Conn1)", "ok");
-                                            }
-                                        });
-                                    }
-                                >"High-Speed (Conn1)"</button>
-                            </div>
-                            <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 8px">
+                    // LA route
+                    <div class="group">
+                        <div class="group-header"><span class="group-title">"LA route"</span></div>
+                        <div class="stack-sm">
+                            <SegmentedControl
+                                options=vec![(0u8, "Low-Speed (Conn2)"), (1u8, "High-Speed (Conn1)")]
+                                value=la_route
+                                block=true
+                                aria_label="Logic analyzer route"
+                                on_change=Callback::new(move |r: u8| {
+                                    spawn_local(async move {
+                                        if let Some(x) = hat_la_set_route(r).await {
+                                            set_la_route_sig.set(x);
+                                            show_toast(
+                                                if r == 0 { "Route → Low-Speed (Conn2)" } else { "Route → High-Speed (Conn1)" },
+                                                "ok",
+                                            );
+                                        }
+                                    });
+                                })
+                            />
+                            <div class="sy-hint sy-hint-static">
                                 {move || if la_route.get() == 0 {
-                                    "EXP_EXT pins — up to 4 ch @ 1 MHz max."
+                                    "EXP_EXT pins: up to 4 channels at 1 MHz max."
                                 } else {
-                                    "Low-skew buffered Conn1 — up to 3 ch."
+                                    "Low-skew buffered Conn1: up to 3 channels."
                                 }}
                             </div>
-                            <div style="display: flex; align-items: center; gap: 8px">
-                                {move || {
-                                    let is_usb = is_usb.get();
-                                    view! {
-                                        <button class="btn"
-                                            disabled=move || !is_usb
-                                            title=move || if is_usb { "Reset RP2040 USB endpoint".to_string() } else { "USB connection required".to_string() }
-                                            style=move || format!("font-size: 10px; padding: 3px 10px{}",
-                                                if !is_usb { "; opacity: 0.4; cursor: not-allowed" } else { "" })
+                            {move || {
+                                let is_usb = is_usb.get();
+                                view! {
+                                    <div class="hstack">
+                                        <button class="btn btn-sm"
+                                            disabled=!is_usb
+                                            title=if is_usb { "Reset RP2040 USB endpoint" } else { "USB connection required" }
                                             on:click=move |_| {
                                                 if !is_usb { return; }
                                                 spawn_local(async move {
@@ -528,182 +541,173 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                             }
                                         >"Reset LA USB"</button>
                                         {if !is_usb {
-                                            view! { <span style="font-size: 9px; color: var(--text-dim)">"(USB only)"</span> }.into_any()
+                                            view! { <span class="text-caption subtle">"USB only"</span> }.into_any()
                                         } else {
                                             ().into_any()
                                         }}
-                                    }
-                                }}
-                            </div>
+                                    </div>
+                                }
+                            }}
                         </div>
+                    </div>
 
-                        // SWD Target
-                        <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
-                            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"SWD Target"</div>
-                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px">
-                                {move || {
-                                    let det = target.get().map(|t| t.detected).unwrap_or_else(|| hat.get().target_detected);
-                                    let dpidr = target.get().map(|t| t.dpidr).unwrap_or_else(|| hat.get().target_dpidr);
-                                    let dot_style = if det {
-                                        "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:#10b981;box-shadow:0 0 6px #10b981"
-                                    } else {
-                                        "width:9px;height:9px;border-radius:50%;flex-shrink:0;background:var(--text-dim)"
-                                    };
-                                    let label = if det {
-                                        format!("DPIDR 0x{:08X}", dpidr)
-                                    } else {
-                                        "No target".into()
-                                    };
-                                    view! {
-                                        <div style=dot_style></div>
-                                        <span style="font-size: 11px; font-family: 'JetBrains Mono', monospace">{label}</span>
-                                    }
-                                }}
-                            </div>
-                            <button class="btn" style="width: 100%; font-size: 10px; padding: 5px; margin-bottom: 8px; background: #8b5cf620; color: #8b5cf6; border: 1px solid #8b5cf650"
+                    // SWD target
+                    <div class="group">
+                        <div class="group-header"><span class="group-title">"SWD target"</span></div>
+                        <div class="stack-sm">
+                            {move || {
+                                let det = target.get().map(|t| t.detected).unwrap_or_else(|| hat.get().target_detected);
+                                let dpidr = target.get().map(|t| t.dpidr).unwrap_or_else(|| hat.get().target_dpidr);
+                                let label = if det {
+                                    format!("DPIDR 0x{:08X}", dpidr)
+                                } else {
+                                    "No target".into()
+                                };
+                                view! {
+                                    <div class="sy-swd-status">
+                                        <span class=if det { "dot tone-green" } else { "dot" }></span>
+                                        <span class="sy-mono">{label}</span>
+                                    </div>
+                                }
+                            }}
+                            <button class="btn btn-tinted btn-block"
                                 disabled=move || detect_busy.get()
                                 on:click=move |_| detect()
                             >{move || if detect_busy.get() { "Detecting…" } else { "Detect Target" }}</button>
-                            <div style="font-size: 9px; color: var(--text-dim); margin-bottom: 6px">"Quick setup — sets VADJ4 + VLOGIC, enables OE, detects:"</div>
-                            <div style="display: flex; gap: 6px">
-                                <button class="btn btn-sm" style="flex: 1; font-size: 10px; padding: 4px"
+                            <div class="sy-hint sy-hint-static">"Quick setup: sets VADJ4 and VLOGIC, enables outputs, then detects."</div>
+                            <div class="grid-2 sy-prep">
+                                <button class="btn btn-sm"
+                                    title="Power the target at 3.3 V and detect"
                                     disabled=move || detect_busy.get()
                                     on:click=move |_| prepare_swd(3300)
                                 >"Prep 3.3 V"</button>
-                                <button class="btn btn-sm" style="flex: 1; font-size: 10px; padding: 4px"
+                                <button class="btn btn-sm"
+                                    title="Power the target at 1.8 V and detect"
                                     disabled=move || detect_busy.get()
                                     on:click=move |_| prepare_swd(1800)
                                 >"Prep 1.8 V"</button>
                             </div>
                         </div>
+                    </div>
 
-                        // Level Shifter
-                        <div style="border-radius: 8px; background: var(--bg-secondary); padding: 10px">
-                            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px">"Level Shifter"</div>
-
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px">
+                    // Level shifter
+                    <div class="group">
+                        <div class="group-header"><span class="group-title">"Level shifter"</span></div>
+                        <div class="rows">
+                            <div class="row">
                                 <div>
-                                    <div style="font-size: 11px; font-weight: 600">"Outputs Enable (OE)"</div>
-                                    <div style="font-size: 9px; color: var(--text-dim)">"Requires 3V3_ADJ."</div>
+                                    <span class="row-label">"Outputs enable (OE)"</span>
+                                    <span class="row-hint">"Requires 3V3_ADJ."</span>
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 6px">
-                                    <label class="toggle-wrap">
-                                        <div class="toggle" class:active=move || ls_oe.get()
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    let next = !ls_oe.get_untracked();
-                                                    let dir  = ls_dir.get_untracked();
-                                                    if let Some(s) = hat_set_level_shift(next, dir).await {
-                                                        set_ls_oe.set(s.oe);
-                                                        set_ls_dir.set(s.dir);
-                                                        show_toast(if s.oe { "Outputs enabled" } else { "Outputs tri-stated" }, "ok");
-                                                    }
-                                                });
-                                            }
-                                        ><div class="toggle-thumb"></div></div>
-                                    </label>
-                                    <span style="font-size: 10px; color: var(--text-dim)">
-                                        {move || if ls_oe.get() { "Active" } else { "Tri-State" }}
-                                    </span>
+                                <div class="hstack">
+                                    <span class="text-footnote muted">{move || if ls_oe.get() { "Active" } else { "Tri-state" }}</span>
+                                    <Switch
+                                        checked=ls_oe
+                                        aria_label="Level shifter outputs enable"
+                                        on_change=Callback::new(move |_: bool| {
+                                            spawn_local(async move {
+                                                let next = !ls_oe.get_untracked();
+                                                let dir  = ls_dir.get_untracked();
+                                                if let Some(s) = hat_set_level_shift(next, dir).await {
+                                                    set_ls_oe.set(s.oe);
+                                                    set_ls_dir.set(s.dir);
+                                                    show_toast(if s.oe { "Outputs enabled" } else { "Outputs tri-stated" }, "ok");
+                                                }
+                                            });
+                                        })
+                                    />
                                 </div>
                             </div>
-
-                            <div style="display: flex; justify-content: space-between; align-items: center">
+                            <div class="row">
                                 <div>
-                                    <div style="font-size: 11px; font-weight: 600">"Direction (DIR)"</div>
-                                    <div style="font-size: 9px; color: var(--text-dim)">"A→B drives; B→A listens."</div>
+                                    <span class="row-label">"Direction (DIR)"</span>
+                                    <span class="row-hint">"A→B drives; B→A listens."</span>
                                 </div>
-                                <div style="display: flex; align-items: center; gap: 6px">
-                                    <label class="toggle-wrap">
-                                        <div class="toggle" class:active=move || ls_dir.get()
-                                            on:click=move |_| {
-                                                spawn_local(async move {
-                                                    let oe   = ls_oe.get_untracked();
-                                                    let next = !ls_dir.get_untracked();
-                                                    if let Some(s) = hat_set_level_shift(oe, next).await {
-                                                        set_ls_oe.set(s.oe);
-                                                        set_ls_dir.set(s.dir);
-                                                    }
-                                                });
-                                            }
-                                        ><div class="toggle-thumb"></div></div>
-                                    </label>
-                                    <span style="font-size: 10px; color: var(--text-dim)">
-                                        {move || if ls_dir.get() { "A→B" } else { "B→A" }}
-                                    </span>
+                                <div class="hstack">
+                                    <span class="text-footnote muted">{move || if ls_dir.get() { "A→B" } else { "B→A" }}</span>
+                                    <Switch
+                                        checked=ls_dir
+                                        aria_label="Level shifter direction"
+                                        on_change=Callback::new(move |_: bool| {
+                                            spawn_local(async move {
+                                                let oe   = ls_oe.get_untracked();
+                                                let next = !ls_dir.get_untracked();
+                                                if let Some(s) = hat_set_level_shift(oe, next).await {
+                                                    set_ls_oe.set(s.oe);
+                                                    set_ls_dir.set(s.dir);
+                                                }
+                                            });
+                                        })
+                                    />
                                 </div>
                             </div>
                         </div>
-
                     </div>
+
                 </div>
 
-                // ── Shifted I/O Bank ──────────────────────────────────────────
-                <div class="card" style="margin-bottom: 16px">
-                    <div class="card-header">
-                        <span>"Shifted I/O Bank"</span>
-                        <span style="font-size: 10px; color: var(--text-dim)">"GPIO 10–15, 20–21"</span>
+                // ── Shifted I/O bank ──────────────────────────────────────────
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title">"Shifted I/O bank"</span>
+                        <span class="group-subtitle">"GPIO 10–15, 20–21"</span>
                     </div>
-                    <div class="card-body">
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px">
-                            {(0..8u8).map(|i| {
-                                let is_out = Signal::derive(move || (io_dirs.get() & (1 << i)) != 0);
-                                let is_up  = Signal::derive(move || (io_ups.get()  & (1 << i)) != 0);
-                                let is_dn  = Signal::derive(move || (io_dns.get()  & (1 << i)) != 0);
-                                view! {
-                                    <div style="padding: 8px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color, #333)">
-                                        <div style="font-size: 10px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px">
-                                            {format!("SH_IO_{}", i + 1)}
-                                        </div>
-                                        <div style="display: flex; gap: 3px; margin-bottom: 5px">
-                                            <button class="btn btn-sm"
-                                                style=move || format!("padding: 1px 4px; font-size: 9px; flex: 1{}",
-                                                    if !is_out.get() { "; background: #3b82f640; color:#3b82f6" } else { "" })
-                                                on:click=move |_| { set_io_dirs.update(|d| *d &= !(1 << i)); }
-                                            >"IN"</button>
-                                            <button class="btn btn-sm"
-                                                style=move || format!("padding: 1px 4px; font-size: 9px; flex: 1{}",
-                                                    if is_out.get() { "; background: #3b82f640; color:#3b82f6" } else { "" })
-                                                on:click=move |_| { set_io_dirs.update(|d| *d |= 1 << i); }
-                                            >"OUT"</button>
-                                        </div>
-                                        <div style="display: flex; flex-direction: column; gap: 2px">
-                                            <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
-                                                <input type="checkbox" prop:checked=move || is_up.get()
-                                                    on:change=move |ev| {
-                                                        let chk = ev.target().unwrap()
-                                                            .unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                                        if chk {
-                                                            set_io_ups.update(|u| *u |= 1 << i);
-                                                            set_io_dns.update(|d| *d &= !(1 << i));
-                                                        } else {
-                                                            set_io_ups.update(|u| *u &= !(1 << i));
-                                                        }
-                                                    }
-                                                />
-                                                "Pull-Up"
-                                            </label>
-                                            <label style="font-size: 9px; display: flex; align-items: center; gap: 3px; cursor: pointer">
-                                                <input type="checkbox" prop:checked=move || is_dn.get()
-                                                    on:change=move |ev| {
-                                                        let chk = ev.target().unwrap()
-                                                            .unchecked_into::<web_sys::HtmlInputElement>().checked();
-                                                        if chk {
-                                                            set_io_dns.update(|d| *d |= 1 << i);
-                                                            set_io_ups.update(|u| *u &= !(1 << i));
-                                                        } else {
-                                                            set_io_dns.update(|d| *d &= !(1 << i));
-                                                        }
-                                                    }
-                                                />
-                                                "Pull-Down"
-                                            </label>
-                                        </div>
-                                    </div>
-                                }
-                            }).collect::<Vec<_>>()}
-                        </div>
-                        <button class="btn btn-primary" style="width: 100%; font-size: 11px; padding: 6px"
+                    <div class="sy-io-grid">
+                        {(0..8u8).map(|i| {
+                            let dir_val = Signal::derive(move || (io_dirs.get() & (1 << i)) != 0);
+                            let pull_val = Signal::derive(move || {
+                                if (io_ups.get() & (1 << i)) != 0 { 1u8 }
+                                else if (io_dns.get() & (1 << i)) != 0 { 2u8 }
+                                else { 0u8 }
+                            });
+                            view! {
+                                <div class="sy-io">
+                                    <div class="sy-io-name">{format!("SH_IO_{}", i + 1)}</div>
+                                    <SegmentedControl
+                                        options=vec![(false, "IN"), (true, "OUT")]
+                                        value=dir_val
+                                        block=true
+                                        small=true
+                                        aria_label="Direction"
+                                        on_change=Callback::new(move |out: bool| {
+                                            if out {
+                                                set_io_dirs.update(|d| *d |= 1 << i);
+                                            } else {
+                                                set_io_dirs.update(|d| *d &= !(1 << i));
+                                            }
+                                        })
+                                    />
+                                    <SegmentedControl
+                                        options=vec![(0u8, "No pull"), (1u8, "Up"), (2u8, "Down")]
+                                        value=pull_val
+                                        block=true
+                                        small=true
+                                        aria_label="Pull resistor"
+                                        on_change=Callback::new(move |p: u8| {
+                                            match p {
+                                                1 => {
+                                                    set_io_ups.update(|u| *u |= 1 << i);
+                                                    set_io_dns.update(|d| *d &= !(1 << i));
+                                                }
+                                                2 => {
+                                                    set_io_dns.update(|d| *d |= 1 << i);
+                                                    set_io_ups.update(|u| *u &= !(1 << i));
+                                                }
+                                                _ => {
+                                                    set_io_ups.update(|u| *u &= !(1 << i));
+                                                    set_io_dns.update(|d| *d &= !(1 << i));
+                                                }
+                                            }
+                                        })
+                                    />
+                                </div>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                    <div class="hstack sy-io-actions">
+                        <span class="text-footnote muted">"Changes take effect when applied."</span>
+                        <span class="spacer"></span>
+                        <button class="btn btn-primary"
                             on:click=move |_| {
                                 spawn_local(async move {
                                     let d  = io_dirs.get_untracked();
@@ -718,45 +722,43 @@ pub fn HatTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     </div>
                 </div>
 
-                // ── RP2040 Debug Logs ─────────────────────────────────────────
-                <div class="card">
-                    <div class="card-header">
-                        <span>"RP2040 Debug Logs"</span>
-                        <div style="display: flex; align-items: center; gap: 8px">
-                            <label class="toggle-wrap">
-                                <div class="toggle" class:active=move || log_enabled.get()
-                                    on:click=move |_| {
-                                        let new_val = !log_enabled.get_untracked();
-                                        spawn_local(async move {
-                                            if hat_la_log_enable(new_val).await.is_some() {
-                                                set_log_enabled.set(new_val);
-                                            } else {
-                                                show_toast("Failed to toggle log relay", "err");
-                                            }
-                                        });
-                                    }
-                                ><div class="toggle-thumb"></div></div>
-                            </label>
-                            <span style="font-size: 10px; color: var(--text-dim)">
+                // ── RP2040 debug logs ─────────────────────────────────────────
+                <div class="group">
+                    <div class="group-header">
+                        <span class="group-title">"RP2040 debug logs"</span>
+                        <div class="group-actions">
+                            <span class="text-footnote muted">
                                 {move || if log_enabled.get() { "Streaming" } else { "Off" }}
                             </span>
-                            <button class="btn btn-sm" style="font-size: 10px; padding: 2px 8px"
+                            <Switch
+                                checked=log_enabled
+                                aria_label="Stream RP2040 debug logs"
+                                on_change=Callback::new(move |_: bool| {
+                                    let new_val = !log_enabled.get_untracked();
+                                    spawn_local(async move {
+                                        if hat_la_log_enable(new_val).await.is_some() {
+                                            set_log_enabled.set(new_val);
+                                        } else {
+                                            show_toast("Failed to toggle log relay", "err");
+                                        }
+                                    });
+                                })
+                            />
+                            <button class="btn btn-sm"
                                 on:click=move |_| { log_lines.update(|l| l.clear()); }
                             >"Clear"</button>
                         </div>
                     </div>
-                    <div class="card-body" style="padding-top: 0">
-                        <pre style="font-size: 10px; font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); border-radius: 6px; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; color: var(--text-dim); margin: 0">
-                            {move || {
-                                let lines = log_lines.get();
-                                if lines.is_empty() {
-                                    "(no log output — enable relay above)".to_string()
-                                } else {
-                                    lines.iter().cloned().collect::<Vec<_>>().join("\n")
-                                }
-                            }}
-                        </pre>
-                    </div>
+                    <pre class="sy-log">
+                        {move || {
+                            let lines = log_lines.get();
+                            if lines.is_empty() {
+                                "(no log output; enable the relay above)".to_string()
+                            } else {
+                                lines.iter().cloned().collect::<Vec<_>>().join("\n")
+                            }
+                        }}
+                    </pre>
                 </div>
 
             </Show>

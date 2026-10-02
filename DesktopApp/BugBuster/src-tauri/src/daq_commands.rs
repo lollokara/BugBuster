@@ -457,6 +457,16 @@ pub async fn daq_reset_stats(daq: State<'_, DaqState>) -> CmdResult<()> {
     send_ctrl(&daq, daq_proto::CMD_RESET_STATS, &[])
 }
 
+/// Drop all captured samples on the host (the stream, if running, keeps going).
+#[tauri::command]
+pub async fn daq_clear_capture(daq: State<'_, DaqState>) -> CmdResult<()> {
+    let mut store = daq.store.write().map_err(map_err)?;
+    let (rate, dec) = (store.sample_rate_hz, store.decimation);
+    *store = DaqStore::new(rate);
+    store.decimation = dec;
+    Ok(())
+}
+
 // ---- Persistent settings via the S3 BBP control plane (CMD_DAQ_CONFIG) ------
 
 const DAQ_CFG_GET: u8 = 0x00;

@@ -18,7 +18,9 @@ cargo tauri build    # release bundle
 
 ## Tabs
 
-22 tabs in five categories.
+22 tabs in five categories, shown in a collapsible sidebar. `Ctrl/Cmd+K` opens a
+command palette that jumps to any view or action. Appearance follows the OS
+(light or dark) with a manual override in the toolbar.
 
 | Category | Tabs |
 |---|---|
@@ -30,24 +32,29 @@ cargo tauri build    # release bundle
 
 <table>
   <tr>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dashboard.png" alt="Dashboard" width="300"/><br/><sub><b>Dashboard</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hs_daq.png" alt="HS DAQ" width="300"/><br/><sub><b>HS DAQ</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_hs_daq_light.png" alt="HS DAQ, light appearance" width="300"/><br/><sub><b>HS DAQ (light)</b></sub></td>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_connect.png" alt="Connect" width="300"/><br/><sub><b>Connect</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_gpio.png" alt="GPIO" width="300"/><br/><sub><b>GPIO</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_adc.png" alt="ADC" width="300"/><br/><sub><b>ADC</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_scope.png" alt="Scope" width="300"/><br/><sub><b>Scope</b></sub></td>
   </tr>
   <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dashboard.png" alt="Dashboard" width="300"/><br/><sub><b>Dashboard</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_logic_analyzer.png" alt="Logic Analyzer" width="300"/><br/><sub><b>Logic Analyzer</b></sub></td>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_wavegen.png" alt="WaveGen" width="300"/><br/><sub><b>WaveGen</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_signal_path.png" alt="Signal Path" width="300"/><br/><sub><b>Signal Path</b></sub></td>
   </tr>
   <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_wavegen.png" alt="WaveGen" width="300"/><br/><sub><b>WaveGen</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_vdac.png" alt="VDAC" width="300"/><br/><sub><b>VDAC</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_idac.png" alt="IDAC" width="300"/><br/><sub><b>IDAC</b></sub></td>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_iin.png" alt="IIN" width="300"/><br/><sub><b>IIN</b></sub></td>
   </tr>
   <tr>
+    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_iin.png" alt="IIN" width="300"/><br/><sub><b>IIN</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_din.png" alt="DIN" width="300"/><br/><sub><b>DIN</b></sub></td>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_dout.png" alt="DOUT" width="300"/><br/><sub><b>DOUT</b></sub></td>
-    <td align="center"><img src="../../Docs/Images/screenshots/screenshot_gpio.png" alt="GPIO" width="300"/><br/><sub><b>GPIO</b></sub></td>
   </tr>
   <tr>
     <td align="center"><img src="../../Docs/Images/screenshots/screenshot_usb_pd.png" alt="USB-PD" width="300"/><br/><sub><b>USB-PD</b></sub></td>
@@ -77,7 +84,7 @@ src/                       Leptos frontend (WASM)
 
 src-tauri/src/             Tauri backend (Rust)
   lib.rs                   Plugin setup, command registration
-  commands.rs              153 Tauri commands
+  commands.rs              154 Tauri commands
   connection_manager.rs    Transport lifecycle, state polling
   usb_transport.rs         BBP over USB CDC (COBS framing)
   http_transport.rs        REST over WiFi, re-encoded to BBP binary
@@ -86,8 +93,10 @@ src-tauri/src/             Tauri backend (Rust)
   state.rs                 DeviceState, ChannelState, connection types
   transport.rs             Transport trait abstraction
 
-styles.css                 Global glass UI theme
+styles/                    Design system: tokens.css (light/dark), base, components,
+                           shell (sidebar/toolbar/palette), views/*.css per tab group
 index.html                 Trunk entry point
+tests/ui-harness/          Mock-IPC browser harness: screenshots every view per HAT/theme
 ```
 
 `bbp.rs` holds `PROTO_VERSION`, which must stay in lockstep with

@@ -1,7 +1,10 @@
 //! Unified HV IO tab — each of the 4 channel tiles has its own independent
-//! In/Out mode selector. Compact layout so 2x2 tiles fit in a 1400x900 window
+//! In/Out mode selector. Compact layout so 2x2 tiles fit in a 1440x900 window
 //! without scrolling.
-use crate::components::channel_sparkline::ChannelSparkline;
+use crate::components::channel_sparkline::{
+    ch_key, ch_var, set_channel_function, ChannelEmpty, ChannelHead, ChannelSparkline,
+};
+use crate::components::ui::{SegmentedControl, Switch};
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use serde::Serialize;
@@ -30,6 +33,14 @@ const DO_MODE_OPTIONS: &[(u8, &str)] = &[
 pub enum HvMode {
     Din,
     Dout,
+}
+
+/// Current `open` state of the <details> element that fired a toggle event.
+fn details_open(e: &web_sys::Event) -> bool {
+    e.target()
+        .and_then(|t| js_sys::Reflect::get(&t, &wasm_bindgen::JsValue::from_str("open")).ok())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[derive(Serialize)]
@@ -88,6 +99,9 @@ fn send_do_config(ch: u8, mode: u8, src_sel_gpio: bool, t1: u8, t2: u8) {
 pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     // Per-channel mode (not global). Default all to DIN.
     let mode: [RwSignal<HvMode>; 4] = std::array::from_fn(|_| RwSignal::new(HvMode::Din));
+    // Disclosure state survives the card rebuild on every device-state tick.
+    let fault_open: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
+    let adv_open: [RwSignal<bool>; 4] = std::array::from_fn(|_| RwSignal::new(false));
 
     // DIN state (per channel)
     let din_thresh = [
@@ -173,18 +187,16 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     });
 
     view! {
-        <div class="tab-content hv-io-tab">
-            <div class="tab-desc">"High-voltage digital I/O. Each channel has its own In/Out selector. Per-channel settings are preserved across mode toggles."</div>
+        <div class="view hv-io-view">
+            <p class="group-subtitle">"High-voltage digital I/O. Each channel has its own In/Out selector; per-channel settings are kept when you switch."</p>
 
-            <div class="channel-grid-wide">
+            <div class="grid-2">
                 {move || {
                     let ds = state.get();
                     ds.channels.into_iter().enumerate().map(|(i, ch)| {
                         let ch_idx = i as u8;
-                        let color = CH_COLORS[i];
                         let is_din_func = ch.function == 8 || ch.function == 9;
                         let hist = history[i];
-                        let spark_color = color.to_string();
 
                         // Per-channel signals (captured into closures below).
                         let th = din_thresh[i];
@@ -202,28 +214,28 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 HvMode::Din => {
                                     if !is_din_func {
                                         view! {
-                                            <div class="mode-warning">
-                                                <span class="mode-warning-icon">"ℹ"</span>
-                                                <span>"Set channel to DIN mode to monitor digital input"</span>
-                                            </div>
+                                            <ChannelEmpty icon="log-in" message="Set the channel to a digital input mode to monitor it.">
+                                                <button class="btn btn-sm" on:click=move |_| set_channel_function(ch_idx, 8)>"Digital in"</button>
+                                            </ChannelEmpty>
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <div>
-                                                <div class="din-display">
-                                                    <div class="din-led" class:din-led-on=ch.din_state
-                                                        style=if ch.din_state { format!("background: {}; box-shadow: 0 0 20px {}", color, color) } else { String::new() }
-                                                    ></div>
-                                                    <div class="din-info">
-                                                        <span class="din-state-label">{if ch.din_state { "HIGH" } else { "LOW" }}</span>
-                                                        <span class="din-counter">"Events: "{format!("{}", ch.din_counter)}</span>
+                                            <div class="io-body">
+                                                <div class="io-primary">
+                                                    <div class="io-level io-level-sm" class:on=ch.din_state role="status">
+                                                        <span class="io-lamp" aria-hidden="true"></span>
+                                                        <span class="io-level-text">{if ch.din_state { "High" } else { "Low" }}</span>
+                                                    </div>
+                                                    <div class="io-meta">
+                                                        <span>"Events"</span>
+                                                        <span class="io-meta-value">{format!("{}", ch.din_counter)}</span>
                                                     </div>
                                                 </div>
 
-                                                <div class="config-section">
-                                                    <div class="config-row">
-                                                        <label>"Debounce"</label>
-                                                        <select class="dropdown"
+                                                <div class="rows io-rows">
+                                                    <label class="row">
+                                                        <span class="row-label">"Debounce"</span>
+                                                        <select
                                                             prop:value=move || db.get().to_string()
                                                             on:change=move |ev| {
                                                                 let val: u8 = event_target_value(&ev).parse().unwrap_or(0);
@@ -235,9 +247,9 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                                 view! { <option value=code.to_string()>{*name}</option> }
                                                             }).collect::<Vec<_>>()}
                                                         </select>
-                                                    </div>
-                                                    <div class="config-row">
-                                                        <label>"Threshold"</label>
+                                                    </label>
+                                                    <label class="row">
+                                                        <span class="row-label">"Threshold"</span>
                                                         <input type="number" class="number-input" min="0" max="127" step="1"
                                                             prop:value=move || th.get().to_string()
                                                             on:change=move |ev| {
@@ -246,59 +258,74 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                                 send_din_config(ch_idx, val, db.get_untracked(), oc.get_untracked(), sc.get_untracked());
                                                             }
                                                         />
-                                                    </div>
-                                                    <details class="hv-io-advanced">
-                                                        <summary>"Fault detection"</summary>
-                                                        <div class="config-row">
-                                                            <label>"OC Detect"</label>
-                                                            <div class="toggle" class:active=move || oc.get()
-                                                                on:click=move |_| {
-                                                                    let new_val = !oc.get_untracked();
+                                                    </label>
+                                                </div>
+                                                <details class="disclosure" prop:open=move || fault_open[i].get() on:toggle=move |e| fault_open[i].set(details_open(&e))>
+                                                    <summary>"Fault detection"</summary>
+                                                    <div class="rows io-rows">
+                                                        <div class="row">
+                                                            <span class="row-label">"Open-circuit detect"</span>
+                                                            <Switch
+                                                                checked=Signal::derive(move || oc.get())
+                                                                on_change=Callback::new(move |new_val: bool| {
                                                                     oc.set(new_val);
                                                                     send_din_config(ch_idx, th.get_untracked(), db.get_untracked(), new_val, sc.get_untracked());
-                                                                }
-                                                            ><div class="toggle-thumb"></div></div>
+                                                                })
+                                                                aria_label="Open-circuit detect"
+                                                            />
                                                         </div>
-                                                        <div class="config-row">
-                                                            <label>"SC Detect"</label>
-                                                            <div class="toggle" class:active=move || sc.get()
-                                                                on:click=move |_| {
-                                                                    let new_val = !sc.get_untracked();
+                                                        <div class="row">
+                                                            <span class="row-label">"Short-circuit detect"</span>
+                                                            <Switch
+                                                                checked=Signal::derive(move || sc.get())
+                                                                on_change=Callback::new(move |new_val: bool| {
                                                                     sc.set(new_val);
                                                                     send_din_config(ch_idx, th.get_untracked(), db.get_untracked(), oc.get_untracked(), new_val);
-                                                                }
-                                                            ><div class="toggle-thumb"></div></div>
+                                                                })
+                                                                aria_label="Short-circuit detect"
+                                                            />
                                                         </div>
-                                                    </details>
-                                                </div>
+                                                    </div>
+                                                </details>
+
+                                                <ChannelSparkline
+                                                    values=Signal::from(hist)
+                                                    min=Signal::derive(move || -0.1f32)
+                                                    max=Signal::derive(move || 1.1f32)
+                                                    color_var=ch_var(i)
+                                                />
                                             </div>
                                         }.into_any()
                                     }
                                 }
                                 HvMode::Dout => {
+                                    let current = ch.do_state;
                                     view! {
-                                        <div>
-                                            <div class="do-center">
-                                                <button class="do-btn" class:do-btn-on=ch.do_state
-                                                    style=format!("--do-color: {}", color)
-                                                    on:click=move |_| {
+                                        <div class="io-body">
+                                            <div class="io-primary">
+                                                <div class="io-level io-level-sm" class:on=current role="status">
+                                                    <span class="io-lamp" aria-hidden="true"></span>
+                                                    <span class="io-level-text">{if current { "High" } else { "Low" }}</span>
+                                                </div>
+                                                <SegmentedControl
+                                                    options=vec![(false, "Low"), (true, "High")]
+                                                    value=Signal::derive(move || current)
+                                                    on_change=Callback::new(move |new_state: bool| {
+                                                        if new_state == current { return; }
                                                         #[derive(Serialize)]
                                                         struct Args { channel: u8, on: bool }
-                                                        let new_state = !ch.do_state;
                                                         let args = serde_wasm_bindgen::to_value(&Args { channel: ch_idx, on: new_state }).unwrap();
                                                         let label = format!("Set CH {} DO {}", CH_NAMES[ch_idx as usize], if new_state { "ON" } else { "OFF" });
                                                         invoke_with_feedback("set_do_state", args, &label);
-                                                    }
-                                                >
-                                                    <div class="do-btn-indicator"></div>
-                                                    <span>{if ch.do_state { "ON" } else { "OFF" }}</span>
-                                                </button>
+                                                    })
+                                                    aria_label="Output level"
+                                                />
                                             </div>
 
-                                            <div class="config-section">
-                                                <div class="config-row">
-                                                    <label>"DO Mode"</label>
-                                                    <select class="dropdown"
+                                            <div class="rows io-rows">
+                                                <label class="row">
+                                                    <span class="row-label">"Output mode"</span>
+                                                    <select
                                                         prop:value=move || dm.get().to_string()
                                                         on:change=move |e| {
                                                             let val: u8 = event_target_value(&e).parse().unwrap_or(0);
@@ -310,25 +337,25 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                             view! { <option value=code.to_string()>{*name}</option> }
                                                         }).collect::<Vec<_>>()}
                                                     </select>
-                                                </div>
-                                                <details class="hv-io-advanced">
-                                                    <summary>"Advanced"</summary>
-                                                    <div class="config-row">
-                                                        <label>"Source"</label>
-                                                        <label class="toggle-wrap">
-                                                            <span class="toggle-off-label">"SPI"</span>
-                                                            <div class="toggle" class:active=move || sg.get()
-                                                                on:click=move |_| {
-                                                                    let new_val = !sg.get_untracked();
-                                                                    sg.set(new_val);
-                                                                    send_do_config(ch_idx, dm.get_untracked(), new_val, t1.get_untracked(), t2.get_untracked());
-                                                                }
-                                                            ><div class="toggle-thumb"></div></div>
-                                                            <span class="toggle-on-label">"GPIO"</span>
-                                                        </label>
+                                                </label>
+                                            </div>
+                                            <details class="disclosure" prop:open=move || adv_open[i].get() on:toggle=move |e| adv_open[i].set(details_open(&e))>
+                                                <summary>"Advanced"</summary>
+                                                <div class="rows io-rows">
+                                                    <div class="row">
+                                                        <span class="row-label">"Source"</span>
+                                                        <SegmentedControl
+                                                            options=vec![(false, "SPI"), (true, "GPIO")]
+                                                            value=Signal::derive(move || sg.get())
+                                                            on_change=Callback::new(move |new_val: bool| {
+                                                                sg.set(new_val);
+                                                                send_do_config(ch_idx, dm.get_untracked(), new_val, t1.get_untracked(), t2.get_untracked());
+                                                            })
+                                                            aria_label="Output source"
+                                                        />
                                                     </div>
-                                                    <div class="config-row">
-                                                        <label>"T1 (μs)"</label>
+                                                    <label class="row">
+                                                        <span class="row-label">"T1 (µs)"</span>
                                                         <input type="number" class="number-input" min="0" max="15" step="1"
                                                             prop:value=move || t1.get().to_string()
                                                             on:change=move |e| {
@@ -337,9 +364,9 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                                 send_do_config(ch_idx, dm.get_untracked(), sg.get_untracked(), val, t2.get_untracked());
                                                             }
                                                         />
-                                                    </div>
-                                                    <div class="config-row">
-                                                        <label>"T2 (μs)"</label>
+                                                    </label>
+                                                    <label class="row">
+                                                        <span class="row-label">"T2 (µs)"</span>
                                                         <input type="number" class="number-input" min="0" max="255" step="1"
                                                             prop:value=move || t2.get().to_string()
                                                             on:change=move |e| {
@@ -348,9 +375,16 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                                                 send_do_config(ch_idx, dm.get_untracked(), sg.get_untracked(), t1.get_untracked(), val);
                                                             }
                                                         />
-                                                    </div>
-                                                </details>
-                                            </div>
+                                                    </label>
+                                                </div>
+                                            </details>
+
+                                            <ChannelSparkline
+                                                values=Signal::from(hist)
+                                                min=Signal::derive(move || -0.1f32)
+                                                max=Signal::derive(move || 1.1f32)
+                                                color_var=ch_var(i)
+                                            />
                                         </div>
                                     }.into_any()
                                 }
@@ -358,33 +392,18 @@ pub fn HvIoTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         };
 
                         view! {
-                            <div class="card channel-card hv-io-card">
-                                <div class="card-header">
-                                    <div class="ch-badge" style=format!("background: {}22; color: {}; border: 1px solid {}44", color, color, color)>
-                                        {format!("CH {}", CH_NAMES[i])}
-                                    </div>
-                                    <span class="channel-func">{func_name(ch.function)}</span>
-                                    <select class="dropdown hv-io-mode-select"
-                                        prop:value=move || match md.get() { HvMode::Din => "din".to_string(), HvMode::Dout => "dout".to_string() }
-                                        on:change=move |e| {
-                                            let v = event_target_value(&e);
-                                            md.set(if v == "dout" { HvMode::Dout } else { HvMode::Din });
-                                        }
-                                    >
-                                        <option value="din">"In"</option>
-                                        <option value="dout">"Out"</option>
-                                    </select>
-                                </div>
-                                <div class="card-body">
-                                    {body}
-                                    <ChannelSparkline
-                                        values=Signal::from(hist)
-                                        min=Signal::derive(move || -0.1f32)
-                                        max=Signal::derive(move || 1.1f32)
-                                        color=spark_color
+                            <section class="group io-card io-card-compact" data-ch=ch_key(i)>
+                                <ChannelHead idx=i func=func_name(ch.function)>
+                                    <SegmentedControl
+                                        options=vec![(HvMode::Din, "In"), (HvMode::Dout, "Out")]
+                                        value=Signal::derive(move || md.get())
+                                        on_change=Callback::new(move |m: HvMode| md.set(m))
+                                        small=true
+                                        aria_label="Direction"
                                     />
-                                </div>
-                            </div>
+                                </ChannelHead>
+                                {body}
+                            </section>
                         }
                     }).collect::<Vec<_>>()
                 }}

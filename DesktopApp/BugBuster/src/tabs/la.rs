@@ -1,18 +1,22 @@
 use crate::tauri_bridge::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-// Dropdown no longer used — replaced with pill/toggle buttons
-// use crate::components::controls::Dropdown;
+use crate::components::icons::Icon;
+use crate::components::ui::{EmptyState, Switch};
+use crate::theme::{css_var, use_theme};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MouseEvent};
 
 use std::cell::{Cell, RefCell};
 
-const CH_COLORS: [&str; 4] = ["#3b82f6", "#10b981", "#f59e0b", "#a855f7"];
-const TOOLBAR_HEIGHT: f64 = 44.0; // Space reserved for toolbar overlay
+// Channel colours come from the design tokens so the canvas follows the theme.
+const CH_VARS: [&str; 4] = ["--ch-a", "--ch-b", "--ch-c", "--ch-d"];
+const TOOLBAR_HEIGHT: f64 = 24.0; // Top padding above the first track
 const TRACK_HEIGHT: f64 = 62.0;
-const LABEL_WIDTH: f64 = 50.0;
+// u64::MAX cannot cross serde_wasm_bindgen (it panics in the bridge); 2^53-1 is the JS-safe maximum.
+const JS_MAX_SAFE: u64 = (1u64 << 53) - 1;
+const LABEL_WIDTH: f64 = 0.0; // Channel names live in the DOM column beside the canvas
 const RULER_HEIGHT: f64 = 22.0;
 const MINIMAP_HEIGHT: f64 = 28.0;
 const SIGNAL_MARGIN: f64 = 8.0;
@@ -88,6 +92,84 @@ fn stream_status_badge(status: &LaStreamRuntimeStatus) -> &'static str {
     }
 }
 
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        web_sys::window()
+            .unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms)
+            .unwrap();
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// Logic level of `ch` at sample `cs`, from the transitions in the current view.
+fn level_at(d: &LaViewData, ch: usize, cs: u64) -> Option<u8> {
+    let trans = d.channel_transitions.get(ch)?;
+    let mut val = 0u8;
+    for &(s, v) in trans.iter() {
+        if s <= cs {
+            val = v;
+        } else {
+            break;
+        }
+    }
+    Some(val)
+}
+
+fn ch_chip(
+    i: u8,
+    active: impl Fn() -> bool + Copy + Send + Sync + 'static,
+    pick: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        <button type="button" class="la-chip"
+            class:active=active
+            aria-pressed=move || if active() { "true" } else { "false" }
+            style=format!("--ch-color: var({})", CH_VARS[i as usize])
+            on:click=move |_| pick()
+        >{i.to_string()}</button>
+    }
+}
+
+fn ch_picker(
+    label: &'static str,
+    active: impl Fn(u8) -> bool + Copy + Send + Sync + 'static,
+    pick: impl Fn(u8) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        <div class="la-field">
+            <span class="la-field-label">{label}</span>
+            <div class="la-chips" role="group" aria-label=label>
+                {(0..4u8).map(|i| ch_chip(i, move || active(i), move || pick(i))).collect::<Vec<_>>()}
+            </div>
+        </div>
+    }
+}
+
+/// Channel picker with an extra "Off" chip (UART RX, SPI CS).
+fn ch_picker_off(
+    label: &'static str,
+    active: impl Fn(u8) -> bool + Copy + Send + Sync + 'static,
+    pick: impl Fn(u8) + Copy + Send + Sync + 'static,
+    off_active: impl Fn() -> bool + Copy + Send + Sync + 'static,
+    set_off: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    view! {
+        <div class="la-field">
+            <span class="la-field-label">{label}</span>
+            <div class="la-chips" role="group" aria-label=label>
+                <button type="button" class="la-chip la-chip-off"
+                    class:active=off_active
+                    aria-pressed=move || if off_active() { "true" } else { "false" }
+                    title="Not connected"
+                    on:click=move |_| set_off()
+                >"Off"</button>
+                {(0..4u8).map(|i| ch_chip(i, move || active(i), move || pick(i))).collect::<Vec<_>>()}
+            </div>
+        </div>
+    }
+}
+
 #[component]
 pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let _ = state;
@@ -135,8 +217,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let (ls_dir, set_ls_dir) = signal(false); // false = B→A (RP2040 listens)
     let (la_route, set_la_route_la) = signal(0u8); // 0 = Low-Speed, 1 = High-Speed
 
-    // Decoder panel state
-    let (decoder_panel_open, set_decoder_panel_open) = signal(false);
+    // Decoder form state
     let (add_dec_type, set_add_dec_type) = signal("uart".to_string());
     let (add_dec_ch_a, set_add_dec_ch_a) = signal(0u8); // UART TX / I2C SDA / SPI MOSI
     let (add_dec_ch_b, set_add_dec_ch_b) = signal(1u8); // UART RX (0xFF=off) / I2C SCL / SPI MISO
@@ -154,6 +235,15 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
     // Cursor
     let (cursor_sample, set_cursor_sample) = signal(Option::<u64>::None);
+
+    // Editable channel names (display only)
+    let ch_names: [RwSignal<String>; 4] =
+        std::array::from_fn(|i| RwSignal::new(format!("CH{}", i)));
+    // Per-channel (top, track height, band height) in canvas CSS px, written by the renderer
+    let (ch_layout, set_ch_layout) = signal(Vec::<(f64, f64, f64)>::new());
+    // Repaint triggers: canvas resize / theme flip
+    let (size_tick, set_size_tick) = signal(0u32);
+    let (theme_tick, set_theme_tick) = signal(0u32);
 
     // Auto-downgrade sample rate if it exceeds bandwidth limits in Stream mode
     leptos::prelude::Effect::new(move |_| {
@@ -201,6 +291,36 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let alive_clean = alive.clone();
     on_cleanup(move || alive_clean.store(false, std::sync::atomic::Ordering::Relaxed));
 
+    // The canvas has no resize event: poll its size and the resolved theme, then bump a tick.
+    let theme = use_theme();
+    {
+        let alive = alive.clone();
+        spawn_local(async move {
+            let mut last_theme = "";
+            let mut last_size = (0u32, 0u32);
+            loop {
+                if !alive.load(std::sync::atomic::Ordering::Relaxed)
+                    || render_epoch.get_untracked() != my_epoch
+                {
+                    break;
+                }
+                let cur_theme = theme.resolved.get_untracked();
+                if cur_theme != last_theme {
+                    last_theme = cur_theme;
+                    set_theme_tick.update(|t| *t = t.wrapping_add(1));
+                }
+                if let Some(c) = canvas_ref.get_untracked() {
+                    let sz = (c.client_width().max(0) as u32, c.client_height().max(0) as u32);
+                    if sz != last_size && sz.0 > 0 {
+                        last_size = sz;
+                        set_size_tick.update(|t| *t = t.wrapping_add(1));
+                    }
+                }
+                sleep_ms(150).await;
+            }
+        });
+    }
+
     // Listen for "la-done" event (capture complete notification from RP2040)
     {
         let set_ci2 = set_capture_info;
@@ -237,6 +357,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let vs = view_start.get();
         let ve = view_end.get();
         let _ci = capture_info.get(); // re-fetch when new data arrives during streaming
+        let _sz = size_tick.get(); // re-fetch with the right pixel budget after a resize
         let max_p = canvas_ref_fetch
             .get()
             .and_then(|el| {
@@ -276,6 +397,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         let data = view_data.get();
         let cursor = cursor_sample.get();
         let fmt = ann_fmt.get(); // track format at top level so changes always redraw
+        let _ = (size_tick.get(), theme_tick.get());
                                  // Stale-mount guard (Fix 1): a newer LaTab has taken over — skip render.
         if render_epoch.get_untracked() != my_epoch {
             return;
@@ -302,21 +424,43 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             }
         });
 
+        // Theme palette, read at draw time so a theme flip repaints correctly.
+        let ch_cols: Vec<String> = CH_VARS.iter().map(|v| css_var(v)).collect();
+        let c_bg = css_var("--surface-plot");
+        let c_panel = css_var("--surface-2");
+        let c_surface = css_var("--surface-1");
+        let c_grid = css_var("--grid-line");
+        let c_sep = css_var("--sep");
+        let c_frame = css_var("--sep-strong");
+        let c_label = css_var("--label-2");
+        let c_dim = css_var("--label-3");
+        let c_text = css_var("--label-1");
+        let c_cursor = css_var("--series-marker");
+        let c_trigger = css_var("--c-orange");
+        let c_accent = css_var("--accent");
+        let c_sel = css_var("--c-purple");
+        let a_green = css_var("--c-green");
+        let a_green_t = css_var("--c-green-text");
+        let a_orange = css_var("--c-orange");
+        let a_orange_t = css_var("--c-orange-text");
+        let a_red = css_var("--c-red");
+        let a_red_t = css_var("--c-red-text");
+        let a_teal = css_var("--c-teal");
+        let a_teal_t = css_var("--c-teal-text");
+        let a_blue = css_var("--c-blue");
+        let a_blue_t = css_var("--c-blue-text");
+        let f_mono = {
+            let f = css_var("--font-mono");
+            if f.is_empty() { "monospace".to_string() } else { f }
+        };
+
         // Background
-        ctx.set_fill_style_str("#060a14");
+        ctx.set_fill_style_str(&c_bg);
         ctx.fill_rect(0.0, 0.0, w, h);
 
         let Some(ref data) = data else {
-            // No data — draw placeholder
-            ctx.set_fill_style_str("#5a6d8a");
-            ctx.set_font("14px 'JetBrains Mono', monospace");
-            ctx.set_text_align("center");
-            ctx.fill_text(
-                "No capture data — configure and capture to see waveforms",
-                w / 2.0,
-                h / 2.0,
-            )
-            .ok();
+            // No data: the DOM empty state explains what to do.
+            set_ch_layout.set(Vec::new());
             return;
         };
 
@@ -379,9 +523,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         }
         // Share offsets with mouse handler (untracked write — no reactive loop)
         set_ch_y_offsets.set(ch_y.clone());
+        set_ch_layout.set((0..num_ch).map(|c| (ch_y[c], track_h, ch_h[c])).collect());
 
         // Grid lines (batched into single path)
-        ctx.set_stroke_style_str("rgba(59, 130, 246, 0.08)");
+        ctx.set_stroke_style_str(&c_grid);
         ctx.set_line_width(1.0);
         let time_per_px = span / plot_w;
         let grid_step = 10.0f64.powf((time_per_px * 100.0).log10().ceil()); // ~100px spacing
@@ -397,7 +542,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         ctx.stroke();
 
         // Channel separators (batched into single path)
-        ctx.set_stroke_style_str("rgba(59, 130, 246, 0.15)");
+        ctx.set_stroke_style_str(&c_sep);
         ctx.begin_path();
         for ch in 0..num_ch {
             let sep_y = ch_y[ch] + ch_h[ch];
@@ -412,22 +557,11 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 continue;
             }
             let transitions = &data.channel_transitions[ch];
-            let color = CH_COLORS[ch % CH_COLORS.len()];
+            let color = ch_cols[ch % 4].as_str();
             let y_top = ch_y[ch] + SIGNAL_MARGIN;
             let y_bot = ch_y[ch] + track_h - SIGNAL_MARGIN;
             let y_high = y_top;
             let y_low = y_bot;
-
-            // Channel label
-            ctx.set_fill_style_str(color);
-            ctx.set_font("11px 'JetBrains Mono', monospace");
-            ctx.set_text_align("right");
-            ctx.fill_text(
-                &format!("CH{}", ch),
-                LABEL_WIDTH - 6.0,
-                y_top + (y_bot - y_top) / 2.0 + 4.0,
-            )
-            .ok();
 
             // Waveform rendering — step function or density mode for zoomed-out signals
             if transitions.is_empty() {
@@ -650,9 +784,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
 
         // Time ruler with tick marks and consistent unit labels
         let ruler_y = plot_h;
-        ctx.set_fill_style_str("#111a2e");
+        ctx.set_fill_style_str(&c_panel);
         ctx.fill_rect(0.0, ruler_y, w, RULER_HEIGHT);
-        ctx.set_stroke_style_str("rgba(59, 130, 246, 0.3)");
+        ctx.set_stroke_style_str(&c_frame);
         ctx.begin_path();
         ctx.move_to(0.0, ruler_y);
         ctx.line_to(w, ruler_y);
@@ -675,10 +809,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         };
 
         // Major tick marks + labels
-        ctx.set_stroke_style_str("rgba(139, 157, 195, 0.5)");
+        ctx.set_stroke_style_str(&c_dim);
         ctx.set_line_width(1.0);
-        ctx.set_fill_style_str("#8b9dc3");
-        ctx.set_font("9px 'JetBrains Mono', monospace");
+        ctx.set_fill_style_str(&c_label);
+        ctx.set_font(&format!("{}px {}", 10, f_mono));
         ctx.set_text_align("center");
         let mut g = first_grid;
         while g < ve {
@@ -695,9 +829,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 0.0
             };
             let label = format!("{:.1}{}", t * unit_div, unit_suffix);
-            ctx.fill_text(&label, x, ruler_y + 15.0).ok();
+            // Keep the first label inside the canvas now that there is no left gutter
+            ctx.set_text_align(if x < 24.0 { "left" } else { "center" });
+            ctx.fill_text(&label, if x < 24.0 { x + 3.0 } else { x }, ruler_y + 15.0)
+                .ok();
             // Minor ticks (5 subdivisions)
-            ctx.set_stroke_style_str("rgba(139, 157, 195, 0.2)");
+            ctx.set_stroke_style_str(&c_frame);
             let minor_step = grid_step / 5.0;
             for m in 1..5 {
                 let mx = LABEL_WIDTH + ((g + minor_step * m as f64 - vs) / span) * plot_w;
@@ -708,21 +845,14 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     ctx.stroke();
                 }
             }
-            ctx.set_stroke_style_str("rgba(139, 157, 195, 0.5)");
+            ctx.set_stroke_style_str(&c_dim);
             g += grid_step;
         }
-        // Unit label in left margin
-        ctx.set_fill_style_str("#5a6d8a");
-        ctx.set_font("8px 'JetBrains Mono', monospace");
-        ctx.set_text_align("right");
-        ctx.fill_text(unit_suffix, LABEL_WIDTH - 4.0, ruler_y + 14.0)
-            .ok();
-
         // Cursor
         if let Some(cs) = cursor {
             if cs >= data.view_start && cs <= data.view_end {
                 let x = LABEL_WIDTH + ((cs as f64 - vs) / span) * plot_w;
-                ctx.set_stroke_style_str("#ef4444");
+                ctx.set_stroke_style_str(&c_cursor);
                 ctx.set_line_width(1.0);
                 ctx.begin_path();
                 ctx.move_to(x, TOOLBAR_HEIGHT);
@@ -735,9 +865,14 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 } else {
                     0.0
                 };
-                ctx.set_fill_style_str("#ef4444");
-                ctx.set_font("10px 'JetBrains Mono', monospace");
-                ctx.fill_text(&format_time(t), x, ruler_y + 14.0).ok();
+                let t_label = format_time(t);
+                ctx.set_font(&format!("{}px {}", 10, f_mono));
+                ctx.set_fill_style_str(&c_panel);
+                ctx.set_text_align("center");
+                let tw = t_label.len() as f64 * 6.2 + 8.0;
+                ctx.fill_rect(x - tw / 2.0, ruler_y + 3.0, tw, RULER_HEIGHT - 4.0);
+                ctx.set_fill_style_str(&c_cursor);
+                ctx.fill_text(&t_label, x, ruler_y + 15.0).ok();
             }
         }
 
@@ -745,7 +880,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         if let Some(ts) = data.trigger_sample {
             if ts >= data.view_start && ts <= data.view_end {
                 let x = LABEL_WIDTH + ((ts as f64 - vs) / span) * plot_w;
-                ctx.set_stroke_style_str("#f59e0b");
+                ctx.set_stroke_style_str(&c_trigger);
                 ctx.set_line_width(1.0);
                 ctx.set_line_dash(&JsValue::from(js_sys::Array::of2(
                     &JsValue::from(4.0),
@@ -764,7 +899,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         if let Some(hch) = hover_ch.get() {
             if hch < data.channel_transitions.len() {
                 let transitions = &data.channel_transitions[hch];
-                let color = CH_COLORS[hch % CH_COLORS.len()];
+                let color = ch_cols[hch % 4].as_str();
                 let mx = hover_x.get();
 
                 if mx > LABEL_WIDTH && transitions.len() >= 3 {
@@ -896,16 +1031,18 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     duty
                                 );
 
-                                ctx.set_font("9px 'JetBrains Mono', monospace");
-                                let text_width = label.len() as f64 * 5.5;
+                                ctx.set_font(&format!("{}px {}", 10, f_mono));
+                                let text_width = label.len() as f64 * 6.1;
                                 let bx = box_x - text_width / 2.0 - 4.0;
                                 let by = box_y - 12.0;
-                                ctx.set_fill_style_str("rgba(6, 10, 20, 0.92)");
+                                ctx.set_global_alpha(0.94);
+                                ctx.set_fill_style_str(&c_surface);
                                 ctx.fill_rect(bx, by, text_width + 8.0, 14.0);
+                                ctx.set_global_alpha(1.0);
                                 ctx.set_stroke_style_str(color);
                                 ctx.set_line_width(0.5);
                                 ctx.stroke_rect(bx, by, text_width + 8.0, 14.0);
-                                ctx.set_fill_style_str(color);
+                                ctx.set_fill_style_str(&c_text);
                                 ctx.set_text_align("center");
                                 ctx.fill_text(&label, box_x, box_y - 1.0).ok();
                             }
@@ -923,9 +1060,9 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             let mm_heat_h = MINIMAP_HEIGHT - 12.0;
 
             // Background
-            ctx.set_fill_style_str("#080e1a");
+            ctx.set_fill_style_str(&c_panel);
             ctx.fill_rect(0.0, mm_y, w, MINIMAP_HEIGHT);
-            ctx.set_stroke_style_str("rgba(59, 130, 246, 0.25)");
+            ctx.set_stroke_style_str(&c_frame);
             ctx.begin_path();
             ctx.move_to(0.0, mm_y);
             ctx.line_to(w, mm_y);
@@ -939,8 +1076,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 } else {
                     0.0
                 };
-                ctx.set_fill_style_str("#5a6d8a");
-                ctx.set_font("8px 'JetBrains Mono', monospace");
+                ctx.set_fill_style_str(&c_dim);
+                ctx.set_font(&format!("{}px {}", 9, f_mono));
                 ctx.set_text_align("left");
                 ctx.fill_text("0s", LABEL_WIDTH + 3.0, mm_y + 9.0).ok();
                 ctx.set_text_align("right");
@@ -959,28 +1096,29 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         let intensity = (count as f64 / max_d).sqrt(); // sqrt for better contrast
                         let bx = LABEL_WIDTH + (i as f64 / buckets) * mm_w;
                         let bw = (mm_w / buckets).max(1.0);
-                        // Blue glow: brighter = more transitions
-                        let r = (20.0 + 39.0 * intensity) as u8;
-                        let g_c = (40.0 + 90.0 * intensity) as u8;
-                        let b = (80.0 + 166.0 * intensity) as u8;
-                        ctx.set_fill_style_str(&format!("rgb({},{},{})", r, g_c, b));
+                        // Accent colour; stronger = more transitions
+                        ctx.set_global_alpha(0.12 + 0.88 * intensity);
+                        ctx.set_fill_style_str(&c_accent);
                         ctx.fill_rect(bx, mm_heat_top, bw + 0.5, mm_heat_h);
                     }
                 }
 
+                ctx.set_global_alpha(1.0);
                 // Viewport indicator box
                 let vp_x1 = LABEL_WIDTH + (data.view_start as f64 / total) * mm_w;
                 let vp_x2 =
                     LABEL_WIDTH + (data.view_end.min(data.total_samples) as f64 / total) * mm_w;
                 let vp_w = (vp_x2 - vp_x1).max(3.0);
-                ctx.set_fill_style_str("rgba(168, 85, 247, 0.12)");
+                ctx.set_global_alpha(0.14);
+                ctx.set_fill_style_str(&c_sel);
                 ctx.fill_rect(vp_x1, mm_heat_top, vp_w, mm_heat_h);
-                ctx.set_stroke_style_str("#a855f7");
+                ctx.set_global_alpha(1.0);
+                ctx.set_stroke_style_str(&c_sel);
                 ctx.set_line_width(1.5);
                 ctx.stroke_rect(vp_x1, mm_heat_top, vp_w, mm_heat_h);
                 // Edge grips
                 ctx.set_line_width(2.0);
-                ctx.set_stroke_style_str("#c084fc");
+                ctx.set_stroke_style_str(&c_sel);
                 for xg in [vp_x1, vp_x1 + vp_w] {
                     ctx.begin_path();
                     ctx.move_to(xg, mm_heat_top + 2.0);
@@ -989,11 +1127,6 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 }
             }
 
-            // Label
-            ctx.set_fill_style_str("#5a6d8a");
-            ctx.set_font("7px 'JetBrains Mono', monospace");
-            ctx.set_text_align("right");
-            ctx.fill_text("NAV", LABEL_WIDTH - 4.0, mm_y + 9.0).ok();
         }
 
         // Draw selection highlight
@@ -1004,7 +1137,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 let x1_sel =
                     LABEL_WIDTH + ((s_sel.max(data.view_start) as f64 - vs) / span) * plot_w;
                 let x2_sel = LABEL_WIDTH + ((e_sel.min(data.view_end) as f64 - vs) / span) * plot_w;
-                ctx.set_fill_style_str("#a855f7");
+                ctx.set_fill_style_str(&c_sel);
                 ctx.set_global_alpha(0.12);
                 ctx.fill_rect(
                     x1_sel,
@@ -1014,7 +1147,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 );
                 ctx.set_global_alpha(1.0);
                 // Selection edges
-                ctx.set_stroke_style_str("#a855f780");
+                ctx.set_stroke_style_str(&c_sel);
                 ctx.set_line_width(1.0);
                 for xedge in [x1_sel, x2_sel] {
                     ctx.begin_path();
@@ -1040,12 +1173,12 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                 .unwrap_or("data");
             let text_owned = reformat_ann(raw_text, &fmt, ann_type);
             let text = text_owned.as_str();
-            let color = match ann_type {
-                "address" => "#10b981",
-                "control" => "#f59e0b",
-                "error" => "#ef4444",
-                "info" => "#06b6d4",
-                _ => "#3b82f6", // data (default)
+            let (color, tcolor) = match ann_type {
+                "address" => (a_green.as_str(), a_green_t.as_str()),
+                "control" => (a_orange.as_str(), a_orange_t.as_str()),
+                "error" => (a_red.as_str(), a_red_t.as_str()),
+                "info" => (a_teal.as_str(), a_teal_t.as_str()),
+                _ => (a_blue.as_str(), a_blue_t.as_str()), // data (default)
             };
             let row = ann.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let ch = ann.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -1076,9 +1209,10 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             ctx.stroke_rect(x1, ann_y, (x2 - x1).max(2.0), ann_h);
 
             // Text (if box wide enough)
-            if x2 - x1 > 20.0 {
-                ctx.set_fill_style_str(color);
-                ctx.set_font("11px 'JetBrains Mono', monospace");
+            // Only label boxes wide enough for the text, so narrow frames do not overprint
+            if x2 - x1 > text.chars().count() as f64 * 6.6 + 6.0 {
+                ctx.set_fill_style_str(tcolor);
+                ctx.set_font(&format!("{}px {}", 11, f_mono));
                 ctx.set_text_align("center");
                 ctx.set_text_baseline("middle");
                 let tx = (x1 + x2) / 2.0;
@@ -1475,397 +1609,78 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         closure.forget();
     }
 
+    let ch_count = move || channels.get().parse::<u8>().unwrap_or(4);
+    let max_rate = move || -> u32 {
+        if stream_mode.get() {
+            let ch = ch_count();
+            if ch <= 1 {
+                5_000_000
+            } else if ch == 2 {
+                2_000_000
+            } else {
+                1_000_000
+            }
+        } else {
+            125_000_000
+        }
+    };
+    let rate_too_fast = move |hz: u32| hz > max_rate();
+    let ch_on = move |i: usize| (i as u8) < ch_count();
+    let no_data = move || view_data.with(|d| d.is_none());
+    let baud_ok = move || add_dec_baud.with(|b| b.trim().parse::<u32>().is_ok_and(|v| v > 0));
+    let ch_row_style = move |i: usize| -> String {
+        ch_layout.with(|l| match l.get(i) {
+            Some(&(y, th, h)) => format!("top:{y}px;height:{h}px;--track-h:{th}px"),
+            None => {
+                if view_data.with(|d| d.is_some()) {
+                    "display:none".to_string()
+                } else {
+                    format!(
+                        "top:{}px;height:{}px;--track-h:{}px",
+                        TOOLBAR_HEIGHT + i as f64 * TRACK_HEIGHT,
+                        TRACK_HEIGHT,
+                        TRACK_HEIGHT
+                    )
+                }
+            }
+        })
+    };
+    let ch_level = move |i: usize| -> Option<u8> {
+        let cs = cursor_sample.get()?;
+        view_data.with(|d| d.as_ref().and_then(|d| level_at(d, i, cs)))
+    };
+    let rail0_mv = move || {
+        hat_rails.with(|r| {
+            r.iter()
+                .find(|r| r.rail_id == 0)
+                .map(|r| r.voltage_mv)
+                .unwrap_or(0)
+        })
+    };
+    let rail0_on = move || {
+        hat_rails.with(|r| {
+            r.iter()
+                .find(|r| r.rail_id == 0)
+                .map(|r| r.enabled)
+                .unwrap_or(false)
+        })
+    };
+    let insp_open = RwSignal::new(
+        web_sys::window()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .map(|w| w >= 1100.0)
+            .unwrap_or(true),
+    );
+
     view! {
-        <div class="tab-content" style="display: flex; flex-direction: column; height: calc(100vh - 100px); gap: 0; overflow: hidden; margin: -20px; padding: 0">
-
-            // Toolbar with labeled sections
-            <div style="display: flex; align-items: flex-end; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border, #1e293b); flex-wrap: wrap; flex-shrink: 0">
-
-                // Channels section — toggle channels on/off
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Channels"</span>
-                    <div style="display: flex; gap: 3px">
-                        {(0..4u8).map(|i| {
-                            let color = CH_COLORS[i as usize];
-                            view! {
-                                <button
-                                    style=move || {
-                                        let ch_count: u8 = channels.get().parse().unwrap_or(4);
-                                        let enabled = i < ch_count;
-                                        if enabled {
-                                            format!("font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
-                                                background: {}30; color: {}; border: 1.5px solid {}", color, color, color)
-                                        } else {
-                                            "font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-family: 'JetBrains Mono', monospace; \
-                                                background: transparent; color: #333; border: 1.5px solid #222".into()
-                                        }
-                                    }
-                                    on:click=move |_| {
-                                        let ch_count: u8 = channels.get_untracked().parse().unwrap_or(4);
-                                        // Click on a disabled channel → enable up to that channel
-                                        // Click on the last enabled → reduce count
-                                        let new_count = if i < ch_count {
-                                            // Clicking an enabled channel: disable from this one onwards (min 1)
-                                            i.max(1)
-                                        } else {
-                                            // Clicking a disabled channel: enable up to and including it
-                                            i + 1
-                                        };
-                                        set_channels.set(new_count.to_string());
-                                    }
-                                    title=move || {
-                                        let ch_count: u8 = channels.get().parse().unwrap_or(4);
-                                        if i < ch_count { format!("CH{} enabled — click to disable", i) }
-                                        else { format!("CH{} disabled — click to enable", i) }
-                                    }
-                                >{format!("CH{}", i)}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // Sample Rate section
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Sample Rate"</span>
-                    <div style="display: flex; gap: 2px">
-                        {move || {
-                            let is_stream = stream_mode.get();
-                            let ch_count: u8 = channels.get().parse().unwrap_or(4);
-
-                            let max_rate = if is_stream {
-                                if ch_count <= 1 { 5000000 }
-                                else if ch_count == 2 { 2000000 }
-                                else { 1000000 }
-                            } else {
-                                125000000
-                            };
-
-                            let all_pairs = &[
-                                ("100k","100000"), ("500k","500000"), ("1M","1000000"),
-                                ("2M","2000000"), ("5M","5000000"), ("10M","10000000"),
-                                ("25M","25000000"), ("50M","50000000"), ("100M","125000000")
-                            ];
-
-                            all_pairs.iter()
-                                .filter(|(_, val)| val.parse::<u32>().unwrap_or(0) <= max_rate)
-                                .map(|(label, val)| {
-                                    let v = val.to_string();
-                                    let l = label.to_string();
-                                    view! {
-                                        <button
-                                            style=move || {
-                                                let active = rate.get() == v;
-                                                format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                                    if active { "background: #3b82f6; color: #fff; border: 1px solid #3b82f6" }
-                                                    else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                            }
-                                            on:click={ let v2 = val.to_string(); move |_| set_rate.set(v2.clone()) }
-                                        >{l.clone()}</button>
-                                    }
-                                }).collect::<Vec<_>>()
-                        }}
-                    </div>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // Memory Depth section
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Memory Depth"</span>
-                    <div style="display: flex; gap: 2px">
-                        {["10K", "50K", "100K", "500K"].iter().zip(
-                            ["10000", "50000", "100000", "500000"].iter()
-                        ).map(|(label, val)| {
-                            let v = val.to_string();
-                            let l = label.to_string();
-                            view! {
-                                <button
-                                    style=move || {
-                                        let active = depth.get() == v;
-                                        format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                            if active { "background: #10b981; color: #fff; border: 1px solid #10b981" }
-                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    }
-                                    on:click={ let v2 = val.to_string(); move |_| set_depth.set(v2.clone()) }
-                                >{l.clone()}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // Trigger section
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Polarity"</span>
-                    <div style="display: flex; gap: 2px; align-items: center">
-                        {[("0", "—", "None"), ("1", "↑", "Rising"), ("2", "↓", "Falling"), ("4", "▔", "High"), ("5", "▁", "Low")].iter().map(|(val, icon, tip)| {
-                            let v = val.to_string();
-                            let ic = icon.to_string();
-                            let tt = tip.to_string();
-                            view! {
-                                <button
-                                    style=move || {
-                                        let active = trig_type.get() == v;
-                                        format!("font-size: 12px; padding: 1px 5px; border-radius: 4px; cursor: pointer; min-width: 22px; transition: all 0.15s; {}",
-                                            if active { "background: #f59e0b30; color: #f59e0b; border: 1px solid #f59e0b" }
-                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    }
-                                    title=tt.clone()
-                                    on:click={ let v2 = val.to_string(); move |_| set_trig_type.set(v2.clone()) }
-                                >{ic.clone()}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-
-                // Trigger Channel
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Trigger Ch"</span>
-                    <div style="display: flex; gap: 2px">
-                        {(0..4u8).map(|i| {
-                            let v = i.to_string();
-                            let color = CH_COLORS[i as usize];
-                            view! {
-                                <button
-                                    style=move || {
-                                        let active = trig_ch.get() == v;
-                                        format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; font-family: 'JetBrains Mono', monospace; {}",
-                                            if active { format!("background: {}30; color: {}; border: 1px solid {}", color, color, color) }
-                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() })
-                                    }
-                                    on:click={ let v2 = i.to_string(); move |_| set_trig_ch.set(v2.clone()) }
-                                >{format!("{}", i)}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                    </div>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // Mode section (Memory/Stream + RLE)
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Capture Mode"</span>
-                    <div style="display: flex; gap: 2px">
-                        <button
-                            style=move || format!("font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                if !stream_mode.get() { "background: #8b5cf6; color: #fff; border: 1px solid #8b5cf6" }
-                                else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                            on:click=move |_| set_stream_mode.set(false)
-                            title="Capture a fixed memory depth then stop"
-                        >"Memory"</button>
-                        <button
-                            style=move || format!("font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                if stream_mode.get() { "background: #06b6d4; color: #fff; border: 1px solid #06b6d4" }
-                                else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                            on:click=move |_| {
-                                set_stream_mode.set(true);
-                                set_rle_enabled.set(true);
-                                show_toast("RLE enabled by default on Stream mode", "ok");
-                                // Limit rate to stream-safe values
-                                let r = rate.get_untracked();
-                                let r_hz: u32 = r.parse().unwrap_or(1000000);
-                                if r_hz > 2000000 { set_rate.set("1000000".to_string()); }
-                            }
-                            title="Continuous live capture (limited sample rate)"
-                        >"Stream"</button>
-                        <button
-                            style=move || format!("font-size: 9px; padding: 2px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}{}",
-                                if rle_enabled.get() { "background: #06b6d430; color: #06b6d4; border: 1px solid #06b6d4" }
-                                else { "background: transparent; color: #06b6d480; border: 1px solid #06b6d430" },
-                                if stream_mode.get() { "; opacity: 0.6; cursor: not-allowed" } else { "" })
-                            disabled=move || stream_mode.get()
-                            on:click=move |_| {
-                                if !stream_mode.get() {
-                                    set_rle_enabled.update(|v| *v = !*v);
-                                }
-                            }
-                            title=move || if stream_mode.get() { "RLE is forced in Stream mode" } else { "Run-Length Encoding — compresses captures, more depth for slow signals" }
-                        >"RLE"</button>
-                    </div>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // ── Signal Conditioning (HAT): VLOGIC, OE, DIR ──────────────────
-                {move || {
-                    if !hat_detected.get() {
-                        return ().into_any();
-                    }
-                    view! {
-                        <div style="display: contents">
-                        <div style="display: flex; flex-direction: column; gap: 2px">
-                            <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Signal Cond."</span>
-                            <div style="display: flex; gap: 3px; align-items: center">
-                                // LA Route: Low-Speed / High-Speed
-                                <button
-                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                        if la_route.get() == 0 { "background: #10b98130; color: #10b981; border: 1px solid #10b981" }
-                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    title="Low-Speed path via EXP_EXT (up to 4ch @ 1 MHz)"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            if let Some(r) = hat_la_set_route(0).await {
-                                                set_la_route_la.set(r);
-                                                show_toast("Route → Low-Speed", "ok");
-                                            }
-                                        });
-                                    }
-                                >"LS"</button>
-                                <button
-                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                        if la_route.get() == 1 { "background: #3b82f630; color: #3b82f6; border: 1px solid #3b82f6" }
-                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    title="High-Speed path via Conn1 (up to 3ch) — DIR auto-locked B\u{2192}A"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            if let Some(r) = hat_la_set_route(1).await {
-                                                set_la_route_la.set(r);
-                                                // Immediately force DIR = B→A so RP2040 listens
-                                                let cur_oe = ls_oe.get_untracked();
-                                                if let Some(s) = hat_set_level_shift(cur_oe, false).await {
-                                                    set_ls_oe.set(s.oe);
-                                                    set_ls_dir.set(s.dir);
-                                                }
-                                                show_toast("Route \u{2192} High-Speed, DIR locked B\u{2192}A", "ok");
-                                            }
-                                        });
-                                    }
-                                >"HS"</button>
-                                <div style="width: 1px; height: 20px; background: var(--border, #1e293b); margin: 0 2px"></div>
-                                // VLOGIC (3V3_ADJ) voltage presets
-                                {[1800u16, 2500u16, 3300u16, 5000u16].into_iter().map(|mv| {
-                                    let label = format!("{:.1}V", mv as f32 / 1000.0);
-                                    let label_click = label.clone();
-                                    view! {
-                                        <button
-                                            style=move || format!("font-size: 9px; padding: 2px 6px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                                if hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.voltage_mv).unwrap_or(0) == mv {
-                                                    "background: #10b98130; color: #10b981; border: 1px solid #10b981"
-                                                } else {
-                                                    "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)"
-                                                })
-                                            title={format!("Set VLOGIC (3V3_ADJ) to {}", label)}
-                                            on:click={
-                                                let lc = label_click.clone();
-                                                move |_| {
-                                                    let lc2 = lc.clone();
-                                                    spawn_local(async move {
-                                                        if let Some(rails) = hat_set_rail_voltage(0, mv).await {
-                                                            set_hat_rails.set(rails);
-                                                            show_toast(&format!("VLOGIC \u{2192} {}", lc2), "ok");
-                                                        }
-                                                    });
-                                                }
-                                            }
-                                        >{label.clone()}</button>
-                                    }
-                                }).collect::<Vec<_>>()}
-                                // 3V3_ADJ rail enable toggle
-                                <button
-                                    style=move || {
-                                        let en = hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false);
-                                        format!("font-size: 9px; padding: 2px 6px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                            if en { "background: #10b98140; color: #10b981; border: 1px solid #10b98180" }
-                                            else  { "background: transparent; color: #ef444460; border: 1px solid #ef444430" })
-                                    }
-                                    title="Enable / disable 3V3_ADJ (VLOGIC) rail"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            let cur = hat_rails.get_untracked().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false);
-                                            if let Some(rails) = hat_set_rail_enable(0, !cur).await {
-                                                set_hat_rails.set(rails);
-                                                show_toast(if !cur { "VLOGIC enabled" } else { "VLOGIC disabled" }, "ok");
-                                            }
-                                        });
-                                    }
-                                >
-                                    {move || if hat_rails.get().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false) { "PWR\u{25CF}" } else { "PWR\u{25CB}" }}
-                                </button>
-                                <div style="width: 1px; height: 20px; background: var(--border, #1e293b); margin: 0 2px"></div>
-                                // Level-Shifter Output Enable
-                                <button
-                                    style=move || format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                                        if ls_oe.get() { "background: #f59e0b30; color: #f59e0b; border: 1px solid #f59e0b" }
-                                        else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    title="Level-shifter Output Enable — requires VLOGIC"
-                                    on:click=move |_| {
-                                        spawn_local(async move {
-                                            let next_oe = !ls_oe.get_untracked();
-                                            let cur_dir = ls_dir.get_untracked();
-                                            if let Some(s) = hat_set_level_shift(next_oe, cur_dir).await {
-                                                set_ls_oe.set(s.oe);
-                                                set_ls_dir.set(s.dir);
-                                                show_toast(if s.oe { "OE active" } else { "OE tri-state" }, "ok");
-                                            }
-                                        });
-                                    }
-                                >
-                                    {move || if ls_oe.get() { "OE\u{25CF}" } else { "OE\u{25CB}" }}
-                                </button>
-                                // DIR toggle — locked B→A on High-Speed route
-                                <button
-                                    disabled=move || la_route.get() == 1
-                                    style=move || {
-                                        let locked = la_route.get() == 1;
-                                        let dir    = ls_dir.get();
-                                        format!("font-size: 9px; padding: 2px 7px; border-radius: 10px; cursor: {}; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}{}",
-                                            if locked { "not-allowed" } else { "pointer" },
-                                            if dir { "background: #a855f730; color: #a855f7; border: 1px solid #a855f7" }
-                                            else   { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" },
-                                            if locked { "; opacity: 0.4" } else { "" })
-                                    }
-                                    title=move || {
-                                        if la_route.get() == 1 {
-                                            "DIR locked B\u{2192}A — High-Speed (RP2040 = input)".to_string()
-                                        } else if ls_dir.get() {
-                                            "DIR: A\u{2192}B (RP2040 drives) — click to switch B\u{2192}A".to_string()
-                                        } else {
-                                            "DIR: B\u{2192}A (RP2040 listens) — click to switch A\u{2192}B".to_string()
-                                        }
-                                    }
-                                    on:click=move |_| {
-                                        if la_route.get_untracked() == 1 { return; }
-                                        spawn_local(async move {
-                                            let cur_oe  = ls_oe.get_untracked();
-                                            let cur_dir = ls_dir.get_untracked();
-                                            if let Some(s) = hat_set_level_shift(cur_oe, !cur_dir).await {
-                                                set_ls_oe.set(s.oe);
-                                                set_ls_dir.set(s.dir);
-                                            }
-                                        });
-                                    }
-                                >
-                                    {move || if ls_dir.get() { "A\u{2192}B" } else { "B\u{2192}A" }}
-                                </button>
-                            </div>
-                        </div>
-                        <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-                        </div>
-                    }.into_any()
-                }}
-
-                // Decoders toggle button
-                <div style="display: flex; flex-direction: column; gap: 2px">
-                    <span style="font-size: 8px; color: var(--text-muted, #5a6d8a); text-transform: uppercase; letter-spacing: 0.5px">"Decoders"</span>
-                    <button
-                        style=move || format!("font-size: 9px; padding: 2px 10px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; transition: all 0.15s; {}",
-                            if decoder_panel_open.get() { "background: #a855f7; color: #fff; border: 1px solid #a855f7" }
-                            else { "background: transparent; color: #a855f780; border: 1px solid #a855f740" })
-                        on:click=move |_| set_decoder_panel_open.update(|v| *v = !*v)
-                        title="Configure protocol decoders (UART, I2C, SPI)"
-                    >{move || if decoder_panel_open.get() { "▲ Hide" } else { "▼ Show" }}</button>
-                </div>
-
-                <div style="width: 1px; height: 32px; background: var(--border, #1e293b); margin: 0 4px; align-self: flex-end"></div>
-
-                // Control buttons
-                <button style=move || format!("font-size: 10px; padding: 3px 12px; border-radius: 4px; cursor: pointer; {}",
-                    if streaming.get() { "background: #10b98140; color: #10b981; border: 1px solid #10b98180; animation: pulse 1s infinite" }
-                    else { "background: #10b98125; color: #10b981; border: 1px solid #10b98150" })
-                    on:click={
+        <div class="la-root">
+            // ============ TOP CONTROL BAR ============
+            <div class="la-bar" role="toolbar" aria-label="Logic analyzer controls">
+                <div class="la-group">
+                    <button type="button" class="btn btn-sm btn-primary la-arm"
+                        title="Arm the analyzer and start a capture"
+                        on:click={
                         let set_ci5 = set_capture_info;
                         move |_| {
                             let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
@@ -2078,110 +1893,247 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             });
                         }
                     }
-                >{move || if streaming.get() { "● Stream" } else { "Arm" }}</button>
-                <button style="font-size: 10px; padding: 3px 12px; background: #f59e0b25; color: #f59e0b; border: 1px solid #f59e0b50; border-radius: 4px; cursor: pointer"
-                    on:click=move |_| { spawn_local(async { la_invoke_force().await; show_toast("Triggered", "ok"); }); }
-                >"Force"</button>
-                <button style="font-size: 10px; padding: 3px 12px; background: #ef444425; color: #ef4444; border: 1px solid #ef444450; border-radius: 4px; cursor: pointer"
-                    on:click=move |_| {
-                        // Always reset streaming flag, even if the invoke rejects
-                        // (Bug 7) — guarantees the next Arm isn't gated by a stale bit.
-                        spawn_local(async move {
-                            let _ = la_stream_usb_stop().await;
-                            la_invoke_stop().await;
-                            set_streaming.set(false);
-                            show_toast("Stopped", "ok");
-                        });
-                    }
-                >"Stop"</button>
-
-                <div
-                    style=move || {
-                        let status = stream_runtime.get();
-                        let badge = stream_status_badge(&status);
-                        let color = match badge {
-                            "LIVE" => "#10b981",
-                            "DEGRADED" => "#f59e0b",
-                            "ERROR" => "#ef4444",
-                            "STOPPED" => "#60a5fa",
-                            _ => "#64748b",
-                        };
-                        format!(
-                            "display: flex; align-items: center; gap: 8px; min-width: 320px; max-width: 520px; padding: 3px 10px; border-radius: 4px; border: 1px solid {}; background: {}20; color: {}; font-size: 10px; font-family: 'JetBrains Mono', monospace",
-                            color, color, color
-                        )
-                    }
-                    title="Live vendor-bulk runtime status"
-                >
-                    <span style="font-weight: 700">{move || stream_status_badge(&stream_runtime.get()).to_string()}</span>
-                    <span>{move || summarize_la_stream_status(&stream_runtime.get())}</span>
-                </div>
-
-                // Read capture — reads data from RP2040 via UART chunks
-                <button style="font-size: 10px; padding: 3px 12px; background: #3b82f625; color: #3b82f6; border: 1px solid #3b82f650; border-radius: 4px; cursor: pointer"
-                    on:click={
-                        let set_ci4 = set_capture_info;
-                        move |_| {
-                            let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
-                            let r: u32 = rate.get_untracked().parse().unwrap_or(1000000);
-                            let d: u32 = depth.get_untracked().parse().unwrap_or(100000);
+                    >
+                        {move || if streaming.get() {
+                            view! { <span class="dot tone-green live"></span> }.into_any()
+                        } else {
+                            view! { <Icon name="play" size=13 /> }.into_any()
+                        }}
+                        {move || if streaming.get() { "Stream" } else { "Arm" }}
+                    </button>
+                    <button type="button" class="btn btn-sm"
+                        title="Force a trigger now"
+                        on:click=move |_| { spawn_local(async { la_invoke_force().await; show_toast("Triggered", "ok"); }); }
+                    ><Icon name="zap" size=13 />"Force"</button>
+                    <button type="button" class="btn btn-sm btn-tinted tone-red"
+                        title="Stop the capture or stream"
+                        on:click=move |_| {
+                            // Always reset streaming flag, even if the invoke rejects
+                            // (Bug 7) — guarantees the next Arm isn't gated by a stale bit.
                             spawn_local(async move {
-                                show_toast("Reading capture data via UART...", "ok");
-                                #[derive(serde::Serialize)]
-                                #[serde(rename_all = "camelCase")]
-                                struct Args { channels: u8, sample_rate_hz: u32, total_samples: u32 }
-                                let args = serde_wasm_bindgen::to_value(&Args {
-                                    channels: ch, sample_rate_hz: r, total_samples: d,
-                                }).unwrap();
-                                let result = try_invoke("la_read_uart_chunks", args).await;
-                                match result.and_then(|r| serde_wasm_bindgen::from_value::<LaCaptureInfo>(r).ok()) {
-                                    Some(info) => {
-                                        set_view_start.set(0);
-                                        set_view_end.set(info.total_samples);
-                                        set_ci4.set(Some(info));
-                                        show_toast("Capture data loaded!", "ok");
-                                    }
-                                    None => {
-                                        show_toast("Read failed", "err");
-                                    }
-                                }
+                                let _ = la_stream_usb_stop().await;
+                                la_invoke_stop().await;
+                                set_streaming.set(false);
+                                show_toast("Stopped", "ok");
                             });
                         }
-                    }
-                >"Read"</button>
+                    ><Icon name="square" size=13 />"Stop"</button>
+                </div>
 
-                // Clear button
-                <button style="font-size: 10px; padding: 3px 12px; background: #64748b15; color: #64748b; border: 1px solid #64748b40; border-radius: 4px; cursor: pointer"
-                    on:click=move |_| {
-                        // Stop any active streaming
-                        set_streaming.set(false);
-                        spawn_local(async move {
-                            let _ = la_stream_usb_stop().await;
-                        });
-                        set_capture_info.set(None);
-                        set_view_data.set(None);
-                        set_annotations.set(vec![]);
-                        set_sel_anchor.set(None);
-                        set_sel_start.set(None);
-                        set_sel_end.set(None);
-                        set_cursor_sample.set(None);
-                        set_view_start.set(0);
-                        set_view_end.set(0);
-                        // Clear backend store
-                        spawn_local(async {
-                            let _ = la_delete_range(0, u64::MAX).await;
-                        });
-                        show_toast("Capture cleared", "ok");
-                    }
-                >"Clear"</button>
+                <span class="la-divider"></span>
 
-                // Test data button — loads decodable protocol waveforms
-                // CH0: UART TX 9600 baud  → decoder: UART TX=CH0 Baud=9600
-                // CH1: SPI MOSI           → decoder: SPI MOSI=CH1 MISO=CH1 CLK=CH2 CS=CH3 Mode=M0
-                // CH2: SPI CLK
-                // CH3: SPI CS (active low)
-                <button style="font-size: 10px; padding: 3px 12px; background: #8b5cf625; color: #8b5cf6; border: 1px solid #8b5cf650; border-radius: 4px; cursor: pointer"
-                    on:click={
+                <div class="la-group">
+                    <label class="la-tb-field">
+                        <span>"Rate"</span>
+                        <select class="la-select" aria-label="Sample rate" title="Sample rate"
+                            on:change=move |e| set_rate.set(event_target_value(&e))
+                        >
+                            {[("100 kS/s", 100_000u32), ("500 kS/s", 500_000), ("1 MS/s", 1_000_000),
+                              ("2 MS/s", 2_000_000), ("5 MS/s", 5_000_000), ("10 MS/s", 10_000_000),
+                              ("25 MS/s", 25_000_000), ("50 MS/s", 50_000_000), ("125 MS/s", 125_000_000)]
+                                .into_iter().map(|(label, hz)| {
+                                    let v = hz.to_string();
+                                    let v2 = v.clone();
+                                    view! {
+                                        <option value=v selected=move || rate.get() == v2
+                                            disabled=move || rate_too_fast(hz)>{label}</option>
+                                    }
+                                }).collect::<Vec<_>>()}
+                        </select>
+                    </label>
+                    <label class="la-tb-field">
+                        <span>"Depth"</span>
+                        <select class="la-select" aria-label="Memory depth" title="Memory depth (samples)"
+                            on:change=move |e| set_depth.set(event_target_value(&e))
+                        >
+                            {[("10K", "10000"), ("50K", "50000"), ("100K", "100000"), ("500K", "500000")]
+                                .into_iter().map(|(label, val)| {
+                                    view! {
+                                        <option value=val selected=move || depth.get() == val>{label}</option>
+                                    }
+                                }).collect::<Vec<_>>()}
+                        </select>
+                    </label>
+                </div>
+
+                <span class="la-divider"></span>
+
+                <div class="la-group">
+                    <label class="la-tb-field">
+                        <span>"Trigger"</span>
+                        <select class="la-select" aria-label="Trigger type" title="Trigger condition"
+                            on:change=move |e| set_trig_type.set(event_target_value(&e))
+                        >
+                            {[("None", "0"), ("Rising edge", "1"), ("Falling edge", "2"), ("High level", "4"), ("Low level", "5")]
+                                .into_iter().map(|(label, val)| {
+                                    view! {
+                                        <option value=val selected=move || trig_type.get() == val>{label}</option>
+                                    }
+                                }).collect::<Vec<_>>()}
+                        </select>
+                    </label>
+                    <select class="la-select la-select-ch" aria-label="Trigger channel"
+                        title=move || if trig_type.get() == "0" { "Choose a trigger condition first" } else { "Trigger channel" }
+                        disabled=move || trig_type.get() == "0"
+                        on:change=move |e| set_trig_ch.set(event_target_value(&e))
+                    >
+                        {(0..4u8).map(|i| {
+                            let v = i.to_string();
+                            let v2 = v.clone();
+                            view! {
+                                <option value=v selected=move || trig_ch.get() == v2>{format!("CH{}", i)}</option>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </select>
+                </div>
+
+                <span class="la-divider"></span>
+
+                <div class="la-group">
+                    <div class="seg seg-sm" role="radiogroup" aria-label="Capture mode">
+                        <button type="button" role="radio"
+                            class:active=move || !stream_mode.get()
+                            aria-checked=move || if !stream_mode.get() { "true" } else { "false" }
+                            title="Capture a fixed memory depth then stop"
+                            on:click=move |_| set_stream_mode.set(false)
+                        >"Memory"</button>
+                        <button type="button" role="radio"
+                            class:active=move || stream_mode.get()
+                            aria-checked=move || if stream_mode.get() { "true" } else { "false" }
+                            title="Continuous live capture (limited sample rate)"
+                            on:click=move |_| {
+                                set_stream_mode.set(true);
+                                set_rle_enabled.set(true);
+                                show_toast("RLE enabled by default on Stream mode", "ok");
+                                // Limit rate to stream-safe values
+                                let r = rate.get_untracked();
+                                let r_hz: u32 = r.parse().unwrap_or(1000000);
+                                if r_hz > 2000000 { set_rate.set("1000000".to_string()); }
+                            }
+                        >"Stream"</button>
+                    </div>
+                    <button type="button" class="btn btn-sm"
+                        class:btn-tinted=move || rle_enabled.get()
+                        aria-pressed=move || if rle_enabled.get() { "true" } else { "false" }
+                        disabled=move || stream_mode.get()
+                        title=move || if stream_mode.get() { "RLE is forced in Stream mode" } else { "Run-Length Encoding — compresses captures, more depth for slow signals" }
+                        on:click=move |_| {
+                            if !stream_mode.get() {
+                                set_rle_enabled.update(|v| *v = !*v);
+                            }
+                        }
+                    >"RLE"</button>
+                </div>
+
+                <div class="la-group la-bar-end">
+                    <div class="la-group la-zoom" role="group" aria-label="Zoom">
+                        <button type="button" class="btn btn-sm btn-icon" aria-label="Zoom in" title="Zoom in"
+                            on:click=move |_| {
+                                let vs = view_start.get_untracked();
+                                let ve = view_end.get_untracked();
+                                let c = vs + (ve - vs) / 2;
+                                let ns = ((ve - vs) as f64 * 0.5) as u64;
+                                set_view_start.set(c.saturating_sub(ns / 2));
+                                set_view_end.set(c.saturating_sub(ns / 2) + ns.max(10));
+                            }
+                        ><Icon name="zoom-in" size=15 /></button>
+                        <button type="button" class="btn btn-sm btn-icon" aria-label="Zoom out" title="Zoom out"
+                            on:click=move |_| {
+                                let vs = view_start.get_untracked();
+                                let ve = view_end.get_untracked();
+                                let c = vs + (ve - vs) / 2;
+                                let ns = ((ve - vs) as f64 * 2.0) as u64;
+                                set_view_start.set(c.saturating_sub(ns / 2));
+                                set_view_end.set(c.saturating_sub(ns / 2) + ns);
+                            }
+                        ><Icon name="zoom-out" size=15 /></button>
+                        <button type="button" class="btn btn-sm" title="Fit the whole capture in view"
+                            on:click=move |_| {
+                                spawn_local(async move {
+                                    if let Some(info) = la_get_capture_info().await {
+                                        set_view_start.set(0);
+                                        set_view_end.set(info.total_samples);
+                                    }
+                                });
+                            }
+                        ><Icon name="maximize-2" size=13 />"Fit"</button>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-icon btn-plain la-insp-toggle"
+                        class:la-toggle-on=move || insp_open.get()
+                        aria-label="Toggle inspector" title="Toggle inspector"
+                        aria-pressed=move || if insp_open.get() { "true" } else { "false" }
+                        on:click=move |_| insp_open.update(|v| *v = !*v)
+                    ><Icon name="panel-right" size=16 /></button>
+                </div>
+            </div>
+
+            // ============ CHANNELS + WAVEFORM + INSPECTOR ============
+            <div class="la-main">
+                <div class="la-chcol" role="group" aria-label="Channels">
+                    {(0..4usize).map(|i| {
+                        let name_sig = ch_names[i];
+                        view! {
+                            <div class="la-ch"
+                                class:la-ch-off=move || !ch_on(i)
+                                style=move || format!("{};--ch-color:var({})", ch_row_style(i), CH_VARS[i])>
+                                <div class="la-ch-in">
+                                    <input type="checkbox"
+                                        aria-label=format!("Enable CH{}", i)
+                                        title=move || {
+                                            if ch_on(i) { format!("CH{} enabled — click to disable it and the channels after it", i) }
+                                            else { format!("CH{} disabled — click to enable CH0–CH{}", i, i) }
+                                        }
+                                        prop:checked=move || ch_on(i)
+                                        on:change=move |_| {
+                                            let i = i as u8;
+                                            let ch_count: u8 = channels.get_untracked().parse().unwrap_or(4);
+                                            // Click on a disabled channel → enable up to that channel
+                                            // Click on the last enabled → reduce count
+                                            let new_count = if i < ch_count {
+                                                // Clicking an enabled channel: disable from this one onwards (min 1)
+                                                i.max(1)
+                                            } else {
+                                                // Clicking a disabled channel: enable up to and including it
+                                                i + 1
+                                            };
+                                            set_channels.set(new_count.to_string());
+                                        }
+                                    />
+                                    <span class="la-ch-sw" aria-hidden="true"></span>
+                                    <input type="text" class="la-ch-name"
+                                        aria-label=format!("Name of CH{}", i)
+                                        maxlength="16"
+                                        prop:value=move || name_sig.get()
+                                        on:input=move |e| name_sig.set(event_target_value(&e))
+                                    />
+                                    <span class="la-ch-lvl num"
+                                        class:hi=move || ch_level(i) == Some(1)
+                                        title="Level at cursor">
+                                        {move || ch_level(i).map(|v| v.to_string()).unwrap_or_default()}
+                                    </span>
+                                </div>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+                    <div class="la-ch-foot la-ch-foot-ruler">"Time"</div>
+                    <div class="la-ch-foot la-ch-foot-map">"Overview"</div>
+                </div>
+
+                <div class="la-plot">
+                    <canvas node_ref=canvas_ref class="la-canvas"
+                        class:la-grabbing=move || dragging.get()
+                        aria-label="Logic analyzer waveform"
+                        on:wheel=on_wheel
+                        on:mousedown=on_mousedown
+                        on:mousemove=on_mousemove
+                        on:mouseup=on_mouseup
+                        on:mouseleave=on_mouseleave
+                    />
+                    <div class="la-empty" class:la-hidden=move || !no_data()>
+                        <EmptyState icon="binary" title="No capture yet"
+                            message="Pick a rate and trigger, then press Arm. Or load a generated UART and SPI waveform to try the decoders.">
+                            <button type="button" class="btn btn-sm btn-tinted"
+                                on:click={
                         let set_ci = set_capture_info;
                         move |_| {
                             spawn_local(async move {
@@ -2309,70 +2261,27 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             });
                         }
                     }
-                >"Test Data"</button>
-
-                // Zoom buttons
-                <div style="margin-left: auto; display: flex; gap: 4px; align-items: center">
-                    <button style="font-size: 10px; padding: 2px 8px; background: #3b82f615; color: #3b82f6; border: 1px solid #3b82f640; border-radius: 4px; cursor: pointer"
-                        on:click=move |_| {
-                            let vs = view_start.get_untracked();
-                            let ve = view_end.get_untracked();
-                            let c = vs + (ve - vs) / 2;
-                            let ns = ((ve - vs) as f64 * 0.5) as u64;
-                            set_view_start.set(c.saturating_sub(ns / 2));
-                            set_view_end.set(c.saturating_sub(ns / 2) + ns.max(10));
-                        }
-                    >"Zoom +"</button>
-                    <button style="font-size: 10px; padding: 2px 8px; background: #3b82f615; color: #3b82f6; border: 1px solid #3b82f640; border-radius: 4px; cursor: pointer"
-                        on:click=move |_| {
-                            let vs = view_start.get_untracked();
-                            let ve = view_end.get_untracked();
-                            let c = vs + (ve - vs) / 2;
-                            let ns = ((ve - vs) as f64 * 2.0) as u64;
-                            set_view_start.set(c.saturating_sub(ns / 2));
-                            set_view_end.set(c.saturating_sub(ns / 2) + ns);
-                        }
-                    >"Zoom -"</button>
-                    <button style="font-size: 10px; padding: 2px 8px; background: #3b82f615; color: #3b82f6; border: 1px solid #3b82f640; border-radius: 4px; cursor: pointer"
-                        on:click=move |_| {
-                            spawn_local(async move {
-                                if let Some(info) = la_get_capture_info().await {
-                                    set_view_start.set(0);
-                                    set_view_end.set(info.total_samples);
-                                }
-                            });
-                        }
-                    >"Fit"</button>
+                            ><Icon name="wand-sparkles" size=13 />"Load sample waveform"</button>
+                        </EmptyState>
+                    </div>
                 </div>
-            </div>
 
-            // Decoder panel (toggleable)
-            {move || if decoder_panel_open.get() { view! {
-                <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border, #1e293b); background: #070d1a; flex-shrink: 0">
-                    // Header row
-                    <div style="display: flex; align-items: center; gap: 8px">
-                        <span style="font-size: 10px; font-weight: 700; color: #a855f7; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px">"Protocol Decoders"</span>
-                        <div style="flex: 1"></div>
-                        // Format selector
-                        {[("Hex","hex"), ("Dec","dec"), ("ASCII","ascii"), ("Bin","bin")].iter().map(|(lbl, val)| {
-                            let v1 = val.to_string();
-                            let v2 = val.to_string();
-                            let l = lbl.to_string();
-                            view! {
-                                <button
-                                    style=move || {
-                                        let active = ann_fmt.get() == v1;
-                                        format!("font-size: 8px; padding: 1px 5px; border-radius: 3px; cursor: pointer; font-family: 'JetBrains Mono', monospace; {}",
-                                            if active { "background: #a855f730; color: #a855f7; border: 1px solid #a855f7" }
-                                            else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                    }
-                                    on:click={let v = v2.clone(); move |_| set_ann_fmt.set(v.clone())}
-                                >{l}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-                        <button
-                            style="font-size: 9px; padding: 2px 10px; background: #a855f720; color: #a855f7; border: 1px solid #a855f750; border-radius: 3px; cursor: pointer; font-family: 'JetBrains Mono', monospace"
-                            on:click={
+                <aside class="inspector la-inspector" class:la-hidden=move || !insp_open.get() aria-label="Logic analyzer inspector">
+                    <div class="inspector-header">
+                        <span>"Inspector"</span>
+                        <button type="button" class="btn btn-sm btn-icon btn-plain"
+                            aria-label="Close inspector" title="Close inspector"
+                            on:click=move |_| insp_open.set(false)
+                        ><Icon name="x" size=14 /></button>
+                    </div>
+
+                    // ---- Decoders ----
+                    <section class="inspector-section" aria-label="Protocol decoders">
+                        <div class="la-sec-head">
+                            <h4>"Protocol decoders"</h4>
+                            <button type="button" class="btn btn-sm btn-tinted"
+                                title="Decode the full capture with every decoder below"
+                                on:click={
                                 let set_ann = set_annotations;
                                 move |_| {
                                     let decs = decoders.get_untracked();
@@ -2380,7 +2289,7 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     let dec_start: u64 = 0;
                                     let dec_end: u64 = capture_info.get_untracked()
                                         .map(|i| i.total_samples)
-                                        .unwrap_or(u64::MAX);
+                                        .unwrap_or(JS_MAX_SAFE);
                                     spawn_local(async move {
                                         let mut all_anns: Vec<serde_json::Value> = Vec::new();
                                         for (_, dtype, _, ch_a, ch_b, ch_c, ch_d, extra) in &decs {
@@ -2407,211 +2316,126 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     });
                                 }
                             }
-                        >"▶ Run All"</button>
-                    </div>
+                            ><Icon name="play" size=12 />"Run All"</button>
+                        </div>
 
-                    // Active decoders list
-                    {move || {
-                        let decs = decoders.get();
-                        if decs.is_empty() {
-                            view! { <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"No decoders — add one below"</span> }.into_any()
-                        } else {
-                            view! {
-                                <div style="display: flex; flex-direction: column; gap: 3px">
-                                    {decs.iter().map(|(id, _, label, _, _, _, _, _)| {
-                                        let id2 = *id;
+                        {move || {
+                            let decs = decoders.get();
+                            if decs.is_empty() {
+                                view! { <p class="la-note">"No decoders yet. Add one below."</p> }.into_any()
+                            } else {
+                                view! {
+                                    <ul class="la-decs">
+                                        {decs.iter().map(|(id, _, label, _, _, _, _, _)| {
+                                            let id2 = *id;
+                                            view! {
+                                                <li class="la-dec">
+                                                    <span class="la-dec-label">{label.clone()}</span>
+                                                    <button type="button" class="btn btn-sm btn-icon btn-plain"
+                                                        aria-label="Remove decoder" title="Remove decoder"
+                                                        on:click=move |_| {
+                                                            set_decoders.update(|v| v.retain(|(id, _, _, _, _, _, _, _)| *id != id2));
+                                                        }
+                                                    ><Icon name="x" size=13 /></button>
+                                                </li>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </ul>
+                                }.into_any()
+                            }
+                        }}
+
+                        <div class="la-add">
+                            <div class="la-field">
+                                <span class="la-field-label">"Add"</span>
+                                <div class="seg seg-sm" role="radiogroup" aria-label="Decoder type">
+                                    {["uart", "i2c", "spi"].iter().map(|t| {
+                                        let t_str = t.to_string();
+                                        let t_str2 = t.to_string();
+                                        let ts = t.to_string();
                                         view! {
-                                            <div style="display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: #0c1222; border: 1px solid #1e293b; border-radius: 4px">
-                                                <span style="font-size: 9px; color: #c4d4f0; font-family: 'JetBrains Mono', monospace">{label.clone()}</span>
-                                                <div style="flex: 1"></div>
-                                                <button
-                                                    style="font-size: 9px; padding: 0px 6px; background: #ef444420; color: #ef4444; border: 1px solid #ef444440; border-radius: 2px; cursor: pointer"
-                                                    on:click=move |_| {
-                                                        set_decoders.update(|v| v.retain(|(id, _, _, _, _, _, _, _)| *id != id2));
-                                                    }
-                                                >"✕"</button>
-                                            </div>
+                                            <button type="button" role="radio"
+                                                class:active=move || add_dec_type.get() == t_str
+                                                aria-checked=move || if add_dec_type.get() == t_str2 { "true" } else { "false" }
+                                                on:click=move |_| set_add_dec_type.set(ts.clone())
+                                            >{t.to_uppercase()}</button>
                                         }
                                     }).collect::<Vec<_>>()}
                                 </div>
-                            }.into_any()
-                        }
-                    }}
+                            </div>
 
-                    // Add decoder form
-                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
-                        // Type selector
-                        <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"Add:"</span>
-                        {["uart", "i2c", "spi"].iter().map(|t| {
-                            let t_str = t.to_string();
-                            view! {
-                                <button
-                                    style=move || format!("font-size: 9px; padding: 1px 8px; border-radius: 10px; cursor: pointer; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; {}",
-                                        if add_dec_type.get() == t_str { "background: #a855f7; color: #fff; border: 1px solid #a855f7" }
-                                        else { "background: transparent; color: #a855f780; border: 1px solid #a855f740" })
-                                    on:click={ let ts = t.to_string(); move |_| set_add_dec_type.set(ts.clone()) }
-                                >{t.to_uppercase()}</button>
-                            }
-                        }).collect::<Vec<_>>()}
-
-                        // Channel selectors (adapt to type)
-                        {move || {
-                            let t = add_dec_type.get();
-                            if t == "uart" {
-                                // UART: TX selector + optional RX with Off button
-                                view! {
-                                    <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"TX"</span>
-                                    <div style="display: flex; gap: 2px">
-                                        {(0..4u8).map(|i| view! {
-                                            <button
-                                                style=move || {
-                                                    let active = add_dec_ch_a.get() == i;
-                                                    let col = CH_COLORS[i as usize];
-                                                    if active { format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: {}30; color: {}; border: 1px solid {}", col, col, col) }
-                                                    else { "font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() }
-                                                }
-                                                on:click=move |_| set_add_dec_ch_a.set(i)
-                                            >{i.to_string()}</button>
-                                        }).collect::<Vec<_>>()}
-                                    </div>
-                                    <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"RX"</span>
-                                    <div style="display: flex; gap: 2px">
-                                        <button
-                                            style=move || format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; {}",
-                                                if add_dec_uart_rx_off.get() { "background: #64748b40; color: #94a3b8; border: 1px solid #64748b" }
-                                                else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                            on:click=move |_| set_add_dec_uart_rx_off.set(true)
-                                        >"–"</button>
-                                        {(0..4u8).map(|i| view! {
-                                            <button
-                                                style=move || {
-                                                    let active = !add_dec_uart_rx_off.get() && add_dec_ch_b.get() == i;
-                                                    let col = CH_COLORS[i as usize];
-                                                    if active { format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: {}30; color: {}; border: 1px solid {}", col, col, col) }
-                                                    else { "font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() }
-                                                }
-                                                on:click=move |_| { set_add_dec_uart_rx_off.set(false); set_add_dec_ch_b.set(i); }
-                                            >{i.to_string()}</button>
-                                        }).collect::<Vec<_>>()}
-                                    </div>
-                                }.into_any()
-                            } else if t == "spi" {
-                                // SPI: MOSI/MISO/CLK with generic buttons; CS with optional "–"
-                                let ch_labels: Vec<(&str, ReadSignal<u8>, WriteSignal<u8>)> = vec![
-                                    ("MOSI", add_dec_ch_a, set_add_dec_ch_a),
-                                    ("MISO", add_dec_ch_b, set_add_dec_ch_b),
-                                    ("CLK",  add_dec_ch_c, set_add_dec_ch_c),
-                                ];
-                                view! {
-                                    {ch_labels.into_iter().map(|(lbl, sig, set_sig)| view! {
-                                        <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">{lbl}</span>
-                                        <div style="display: flex; gap: 2px">
-                                            {(0..4u8).map(|i| view! {
-                                                <button
-                                                    style=move || {
-                                                        let active = sig.get() == i;
-                                                        let col = CH_COLORS[i as usize];
-                                                        if active { format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: {}30; color: {}; border: 1px solid {}", col, col, col) }
-                                                        else { "font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() }
-                                                    }
-                                                    on:click=move |_| set_sig.set(i)
-                                                >{i.to_string()}</button>
-                                            }).collect::<Vec<_>>()}
-                                        </div>
-                                    }).collect::<Vec<_>>()}
-                                    // CS row with "–" (no CS) option
-                                    <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"CS"</span>
-                                    <div style="display: flex; gap: 2px">
-                                        <button
-                                            style=move || {
-                                                let active = add_dec_spi_cs_off.get();
-                                                format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; {}",
-                                                    if active { "background: #64748b30; color: #94a3b8; border: 1px solid #64748b" }
-                                                    else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                            }
-                                            on:click=move |_| set_add_dec_spi_cs_off.set(true)
-                                        >"–"</button>
-                                        {(0..4u8).map(|i| view! {
-                                            <button
-                                                style=move || {
-                                                    let active = !add_dec_spi_cs_off.get() && add_dec_ch_d.get() == i;
-                                                    let col = CH_COLORS[i as usize];
-                                                    if active { format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: {}30; color: {}; border: 1px solid {}", col, col, col) }
-                                                    else { "font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() }
-                                                }
-                                                on:click=move |_| { set_add_dec_spi_cs_off.set(false); set_add_dec_ch_d.set(i); }
-                                            >{i.to_string()}</button>
-                                        }).collect::<Vec<_>>()}
-                                    </div>
-                                }.into_any()
-                            } else {
-                                let ch_labels: Vec<(&str, ReadSignal<u8>, WriteSignal<u8>)> = match t.as_str() {
-                                    "i2c" => vec![("SDA", add_dec_ch_a, set_add_dec_ch_a), ("SCL", add_dec_ch_b, set_add_dec_ch_b)],
-                                    _     => vec![],
-                                };
-                                ch_labels.into_iter().map(|(lbl, sig, set_sig)| {
+                            {move || {
+                                let t = add_dec_type.get();
+                                if t == "uart" {
                                     view! {
-                                        <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">{lbl}</span>
-                                        <div style="display: flex; gap: 2px">
-                                            {(0..4u8).map(|i| view! {
-                                                <button
-                                                    style=move || {
-                                                        let active = sig.get() == i;
-                                                        let col = CH_COLORS[i as usize];
-                                                        if active { format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: {}30; color: {}; border: 1px solid {}", col, col, col) }
-                                                        else { "font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)".into() }
-                                                    }
-                                                    on:click=move |_| set_sig.set(i)
-                                                >{i.to_string()}</button>
-                                            }).collect::<Vec<_>>()}
+                                        {ch_picker("TX",
+                                            move |i| add_dec_ch_a.get() == i,
+                                            move |i| set_add_dec_ch_a.set(i))}
+                                        {ch_picker_off("RX",
+                                            move |i| !add_dec_uart_rx_off.get() && add_dec_ch_b.get() == i,
+                                            move |i| { set_add_dec_uart_rx_off.set(false); set_add_dec_ch_b.set(i); },
+                                            move || add_dec_uart_rx_off.get(),
+                                            move || set_add_dec_uart_rx_off.set(true))}
+                                        <div class="la-field">
+                                            <span class="la-field-label">"Baud"</span>
+                                            <input type="text" class="la-baud num" inputmode="numeric"
+                                                aria-label="UART baud rate"
+                                                aria-invalid=move || if baud_ok() { "false" } else { "true" }
+                                                prop:value=move || add_dec_baud.get()
+                                                on:change=move |e| {
+                                                    let input: web_sys::HtmlInputElement = e.target().unwrap().unchecked_into();
+                                                    set_add_dec_baud.set(input.value());
+                                                }
+                                            />
                                         </div>
-                                    }
-                                }).collect::<Vec<_>>().into_any()
-                            }
-                        }}
-
-                        // UART: baud rate input
-                        {move || {
-                            if add_dec_type.get() == "uart" { view! {
-                                <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"Baud"</span>
-                                <input
-                                    type="text"
-                                    prop:value=move || add_dec_baud.get()
-                                    style="background: #0c1222; border: 1px solid #1e293b; color: #e2e8f0; padding: 1px 6px; border-radius: 3px; width: 72px; font-family: 'JetBrains Mono', monospace; font-size: 9px"
-                                    on:change=move |e| {
-                                        let input: web_sys::HtmlInputElement = e.target().unwrap().unchecked_into();
-                                        set_add_dec_baud.set(input.value());
-                                    }
-                                />
-                            }.into_any() } else { view! { <span></span> }.into_any() }
-                        }}
-
-                        // SPI: mode selector
-                        {move || {
-                            if add_dec_type.get() == "spi" { view! {
-                                <span style="font-size: 9px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace">"Mode"</span>
-                                {[("0","CPOL0/CPHA0"), ("1","CPOL0/CPHA1"), ("2","CPOL1/CPHA0"), ("3","CPOL1/CPHA1")].iter().map(|(m, tip)| {
-                                    let mv: u8 = m.parse().unwrap();
+                                    }.into_any()
+                                } else if t == "spi" {
                                     view! {
-                                        <button
-                                            style=move || {
-                                                let active = add_dec_spi_mode.get() == mv;
-                                                format!("font-size: 9px; padding: 1px 5px; border-radius: 3px; cursor: pointer; {}",
-                                                    if active { "background: #06b6d430; color: #06b6d4; border: 1px solid #06b6d4" }
-                                                    else { "background: transparent; color: var(--text-dim); border: 1px solid var(--border, #333)" })
-                                            }
-                                            title=tip.to_string()
-                                            on:click=move |_| set_add_dec_spi_mode.set(mv)
-                                        >{format!("M{}", mv)}</button>
-                                    }
-                                }).collect::<Vec<_>>()}
-                            }.into_any() } else { view! { <span></span> }.into_any() }
-                        }}
+                                        {ch_picker("MOSI",
+                                            move |i| add_dec_ch_a.get() == i,
+                                            move |i| set_add_dec_ch_a.set(i))}
+                                        {ch_picker("MISO",
+                                            move |i| add_dec_ch_b.get() == i,
+                                            move |i| set_add_dec_ch_b.set(i))}
+                                        {ch_picker("CLK",
+                                            move |i| add_dec_ch_c.get() == i,
+                                            move |i| set_add_dec_ch_c.set(i))}
+                                        {ch_picker_off("CS",
+                                            move |i| !add_dec_spi_cs_off.get() && add_dec_ch_d.get() == i,
+                                            move |i| { set_add_dec_spi_cs_off.set(false); set_add_dec_ch_d.set(i); },
+                                            move || add_dec_spi_cs_off.get(),
+                                            move || set_add_dec_spi_cs_off.set(true))}
+                                        <div class="la-field">
+                                            <span class="la-field-label">"Mode"</span>
+                                            <div class="seg seg-sm" role="radiogroup" aria-label="SPI mode">
+                                                {[("0", "CPOL0/CPHA0"), ("1", "CPOL0/CPHA1"), ("2", "CPOL1/CPHA0"), ("3", "CPOL1/CPHA1")].iter().map(|(m, tip)| {
+                                                    let mv: u8 = m.parse().unwrap();
+                                                    view! {
+                                                        <button type="button" role="radio"
+                                                            class:active=move || add_dec_spi_mode.get() == mv
+                                                            aria-checked=move || if add_dec_spi_mode.get() == mv { "true" } else { "false" }
+                                                            title=tip.to_string()
+                                                            on:click=move |_| set_add_dec_spi_mode.set(mv)
+                                                        >{format!("M{}", mv)}</button>
+                                                    }
+                                                }).collect::<Vec<_>>()}
+                                            </div>
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        {ch_picker("SDA",
+                                            move |i| add_dec_ch_a.get() == i,
+                                            move |i| set_add_dec_ch_a.set(i))}
+                                        {ch_picker("SCL",
+                                            move |i| add_dec_ch_b.get() == i,
+                                            move |i| set_add_dec_ch_b.set(i))}
+                                    }.into_any()
+                                }
+                            }}
 
-                        // Add button
-                        <button
-                            style="font-size: 9px; padding: 2px 10px; background: #10b98120; color: #10b981; border: 1px solid #10b98150; border-radius: 3px; cursor: pointer; font-family: 'JetBrains Mono', monospace"
-                            on:click=move |_| {
+                            <button type="button" class="btn btn-sm btn-primary la-add-btn"
+                                on:click=move |_| {
                                 let dtype = add_dec_type.get_untracked();
                                 let ch_a = add_dec_ch_a.get_untracked();
                                 let ch_b = add_dec_ch_b.get_untracked();
@@ -2640,111 +2464,274 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 let effective_ch_d = if dtype == "spi" && cs_off { 0xFF } else { ch_d };
                                 set_decoders.update(|v| v.push((id, dtype, label, ch_a, ch_b, ch_c, effective_ch_d, extra)));
                             }
-                        >"+ Add"</button>
-                    </div>
-                </div>
-            }.into_any() } else { view! { <div></div> }.into_any() }}
+                            ><Icon name="plus" size=13 />"Add decoder"</button>
+                        </div>
 
-            // Canvas waveform area
-            <canvas
-                node_ref=canvas_ref
-                style=move || format!("flex: 1; width: 100%; min-height: 0; cursor: {}; border-radius: 4px",
-                    if dragging.get() { "grabbing" } else { "crosshair" })
-                on:wheel=on_wheel
-                on:mousedown=on_mousedown
-                on:mousemove=on_mousemove
-                on:mouseup=on_mouseup
-                on:mouseleave=on_mouseleave
-            />
-
-            // Status bar with cursor readout + export buttons
-            {move || {
-                let info = capture_info.get();
-                let cursor = cursor_sample.get();
-                let vd = view_data.get();
-                view! {
-                    <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; border-top: 1px solid var(--border, #1e293b); flex-shrink: 0">
-                        // Capture info
-                        {if let Some(ref i) = info {
-                            view! {
-                                <span>{format!("{}ch @ {} | {} samples | {}", i.channels, format_time(1.0 / i.sample_rate_hz as f64), i.total_samples, format_time(i.duration_sec))}</span>
-                            }.into_any()
-                        } else {
-                            view! { <span>"No capture"</span> }.into_any()
-                        }}
-                        <span style="color: var(--text-muted)">"|"</span>
-
-                        // Cursor readout with per-channel values
-                        {if let Some(cs) = cursor {
-                            let sr = info.as_ref().map(|i| i.sample_rate_hz as f64).unwrap_or(1.0);
-                            let t = if sr > 0.0 { cs as f64 / sr } else { 0.0 };
-                            // Get channel values at cursor from view data
-                            let ch_vals: String = if let Some(ref d) = vd {
-                                (0..d.channels).map(|ch| {
-                                    // Find value at cursor sample from transitions
-                                    let trans = &d.channel_transitions[ch as usize];
-                                    let mut val = 0u8;
-                                    for &(s, v) in trans.iter() {
-                                        if s <= cs { val = v; } else { break; }
+                        <div class="la-field">
+                            <span class="la-field-label">"Format"</span>
+                            <div class="seg seg-sm" role="radiogroup" aria-label="Annotation format">
+                                {[("Hex", "hex"), ("Dec", "dec"), ("ASCII", "ascii"), ("Bin", "bin")].iter().map(|(lbl, val)| {
+                                    let v1 = val.to_string();
+                                    let v2 = val.to_string();
+                                    let v3 = val.to_string();
+                                    let l = lbl.to_string();
+                                    view! {
+                                        <button type="button" role="radio"
+                                            class:active=move || ann_fmt.get() == v1
+                                            aria-checked=move || if ann_fmt.get() == v2 { "true" } else { "false" }
+                                            on:click=move |_| set_ann_fmt.set(v3.clone())
+                                        >{l}</button>
                                     }
-                                    format!(" CH{}:{}", ch, val)
-                                }).collect()
-                            } else { String::new() };
-                            view! {
-                                <span style="color: #ef4444">{format!("Cursor: {}{}", format_time(t), ch_vals)}</span>
-                            }.into_any()
-                        } else {
-                            view! { <span style="color: var(--text-muted)">"Click waveform to place cursor"</span> }.into_any()
-                        }}
+                                }).collect::<Vec<_>>()}
+                            </div>
+                        </div>
+                    </section>
 
-                        // Spacer
-                        <div style="flex: 1"></div>
+                    // ---- Measurements ----
+                    <section class="inspector-section" aria-label="Measurements">
+                        <h4>"Measurements"</h4>
+                        <dl class="kv la-kv">
+                            <dt>"Capture"</dt>
+                            <dd>{move || capture_info.get().map(|i| format!("{} ch · {}", i.channels, format_time(1.0 / i.sample_rate_hz.max(1) as f64))).unwrap_or_else(|| "—".to_string())}</dd>
+                            <dt>"Samples"</dt>
+                            <dd>{move || capture_info.get().map(|i| format!("{}", i.total_samples)).unwrap_or_else(|| "—".to_string())}</dd>
+                            <dt>"Duration"</dt>
+                            <dd>{move || capture_info.get().map(|i| format_time(i.duration_sec)).unwrap_or_else(|| "—".to_string())}</dd>
+                            <dt>"Cursor"</dt>
+                            <dd>{move || match (cursor_sample.get(), capture_info.get()) {
+                                (Some(cs), Some(i)) if i.sample_rate_hz > 0 => format_time(cs as f64 / i.sample_rate_hz as f64),
+                                _ => "—".to_string(),
+                            }}</dd>
+                            <dt>"Selection"</dt>
+                            <dd>{move || match (sel_start.get(), sel_end.get(), capture_info.get()) {
+                                (Some(s), Some(e), Some(i)) if i.sample_rate_hz > 0 => {
+                                    format_time((e - s) as f64 / i.sample_rate_hz as f64)
+                                }
+                                _ => "—".to_string(),
+                            }}</dd>
+                            <dt>"Selected"</dt>
+                            <dd>{move || match (sel_start.get(), sel_end.get()) {
+                                (Some(s), Some(e)) => format!("{} samples", e - s + 1),
+                                _ => "—".to_string(),
+                            }}</dd>
+                        </dl>
+                        <p class="la-note">
+                            "Hover a signal for period, frequency and duty. Click to place the cursor. "
+                            <kbd>"Shift"</kbd>"+click selects a range and copies its decoded data. "
+                            <kbd>"Backspace"</kbd>" deletes the selection."
+                        </p>
+                    </section>
 
-                        // Export buttons
-                        <button style="font-size: 9px; padding: 1px 8px; background: #06b6d415; color: #06b6d4; border: 1px solid #06b6d440; border-radius: 3px; cursor: pointer"
-                            on:click=move |_| {
-                                spawn_local(async {
-                                    #[derive(serde::Serialize)]
-                                    struct Filter { name: String, extensions: Vec<String> }
-                                    #[derive(serde::Serialize)]
-                                    struct Args { title: String, filters: Vec<Filter> }
-                                    let args = serde_wasm_bindgen::to_value(&Args {
-                                        title: "Export VCD".into(),
-                                        filters: vec![Filter { name: "VCD files".into(), extensions: vec!["vcd".into()] }],
-                                    }).unwrap();
-                                    let result = try_invoke("pick_save_file", args).await;
-                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
-                                        if !path.is_empty() {
-                                            la_export_vcd(&path).await;
-                                            show_toast("Exported VCD", "ok");
-                                        }
-                                    }
-                                });
+                    // ---- Annotations ----
+                    <section class="inspector-section" aria-label="Annotations">
+                        <div class="la-sec-head">
+                            <h4>"Annotations"</h4>
+                            <span class="badge num">{move || annotations.with(|a| a.len())}</span>
+                        </div>
+                        {move || {
+                            let anns = annotations.get();
+                            if anns.is_empty() {
+                                return view! { <p class="la-note">"Run a decoder to list decoded frames here."</p> }.into_any();
                             }
-                        >"Export VCD"</button>
-                        <button style="font-size: 9px; padding: 1px 8px; background: #06b6d415; color: #06b6d4; border: 1px solid #06b6d440; border-radius: 3px; cursor: pointer"
-                            on:click=move |_| {
-                                spawn_local(async {
-                                    #[derive(serde::Serialize)]
-                                    struct Filter { name: String, extensions: Vec<String> }
-                                    #[derive(serde::Serialize)]
-                                    struct Args { title: String, filters: Vec<Filter> }
-                                    let args = serde_wasm_bindgen::to_value(&Args {
-                                        title: "Export JSON".into(),
-                                        filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
-                                    }).unwrap();
-                                    let result = try_invoke("pick_save_file", args).await;
-                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
-                                        if !path.is_empty() {
-                                            la_export_json(&path).await;
-                                            show_toast("Exported JSON", "ok");
-                                        }
+                            let fmt = ann_fmt.get();
+                            let sr = capture_info.with(|i| i.as_ref().map(|i| i.sample_rate_hz as f64).unwrap_or(0.0));
+                            let total = anns.len();
+                            let rows = anns.iter().take(300).map(|ann| {
+                                let ss = ann.get("startSample").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let raw = ann.get("text").and_then(|v| v.as_str()).unwrap_or("?");
+                                let at = ann.get("annType").and_then(|v| v.as_str()).unwrap_or("data").to_string();
+                                let ch = ann.get("channel").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let text = reformat_ann(raw, &fmt, &at);
+                                let t = if sr > 0.0 { format_time(ss as f64 / sr) } else { format!("{}", ss) };
+                                let cls = format!("la-ann-row la-ann-{}", at);
+                                view! {
+                                    <button type="button" class=cls title="Place the cursor at this frame"
+                                        on:click=move |_| set_cursor_sample.set(Some(ss))>
+                                        <span class="la-ann-time num">{t}</span>
+                                        <span class="la-ann-ch num">{format!("CH{}", ch)}</span>
+                                        <span class="la-ann-text num">{text}</span>
+                                    </button>
+                                }
+                            }).collect::<Vec<_>>();
+                            view! {
+                                <div class="la-anns" role="list">
+                                    {rows}
+                                    {(total > 300).then(|| view! { <p class="la-note">{format!("+{} more not listed", total - 300)}</p> })}
+                                </div>
+                            }.into_any()
+                        }}
+                    </section>
+
+                    // ---- Capture data / files ----
+                    <section class="inspector-section" aria-label="Capture data">
+                        <h4>"Capture data"</h4>
+                        <div class="la-btn-grid">
+                            <button type="button" class="btn btn-sm"
+                                title="Read the finished capture back from the device over UART"
+                                on:click={
+                        let set_ci4 = set_capture_info;
+                        move |_| {
+                            let ch: u8 = channels.get_untracked().parse().unwrap_or(4);
+                            let r: u32 = rate.get_untracked().parse().unwrap_or(1000000);
+                            let d: u32 = depth.get_untracked().parse().unwrap_or(100000);
+                            spawn_local(async move {
+                                show_toast("Reading capture data via UART...", "ok");
+                                #[derive(serde::Serialize)]
+                                #[serde(rename_all = "camelCase")]
+                                struct Args { channels: u8, sample_rate_hz: u32, total_samples: u32 }
+                                let args = serde_wasm_bindgen::to_value(&Args {
+                                    channels: ch, sample_rate_hz: r, total_samples: d,
+                                }).unwrap();
+                                let result = try_invoke("la_read_uart_chunks", args).await;
+                                match result.and_then(|r| serde_wasm_bindgen::from_value::<LaCaptureInfo>(r).ok()) {
+                                    Some(info) => {
+                                        set_view_start.set(0);
+                                        set_view_end.set(info.total_samples);
+                                        set_ci4.set(Some(info));
+                                        show_toast("Capture data loaded!", "ok");
                                     }
-                                });
-                            }
-                        >"Export JSON"</button>
-                        <button style="font-size: 9px; padding: 1px 8px; background: #a855f715; color: #a855f7; border: 1px solid #a855f740; border-radius: 3px; cursor: pointer"
-                            on:click={
+                                    None => {
+                                        show_toast("Read failed", "err");
+                                    }
+                                }
+                            });
+                        }
+                    }
+                            ><Icon name="download" size=13 />"Read"</button>
+                            <button type="button" class="btn btn-sm"
+                                title="Load a generated UART + SPI waveform"
+                                on:click={
+                        let set_ci = set_capture_info;
+                        move |_| {
+                            spawn_local(async move {
+                                let sample_rate: u32 = 1_000_000; // 1MHz
+                                let num_samples: u32 = 50_000;
+                                let channels: u8 = 4;
+
+                                // Per-sample nibble: bit0=CH0, bit1=CH1, bit2=CH2, bit3=CH3
+                                // Default all idle: UART=HIGH(1), SPI MOSI=HIGH(1), CLK=LOW(0), CS=HIGH(1)
+                                let mut ps = vec![0b1011u8; num_samples as usize]; // CH0,CH1,CH3=1; CH2=0
+
+                                // ── Helpers ──────────────────────────────────────────
+                                fn set_ch(ps: &mut [u8], start: usize, count: usize, ch: u8, val: bool) {
+                                    let mask = 1u8 << ch;
+                                    for s in start..(start + count).min(ps.len()) {
+                                        if val { ps[s] |= mask; } else { ps[s] &= !mask; }
+                                    }
+                                }
+
+                                // UART: 8N1, idle HIGH, LSB first. Returns end sample.
+                                fn uart_byte(ps: &mut [u8], start: usize, byte: u8, spb: usize) -> usize {
+                                    let mut s = start;
+                                    set_ch(ps, s, spb, 0, false); s += spb; // start LOW
+                                    for bit in 0..8u8 {
+                                        set_ch(ps, s, spb, 0, (byte >> bit) & 1 == 1); s += spb;
+                                    }
+                                    s += spb; // stop bit (already HIGH)
+                                    s
+                                }
+
+                                // SPI mode 0: CLK idle LOW, sample on rising edge.
+                                // CS on CH3 (active low), CLK on CH2, MOSI/MISO on CH1.
+                                // Returns end sample.
+                                fn spi_byte(ps: &mut [u8], start: usize, byte: u8, half: usize) -> usize {
+                                    let mut s = start;
+                                    for bit in (0..8u8).rev() { // MSB first
+                                        let val = (byte >> bit) & 1 == 1;
+                                        // CLK low: set MOSI
+                                        set_ch(ps, s, half, 2, false); // CLK low
+                                        set_ch(ps, s, half, 1, val);   // MOSI
+                                        s += half;
+                                        // CLK high: data stable (sample here)
+                                        set_ch(ps, s, half, 2, true);  // CLK high
+                                        set_ch(ps, s, half, 1, val);   // MOSI stable
+                                        s += half;
+                                    }
+                                    s
+                                }
+
+                                // ── CH0: UART "Hello!\r\n" then "0x55 0xAA" ──────
+                                let spb = 104usize; // ~9600 baud @ 1MHz
+                                let mut pos = 500usize;
+                                for &b in b"Hello!\r\n" {
+                                    pos = uart_byte(&mut ps, pos, b, spb);
+                                    pos += spb / 4; // small inter-byte gap
+                                }
+                                pos += spb * 20; // longer inter-message gap
+                                for &b in &[0x55u8, 0xAAu8, 0xFFu8, 0x00u8] {
+                                    pos = uart_byte(&mut ps, pos, b, spb);
+                                    pos += spb / 4;
+                                }
+
+                                // ── CH1/CH2/CH3: SPI 0xDE 0xAD 0xBE 0xEF ──────
+                                let half = 5usize; // 100kHz SPI @ 1MHz (10 samples/bit)
+                                let mut spi_pos = 25_000usize;
+                                // Run bytes first to find end position, then set CS low for full range
+                                let cs1_start = spi_pos - 10;
+                                for &b in &[0xDEu8, 0xADu8, 0xBEu8, 0xEFu8, 0xCAu8, 0xFEu8] {
+                                    spi_pos = spi_byte(&mut ps, spi_pos, b, half);
+                                    spi_pos += half; // inter-byte gap
+                                }
+                                let cs1_end = spi_pos + half * 2;
+                                set_ch(&mut ps, cs1_start, cs1_end - cs1_start, 3, false); // CS low during burst
+                                set_ch(&mut ps, spi_pos, half * 2, 3, true); // CS high after burst
+
+                                // Second SPI burst: ASCII "SPI" in bytes
+                                spi_pos += half * 10;
+                                let cs2_start = spi_pos - 5;
+                                for &b in b"SPI" {
+                                    spi_pos = spi_byte(&mut ps, spi_pos, b, half);
+                                    spi_pos += half;
+                                }
+                                let cs2_end = spi_pos + half * 2;
+                                set_ch(&mut ps, cs2_start, cs2_end - cs2_start, 3, false);
+                                set_ch(&mut ps, spi_pos, half * 2, 3, true);
+
+                                // Pack nibbles: 2 samples per byte (4 bits each, lower nibble first)
+                                let raw: Vec<u8> = ps.chunks(2).map(|c| {
+                                    let lo = c[0] & 0x0F;
+                                    let hi = if c.len() > 1 { c[1] & 0x0F } else { 0 };
+                                    lo | (hi << 4)
+                                }).collect();
+
+                                // Load into backend store
+                                #[derive(serde::Serialize)]
+                                struct Args {
+                                    #[serde(rename = "rawData")]
+                                    raw_data: Vec<u8>,
+                                    channels: u8,
+                                    #[serde(rename = "sampleRateHz")]
+                                    sample_rate_hz: u32,
+                                }
+                                let args = serde_wasm_bindgen::to_value(&Args {
+                                    raw_data: raw, channels, sample_rate_hz: sample_rate
+                                }).unwrap();
+                                let result = try_invoke("la_load_raw", args).await;
+
+                                // Debug: log what we got back
+                                web_sys::console::log_1(&format!("la_load_raw result: {:?}", result).into());
+
+                                let total: u64 = result.and_then(|r| serde_wasm_bindgen::from_value(r).ok()).unwrap_or(0);
+
+                                if total > 0 {
+                                    set_view_start.set(0);
+                                    set_view_end.set(total);
+                                    set_ci.set(Some(LaCaptureInfo {
+                                        channels,
+                                        sample_rate_hz: sample_rate,
+                                        total_samples: total,
+                                        duration_sec: total as f64 / sample_rate as f64,
+                                        trigger_sample: None,
+                                    }));
+                                    show_toast(&format!("Loaded {} test samples", total), "ok");
+                                }
+                            });
+                        }
+                    }
+                            ><Icon name="wand-sparkles" size=13 />"Test Data"</button>
+                            <button type="button" class="btn btn-sm"
+                                title="Import a capture from a JSON file"
+                                on:click={
                                 let set_ci3 = set_capture_info;
                                 move |_| {
                                     spawn_local(async move {
@@ -2770,7 +2757,276 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                     });
                                 }
                             }
-                        >"Import"</button>
+                            ><Icon name="folder-open" size=13 />"Import"</button>
+                            <button type="button" class="btn btn-sm btn-tinted tone-red"
+                                title="Discard the current capture"
+                                on:click=move |_| {
+                        // Stop any active streaming
+                        set_streaming.set(false);
+                        spawn_local(async move {
+                            let _ = la_stream_usb_stop().await;
+                        });
+                        set_capture_info.set(None);
+                        set_view_data.set(None);
+                        set_annotations.set(vec![]);
+                        set_sel_anchor.set(None);
+                        set_sel_start.set(None);
+                        set_sel_end.set(None);
+                        set_cursor_sample.set(None);
+                        set_view_start.set(0);
+                        set_view_end.set(0);
+                        // Clear backend store
+                        spawn_local(async {
+                            let _ = la_delete_range(0, JS_MAX_SAFE).await;
+                        });
+                        show_toast("Capture cleared", "ok");
+                    }
+                            ><Icon name="trash-2" size=13 />"Clear"</button>
+                            <button type="button" class="btn btn-sm"
+                                title="Export the capture as VCD"
+                                on:click=move |_| {
+                                spawn_local(async {
+                                    #[derive(serde::Serialize)]
+                                    struct Filter { name: String, extensions: Vec<String> }
+                                    #[derive(serde::Serialize)]
+                                    struct Args { title: String, filters: Vec<Filter> }
+                                    let args = serde_wasm_bindgen::to_value(&Args {
+                                        title: "Export VCD".into(),
+                                        filters: vec![Filter { name: "VCD files".into(), extensions: vec!["vcd".into()] }],
+                                    }).unwrap();
+                                    let result = try_invoke("pick_save_file", args).await;
+                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
+                                        if !path.is_empty() {
+                                            la_export_vcd(&path).await;
+                                            show_toast("Exported VCD", "ok");
+                                        }
+                                    }
+                                });
+                            }
+                            ><Icon name="file-down" size=13 />"Export VCD"</button>
+                            <button type="button" class="btn btn-sm"
+                                title="Export the capture as JSON"
+                                on:click=move |_| {
+                                spawn_local(async {
+                                    #[derive(serde::Serialize)]
+                                    struct Filter { name: String, extensions: Vec<String> }
+                                    #[derive(serde::Serialize)]
+                                    struct Args { title: String, filters: Vec<Filter> }
+                                    let args = serde_wasm_bindgen::to_value(&Args {
+                                        title: "Export JSON".into(),
+                                        filters: vec![Filter { name: "JSON files".into(), extensions: vec!["json".into()] }],
+                                    }).unwrap();
+                                    let result = try_invoke("pick_save_file", args).await;
+                                    if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
+                                        if !path.is_empty() {
+                                            la_export_json(&path).await;
+                                            show_toast("Exported JSON", "ok");
+                                        }
+                                    }
+                                });
+                            }
+                            ><Icon name="file-down" size=13 />"Export JSON"</button>
+                        </div>
+                    </section>
+
+                    // ---- Signal conditioning (HAT): route, VLOGIC, OE, DIR ----
+                    {move || {
+                        if !hat_detected.get() {
+                            return ().into_any();
+                        }
+                        view! {
+                            <section class="inspector-section" aria-label="Signal conditioning">
+                                <h4>"Signal conditioning"</h4>
+                                <div class="la-field">
+                                    <span class="la-field-label">"Route"</span>
+                                    <div class="seg seg-sm" role="radiogroup" aria-label="Capture route">
+                                        <button type="button" role="radio"
+                                            class:active=move || la_route.get() == 0
+                                            aria-checked=move || if la_route.get() == 0 { "true" } else { "false" }
+                                            title="Low-Speed path via EXP_EXT (up to 4ch @ 1 MHz)"
+                                            on:click=move |_| {
+                                                spawn_local(async move {
+                                                    if let Some(r) = hat_la_set_route(0).await {
+                                                        set_la_route_la.set(r);
+                                                        show_toast("Route → Low-Speed", "ok");
+                                                    }
+                                                });
+                                            }
+                                        >"Low-speed"</button>
+                                        <button type="button" role="radio"
+                                            class:active=move || la_route.get() == 1
+                                            aria-checked=move || if la_route.get() == 1 { "true" } else { "false" }
+                                            title="High-Speed path via Conn1 (up to 3ch) — DIR auto-locked B\u{2192}A"
+                                            on:click=move |_| {
+                                                spawn_local(async move {
+                                                    if let Some(r) = hat_la_set_route(1).await {
+                                                        set_la_route_la.set(r);
+                                                        // Immediately force DIR = B→A so RP2040 listens
+                                                        let cur_oe = ls_oe.get_untracked();
+                                                        if let Some(s) = hat_set_level_shift(cur_oe, false).await {
+                                                            set_ls_oe.set(s.oe);
+                                                            set_ls_dir.set(s.dir);
+                                                        }
+                                                        show_toast("Route \u{2192} High-Speed, DIR locked B\u{2192}A", "ok");
+                                                    }
+                                                });
+                                            }
+                                        >"High-speed"</button>
+                                    </div>
+                                </div>
+                                <div class="la-field">
+                                    <span class="la-field-label">"VLOGIC"</span>
+                                    <div class="seg seg-sm" role="radiogroup" aria-label="VLOGIC voltage">
+                                        {[1800u16, 2500u16, 3300u16, 5000u16].into_iter().map(|mv| {
+                                            let label = format!("{:.1} V", mv as f32 / 1000.0);
+                                            let label_click = label.clone();
+                                            view! {
+                                                <button type="button" role="radio"
+                                                    class:active=move || rail0_mv() == mv
+                                                    aria-checked=move || if rail0_mv() == mv { "true" } else { "false" }
+                                                    title={format!("Set VLOGIC (3V3_ADJ) to {}", label)}
+                                                    on:click={
+                                                        let lc = label_click.clone();
+                                                        move |_| {
+                                                            let lc2 = lc.clone();
+                                                            spawn_local(async move {
+                                                                if let Some(rails) = hat_set_rail_voltage(0, mv).await {
+                                                                    set_hat_rails.set(rails);
+                                                                    show_toast(&format!("VLOGIC \u{2192} {}", lc2), "ok");
+                                                                }
+                                                            });
+                                                        }
+                                                    }
+                                                >{label.clone()}</button>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <span class="row-label" title="Enable / disable 3V3_ADJ (VLOGIC) rail">"VLOGIC rail"</span>
+                                    <Switch
+                                        checked=Signal::derive(move || rail0_on())
+                                        aria_label="VLOGIC rail enable"
+                                        on_change=Callback::new(move |_| {
+                                            spawn_local(async move {
+                                                let cur = hat_rails.get_untracked().iter().find(|r| r.rail_id == 0).map(|r| r.enabled).unwrap_or(false);
+                                                if let Some(rails) = hat_set_rail_enable(0, !cur).await {
+                                                    set_hat_rails.set(rails);
+                                                    show_toast(if !cur { "VLOGIC enabled" } else { "VLOGIC disabled" }, "ok");
+                                                }
+                                            });
+                                        })
+                                    />
+                                </div>
+                                <div class="row">
+                                    <span class="row-label" title="Level-shifter Output Enable — requires VLOGIC">"Output enable"</span>
+                                    <Switch
+                                        checked=Signal::derive(move || ls_oe.get())
+                                        aria_label="Level-shifter output enable"
+                                        on_change=Callback::new(move |_| {
+                                            spawn_local(async move {
+                                                let next_oe = !ls_oe.get_untracked();
+                                                let cur_dir = ls_dir.get_untracked();
+                                                if let Some(s) = hat_set_level_shift(next_oe, cur_dir).await {
+                                                    set_ls_oe.set(s.oe);
+                                                    set_ls_dir.set(s.dir);
+                                                    show_toast(if s.oe { "OE active" } else { "OE tri-state" }, "ok");
+                                                }
+                                            });
+                                        })
+                                    />
+                                </div>
+                                <div class="la-field">
+                                    <span class="la-field-label">"Direction"</span>
+                                    <div class="seg seg-sm" role="radiogroup" aria-label="Level-shifter direction"
+                                        title=move || {
+                                            if la_route.get() == 1 {
+                                                "DIR locked B\u{2192}A — High-Speed (RP2040 = input)".to_string()
+                                            } else if ls_dir.get() {
+                                                "DIR: A\u{2192}B (RP2040 drives) — click to switch B\u{2192}A".to_string()
+                                            } else {
+                                                "DIR: B\u{2192}A (RP2040 listens) — click to switch A\u{2192}B".to_string()
+                                            }
+                                        }>
+                                        <button type="button" role="radio"
+                                            class:active=move || !ls_dir.get()
+                                            aria-checked=move || if !ls_dir.get() { "true" } else { "false" }
+                                            disabled=move || la_route.get() == 1
+                                            on:click=move |_| {
+                                                if la_route.get_untracked() == 1 || !ls_dir.get_untracked() { return; }
+                                                spawn_local(async move {
+                                                    let cur_oe  = ls_oe.get_untracked();
+                                                    if let Some(s) = hat_set_level_shift(cur_oe, false).await {
+                                                        set_ls_oe.set(s.oe);
+                                                        set_ls_dir.set(s.dir);
+                                                    }
+                                                });
+                                            }
+                                        >"B\u{2192}A"</button>
+                                        <button type="button" role="radio"
+                                            class:active=move || ls_dir.get()
+                                            aria-checked=move || if ls_dir.get() { "true" } else { "false" }
+                                            disabled=move || la_route.get() == 1
+                                            on:click=move |_| {
+                                                if la_route.get_untracked() == 1 || ls_dir.get_untracked() { return; }
+                                                spawn_local(async move {
+                                                    let cur_oe  = ls_oe.get_untracked();
+                                                    if let Some(s) = hat_set_level_shift(cur_oe, true).await {
+                                                        set_ls_oe.set(s.oe);
+                                                        set_ls_dir.set(s.dir);
+                                                    }
+                                                });
+                                            }
+                                        >"A\u{2192}B"</button>
+                                    </div>
+                                </div>
+                            </section>
+                        }.into_any()
+                    }}
+                </aside>
+            </div>
+
+            // ============ STATUS STRIP ============
+            {move || {
+                let info = capture_info.get();
+                let cursor = cursor_sample.get();
+                let vd = view_data.get();
+                let status = stream_runtime.get();
+                let badge = stream_status_badge(&status);
+                let tone = match badge {
+                    "LIVE" => "green",
+                    "DEGRADED" => "orange",
+                    "ERROR" => "red",
+                    "STOPPED" => "blue",
+                    _ => "gray",
+                };
+                view! {
+                    <div class="la-status" role="status">
+                        <span class="la-st" title="Live vendor-bulk runtime status">
+                            <span class=format!("badge tone-{}", tone)>{badge}</span>
+                            <span class="la-st-text">{summarize_la_stream_status(&status)}</span>
+                        </span>
+                        <span class="la-st">
+                            {if let Some(ref i) = info {
+                                format!("{}ch @ {} | {} samples | {}", i.channels, format_time(1.0 / i.sample_rate_hz as f64), i.total_samples, format_time(i.duration_sec))
+                            } else {
+                                "No capture".to_string()
+                            }}
+                        </span>
+                        <span class=if cursor.is_some() { "la-st la-st-cursor is-set" } else { "la-st la-st-cursor" }>
+                            {if let Some(cs) = cursor {
+                                let sr = info.as_ref().map(|i| i.sample_rate_hz as f64).unwrap_or(1.0);
+                                let t = if sr > 0.0 { cs as f64 / sr } else { 0.0 };
+                                let ch_vals: String = if let Some(ref d) = vd {
+                                    (0..d.channels as usize).map(|ch| {
+                                        format!(" {}:{}", ch_names[ch.min(3)].get_untracked(), level_at(d, ch, cs).unwrap_or(0))
+                                    }).collect()
+                                } else { String::new() };
+                                format!("Cursor: {}{}", format_time(t), ch_vals)
+                            } else {
+                                "Click the waveform to place a cursor".to_string()
+                            }}
+                        </span>
                     </div>
                 }
             }}
