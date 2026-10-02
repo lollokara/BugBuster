@@ -33,6 +33,7 @@
 #include "bbp_codec.h"
 #include "bbp.h"
 #include "tasks.h"
+#include "ad74416h_regs.h"
 #include "state_lock.h"
 #include "uart_bridge.h"
 #include "adc_leds.h"
@@ -134,9 +135,11 @@ static int handler_get_device_info(const uint8_t *payload, size_t len,
 
     uint16_t siliconRev = 0, id0 = 0, id1 = 0;
     bool spiOk = true;
-    spiOk &= bbp_spi_read_reg(0x46, &siliconRev);
-    spiOk &= bbp_spi_read_reg(0x47, &id0);
-    spiOk &= bbp_spi_read_reg(0x48, &id1);
+    // BBP-DEVINFO: these were hard-coded 0x46/0x47/0x48 (not the silicon ID
+    // registers), so USB reported different IDs than HTTP (api_core.cpp).
+    spiOk &= bbp_spi_read_reg(REG_SILICON_REV, &siliconRev);
+    spiOk &= bbp_spi_read_reg(REG_SILICON_ID0, &id0);
+    spiOk &= bbp_spi_read_reg(REG_SILICON_ID1, &id1);
     if (!spiOk) return -CMD_ERR_HARDWARE;
 
     size_t pos = 0;

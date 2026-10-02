@@ -34,7 +34,6 @@ def test_channel_function_equivalent_across_transports(usb_device, http_device, 
     assert _fn(usb_device) == _fn(http_device) == int(ChannelFunction.HIGH_IMP)
 
 
-@pytest.mark.xfail(strict=True, reason="BBP-DEVINFO")
 def test_device_info_equivalent_across_transports(usb_device, http_device):
     # Found by this gate: BBP GET_DEVICE_INFO read registers 0x46-0x48, the
     # HTTP route the real silicon registers 0x7B/0x7D/0x7E.
