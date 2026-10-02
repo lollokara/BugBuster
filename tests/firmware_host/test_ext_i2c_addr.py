@@ -23,6 +23,8 @@ static uint8_t bbp_get_u8(const uint8_t *b, size_t *p) { return b[(*p)++]; }
 static uint16_t bbp_get_u16(const uint8_t *b, size_t *p) { uint16_t v = b[*p] | (b[*p + 1] << 8); *p += 2; return v; }
 static void bbp_put_u32(uint8_t *b, size_t *p, uint32_t v) { for (int i = 0; i < 4; i++) b[(*p)++] = v >> (8 * i); }
 static bool ext_i2c_ready(void) { return true; }
+static int ext_bus_last_error(void) { return -1; }                 /* BUS-017 */
+static int ext_bus_cmd_error(int) { return CMD_ERR_TIMEOUT; }
 static bool ext_i2c_write(uint8_t, const uint8_t *, size_t, uint16_t) { g_driver_calls++; return true; }
 static bool ext_i2c_read(uint8_t, uint8_t *, size_t, uint16_t) { g_driver_calls++; return true; }
 static bool ext_i2c_write_read(uint8_t, const uint8_t *, size_t, uint8_t *, size_t, uint16_t) { g_driver_calls++; return true; }
