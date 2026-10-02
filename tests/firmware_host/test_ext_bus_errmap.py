@@ -32,14 +32,12 @@ int main(void) {
 """
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-017")
 def test_error_map_distinguishes_nack_timeout_and_busy():
     out = compile_and_run(MAIN, cxx=False, include_dirs=[SRC / "bus", SRC / "bbp"]).strip()
     # CmdError: HARDWARE=5, TIMEOUT=9, BUSY=4, INVALID_STATE=8, BAD_ARG=1
     assert out == "ok=0 nack=5 stuck=9 busy=4 state=8 arg=1 other=5", out
 
 
-@pytest.mark.xfail(strict=True, reason="BUS-017")
 def test_bbp_handlers_no_longer_collapse_to_timeout():
     body = (SRC / "bbp/cmds/cmd_ext_bus.cpp").read_text(encoding="utf-8")
     assert not re.search(r"\?\s*-CMD_ERR_TIMEOUT\s*:", body)

@@ -70,6 +70,29 @@ static TickType_t ticks(uint16_t timeout_ms)
     return pdMS_TO_TICKS(timeout_ms ? timeout_ms : 100);
 }
 
+// BUS-017: esp_err_t of the last I2C/SPI transfer, kept per calling task so a
+// handler can tell a NACK from a stuck or contended bus.
+static portMUX_TYPE s_err_lock = portMUX_INITIALIZER_UNLOCKED;
+static esp_err_t s_last_err = ESP_OK;
+static TaskHandle_t s_last_err_task = nullptr;
+
+static bool note_err(esp_err_t err)
+{
+    taskENTER_CRITICAL(&s_err_lock);
+    s_last_err = err;
+    s_last_err_task = xTaskGetCurrentTaskHandle();
+    taskEXIT_CRITICAL(&s_err_lock);
+    return err == ESP_OK;
+}
+
+esp_err_t ext_bus_last_error(void)
+{
+    taskENTER_CRITICAL(&s_err_lock);
+    esp_err_t err = (s_last_err_task == xTaskGetCurrentTaskHandle()) ? s_last_err : ESP_FAIL;
+    taskEXIT_CRITICAL(&s_err_lock);
+    return err;
+}
+
 bool ext_i2c_setup(uint8_t sda_gpio, uint8_t scl_gpio, uint32_t frequency_hz, bool internal_pullups)
 {
     if (!valid_gpio(sda_gpio) || !valid_gpio(scl_gpio) || sda_gpio == scl_gpio) {
@@ -214,44 +237,43 @@ bool ext_i2c_scan(uint8_t start_addr, uint8_t stop_addr, bool skip_reserved,
 
 bool ext_i2c_write(uint8_t addr, const uint8_t *data, size_t len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || (len > 0 && data == nullptr) || len > 255) {
-        return false;
-    }
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if ((len > 0 && data == nullptr) || len > 255) return note_err(ESP_ERR_INVALID_ARG);
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_write_to_device(EXT_I2C_PORT, addr, data, len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 bool ext_i2c_read(uint8_t addr, uint8_t *data, size_t len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || data == nullptr || len == 0 || len > 255) {
-        return false;
-    }
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if (data == nullptr || len == 0 || len > 255) return note_err(ESP_ERR_INVALID_ARG);
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_read_from_device(EXT_I2C_PORT, addr, data, len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 bool ext_i2c_write_read(uint8_t addr, const uint8_t *wr_data, size_t wr_len,
                         uint8_t *rd_data, size_t rd_len, uint16_t timeout_ms)
 {
-    if (!s_i2c_ready || wr_data == nullptr || rd_data == nullptr ||
+    if (!s_i2c_ready) return note_err(ESP_ERR_INVALID_STATE);
+    if (wr_data == nullptr || rd_data == nullptr ||
         wr_len == 0 || rd_len == 0 || wr_len > 255 || rd_len > 255) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (xSemaphoreTake(s_i2c_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
     esp_err_t err = i2c_master_write_read_device(
         EXT_I2C_PORT, addr, wr_data, wr_len, rd_data, rd_len, ticks(timeout_ms));
     xSemaphoreGive(s_i2c_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 static bool valid_optional_gpio(uint8_t gpio)
@@ -387,19 +409,20 @@ bool ext_spi_transfer(const uint8_t *tx_data, size_t tx_len,
                       uint8_t *rx_data, size_t *inout_rx_len,
                       uint16_t timeout_ms)
 {
-    if (s_spi_dev == nullptr || inout_rx_len == nullptr || rx_data == nullptr ||
+    if (s_spi_dev == nullptr) return note_err(ESP_ERR_INVALID_STATE);
+    if (inout_rx_len == nullptr || rx_data == nullptr ||
         tx_len > EXT_SPI_MAX_TRANSFER || *inout_rx_len > EXT_SPI_MAX_TRANSFER) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     size_t transfer_len = tx_len > *inout_rx_len ? tx_len : *inout_rx_len;
     if (transfer_len == 0 || transfer_len > EXT_SPI_MAX_TRANSFER) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (tx_len > 0 && tx_data == nullptr) {
-        return false;
+        return note_err(ESP_ERR_INVALID_ARG);
     }
     if (xSemaphoreTake(s_spi_mutex, ticks(timeout_ms)) != pdTRUE) {
-        return false;
+        return note_err(EXT_BUS_ERR_MUTEX);
     }
 
     memset(s_spi_tx, 0, transfer_len);
@@ -419,7 +442,7 @@ bool ext_spi_transfer(const uint8_t *tx_data, size_t tx_len,
     }
 
     xSemaphoreGive(s_spi_mutex);
-    return err == ESP_OK;
+    return note_err(err);
 }
 
 static uint8_t *job_alloc(size_t len)
