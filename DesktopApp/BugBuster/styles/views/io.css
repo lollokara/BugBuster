@@ -1,1 +1,104 @@
 /* View styles: io. Tokens only, no raw colours. */
+
+/* Channel identity: cards and children read --io-ch */
+[data-ch="a"] { --io-ch: var(--ch-a); }
+[data-ch="b"] { --io-ch: var(--ch-b); }
+[data-ch="c"] { --io-ch: var(--ch-c); }
+[data-ch="d"] { --io-ch: var(--ch-d); }
+
+/* ===================================================================
+   Channel card (shared by ADC / VDAC / IDAC / IIN / DIN / DOUT / HV IO)
+   =================================================================== */
+.io-card { display: flex; flex-direction: column; min-height: 300px; }
+.io-card-compact { min-height: 290px; }
+.io-head { margin-bottom: var(--s-3); }
+.io-head .group-actions { gap: var(--s-2); }
+.io-dot {
+    display: inline-block; flex-shrink: 0;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--io-ch, var(--label-3));
+}
+.io-body { display: flex; flex-direction: column; gap: var(--s-3); flex: 1; min-height: 0; }
+.io-card-compact .io-body { gap: var(--s-2); }
+
+.io-primary { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-3); }
+.io-meta {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+    font-size: var(--fs-footnote); color: var(--label-2); font-variant-numeric: tabular-nums;
+    padding-bottom: 4px;
+}
+.io-meta-value { color: var(--label-1); font-size: var(--fs-headline); font-weight: var(--fw-semibold); }
+.io-code { font-family: var(--font-mono); font-size: var(--fs-caption); }
+
+.io-meter { margin-top: calc(-1 * var(--s-1)); }
+.io-meter > span { background: var(--io-ch, var(--accent)); }
+
+.io-spark {
+    display: block; width: 100%; height: 56px;
+    background: var(--surface-plot);
+    border: 0.5px solid var(--sep); border-radius: var(--r-sm);
+}
+.io-card-compact .io-spark { height: 44px; }
+
+/* Settings rows: controls right-aligned at one width */
+.io-rows .row { min-height: 32px; }
+.io-rows select,
+.io-rows .number-input { width: 176px; max-width: none; }
+.io-rows .number-input-wrap .number-input { width: 96px; }
+.io-card-compact .io-rows .row { min-height: 30px; }
+.io-slider { margin: 0; }
+.io-slider input[type="range"] {
+    background: linear-gradient(to right, var(--io-ch, var(--accent)) var(--fill, 0%), var(--fill-2) var(--fill, 0%));
+}
+.io-card details.disclosure { margin-top: calc(-1 * var(--s-1)); }
+.io-card details.disclosure[open] > summary { margin-bottom: var(--s-1); }
+
+/* Compact in-card body when the channel function makes the view inapplicable */
+.io-empty {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--s-2); padding: var(--s-6) var(--s-4); text-align: center; color: var(--label-2);
+}
+.io-empty svg { color: var(--label-3); }
+.io-empty p { font-size: var(--fs-body); max-width: 280px; }
+.io-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s-2); margin-top: var(--s-1); }
+
+/* Digital level indicator: filled = high, hollow = low */
+.io-level { display: inline-flex; align-items: center; gap: var(--s-3); }
+.io-lamp {
+    flex-shrink: 0; box-sizing: border-box;
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid var(--label-3); background: transparent;
+    transition: background-color var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+}
+.io-level.on .io-lamp { background: var(--io-ch, var(--accent)); border-color: var(--io-ch, var(--accent)); }
+.io-level-text {
+    font-size: var(--fs-display); font-weight: var(--fw-semibold); letter-spacing: -0.03em;
+    line-height: 1.1; color: var(--label-1);
+}
+.io-level:not(.on) .io-level-text { color: var(--label-2); }
+.io-level-sm { gap: var(--s-2); }
+.io-level-sm .io-lamp { width: 16px; height: 16px; }
+.io-level-sm .io-level-text { font-size: var(--fs-title1); }
+
+/* ===================================================================
+   Tables (GPIO list, IO expander)
+   =================================================================== */
+.io-table th:first-child, .io-table td:first-child { padding-left: var(--s-4); }
+.io-table th:last-child, .io-table td:last-child { padding-right: var(--s-4); }
+.io-table td { height: 38px; padding-top: 3px; padding-bottom: 3px; }
+.io-table select { width: 150px; }
+.io-name { font-weight: var(--fw-medium); white-space: nowrap; }
+.io-table-gpio th:nth-child(1) { width: 12%; }
+.io-table-gpio th:nth-child(2) { width: 24%; }
+.io-table-gpio th:nth-child(3) { width: 16%; }
+.io-table-gpio th:nth-child(4) { width: 16%; }
+.io-table-gpio th:nth-child(5) { width: 18%; }
+.io-state { display: inline-flex; align-items: center; gap: var(--s-2); font-variant-numeric: tabular-nums; }
+
+/* ===================================================================
+   IO expander
+   =================================================================== */
+.io-section-label { margin: 0; }
+.io-efuse.fault { box-shadow: 0 0 0 1.5px var(--c-red); }
+.io-efuse .group-header { margin-bottom: var(--s-2); }
+.io-efuse-status { margin: var(--s-2) 0 0; font-size: var(--fs-footnote); color: var(--label-2); }
