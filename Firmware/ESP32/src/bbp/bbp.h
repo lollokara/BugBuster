@@ -274,6 +274,7 @@ extern "C" {
 #define BBP_DAQ_CFG_GET_ALL      0x02  // payload: [op][start][flags] -> [next_idx][TLVs]
 #define BBP_DAQ_CFG_SCHEMA       0x03  // payload: [op][key u16]      -> schema blob
 #define BBP_DAQ_CFG_ACTION       0x04  // payload: [op][action_id u8] -> OK
+#define BBP_DAQ_CFG_BATTSIM      0x0B  // payload: [op][bs op][args]  -> battsim reply (<= 240 B, HAT cmd 0x7B)
 
 // DAQ HAT SMU factory calibration — forwarded to the P4 over the HAT UART.
 // One multiplexed opcode; payload[0] selects the sub-op, which maps to the P4

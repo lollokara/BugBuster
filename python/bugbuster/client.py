@@ -549,6 +549,12 @@ class BugBuster:
         from .daq_config import DaqTrigger
         return DaqTrigger(self)
 
+    @property
+    def battsim(self) -> "BattSim":  # type: ignore[name-defined]  # noqa: F821
+        """DAQ HAT battery simulator: status, runs, history download (USB or HTTP)."""
+        from .battsim import BattSim
+        return BattSim(self)
+
     def _usb_cmd(self, cmd_id: int, payload: bytes = b'') -> bytes:
         """
         Send a binary command and return the raw response payload.

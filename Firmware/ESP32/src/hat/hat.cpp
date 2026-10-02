@@ -1954,6 +1954,80 @@ int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len)
     return (int)rsp_len;
 }
 
+// Receive one frame of up to 255 payload bytes straight into @out (the narrow
+// hat_recv_frame() keeps its 32-byte stack buffer for every other command).
+static uint8_t hat_recv_frame_wide(uint8_t *out, uint16_t cap, uint16_t *out_len,
+                                   uint32_t timeout_ms)
+{
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    uint8_t b = 0;
+    for (;;) {
+        TickType_t now = xTaskGetTickCount();
+        if (now >= deadline) return 0;
+        if (uart_read_bytes(HAT_UART_NUM, &b, 1, deadline - now) != 1) return 0;
+        if (b == HAT_FRAME_SYNC) break;
+    }
+    uint8_t hdr[2];
+    TickType_t now = xTaskGetTickCount();
+    if (now >= deadline || uart_read_bytes(HAT_UART_NUM, hdr, 2, deadline - now) != 2) return 0;
+    uint8_t len = hdr[0], cmd = hdr[1];
+    if (len > cap) {
+        ESP_LOGW(TAG, "BS RX: len %u > cap %u", len, cap);
+        return 0;
+    }
+    uint8_t crc_rx = 0;
+    now = xTaskGetTickCount();
+    if (now >= deadline) return 0;
+    if (len && uart_read_bytes(HAT_UART_NUM, out, len, deadline - now) != (int)len) return 0;
+    now = xTaskGetTickCount();
+    if (now >= deadline || uart_read_bytes(HAT_UART_NUM, &crc_rx, 1, deadline - now) != 1) return 0;
+
+    // CRC over CMD + payload, chained (same polynomial as crc8()).
+    uint8_t crc = 0;
+    auto step = [&crc](uint8_t v) {
+        crc ^= v;
+        for (int j = 0; j < 8; j++) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+    };
+    step(cmd);
+    for (uint16_t i = 0; i < len; i++) step(out[i]);
+    if (crc != crc_rx) {
+        ESP_LOGW(TAG, "BS RX: CRC mismatch cmd 0x%02X len %u", cmd, len);
+        return 0;
+    }
+    *out_len = len;
+    return cmd;
+}
+
+int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                   uint32_t timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return -1;
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
+        return -1;
+    }
+    int result = -1;
+    if (!s_commit_in_progress) uart_flush_input(HAT_UART_NUM);
+    if (hat_send_frame(HAT_CMD_BS, req, req_len)) {
+        // Receive straight into the caller's buffer: no extra 240 B on this stack.
+        uint16_t cap = rsp_cap > 255 ? 255 : rsp_cap;
+        uint16_t n = 0;
+        TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+        for (;;) {
+            TickType_t now = xTaskGetTickCount();
+            if (now >= deadline) break;
+            uint8_t code = hat_recv_frame_wide(rsp, cap, &n,
+                                               (deadline - now) * portTICK_PERIOD_MS + 1);
+            if (code == 0) break;
+            if (code == HAT_RSP_BS_DATA) { result = n; break; }
+            if (code == HAT_RSP_ERROR) { result = -2; break; }
+            // Anything else is a stray frame; keep waiting for ours.
+        }
+    }
+    if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
+    return result;
+}
+
 bool hat_daq_vdut_status(hat_vdut_status_t *out)
 {
     if (!out) return false;

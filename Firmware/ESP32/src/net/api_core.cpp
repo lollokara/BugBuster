@@ -17,7 +17,9 @@
 //          /api/ioexp/control, /api/usbpd/select, /api/lshift/oe,
 //          /api/gpio/<pin>/{config,set}, /api/device/reset,
 //          /api/ota/check, /api/ota/apply (drives the on-device git-release updater),
-//          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint}
+//          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint},
+//          /api/daq/bs, /api/daq/bs/read (battery simulator), /api/daq/config
+//          (DAQ settings registry passthrough)
 //
 // PENDING (planned, mirror the HTTP handler then expose here): IDAC cal writes
 //   (/api/idac/cal/{point,clear,save}), channel signal-path config
@@ -67,6 +69,7 @@
 #include "esp_wifi.h"
 #include "power/pd_manager.h"
 #include "quicksetup.h"
+#include "mbedtls/base64.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
 extern AD74416H_SPI spiDriver;
@@ -1748,6 +1751,131 @@ static char *api_quicksetup_delete(int slot)
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// DAQ HAT battery simulator + settings registry passthrough. The S3 does not
+// interpret these bytes: hosts decode them (python/bugbuster/battsim.py is the
+// reference decoder). Binary travels as hex in, base64 out.
+// ---------------------------------------------------------------------------
+static int hex_decode(const char *s, uint8_t *out, size_t cap)
+{
+    if (!s) return 0;
+    size_t n = strlen(s);
+    if ((n & 1u) || n / 2 > cap) return -1;
+    for (size_t i = 0; i < n / 2; i++) {
+        unsigned v;
+        if (sscanf(s + 2 * i, "%2x", &v) != 1) return -1;
+        out[i] = (uint8_t)v;
+    }
+    return (int)(n / 2);
+}
+
+static char *b64_result(const uint8_t *data, size_t len)
+{
+    size_t olen = 0;
+    mbedtls_base64_encode(NULL, 0, &olen, data, len);
+    char *b = (char *)heap_caps_malloc(olen + 1, MALLOC_CAP_SPIRAM);
+    if (!b) return api_error("out of memory");
+    if (mbedtls_base64_encode((unsigned char *)b, olen + 1, &olen, data, len) != 0) {
+        heap_caps_free(b);
+        return api_error("encode failed");
+    }
+    b[olen] = '\0';
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "n", (double)len);
+    cJSON_AddStringToObject(root, "data", b);
+    heap_caps_free(b);
+    return json_take(root);
+}
+
+// POST /api/daq/bs  body: {"op": u8, "args": "<hex>"} -> {"ok","n","data": base64}
+static char *api_daq_bs(const cJSON *body)
+{
+    cJSON *jop = body_get(body, "op");
+    if (!cJSON_IsNumber(jop) || jop->valueint < 0 || jop->valueint > 255) return api_error("op required");
+    uint8_t req[HAT_BS_REQ_MAX];
+    req[0] = (uint8_t)jop->valueint;
+    cJSON *jargs = body_get(body, "args");
+    int n = hex_decode(cJSON_IsString(jargs) ? jargs->valuestring : NULL, req + 1, sizeof(req) - 1);
+    if (n < 0) return api_error("args must be hex, <= 15 bytes");
+    uint8_t *rsp = (uint8_t *)heap_caps_malloc(HAT_OTA_WIDE_MAX, MALLOC_CAP_SPIRAM);
+    if (!rsp) return api_error("out of memory");
+    int got = hat_bs_request(req, (uint8_t)(1 + n), rsp, HAT_OTA_WIDE_MAX, 600);
+    char *out = got == -2 ? api_error("battsim request rejected")
+              : got < 0   ? api_error("HAT not responding or not a DAQ HAT")
+                          : b64_result(rsp, (size_t)got);
+    heap_caps_free(rsp);
+    return out;
+}
+
+// POST /api/daq/bs/read  body: {"run","file","off","len" <= 2048} -> base64 bytes
+// (fewer than len = end of file). Capped so the transient JSON stays small.
+static char *api_daq_bs_read(const cJSON *body)
+{
+    cJSON *jr = body_get(body, "run"), *jf = body_get(body, "file");
+    cJSON *jo = body_get(body, "off"), *jl = body_get(body, "len");
+    if (!cJSON_IsNumber(jr) || !cJSON_IsNumber(jf) || !cJSON_IsNumber(jo) || !cJSON_IsNumber(jl)) {
+        return api_error("run, file, off, len required");
+    }
+    if (jr->valuedouble < 0 || jr->valuedouble > 65535 || jf->valuedouble < 0 ||
+        jf->valuedouble > 65535 || jo->valuedouble < 0 || jo->valuedouble > 4294967295.0) {
+        return api_error("argument out of range");
+    }
+    uint16_t run = (uint16_t)jr->valueint, file = (uint16_t)jf->valueint;
+    uint32_t off = (uint32_t)jo->valuedouble;
+    int want = jl->valueint;
+    if (want <= 0 || want > 2048) return api_error("len must be 1..2048");
+    uint8_t *buf = (uint8_t *)heap_caps_malloc((size_t)want, MALLOC_CAP_SPIRAM);
+    if (!buf) return api_error("out of memory");
+    int have = 0;
+    while (have < want) {
+        uint8_t req[10] = { 3 /* BS_HOP_READ */ };
+        uint32_t o = off + (uint32_t)have;
+        int chunk = want - have > 236 ? 236 : want - have;
+        memcpy(req + 1, &run, 2);
+        memcpy(req + 3, &file, 2);
+        memcpy(req + 5, &o, 4);
+        req[9] = (uint8_t)chunk;
+        int got = hat_bs_request(req, sizeof(req), buf + have, (uint16_t)chunk, 600);
+        if (got < 0) {
+            heap_caps_free(buf);
+            return api_error(got == -2 ? "file not found" : "HAT not responding");
+        }
+        have += got;
+        if (got < chunk) break;
+    }
+    char *r = b64_result(buf, (size_t)have);
+    heap_caps_free(buf);
+    return r;
+}
+
+// POST /api/daq/config  body: {"op": 0..4, "args": "<hex>"} -> base64 reply.
+// Same passthrough as BBP DAQ_CONFIG (HAT cmd 0x70 + op), so web and iOS reach
+// the full settings registry, including the battery-simulator keys/actions.
+static char *api_daq_config(const cJSON *body)
+{
+    cJSON *jop = body_get(body, "op");
+    if (!cJSON_IsNumber(jop) || jop->valueint < 0 || jop->valueint > BBP_DAQ_CFG_ACTION) {
+        return api_error("op must be 0..4");
+    }
+    if (!hat_get_state()->connected) return api_error("HAT not connected");
+    uint8_t args[64];
+    cJSON *jargs = body_get(body, "args");
+    int n = hex_decode(cJSON_IsString(jargs) ? jargs->valuestring : NULL, args, sizeof(args));
+    if (n < 0) return api_error("args must be hex, <= 64 bytes");
+    uint8_t *rsp = (uint8_t *)heap_caps_malloc(240, MALLOC_CAP_SPIRAM);
+    if (!rsp) return api_error("out of memory");
+    uint8_t rsp_len = 0;
+    uint8_t code = hat_request((uint8_t)(0x70 + jop->valueint), args, (uint8_t)n,
+                               rsp, &rsp_len, 300, 240);
+    char *out = code == 0 ? api_error("HAT timeout")
+              : (code != HAT_RSP_OK && code != 0x93 && code != 0x94) ? api_error("rejected by the DAQ HAT")
+              : b64_result(rsp, rsp_len);
+    heap_caps_free(rsp);
+    return out;
+}
+
 char *api_core_handle(const char *method, const char *path, const cJSON *body)
 {
     (void)method;  // most routing is by path; method used where GET/POST share a path
@@ -1797,6 +1925,9 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/daq/vdut/enable") == 0)   return api_daq_vdut_enable(body);
     if (strcmp(path, "/api/daq/vdut/setpoint") == 0) return api_daq_vdut_setpoint(body);
     if (strcmp(path, "/api/daq/acq_config") == 0) return api_daq_acq_config(body);
+    if (strcmp(path, "/api/daq/bs") == 0)         return api_daq_bs(body);
+    if (strcmp(path, "/api/daq/bs/read") == 0)    return api_daq_bs_read(body);
+    if (strcmp(path, "/api/daq/config") == 0)     return api_daq_config(body);
     if (strcmp(path, "/api/ioexp/control") == 0)    return api_ioexp_control(body);
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);

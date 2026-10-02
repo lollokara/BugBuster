@@ -11,6 +11,7 @@
 #include "config.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
+#include "battsim_host.h"
 
 static const char *TAG = "s3_link";
 
@@ -211,6 +212,15 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
         case HATP_CMD_CONFIG_GET_ALL: handle_config_get_all(payload, len); break;
         case HATP_CMD_CONFIG_SCHEMA:  handle_config_schema(payload, len);  break;
         case HATP_CMD_CONFIG_ACTION:  handle_config_action(payload, len);  break;
+
+        // Battery simulator host access (served off this task, see battsim_host.h).
+        case HATP_CMD_BS: {
+            uint8_t resp[HATP_MAX_PAYLOAD];
+            int n = battsim_host_handle(payload, len, resp, sizeof(resp));
+            if (n < 0) send_error();
+            else send_frame(HATP_RSP_BS_DATA, resp, (uint8_t)n);
+            break;
+        }
 
         // DAQ-specific commands -> board callback.
         case HATP_CMD_DAQ_START:

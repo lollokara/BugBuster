@@ -2608,6 +2608,33 @@ static esp_err_t handle_post_daq_acq_config(httpd_req_t *req)
     return send_api_core_result(req, resp, "acq config failed");
 }
 
+// POST /api/daq/bs, /api/daq/bs/read - battery simulator status/list/read.
+// Read-only (SET_EPOCH only stamps the host clock), so no admin token.
+static esp_err_t handle_post_daq_bs(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    const char *path = strcmp(req->uri, "/api/daq/bs/read") == 0 ? "/api/daq/bs/read" : "/api/daq/bs";
+    char *resp = api_core_handle("POST", path, body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "battsim request failed");
+}
+
+// POST /api/daq/config  body: {"op": 0..4, "args": hex}. SET (1) and ACTION (4)
+// change device state and need the admin token; GET/GET_ALL/SCHEMA do not.
+static esp_err_t handle_post_daq_config(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body(req);
+    cJSON *jop = body ? cJSON_GetObjectItem(body, "op") : NULL;
+    int op = cJSON_IsNumber(jop) ? jop->valueint : -1;
+    if ((op == 1 || op == 4) && check_admin_auth(req) != ESP_OK) {
+        cJSON_Delete(body);
+        return send_error(req, 401, "Admin token required");
+    }
+    char *resp = api_core_handle("POST", "/api/daq/config", body);
+    if (body) cJSON_Delete(body);
+    return send_api_core_result(req, resp, "daq config failed");
+}
+
 // GET /api/hat/la/status
 static esp_err_t handle_get_hat_la_status(httpd_req_t *req)
 {
@@ -5499,6 +5526,18 @@ bool initWebServer(void)
         .uri = "/api/daq/acq_config", .method = HTTP_POST, .handler = handle_post_daq_acq_config, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_acq_config);
+    httpd_uri_t uri_daq_bs = {
+        .uri = "/api/daq/bs", .method = HTTP_POST, .handler = handle_post_daq_bs, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_bs);
+    httpd_uri_t uri_daq_bs_read = {
+        .uri = "/api/daq/bs/read", .method = HTTP_POST, .handler = handle_post_daq_bs, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_bs_read);
+    httpd_uri_t uri_daq_config = {
+        .uri = "/api/daq/config", .method = HTTP_POST, .handler = handle_post_daq_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_daq_config);
 
     // ----- HAT v2 routes (registered before the /api/hat/* wildcard) -----
 

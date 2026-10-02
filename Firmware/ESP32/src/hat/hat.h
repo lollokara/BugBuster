@@ -895,6 +895,22 @@ const char *hat_get_type_string(void);
  */
 int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
 
+// Battery simulator host access on the DAQ HAT. Request [op u8][args] (<= 16 B),
+// reply up to HAT_OTA_WIDE_MAX bytes received on the wide path. Ops are defined
+// in Firmware/DAQ_HAT/ESP32P4/src/battsim/battsim_host.h.
+// MUST match P4 HATP_CMD_BS / HATP_RSP_BS_DATA (s3_link.h).
+#define HAT_CMD_BS              0x7Bu
+#define HAT_RSP_BS_DATA         0x9Au
+#define HAT_BS_REQ_MAX          16
+
+/**
+ * @brief One battery-simulator request to the DAQ HAT (HAT_CMD_BS).
+ * @return reply length (0..rsp_cap), -1 transport error / timeout,
+ *         -2 the P4 answered RSP_ERROR (bad args, missing run/file, busy).
+ */
+int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                   uint32_t timeout_ms);
+
 /**
  * @brief Begin an OTA image transfer to the DAQ HAT.
  * @param target One of HAT_OTA_TARGET_P4 / _C6 / _STAGE. P4 streams straight to

@@ -187,6 +187,11 @@ extern "C" {
 #define HATP_CMD_CONFIG_SCHEMA   0x73u   // payload: key u16 LE        -> RSP_CONFIG_SCHEMA
 #define HATP_CMD_CONFIG_ACTION   0x74u   // payload: action_id u8      -> OK / ERROR
 
+// Battery simulator host access: [op u8][args] -> HATP_RSP_BS_DATA (up to 240 B,
+// the S3 receives it on its wide path). Ops in battsim/battsim_host.h.
+// MUST match S3 hat.h HAT_CMD_BS / HAT_RSP_BS_DATA.
+#define HATP_CMD_BS              0x7Bu
+
 // CONFIG_GET_ALL flags.
 #define HATP_CONFIG_FLAG_SECRET  0x01u   // include secret values (e.g. wifi pw)
 
@@ -206,6 +211,7 @@ extern "C" {
 #define HATP_RSP_DAQ_WIFI_STREAM_INFO 0x8Cu // response to HATP_CMD_DAQ_WIFI_STREAM_INFO (mirrors S3 HAT_RSP_DAQ_WIFI_STREAM_INFO)
 #define HATP_RSP_DAQ_VDUT_STATUS 0x98u // payload: s3link_vdut_status_t; response to HATP_CMD_DAQ_VDUT_STATUS
 #define HATP_RSP_DAQ_C6_VERSION  0x99u // payload: s3link_c6_version_t; response to HATP_CMD_DAQ_C6_VERSION
+#define HATP_RSP_BS_DATA         0x9Au // payload: battsim host reply (battsim_host.h)
 
 // Firmware version reported in GET_INFO.
 #define S3LINK_FW_MAJOR      1u

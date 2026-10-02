@@ -46,6 +46,19 @@ static int handler_daq_config(const uint8_t *payload, size_t len,
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;
     uint8_t subop = payload[0];
+
+    // Battery simulator: reply up to 240 B, so it rides the wide receive path.
+    if (subop == BBP_DAQ_CFG_BATTSIM) {
+        if (!hat_get_state()->connected) return -CMD_ERR_INVALID_STATE;
+        if (len < 2 || len - 1 > HAT_BS_REQ_MAX) return -CMD_ERR_BAD_ARG;
+        // resp is the BBP response buffer (BBP_MAX_PAYLOAD), so no local copy.
+        int n = hat_bs_request(payload + 1, (uint8_t)(len - 1), resp, HAT_OTA_WIDE_MAX, 600);
+        if (n == -2) return -CMD_ERR_BAD_ARG;
+        if (n < 0) return -CMD_ERR_TIMEOUT;
+        *resp_len = (size_t)n;
+        return n;
+    }
+
     if (subop > BBP_DAQ_CFG_ACTION) return -CMD_ERR_BAD_ARG;
 
     if (!hat_get_state()->connected) return -CMD_ERR_INVALID_STATE;
