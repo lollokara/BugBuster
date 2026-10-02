@@ -290,7 +290,8 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         let (lo, avg, hi) = series(v, lane);
         let (y0, y1) = if lane == Lane::Soc && !log { let (a, b) = y_range(lo, hi, false); (a.max(-2.0), b.min(102.0)) } else { y_range(lo, hi, log) };
         let fy = |x: f64| {
-            let x = if log { x.max(1e-10).log10() } else { x };
+            // Log: readings at or below the floor sit on the bottom edge instead of vanishing.
+            let x = if log { x.max(10f64.powf(y0)).log10() } else { x };
             top + lh - (x - y0) / (y1 - y0) * lh
         };
 
@@ -335,28 +336,25 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
         ctx.begin_path();
         ctx.rect(lay.plot_x, top, lay.plot_w, lh);
         ctx.clip();
-        // Min/max envelope.
+        let segs = step_segments(&v.t, &v.dt);
+        // Min/max envelope: one column per interval, so no diagonal artefacts.
         if !std::ptr::eq(lo, avg) {
-            ctx.set_global_alpha(0.18);
+            ctx.set_global_alpha(0.22);
             ctx.set_fill_style_str(&color);
-            ctx.begin_path();
-            for (i, &tt) in v.t.iter().enumerate() {
-                let (x, y) = (xof(tt), fy(hi[i]));
-                if i == 0 { ctx.move_to(x, y) } else { ctx.line_to(x, y) }
+            for (i, &(a, b, _)) in segs.iter().enumerate() {
+                let (xa, xb) = (xof(a), xof(b));
+                let (ya, yb) = (fy(hi[i]), fy(lo[i]));
+                ctx.fill_rect(xa, ya.min(yb), (xb - xa).max(1.0), (yb - ya).abs().max(1.0));
             }
-            for i in (0..v.t.len()).rev() {
-                ctx.line_to(xof(v.t[i]), fy(lo[i]));
-            }
-            ctx.close_path();
-            ctx.fill();
             ctx.set_global_alpha(1.0);
         }
         ctx.set_stroke_style_str(&color);
         ctx.set_line_width(1.5);
         ctx.begin_path();
-        for (i, &tt) in v.t.iter().enumerate() {
-            let (x, y) = (xof(tt), fy(avg[i]));
-            if i == 0 { ctx.move_to(x, y) } else { ctx.line_to(x, y) }
+        for (i, &(a, b, joined)) in segs.iter().enumerate() {
+            let y = fy(avg[i]);
+            if joined { ctx.line_to(xof(a), y) } else { ctx.move_to(xof(a), y) }
+            ctx.line_to(xof(b), y);
         }
         ctx.stroke();
         ctx.restore();
@@ -408,6 +406,22 @@ pub fn draw(canvas: &HtmlCanvasElement, view: Option<&BsView>, o: &ChartOpts) {
             ctx.stroke();
         }
     }
+}
+
+/// Interval [start, end] of each point and whether it joins the previous one; a hole
+/// longer than half an interval (missing data) breaks the trace.
+pub fn step_segments(t: &[f64], dt: &[f64]) -> Vec<(f64, f64, bool)> {
+    let mut prev_end = f64::NEG_INFINITY;
+    t.iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let w = dt.get(i).copied().filter(|w| *w > 0.0).unwrap_or(60.0);
+            let (a, b) = (c - w / 2.0, c + w / 2.0);
+            let joined = (a - prev_end).abs() <= w * 0.5;
+            prev_end = b;
+            (a, b, joined)
+        })
+        .collect()
 }
 
 pub fn event_name(e: &BsEvent) -> &'static str {

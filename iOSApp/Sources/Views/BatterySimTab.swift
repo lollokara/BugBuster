@@ -397,31 +397,35 @@ struct BatteryHistoryChart: View {
             var y1 = lane.5.filter(usable).map(f).max() ?? (log ? 0 : 1)
             var y0 = lane.3.filter(usable).map(f).min() ?? (log ? y1 - 3 : 0)
             let pad = y1 - y0 < 1e-12 ? (log ? 0.5 : max(abs(y1), 1e-9) * 0.05) : (y1 - y0) * 0.06
+            let dataMin = y0
             y0 -= pad; y1 += pad
-            let y = { (val: Double) in top + laneH - CGFloat((f(val) - y0) / (y1 - y0)) * laneH }
+            if !log && dataMin >= 0 { y0 = max(y0, 0) }
+            let y = { (val: Double) in top + laneH - CGFloat(((log ? log10(max(val, pow(10, y0))) : val) - y0) / (y1 - y0)) * laneH }
             for k in 0...2 {
                 let yv = y0 + (y1 - y0) * Double(k) / 2
                 let real = log ? pow(10, yv) : yv
+                // Edge labels sit inside their lane so they do not collide with the neighbour's.
                 ctx.draw(Text(lane.1 == "%" ? String(format: "%.0f%%", real) : BattSim.si(real, lane.1))
                             .font(.system(size: 8, design: .monospaced)).foregroundColor(label),
-                         at: CGPoint(x: left - 26, y: top + laneH - CGFloat(k) / 2 * laneH))
+                         at: CGPoint(x: left - 4, y: top + laneH - CGFloat(k) / 2 * laneH),
+                         anchor: k == 0 ? .bottomTrailing : k == 2 ? .topTrailing : .trailing)
             }
             var inner = ctx
             inner.clip(to: Path(rect))
+            let segs = BattSim.stepSegments(v.t, v.dt)
             if lane.3 != lane.4 {
                 var band = Path()
-                for i in v.t.indices {
-                    let pt = CGPoint(x: x(v.t[i]), y: y(lane.5[i]))
-                    if i == 0 { band.move(to: pt) } else { band.addLine(to: pt) }
+                for (i, s) in segs.enumerated() {
+                    let ya = y(lane.5[i]), yb = y(lane.3[i])
+                    band.addRect(CGRect(x: x(s.0), y: min(ya, yb), width: max(1, x(s.1) - x(s.0)), height: max(1, abs(yb - ya))))
                 }
-                for i in v.t.indices.reversed() { band.addLine(to: CGPoint(x: x(v.t[i]), y: y(lane.3[i]))) }
-                band.closeSubpath()
-                inner.fill(band, with: .color(lane.2.opacity(0.18)))
+                inner.fill(band, with: .color(lane.2.opacity(0.22)))
             }
             var line = Path()
-            for i in v.t.indices {
-                let pt = CGPoint(x: x(v.t[i]), y: y(lane.4[i]))
-                if i == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
+            for (i, s) in segs.enumerated() {
+                let yv = y(lane.4[i])
+                if s.2 { line.addLine(to: CGPoint(x: x(s.0), y: yv)) } else { line.move(to: CGPoint(x: x(s.0), y: yv)) }
+                line.addLine(to: CGPoint(x: x(s.1), y: yv))
             }
             inner.stroke(line, with: .color(lane.2), lineWidth: 1.4)
         }

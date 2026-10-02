@@ -139,6 +139,8 @@ pub struct BsOpenInfo {
 #[serde(rename_all = "camelCase")]
 pub struct BsView {
     pub t: Vec<f64>,
+    #[serde(default)]
+    pub dt: Vec<f64>,
     pub v_min: Vec<f64>,
     pub v_avg: Vec<f64>,
     pub v_max: Vec<f64>,

@@ -52,7 +52,7 @@ struct BsHistory {
 }
 
 struct BsView {
-    var t: [Double] = [], vMin: [Double] = [], vAvg: [Double] = [], vMax: [Double] = []
+    var t: [Double] = [], dt: [Double] = [], vMin: [Double] = [], vAvg: [Double] = [], vMax: [Double] = []
     var iMin: [Double] = [], iAvg: [Double] = [], iMax: [Double] = [], pAvg: [Double] = []
     var soc: [Double] = [], tier: [Int] = []
 }
@@ -213,14 +213,14 @@ enum BattSim {
     static func view(_ h: BsHistory, _ t0: Double, _ t1: Double, buckets: Int) -> BsView {
         let rs = h.recs[range(h, t0, t1)]
         var v = BsView()
-        func push(_ t: Double, _ r: BsRec, _ p: Double) {
-            v.t.append(t); v.vMin.append(r.vMin); v.vAvg.append(r.vAvg); v.vMax.append(r.vMax)
+        func push(_ t: Double, _ r: BsRec, _ p: Double, _ dt: Double) {
+            v.t.append(t); v.dt.append(dt); v.vMin.append(r.vMin); v.vAvg.append(r.vAvg); v.vMax.append(r.vMax)
             v.iMin.append(r.iMin); v.iAvg.append(r.iAvg); v.iMax.append(r.iMax); v.pAvg.append(p)
             v.soc.append(r.soc); v.tier.append(r.tier)
         }
         let n = min(max(buckets, 16), 4000)
         if rs.count <= n {
-            for r in rs { push(r.t - r.dt / 2, r, r.vAvg * r.iAvg) }
+            for r in rs { push(r.t - r.dt / 2, r, r.vAvg * r.iAvg, r.dt) }
             return v
         }
         let w = (t1 - t0) / Double(n)
@@ -229,9 +229,10 @@ enum BattSim {
             let be = t0 + w * Double(b + 1)
             var acc = BsRec(t: 0, dt: 0, vAvg: 0, vMin: .infinity, vMax: -.infinity, soc: 0, iAvg: 0,
                             iMin: .infinity, iMax: -.infinity, flags: 0, qDut: nil, qUsed: 0, eDut: nil, tier: 0)
-            var tw = 0.0, ew = 0.0, cnt = 0
+            var tw = 0.0, ew = 0.0, cnt = 0, lo = Double.infinity, hi = -Double.infinity
             while i < rs.endIndex && rs[i].t - rs[i].dt / 2 < be {
                 let r = rs[i]
+                lo = min(lo, r.t - r.dt); hi = max(hi, r.t)
                 acc.vMin = min(acc.vMin, r.vMin); acc.vMax = max(acc.vMax, r.vMax)
                 acc.iMin = min(acc.iMin, r.iMin); acc.iMax = max(acc.iMax, r.iMax)
                 acc.vAvg += r.vAvg * r.dt; acc.iAvg += r.iAvg * r.dt; ew += r.vAvg * r.iAvg * r.dt
@@ -239,7 +240,8 @@ enum BattSim {
             }
             guard cnt > 0, tw > 0 else { continue }
             acc.vAvg /= tw; acc.iAvg /= tw
-            push(be - w / 2, acc, ew / tw)
+            // Span the records actually covered, so sparse data stays continuous instead of w-wide dots.
+            push((lo + hi) / 2, acc, ew / tw, hi - lo)
         }
         return v
     }
@@ -280,6 +282,18 @@ enum BattSim {
     }
 
     // MARK: Formatting
+
+    /// (start, end, joinsPrevious) per point; a hole longer than half an interval breaks the trace.
+    static func stepSegments(_ t: [Double], _ dt: [Double]) -> [(Double, Double, Bool)] {
+        var prevEnd = -Double.infinity
+        return t.indices.map { i in
+            let w = i < dt.count && dt[i] > 0 ? dt[i] : 60
+            let a = t[i] - w / 2, b = t[i] + w / 2
+            let joined = abs(a - prevEnd) <= w * 0.5
+            prevEnd = b
+            return (a, b, joined)
+        }
+    }
 
     static func si(_ v: Double, _ unit: String) -> String {
         guard v.isFinite else { return "-" }

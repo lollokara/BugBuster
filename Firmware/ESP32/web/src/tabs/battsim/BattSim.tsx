@@ -9,7 +9,7 @@ import { deviceMac, pollIntervalFor } from "../../state/signals";
 import * as dev from "./device";
 import {
   buildHistory, CHEM_NAMES, ERROR_TEXT, EVENT_NAMES, fmtDuration, fmtElapsedTick, fmtSi,
-  STATE_NAMES, stats as winStats, timeStep, view as mkView, type BsStatus, type History, type View,
+  STATE_NAMES, stats as winStats, stepSegments, timeStep, view as mkView, type BsStatus, type History, type View,
 } from "./history";
 
 const ACT = { defaults: 14, newRun: 7, start: 8, pause: 9, stop: 10, unload: 11, load: 12, del: 13 };
@@ -77,7 +77,7 @@ function draw(c: HTMLCanvasElement, v: View | null, h: History | null, t0: numbe
     if (!Number.isFinite(y0) || !Number.isFinite(y1)) { y0 = log ? -9 : 0; y1 = log ? 0 : 1; }
     const pad = y1 - y0 < 1e-12 ? (log ? 0.5 : Math.max(Math.abs(y1), 1e-9) * 0.05) : (y1 - y0) * 0.06;
     y0 -= pad; y1 += pad;
-    const fy = (x: number) => top + lh - ((f(x) - y0) / (y1 - y0)) * lh;
+    const fy = (x: number) => top + lh - (((log ? Math.log10(Math.max(x, 10 ** y0)) : x) - y0) / (y1 - y0)) * lh;
     g.textAlign = "right";
     if (log) {
       const every = Math.max(1, Math.ceil((y1 - y0) / Math.max(1, lh / 24)));
@@ -97,15 +97,25 @@ function draw(c: HTMLCanvasElement, v: View | null, h: History | null, t0: numbe
     }
     const col = cssVar(c, ln.color);
     g.save(); g.beginPath(); g.rect(LEFT, top, pw, lh); g.clip();
+    const segs = stepSegments(v.t, v.dt);
     if (lo !== av) {
-      g.globalAlpha = 0.18; g.fillStyle = col; g.beginPath();
-      v.t.forEach((t, i) => (i ? g.lineTo(xof(t), fy(hi[i]!)) : g.moveTo(xof(t), fy(hi[i]!))));
-      for (let i = v.t.length - 1; i >= 0; i--) g.lineTo(xof(v.t[i]!), fy(lo[i]!));
-      g.closePath(); g.fill(); g.globalAlpha = 1;
+      g.globalAlpha = 0.22; g.fillStyle = col;
+      segs.forEach(([a, b], i) => {
+        const ya = fy(hi[i]!), yb = fy(lo[i]!);
+        g.fillRect(xof(a), Math.min(ya, yb), Math.max(1, xof(b) - xof(a)), Math.max(1, Math.abs(yb - ya)));
+      });
+      g.globalAlpha = 1;
     }
     g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
-    v.t.forEach((t, i) => (i ? g.lineTo(xof(t), fy(av[i]!)) : g.moveTo(xof(t), fy(av[i]!))));
+    segs.forEach(([a, b, joined], i) => {
+      const y = fy(av[i]!);
+      if (joined) g.lineTo(xof(a), y); else g.moveTo(xof(a), y);
+      g.lineTo(xof(b), y);
+    });
     g.stroke(); g.lineWidth = 1; g.restore();
+    g.fillStyle = cssVar(c, "var(--bg0)");
+    g.fillRect(LEFT + 1, top + 1, g.measureText(ln.label).width + 12, 17);
+    g.textAlign = "left"; g.fillStyle = lab; g.fillText(ln.label, LEFT + 6, top + 13);
   });
   if (h) {
     g.strokeStyle = g.fillStyle = cssVar(c, "var(--rose)"); g.textAlign = "left"; g.setLineDash([3, 3]);

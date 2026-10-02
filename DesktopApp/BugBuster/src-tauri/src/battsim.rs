@@ -478,6 +478,8 @@ fn stats(h: &History, t0: f64, t1: f64) -> BsStats {
 #[serde(rename_all = "camelCase")]
 pub struct BsView {
     pub t: Vec<f64>,
+    /// Interval covered by each point (s): record dt, or the bucket width.
+    pub dt: Vec<f64>,
     pub v_min: Vec<f64>,
     pub v_avg: Vec<f64>,
     pub v_max: Vec<f64>,
@@ -500,8 +502,9 @@ fn view(h: &History, t0: f64, t1: f64, buckets: usize) -> BsView {
         stats: stats(h, t0, t1),
         ..Default::default()
     };
-    let mut push = |t: f64, r: &Rec, p: f64| {
+    let mut push = |t: f64, r: &Rec, p: f64, dt: f64| {
         v.t.push(t);
+        v.dt.push(dt);
         v.v_min.push(r.v_min);
         v.v_avg.push(r.v_avg);
         v.v_max.push(r.v_max);
@@ -515,7 +518,7 @@ fn view(h: &History, t0: f64, t1: f64, buckets: usize) -> BsView {
     let buckets = buckets.clamp(16, 8000);
     if rs.len() <= buckets {
         for r in rs {
-            push(r.t - r.dt / 2.0, r, r.v_avg * r.i_avg);
+            push(r.t - r.dt / 2.0, r, r.v_avg * r.i_avg, r.dt);
         }
         return v;
     }
@@ -526,8 +529,11 @@ fn view(h: &History, t0: f64, t1: f64, buckets: usize) -> BsView {
         let be = t0 + w * (b + 1) as f64;
         let mut acc = Rec { v_min: f64::INFINITY, v_max: f64::NEG_INFINITY, i_min: f64::INFINITY, i_max: f64::NEG_INFINITY, ..Default::default() };
         let (mut tw, mut ew, mut n) = (0.0, 0.0, 0usize);
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         while i < rs.len() && rs[i].t - rs[i].dt / 2.0 < be {
             let r = &rs[i];
+            lo = lo.min(r.t - r.dt);
+            hi = hi.max(r.t);
             acc.v_min = acc.v_min.min(r.v_min);
             acc.v_max = acc.v_max.max(r.v_max);
             acc.i_min = acc.i_min.min(r.i_min);
@@ -546,7 +552,8 @@ fn view(h: &History, t0: f64, t1: f64, buckets: usize) -> BsView {
         }
         acc.v_avg /= tw;
         acc.i_avg /= tw;
-        push(be - w / 2.0, &acc, ew / tw);
+        // Span the records actually covered, so sparse data stays continuous instead of w-wide dots.
+        push((lo + hi) / 2.0, &acc, ew / tw, hi - lo);
     }
     v
 }

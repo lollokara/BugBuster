@@ -239,7 +239,7 @@ export function stats(h: History, t0 = -Infinity, t1 = Infinity): Stats | null {
 }
 
 export interface View {
-  t: number[]; vMin: number[]; vAvg: number[]; vMax: number[];
+  t: number[]; dt: number[]; vMin: number[]; vAvg: number[]; vMax: number[];
   iMin: number[]; iAvg: number[]; iMax: number[]; pAvg: number[]; soc: number[]; tier: number[];
 }
 
@@ -247,14 +247,14 @@ export interface View {
 export function view(h: History, t0: number, t1: number, buckets: number): View {
   const [lo, hi] = windowRange(h, t0, t1);
   const rs = h.recs.slice(lo, hi);
-  const v: View = { t: [], vMin: [], vAvg: [], vMax: [], iMin: [], iAvg: [], iMax: [], pAvg: [], soc: [], tier: [] };
-  const push = (t: number, r: Rec, p: number) => {
-    v.t.push(t); v.vMin.push(r.vMin); v.vAvg.push(r.vAvg); v.vMax.push(r.vMax);
+  const v: View = { t: [], dt: [], vMin: [], vAvg: [], vMax: [], iMin: [], iAvg: [], iMax: [], pAvg: [], soc: [], tier: [] };
+  const push = (t: number, r: Rec, p: number, dt: number) => {
+    v.t.push(t); v.dt.push(dt); v.vMin.push(r.vMin); v.vAvg.push(r.vAvg); v.vMax.push(r.vMax);
     v.iMin.push(r.iMin); v.iAvg.push(r.iAvg); v.iMax.push(r.iMax); v.pAvg.push(p); v.soc.push(r.soc); v.tier.push(r.tier);
   };
   const n = Math.max(16, Math.min(8000, Math.floor(buckets)));
   if (rs.length <= n) {
-    for (const r of rs) push(r.t - r.dt / 2, r, r.vAvg * r.iAvg);
+    for (const r of rs) push(r.t - r.dt / 2, r, r.vAvg * r.iAvg, r.dt);
     return v;
   }
   const w = (t1 - t0) / n;
@@ -262,9 +262,10 @@ export function view(h: History, t0: number, t1: number, buckets: number): View 
   for (let b = 0; b < n; b++) {
     const be = t0 + w * (b + 1);
     const acc: Rec = { t: 0, dt: 0, vAvg: 0, vMin: Infinity, vMax: -Infinity, soc: 0, iAvg: 0, iMin: Infinity, iMax: -Infinity, flags: 0, qDut: null, qUsed: 0, eDut: null, tier: 0 };
-    let tw = 0, ew = 0, cnt = 0;
+    let tw = 0, ew = 0, cnt = 0, lo = Infinity, hi = -Infinity;
     while (i < rs.length && rs[i]!.t - rs[i]!.dt / 2 < be) {
       const r = rs[i]!;
+      lo = Math.min(lo, r.t - r.dt); hi = Math.max(hi, r.t);
       acc.vMin = Math.min(acc.vMin, r.vMin); acc.vMax = Math.max(acc.vMax, r.vMax);
       acc.iMin = Math.min(acc.iMin, r.iMin); acc.iMax = Math.max(acc.iMax, r.iMax);
       acc.vAvg += r.vAvg * r.dt; acc.iAvg += r.iAvg * r.dt; ew += r.vAvg * r.iAvg * r.dt;
@@ -272,9 +273,22 @@ export function view(h: History, t0: number, t1: number, buckets: number): View 
     }
     if (!cnt || tw <= 0) continue;
     acc.vAvg /= tw; acc.iAvg /= tw;
-    push(be - w / 2, acc, ew / tw);
+    // Span the records actually covered, so sparse data stays continuous instead of w-wide dots.
+    push((lo + hi) / 2, acc, ew / tw, hi - lo);
   }
   return v;
+}
+
+/** [start, end, joinsPrevious] per point; a hole longer than half an interval breaks the trace. */
+export function stepSegments(t: number[], dt: number[]): [number, number, boolean][] {
+  let prevEnd = -Infinity;
+  return t.map((c, i) => {
+    const w = dt[i]! > 0 ? dt[i]! : 60;
+    const a = c - w / 2, b = c + w / 2;
+    const joined = Math.abs(a - prevEnd) <= w * 0.5;
+    prevEnd = b;
+    return [a, b, joined];
+  });
 }
 
 // ---------------------------------------------------------------------------
