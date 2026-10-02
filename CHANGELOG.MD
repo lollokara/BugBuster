@@ -345,6 +345,22 @@
   | AN-07 / AN-12 | scope events sent under `g_stateMutex`; ADC config held the SPI bus across a 20 ms settle | both released earlier (functional smoke only; no measurable change here) |
   | TR-1 | suspected truncation of >512 B responses | already fixed by BBP-TXQ (M2): 100/100 1018 B responses intact; device test added |
 
+- **Latency (2026-10 audit, M5, second part).** Measured on the board where
+  a metric exists. Desktop and iOS items are host-tested only (no UI driver
+  or Swift toolchain on the bench).
+
+  | ID | Was | Now |
+  |---|---|---|
+  | AN-10 / AN-11 | the BBP ADC stream advertised 9.6 kSPS and delivered ~18 samples/s: diagnostic slots stayed in the sequence, `div` was echoed but ignored, and the poll loop slept on a 1 ms tick | stream pauses the diag slots, `div` applied on the device, poll task wakes on the ADC_RDY edge (burst-limited so cmdProc is not starved): 9.6 kSPS -> ~1180 samples/s, 1.2 kSPS -> ~735-1030/s; the reported rate is capped at 1200 so it matches delivery; PING p95 5.9 ms during a stream. New `adcPoll` counters in `/api/debug` |
+  | IOS-23 | every HTTP/BLE reply carried camelCase and snake_case copies | camelCase only, iOS decodes camelCase: `/api/status` 2541 -> 1474 B (-42%), `/api/device/info` 206 -> 106 B. **Breaking for older iOS builds** |
+  | WEB-28 | no fetch timeout; scope redrew at 60 fps with no new data; one SSE error streak latched polling forever; only SignalPath backed off when the device was unreachable | 10 s request timeout, redraw only on change, SSE error count resets on success, every poller uses the shared backoff (on-device UI redeployed) |
+  | DESK-22 | HAT, Voltages, IO Expander and USB-PD tabs refetched on every `device-state` tick (300 ms on HTTP); the HAT probe ran every 3 s on a bare board | own non-overlapping schedules (2-3 s); bare-board probe every 15 s |
+  | DESK-23 | the ADC tab rebuilt its four-card grid on every tick | rebuilt only on a config change; readings update in place |
+  | DESK-24 | the DAQ ingest thread held the transport mutex across a 1 s USB read | 50 ms read slices; the 1 s idle timeout is kept |
+  | DESK-25 | each DAQ view refresh shipped ~14k floats as JSON | binary layout over IPC (ArrayBuffer), less than half the bytes; layout pinned by a test |
+  | DESK-28 | a 30 Hz `adc-stream` event with no listener, re-emitting stale data after the stream stopped; the ADC tab never stopped its stream | event removed; the tab stops the stream it started |
+  | DESK-DIAG-RAW (found during IOS-23) | desktop HTTP read `diagnostics[].raw`, firmware sends `rawCode`: raw codes were always 0 | reads `rawCode` |
+
 - **IDAC auto-calibration failed after one point.** With a DAQ HAT attached,
   the S3 measures the three supply rails through U23 every second for C6
   telemetry. Once U23 was serialised, those reads queued ahead of the

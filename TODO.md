@@ -139,14 +139,15 @@ update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
    | Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
    | Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
 
-   **Plan M5 status, part 1 (2026-10-02, branch `audit/2026-10-m5-latency`, S3 flashed by OTA).**
+   **Plan M5 status (2026-10-02, branch `audit/2026-10-m5-latency`, S3 + SPIFFS flashed by OTA). M5 complete.**
 
    | Status | Items |
    |---|---|
-   | Fixed, measured on hardware | USB-RX-LAT (new; PING 107 -> 1.0 ms), TR-3 (70 s idle: timeout -> 5 ms), WEB-23 (status with SSE open 0/10 -> 10/10), AN-06 (PING p95 during wave 4.1 -> 1.2 ms), TR-6 (11 -> 5 frames, 761 -> 405 ms; time target -60 % missed at -47 %), IO-13 |
-   | Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12 |
+   | Fixed, measured on hardware | USB-RX-LAT (new; PING 107 -> 1.0 ms), TR-3 (70 s idle: timeout -> 5 ms), WEB-23 (status with SSE open 0/10 -> 10/10), AN-06 (PING p95 during wave 4.1 -> 1.2 ms), TR-6 (11 -> 5 frames, 761 -> 405 ms; time target -60 % missed at -47 %), IO-13, AN-10/AN-11 (9.6 kSPS stream 16 -> ~1180 samples/s, reported rate now matches; plan target "within 2 % of 9.6 k" missed - SPI cost per sample is the ceiling), IOS-23 (`/api/status` -42 %) |
+   | Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12, WEB-28 (UI redeployed, vitest), DESK-22, DESK-23 (ADC tab only), DESK-24, DESK-25, DESK-28, DESK-DIAG-RAW (new) |
+   | Not verified on a client | iOS camelCase decode (IOS-23): T1 only, needs a macOS build by the owner. Desktop UI changes: `cargo check` + tests, no UI run |
    | Refuted / closed | TR-1 (fixed by BBP-TXQ in M2; device test added) |
-   | Not started yet | AN-10 / AN-11 (ADC_RDY acquisition, L), DESK-22..28, WEB-28, IOS-23 |
+   | Carried over | DESK-23 for the other tabs (Overview, Diag, Faults rebuild per tick); AN-11 faster path (fewer SPI transactions per sample) |
 2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
    then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
    PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
