@@ -204,6 +204,7 @@ on-device; the C6 drives the local display and wireless link.
 | **Low-noise mode** | Super Resolution - best measured density 0.70 nA/√Hz ([method](Docs/noise-characterisation.md)) |
 | **Signal integrity** | Per-sample ADAQ CRC, isolated-outlier despiking on device |
 | **DUT supply** | Enable / voltage / current limit over HTTP and BLE; out-of-range setpoints are rejected, not clamped |
+| **Battery simulator** | Runs fully on the P4: LiPo, LiFePO4, NiMH, 12 V lead-acid; capacity, cell count, start SOC. Exact charge integration (no drift on months-long µA runs), OCV curve + internal-resistance sag + Peukert, optional virtual constant-current load and self-discharge, BMS-style cutoff. Runs persist to a 4 MiB LittleFS partition with tiered history and resume after reboot (paused). Configured and monitored from the C6 screen: V, A, SOC, remaining time |
 | **Display** | ESP32-C6 + ST7789 - live readout, settings and diagnostics menus |
 | **OTA** | P4 dual-slot A/B with rollback; C6 flashed via the P4's ROM-loader relay, SHA-256 verified |
 

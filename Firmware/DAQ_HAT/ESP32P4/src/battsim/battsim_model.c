@@ -85,7 +85,7 @@ bs_valid_t bs_params_validate(const bs_params_t *p, uint32_t vmin_mv,
     const bs_chem_info_t *ci = bs_chem_info((bs_chem_t)p->chem);
     if (!ci) return BS_ERR_CHEM;
     if (p->cells < ci->cells_min || p->cells > ci->cells_max) return BS_ERR_CELLS;
-    // 1 mAh .. 2,000 Ah keeps every pC quantity far inside int64.
+    // 2,000 Ah = 7.2e18 pC, inside int64 (9.2e18); the run stops at depletion.
     if (p->capacity_mah == 0 || p->capacity_mah > 2000000u) return BS_ERR_CAPACITY;
     if (p->start_soc_x10 > 1000) return BS_ERR_SOC;
     if ((uint32_t)p->cells * ci->ocv_mv[BS_OCV_POINTS - 1] > vmax_mv) return BS_ERR_VMAX;

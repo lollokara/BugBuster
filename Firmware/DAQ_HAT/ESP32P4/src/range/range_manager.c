@@ -268,17 +268,20 @@ current_range_t range_manager_step(range_manager_t *rm)
     bool ff_hi_level  = gpio_get_level(AR_FF_HI_PIN) != 0;
     bool ff_mid_level = gpio_get_level(AR_FF_MID_PIN) != 0;
 
-    // FF_HI set while we are in HI → go to MID, unless the FINE reading for
-    // this sample says the current is well inside the HI span (stuck latch).
-    // Two consecutive over-range samples, so one corrupted conversion cannot
-    // confirm it; a missing FINE note fails safe to the latch.
-    bool hi_note = rm->hi_note_valid;
+    // HI -> MID. The FINE reading decides, not the latch alone: at ~12.8 V
+    // V_DUT the HI path clips at ~0.83 mA, below the 1.434 mA latch trip, and a
+    // latch set by a switching transient never releases. Up on two consecutive
+    // over-range FINE samples (one corrupted conversion cannot confirm), or on
+    // the latch when no FINE note exists (fail safe).
+    bool hi_note = rm->hi_note_valid && cur == RANGE_HI;
+    // FINE is still settling from the bypass switch during the lock window.
+    if (hi_note && rm->lock_remaining > 0) rm->hi_note_over = false;
     if (hi_note) rm->hi_over_run = rm->hi_note_over ? (uint8_t)(rm->hi_over_run < 2 ? rm->hi_over_run + 1 : 2) : 0;
-    bool hi_over = !hi_note || rm->hi_over_run >= 2;
+    bool latch_hi = (flags & AR_ISR_UP_HI) || ff_hi_level;
+    bool hi_up = hi_note ? (rm->hi_over_run >= 2) : latch_hi;
     rm->hi_note_valid = false;
-    if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI && !hi_over) {
-        rm->hi_latch_vetoed++;
-    } else if (((flags & AR_ISR_UP_HI) || ff_hi_level) && cur == RANGE_HI) {
+    if (cur == RANGE_HI && latch_hi && !hi_up) rm->hi_latch_vetoed++;
+    if (cur == RANGE_HI && hi_up) {
         apply_range(rm, RANGE_MID);
         rm->lock_remaining = (int32_t)rm->lock_samples;
         rm->pending_down   = false;
@@ -338,7 +341,13 @@ current_range_t range_manager_step(range_manager_t *rm)
                         (cur == RANGE_LO)  ? AR_FF_MID_PIN : GPIO_NUM_NC;
 
     if (dn_pin != GPIO_NUM_NC) {
-        if (!gpio_get_level(dn_pin)) {
+        // MID -> HI also needs the MID reading well below the HI clip point,
+        // otherwise a load near the boundary would bounce (hysteresis).
+        bool quiet = !gpio_get_level(dn_pin);
+        if (cur == RANGE_MID && rm->mid_note_valid && rm->mid_note_amps > AR_HI_DOWN_MAX_A)
+            quiet = false;
+        rm->mid_note_valid = false;
+        if (quiet) {
             rm->pending_down = true;
             if (rm->confirm_count < AR_CONFIRM_SAMPLES) rm->confirm_count++;
         } else if (rm->confirm_count > 0) {
@@ -379,8 +388,13 @@ current_range_t range_manager_step(range_manager_t *rm)
 
 void range_manager_note_hi(range_manager_t *rm, float fine_amps, bool fine_ok)
 {
-    rm->hi_note_valid = true;
-    rm->hi_note_over  = !fine_ok || fabsf(fine_amps) > AR_HI_CONFIRM_A;
+    if (rm->current == RANGE_HI) {
+        rm->hi_note_valid = true;
+        rm->hi_note_over  = !fine_ok || fabsf(fine_amps) > AR_HI_CONFIRM_A;
+    } else if (rm->current == RANGE_MID) {
+        rm->mid_note_valid = fine_ok;
+        rm->mid_note_amps  = fabsf(fine_amps);
+    }
 }
 
 current_range_t range_manager_poll(range_manager_t *rm)

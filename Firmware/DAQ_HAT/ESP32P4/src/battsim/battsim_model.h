@@ -24,7 +24,7 @@ typedef enum {
 } bs_chem_t;
 
 #define BS_OCV_POINTS     21          // 0..100 % SOC in 5 % steps
-#define BS_PC_PER_MAH     3600000000LL  // 1 mAh = 3.6 C = 3.6e9 pC
+#define BS_PC_PER_MAH     3600000000000LL  // 1 mAh = 3.6 C = 3.6e12 pC
 #define BS_SECONDS_PER_MONTH 2592000.0  // 30 days
 
 typedef struct {
