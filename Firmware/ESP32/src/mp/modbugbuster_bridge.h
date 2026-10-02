@@ -17,6 +17,9 @@ bool bugbuster_mp_channel_set_do(uint8_t channel, bool value);
 // ── Power/PD helpers ──────────────────────────────────────────────────────────
 bool bugbuster_mp_vadj_pd_warning(uint8_t rail, float requested_v,
                                   char *warning, size_t warning_len);
+int bugbuster_mp_rail_power_up(uint8_t rail, float volts, uint8_t efuse_mask,
+                              bool *pg, bool *fault);
+bool bugbuster_mp_efuse_set(uint8_t efuse, bool on);
 
 // ── I2C binding (Phase 4) ────────────────────────────────────────────────────
 bool bugbuster_mp_i2c_setup(uint8_t sda_io, uint8_t scl_io, uint32_t freq_hz,

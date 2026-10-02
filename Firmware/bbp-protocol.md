@@ -2611,11 +2611,11 @@ Set the state of a single switch in the matrix.
 ### 6.23 On-Device Scripting
 
 MicroPython scripts run on the ESP32-S3 inside a dedicated FreeRTOS task.
-All four commands are **USB-only** (cable-gated; no HTTP surface, no auth token
-required).  BBP wire-protocol version stays at **7** - no handshake change.
+BBP scripting commands are cable-gated; HTTP has separate script endpoints.
+Chunked USB source transfers require BBP wire version 13.
 
 Script source max: **32 768 bytes** (32 KB).
-Log ring drain: up to **1020 bytes** per call.
+Log ring drain: up to **1016 bytes** per call.
 
 #### 0xF5 SCRIPT_EVAL
 Submit a Python source string for evaluation.
@@ -2678,6 +2678,23 @@ raises `KeyboardInterrupt` at the next opcode boundary.
 #### 0xF9 SCRIPT_UPLOAD
 Upload a Python script file to SPIFFS persistent storage.  Name rules:
 1–32 characters, `[A-Za-z0-9_.-]`, must end in `.py`, must not start with `.`.
+Single-frame uploads keep the legacy format below. For larger source, or
+larger `SCRIPT_EVAL` requests, clients use `name_len=0` and the transfer
+extension. Each request stays within the 1018-byte BBP command payload:
+
+```
+BEGIN   0, 0, mode:u8, name_len:u8, name:bytes, total:u16
+CHUNK   0, 1, offset:u16, data:bytes (at most 900 bytes)
+FINISH  0, 2
+ABORT   0, 3
+```
+
+Mode 0 stores a named script; mode 1 evaluates it, and mode 2 evaluates
+with a persistent VM. BEGIN replaces an unfinished transfer. CHUNK must
+match the next offset; FINISH only commits a complete source. BEGIN, CHUNK
+and ABORT answer `ok:u8, err_len:u8`; FINISH answers the legacy upload
+response in mode 0 and the `SCRIPT_EVAL` response in modes 1/2. No partial
+script is saved or evaluated before FINISH. Maximum source is 32 KB.
 
 **Request payload:**
 ```

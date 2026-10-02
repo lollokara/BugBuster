@@ -227,6 +227,20 @@ spi.close()                                                  # Release the share
 
 **Limits:** Single transfer ≤ 512 bytes.
 
+### Mainboard VADJ and e-fuses
+
+`bugbuster.rail_power_up(rail, voltage, efuse_mask)` uses the same sequenced
+power-up as the BBP and HTTP APIs: disable selected e-fuses, program VADJ,
+enable the rail, settle, and arm the selected e-fuses through the fault
+blackout gate. `rail` is 1 or 2; `efuse_mask` bit 0/1 selects that rail's
+first/second e-fuse (1/2 for VADJ1, 3/4 for VADJ2). Voltage is 3-12 V; use
+the host API for higher voltages, which require explicit confirmation.
+It returns `{"pg": bool, "fault": bool}`; always check both fields.
+`bugbuster.efuse_set(number, on)` controls e-fuse 1-4 through the same
+guarded gate, including turning one off in a `finally` block. Hardware errors
+raise `OSError(EIO)`. These bindings require updated ESP32 firmware and do not
+make requests to the on-device HTTP server.
+
 ### HAT v2 (rails, LEDs, shifted IO, SWD)
 
 HAT support is exposed as flat functions on the `bugbuster` module. These calls
@@ -508,6 +522,9 @@ See the examples folder for V2-specific scripts:
 - **`15_mcp4725_dac.py`** - MCP4725 DAC control through `bb_devices.MCP4725()`
 - **`17_ds18b20_1wire.py`** - OneWire temperature readout with `bb_devices.DS18B20()`
 - **`30_ssd1306_display.py`** - OLED text output using `bb_devices.SSD1306()`
+- **`31_vadj1_efuse1_pulse.py`** - native VADJ1 at 3 V, e-fuse 1 on for 3 seconds, then off for a random 1-12 minute test interval. Requires firmware with `rail_power_up` and `efuse_set`; change `WAIT_UNIT_SECONDS` from 60 to 3600 for 1-12 hours. A single pulse body was verified on hardware with power-good true, no fault, and e-fuse 1 off afterward; the repeating loop was not run. VADJ1 stays enabled after each pulse.
+
+USB script upload and evaluation use chunked BBP transfer for source exceeding one frame on firmware with BBP v13 or later. Older firmware needs the HTTP script endpoints for larger files.
 
 Classic examples (still valid):
 - **`02_channel_voltage_sweep.py`** - sweep 0–5 V on channel 0 with ADC readback

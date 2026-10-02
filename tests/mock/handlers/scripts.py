@@ -26,6 +26,7 @@ def register(device) -> None:
     # Initialise in-memory file store if not already present
     if not hasattr(device, "script_files"):
         device.script_files = {}
+    device.script_transfer = None
 
     # V2-A persistent-mode state
     if not hasattr(device, "script_mode"):
@@ -143,6 +144,33 @@ def _script_upload(device):
         if len(payload) < 1:
             err = b'bad payload'
             return struct.pack('<BB', 0, len(err)) + err
+        if payload[0] == 0:
+            if len(payload) < 2:
+                return bytes((0, 0))
+            sub = payload[1]
+            if sub == 0:
+                mode, name_len = payload[2:4]
+                name = payload[4:4 + name_len].decode()
+                total, = struct.unpack_from('<H', payload, 4 + name_len)
+                device.script_transfer = (mode, name, total, bytearray())
+            elif sub == 1:
+                mode, name, total, body = device.script_transfer
+                offset, = struct.unpack_from('<H', payload, 2)
+                if offset != len(body) or len(body) + len(payload) - 4 > total:
+                    raise ValueError('invalid script chunk')
+                body.extend(payload[4:])
+            elif sub == 2:
+                mode, name, total, body = device.script_transfer
+                device.script_transfer = None
+                if len(body) != total:
+                    raise ValueError('incomplete script')
+                if mode:
+                    return device.dispatch(int(CmdId.SCRIPT_EVAL),
+                                           bytes((int(mode == 2),)) + struct.pack('<H', total) + body)
+                device.script_files[name] = bytes(body)
+            elif sub == 3:
+                device.script_transfer = None
+            return bytes((1, 0))
         name_len = payload[0]
         if name_len == 0 or name_len > _SCRIPT_NAME_MAX or len(payload) < 1 + name_len + 2:
             err = b'bad name_len'

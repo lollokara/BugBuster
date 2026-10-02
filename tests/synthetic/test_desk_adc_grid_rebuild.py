@@ -11,6 +11,7 @@ ADC = Path(__file__).resolve().parents[2] / "DesktopApp" / "BugBuster" / "src" /
 
 def test_adc_grid_tracks_config_not_every_tick():
     src = ADC.read_text(encoding="utf-8")
-    grid = src[src.index("channel-grid-wide"):]
+    grid = src[src.index("let _ = cfg.get();"):]
+    assert "state.get_untracked()" in grid
     assert "state.get()" not in grid
     assert "Memo::new" in src
