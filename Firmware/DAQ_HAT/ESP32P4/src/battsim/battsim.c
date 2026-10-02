@@ -718,7 +718,9 @@ void battsim_init(daq_board_t *b)
             unlock();
         }
     }
-    xTaskCreatePinnedToCore(battsim_task, "battsim", 6144, NULL, 4, NULL, 1);
+    // Core 1 is busy-polled by the prio-20 ADAQ capture task; a task pinned
+    // there never runs. Core 0 next to daq_ui (daq_fast yields every 1024 loops).
+    xTaskCreatePinnedToCore(battsim_task, "battsim", 6144, NULL, 5, NULL, 0);
 }
 
 battsim_state_t battsim_state(void) { return S.loaded ? (battsim_state_t)S.ck.state : BS_ST_NONE; }
