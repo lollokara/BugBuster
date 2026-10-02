@@ -1,6 +1,6 @@
 // Screenshot + health report harness for the BugBuster desktop frontend (mock IPC, no hardware).
 // Usage: node shoot.mjs [--url http://localhost:1431] [--hat daq|la|none] [--theme light|dark|both]
-//                       [--only viewId,viewId] [--out shots]
+//                       [--only viewId,viewId] [--out shots] [--size 1440x900]
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const o = { url: 'http://localhost:1431', hat: 'daq', theme: 'dark', only: null, out: 'shots' };
+  const o = { url: 'http://localhost:1431', hat: 'daq', theme: 'dark', only: null, out: 'shots', w: 1440, h: 900 };
   for (let i = 2; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
@@ -18,6 +18,7 @@ function parseArgs(argv) {
     else if (k === '--theme') { o.theme = v; i++; }
     else if (k === '--only') { o.only = v.split(',').map((s) => s.trim()).filter(Boolean); i++; }
     else if (k === '--out') { o.out = v; i++; }
+    else if (k === '--size') { [o.w, o.h] = v.split('x').map(Number); i++; }
   }
   return o;
 }
@@ -102,7 +103,7 @@ async function runOne(browser, hat, theme) {
   const dir = path.join(outRoot, `${hat}-${theme}`);
   fs.mkdirSync(dir, { recursive: true });
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
+    viewport: { width: opts.w, height: opts.h },
     deviceScaleFactor: 1,
     colorScheme: theme,
     locale: 'en-US',
