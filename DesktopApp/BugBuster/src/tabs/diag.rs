@@ -1257,6 +1257,34 @@ fn WifiSection() -> impl IntoView {
     let connect_ssid = RwSignal::new(String::new());
     let connect_pass = RwSignal::new(String::new());
     let connect_status = RwSignal::new(String::new());
+    // DESK-9: SoftAP password change.
+    let ap_pass = RwSignal::new(String::new());
+    let ap_status = RwSignal::new(String::new());
+    let set_ap_password = move |_| {
+        let pass = ap_pass.get_untracked();
+        if !(8..=63).contains(&pass.len()) {
+            ap_status.set("AP password must be 8-63 characters".to_string());
+            return;
+        }
+        ap_status.set("Applying...".to_string());
+        leptos::task::spawn_local(async move {
+            #[derive(serde::Serialize)]
+            struct Args { password: String }
+            let args = serde_wasm_bindgen::to_value(&Args { password: pass }).unwrap();
+            #[derive(serde::Deserialize)]
+            struct Res { applied: bool, persisted: bool }
+            let res: Option<Res> = try_invoke("wifi_set_ap_password", args)
+                .await
+                .and_then(|r| serde_wasm_bindgen::from_value(r).ok());
+            ap_status.set(match res {
+                Some(Res { applied: true, persisted: true }) => "AP password changed".to_string(),
+                Some(Res { applied: true, persisted: false }) =>
+                    "Applied, but not saved: the old password returns after a reboot".to_string(),
+                _ => "Failed to change the AP password".to_string(),
+            });
+            ap_pass.set(String::new());
+        });
+    };
     let scan_results: RwSignal<Vec<WifiNetwork>> = RwSignal::new(Vec::new());
     let scanning = RwSignal::new(false);
 
@@ -1457,6 +1485,17 @@ fn WifiSection() -> impl IntoView {
                         style="white-space: nowrap; background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); color: var(--rose); font-size: 0.7rem"
                         on:click=do_forget
                     >"Clear Saved Credentials"</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem">
+                    <input type="password" class="input" placeholder="New AP password (8-63)"
+                        style="flex: 1; min-width: 120px"
+                        prop:value=move || ap_pass.get()
+                        on:input=move |e| ap_pass.set(event_target_value(&e))
+                    />
+                    <button class="btn btn-sm" on:click=set_ap_password>"Set AP Password"</button>
+                </div>
+                <div class="text-xs" style="color: var(--text-dim); margin-top: 0.25rem">
+                    {move || ap_status.get()}
                 </div>
             </div>
         </div>

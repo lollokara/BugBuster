@@ -435,6 +435,39 @@ pub async fn wifi_forget(mgr: State<'_, ConnectionManager>) -> CmdResult<bool> {
     Ok(r.get_bool().unwrap_or(false))
 }
 
+/// DESK-9: result of a SoftAP password change.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApPasswordResult {
+    pub applied: bool,
+    /// false: applied live but the NVS write failed (old password after reboot).
+    pub persisted: bool,
+}
+
+/// Status byte of WIFI_SET_AP_PASSWORD: 0 applied + persisted, 1 applied only, 2 failed.
+pub fn ap_password_result(status: u8) -> ApPasswordResult {
+    ApPasswordResult { applied: status != 2, persisted: status == 0 }
+}
+
+#[tauri::command]
+pub async fn wifi_set_ap_password(
+    password: String,
+    mgr: State<'_, ConnectionManager>,
+) -> CmdResult<ApPasswordResult> {
+    let b = password.as_bytes();
+    if !(8..=63).contains(&b.len()) {
+        return Err("AP password must be 8-63 characters (WPA2)".into());
+    }
+    let mut pw = PayloadWriter::new();
+    pw.put_u8(b.len() as u8);
+    pw.buf.extend_from_slice(b);
+    let rsp = mgr
+        .send_command(bbp::CMD_WIFI_SET_AP_PASSWORD, &pw.buf)
+        .await
+        .map_err(map_err)?;
+    Ok(ap_password_result(rsp.first().copied().unwrap_or(2)))
+}
+
 // -----------------------------------------------------------------------------
 // Faults
 // -----------------------------------------------------------------------------

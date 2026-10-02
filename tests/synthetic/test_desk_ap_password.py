@@ -4,12 +4,10 @@ defined in bbp.rs but nothing used it."""
 
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2] / "DesktopApp" / "BugBuster"
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-9")
 def test_ap_password_wired_end_to_end():
     lib = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
     cmds = (ROOT / "src-tauri" / "src" / "commands.rs").read_text(encoding="utf-8")

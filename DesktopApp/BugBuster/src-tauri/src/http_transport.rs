@@ -1437,6 +1437,22 @@ impl Transport for HttpTransport {
                 Ok(vec![if success { 1 } else { 0 }])
             }
 
+            bbp::CMD_WIFI_SET_AP_PASSWORD => {
+                // DESK-9: payload pass_len(u8) + pass -> POST /api/wifi/ap_password,
+                // re-encoded as the BBP status byte (0 persisted, 1 live only, 2 failed).
+                let n = *payload.first().ok_or_else(|| anyhow!("Invalid payload"))? as usize;
+                if payload.len() < 1 + n {
+                    return Err(anyhow!("Invalid payload"));
+                }
+                let pass = String::from_utf8_lossy(&payload[1..1 + n]).to_string();
+                let json = self
+                    .post_json("/api/wifi/ap_password", &serde_json::json!({"password": pass}))
+                    .await?;
+                let ok = json.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let persisted = json.get("persisted").and_then(|v| v.as_bool()).unwrap_or(false);
+                Ok(vec![if !ok { 2 } else if persisted { 0 } else { 1 }])
+            }
+
             bbp::CMD_WIFI_SCAN => {
                 let json = self.get_json_slow("/api/wifi/scan").await?;
                 // Re-encode as BBP binary: count(u8) + N * (ssid_len(u8) + ssid + rssi(i8) + auth(u8))

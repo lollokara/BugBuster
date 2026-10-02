@@ -97,6 +97,7 @@ pub fn run() {
             commands::wifi_connect,
             commands::wifi_scan,
             commands::wifi_forget,
+            commands::wifi_set_ap_password,
             // Firmware / OTA
             commands::get_firmware_info,
             commands::ota_upload_firmware,
