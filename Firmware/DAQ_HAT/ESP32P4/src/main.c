@@ -9,6 +9,7 @@
 #include "diagnostics.h"
 #include "cli.h"
 #include "usb_backend.h"
+#include "battsim.h"
 
 static const char *TAG = "daq_hat_p4";
 
@@ -88,6 +89,10 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "fast acquisition running (8 kSPS/ch, use 'fast'/'odr' to change)");
     }
+
+    // Battery simulator: mounts the battlog partition and reloads the active
+    // run (always PAUSED). Needs the ctrl queue (USB start) and acquisition.
+    battsim_init(&s_board);
 
     // Interactive bring-up console on the USB-Serial-JTAG debug port (J1).
     // Type 'help' for commands (status/read/adaq/temp/rail/vdut/ilimit).

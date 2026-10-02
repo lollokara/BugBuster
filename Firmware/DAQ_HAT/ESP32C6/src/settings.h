@@ -43,6 +43,23 @@ typedef struct {
     char ssid[33];          // <=32 + NUL
     char password[65];      // <=64 + NUL
     int  wifi_status;       // read-only: 0=down,1=connecting,2=connected (from wifi.c)
+
+    // --- Battery simulator (P4-owned, mirrored; DAQ_K_BS_*). Appended in v7:
+    // a v6 blob is a prefix of this struct. ---
+    int  bs_chem;           // DAQ_BS_*
+    int  bs_cells;
+    int  bs_capacity_mah;
+    int  bs_start_soc;      // 0..1000 = 0..100.0 %
+    int  bs_cutoff_mv;      // per cell
+    int  bs_rint_uohm;      // per cell
+    int  bs_peukert;        // k x1000
+    bool bs_sd_enable;
+    int  bs_sd_pct;         // %/month x100
+    bool bs_ext_enable;
+    int  bs_ext_ua;
+    bool bs_dither;
+    int  bs_profile_slot;   // 0..15
+    int  bs_run_select;     // run id for load/delete
 } settings_t;
 
 extern settings_t g_settings;

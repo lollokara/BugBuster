@@ -24,6 +24,7 @@
 #include "range_manager.h"
 #include "adaq7769.h"
 #include "ds4424_p4.h"
+#include "battsim.h"
 
 static const char *TAG = "smu_cal";
 
@@ -1019,6 +1020,7 @@ esp_err_t smu_cal_start(smu_cal_t *c, smu_cal_mode_t mode)
     if (c->phase == SMU_CAL_PROMPT || c->phase == SMU_CAL_RUNNING) {
         return ESP_ERR_INVALID_STATE;   // already running
     }
+    if (battsim_owns_supply()) return ESP_ERR_INVALID_STATE;   // run owns V_DUT
     reset_run_state(c, mode);
     c->phase = SMU_CAL_RUNNING;
     xTaskNotifyGive(c->task);

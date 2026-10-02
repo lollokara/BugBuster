@@ -36,6 +36,7 @@ static const char *const OPT_WIFI[]    = { "Access Point", "Station" };
 static const char *const OPT_FILTER[]  = { "Wideband", "Sinc5", "Sinc3" };
 static const char *const OPT_DECIM[]   = { "x32", "x64", "x128", "x256",
                                            "x512", "x1024" };
+static const char *const OPT_BS_CHEM[] = { "LiPo", "LiFePO4", "NiMH", "Lead-acid" };
 
 // ---------------------------------------------------------------------------
 // Schema table — the canonical list of every configurable setting.
@@ -80,6 +81,22 @@ static const daq_setting_schema_t s_table[] = {
     { DAQ_K_WIFI_PASSWORD,   DAQ_T_STR,  DAQ_F_S3_LOCAL|DAQ_F_PERSIST|DAQ_F_SECRET, 0, 64, 0,   0,    "WiFi Password",      NULL },
     // --- System ---
     { DAQ_K_DEVICE_LABEL,    DAQ_T_STR,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   24,   0,    0,    "Device Label",       NULL },
+    // --- Battery simulator (defaults: 1S LiPo 2000 mAh) ---
+    { DAQ_K_BS_CHEM,         DAQ_T_ENUM, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   3,    1,    0,    "Chemistry",          OPT_BS_CHEM },
+    { DAQ_K_BS_CELLS,        DAQ_T_U8,   DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1,   14,   1,    1,    "Cells",              NULL },
+    { DAQ_K_BS_CAPACITY_MAH, DAQ_T_U32,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1, 2000000, 100, 2000, "Capacity mAh",       NULL },
+    { DAQ_K_BS_START_SOC,    DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1000, 10,   1000, "Start SOC",          NULL },
+    { DAQ_K_BS_CUTOFF_MV,    DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         800, 4000, 10,   3000, "Cutoff mV/cell",     NULL },
+    { DAQ_K_BS_RINT_UOHM,    DAQ_T_U32,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0, 10000000, 100, 30000, "R int uOhm/cell",   NULL },
+    { DAQ_K_BS_PEUKERT,      DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         1000, 1500, 5,   1050, "Peukert k x1000",    NULL },
+    { DAQ_K_BS_SD_ENABLE,    DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    1,    "Self-Discharge",     NULL },
+    { DAQ_K_BS_SD_PCT,       DAQ_T_U16,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   5000, 10,   200,  "SD %/month x100",    NULL },
+    { DAQ_K_BS_EXT_ENABLE,   DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    0,    "External Load",      NULL },
+    { DAQ_K_BS_EXT_UA,       DAQ_T_U32,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0, 2000000, 10,  1000, "Ext Load uA",        NULL },
+    { DAQ_K_BS_DITHER,       DAQ_T_BOOL, DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   1,    1,    0,    "Dithering",          NULL },
+    { DAQ_K_BS_PROFILE_SLOT, DAQ_T_U8,   DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   15,   1,    0,    "Profile Slot",       NULL },
+    { DAQ_K_BS_RUN_SELECT,   DAQ_T_U16,  DAQ_F_P4_LOCAL,                       0,   65535, 1,   0,    "Run Select",         NULL },
+    { DAQ_K_BS_NAME,         DAQ_T_STR,  DAQ_F_P4_LOCAL|DAQ_F_PERSIST,         0,   23,   0,    0,    "Battery Name",       NULL },
 };
 
 #define S_TABLE_COUNT (sizeof(s_table) / sizeof(s_table[0]))

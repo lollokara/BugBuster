@@ -92,6 +92,22 @@ class DaqKey(IntEnum):
     WIFI_PASSWORD   = _key(0x06, 0x04)
     # System
     DEVICE_LABEL    = _key(0x07, 0x01)
+    # Battery simulator (P4 battsim/)
+    BS_CHEM         = _key(0x08, 0x01)   # enum LiPo/LiFePO4/NiMH/Lead-acid
+    BS_CELLS        = _key(0x08, 0x02)
+    BS_CAPACITY_MAH = _key(0x08, 0x03)
+    BS_START_SOC    = _key(0x08, 0x04)   # 0..1000 = 0..100.0 %
+    BS_CUTOFF_MV    = _key(0x08, 0x05)   # per cell
+    BS_RINT_UOHM    = _key(0x08, 0x06)   # per cell
+    BS_PEUKERT      = _key(0x08, 0x07)   # k x1000
+    BS_SD_ENABLE    = _key(0x08, 0x08)
+    BS_SD_PCT       = _key(0x08, 0x09)   # %/month x100
+    BS_EXT_ENABLE   = _key(0x08, 0x0A)
+    BS_EXT_UA       = _key(0x08, 0x0B)
+    BS_DITHER       = _key(0x08, 0x0C)
+    BS_PROFILE_SLOT = _key(0x08, 0x0D)
+    BS_RUN_SELECT   = _key(0x08, 0x0E)
+    BS_NAME         = _key(0x08, 0x0F)
 
 
 # --- Actions (CmdId.DAQ_CONFIG / DaqCfgOp.ACTION) -----------------------------
@@ -99,6 +115,17 @@ class DaqAction(IntEnum):
     ENERGY_RESET  = 1
     CHARGE_RESET  = 2
     FACTORY_RESET = 3
+    BS_PROFILE_SAVE   = 4
+    BS_PROFILE_LOAD   = 5
+    BS_PROFILE_DELETE = 6
+    BS_RUN_NEW        = 7
+    BS_RUN_START      = 8
+    BS_RUN_PAUSE      = 9
+    BS_RUN_STOP       = 10
+    BS_RUN_UNLOAD     = 11
+    BS_RUN_LOAD       = 12
+    BS_RUN_DELETE     = 13
+    BS_DEFAULTS       = 14
 
 
 # --- SMU calibration (CmdId.DAQ_CAL sub-ops, map to P4 HAT cmd 0x56+op) --------
@@ -278,6 +305,21 @@ KEY_TYPE: Dict[int, DaqType] = {
     DaqKey.WIFI_SSID:       DaqType.STR,
     DaqKey.WIFI_PASSWORD:   DaqType.STR,
     DaqKey.DEVICE_LABEL:    DaqType.STR,
+    DaqKey.BS_CHEM:         DaqType.ENUM,
+    DaqKey.BS_CELLS:        DaqType.U8,
+    DaqKey.BS_CAPACITY_MAH: DaqType.U32,
+    DaqKey.BS_START_SOC:    DaqType.U16,
+    DaqKey.BS_CUTOFF_MV:    DaqType.U16,
+    DaqKey.BS_RINT_UOHM:    DaqType.U32,
+    DaqKey.BS_PEUKERT:      DaqType.U16,
+    DaqKey.BS_SD_ENABLE:    DaqType.BOOL,
+    DaqKey.BS_SD_PCT:       DaqType.U16,
+    DaqKey.BS_EXT_ENABLE:   DaqType.BOOL,
+    DaqKey.BS_EXT_UA:       DaqType.U32,
+    DaqKey.BS_DITHER:       DaqType.BOOL,
+    DaqKey.BS_PROFILE_SLOT: DaqType.U8,
+    DaqKey.BS_RUN_SELECT:   DaqType.U16,
+    DaqKey.BS_NAME:         DaqType.STR,
 }
 
 _SCALAR_FMT = {

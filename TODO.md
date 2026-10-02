@@ -565,6 +565,15 @@ what to build, how to prove it. Effort S/M/L.
   stamps arrival (`daq_board.c:1763-1770`) and `sync_epoch` is never read. The
   "exact sample index" claim in docs is false. M.
 - **P4-8** - see the corrected entry below; widen to u32 together with DAQ-01.
+- **BS-1** · P1 · FEATURE · `[REPORTED]` - battery simulator firmware core
+  (P4 `src/battsim/`, C6 menu + battery main screen, DDP v10, `battlog`
+  partition). P4 and C6 build; nothing run on hardware yet. **Do:** wired
+  flash (partition change), then bench-verify: integrator vs `power_dsp`
+  charge, cutoff, reboot resume, dither ripple, 1-min/15-min files. M.
+- **BS-2** · P1 · FEATURE · `[REPORTED]` - battery simulator host transport is
+  missing: HAT-link status/list/read commands (32 B reply cap -> paged), BBP
+  + HTTP routes on the S3, Python binary decode + JSON export, MCP tools,
+  manifests. Settings/actions already work generically via `DAQ_CONFIG`. L.
 
 ### Wave D - latency
 

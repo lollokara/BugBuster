@@ -30,6 +30,7 @@ static SemaphoreHandle_t           s_lock;
 static daq_settings_apply_cb_t   s_apply;
 static daq_settings_notify_cb_t  s_notify;
 static daq_settings_action_cb_t  s_action;
+static daq_settings_guard_cb_t   s_guard;
 static void                     *s_user;
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,11 @@ void daq_settings_set_callbacks(daq_settings_apply_cb_t apply,
     s_user   = user;
 }
 
+void daq_settings_set_guard(daq_settings_guard_cb_t guard)
+{
+    s_guard = guard;
+}
+
 // ---------------------------------------------------------------------------
 // C6-20: the C6 menu resends the whole settings set on every edit. Re-applying
 // an UNCHANGED value from it restarted the acquisition (rate/range/filter) on a
@@ -179,6 +185,7 @@ bool daq_settings_set_i32(uint16_t key, int32_t value, daq_src_t src)
     if (sc->flags & DAQ_F_READONLY) return false;
 
     value = daq_config_clamp(key, value);
+    if (s_guard && !s_guard(key, 0, value, src)) return false;
 
     lock();
     bool changed = (s_slots[i].ival != value);
@@ -213,6 +220,7 @@ bool daq_settings_set_str(uint16_t key, const char *val, daq_src_t src)
     const daq_setting_schema_t *sc = &s_schema[i];
     if (sc->type != DAQ_T_STR || (sc->flags & DAQ_F_READONLY)) return false;
     if (!val) val = "";
+    if (s_guard && !s_guard(key, 0, 0, src)) return false;
 
     // Enforce the schema max length (max == byte cap for strings).
     size_t maxlen = (sc->max > 0) ? (size_t)sc->max : 0;
@@ -301,7 +309,7 @@ int daq_settings_encode_all(uint8_t *buf, size_t cap, bool include_secret)
 // ---------------------------------------------------------------------------
 bool daq_settings_action(uint8_t action_id, daq_src_t src)
 {
-    (void)src;
+    if (s_guard && !s_guard(0, action_id, 0, src)) return false;
     if (action_id == DAQ_ACT_FACTORY_RESET) {
         nvs_handle_t h;
         if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {

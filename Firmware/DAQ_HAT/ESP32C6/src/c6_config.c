@@ -37,6 +37,20 @@ static bool field_get_i32(uint16_t key, int32_t *out)
     case DAQ_K_NPX_COLOR:       *out = (int32_t)g_settings.npx_color; return true;
     case DAQ_K_WIFI_ENABLE:     *out = g_settings.wifi_enable;     return true;
     case DAQ_K_WIFI_MODE:       *out = g_settings.wifi_mode;       return true;
+    case DAQ_K_BS_CHEM:         *out = g_settings.bs_chem;         return true;
+    case DAQ_K_BS_CELLS:        *out = g_settings.bs_cells;        return true;
+    case DAQ_K_BS_CAPACITY_MAH: *out = g_settings.bs_capacity_mah; return true;
+    case DAQ_K_BS_START_SOC:    *out = g_settings.bs_start_soc;    return true;
+    case DAQ_K_BS_CUTOFF_MV:    *out = g_settings.bs_cutoff_mv;    return true;
+    case DAQ_K_BS_RINT_UOHM:    *out = g_settings.bs_rint_uohm;    return true;
+    case DAQ_K_BS_PEUKERT:      *out = g_settings.bs_peukert;      return true;
+    case DAQ_K_BS_SD_ENABLE:    *out = g_settings.bs_sd_enable;    return true;
+    case DAQ_K_BS_SD_PCT:       *out = g_settings.bs_sd_pct;       return true;
+    case DAQ_K_BS_EXT_ENABLE:   *out = g_settings.bs_ext_enable;   return true;
+    case DAQ_K_BS_EXT_UA:       *out = g_settings.bs_ext_ua;       return true;
+    case DAQ_K_BS_DITHER:       *out = g_settings.bs_dither;       return true;
+    case DAQ_K_BS_PROFILE_SLOT: *out = g_settings.bs_profile_slot; return true;
+    case DAQ_K_BS_RUN_SELECT:   *out = g_settings.bs_run_select;   return true;
     default:                    return false;
     }
 }
@@ -73,6 +87,20 @@ static void field_apply_i32(uint16_t key, int32_t v)
     case DAQ_K_NPX_COLOR:       g_settings.npx_color       = (uint32_t)v;  break;
     case DAQ_K_WIFI_ENABLE:     g_settings.wifi_enable     = (v != 0);     break;
     case DAQ_K_WIFI_MODE:       g_settings.wifi_mode       = v;            break;
+    case DAQ_K_BS_CHEM:         g_settings.bs_chem         = v;            break;
+    case DAQ_K_BS_CELLS:        g_settings.bs_cells        = v;            break;
+    case DAQ_K_BS_CAPACITY_MAH: g_settings.bs_capacity_mah = v;            break;
+    case DAQ_K_BS_START_SOC:    g_settings.bs_start_soc    = v;            break;
+    case DAQ_K_BS_CUTOFF_MV:    g_settings.bs_cutoff_mv    = v;            break;
+    case DAQ_K_BS_RINT_UOHM:    g_settings.bs_rint_uohm    = v;            break;
+    case DAQ_K_BS_PEUKERT:      g_settings.bs_peukert      = v;            break;
+    case DAQ_K_BS_SD_ENABLE:    g_settings.bs_sd_enable    = (v != 0);     break;
+    case DAQ_K_BS_SD_PCT:       g_settings.bs_sd_pct       = v;            break;
+    case DAQ_K_BS_EXT_ENABLE:   g_settings.bs_ext_enable   = (v != 0);     break;
+    case DAQ_K_BS_EXT_UA:       g_settings.bs_ext_ua       = v;            break;
+    case DAQ_K_BS_DITHER:       g_settings.bs_dither       = (v != 0);     break;
+    case DAQ_K_BS_PROFILE_SLOT: g_settings.bs_profile_slot = v;            break;
+    case DAQ_K_BS_RUN_SELECT:   g_settings.bs_run_select   = v;            break;
     default: break;
     }
 }
@@ -112,6 +140,12 @@ static const uint16_t SEND_KEYS[] = {
     DAQ_K_BRIGHTNESS_PCT, DAQ_K_DARK_MODE,
     DAQ_K_NPX_MODE, DAQ_K_NPX_BRIGHTNESS, DAQ_K_NPX_COLOR,
     DAQ_K_WIFI_ENABLE, DAQ_K_WIFI_MODE,
+    // Battery simulator. The P4 vetoes only CHANGES to a loaded run's identity
+    // keys, so re-sending unchanged values with every commit is harmless.
+    DAQ_K_BS_CHEM, DAQ_K_BS_CELLS, DAQ_K_BS_CAPACITY_MAH, DAQ_K_BS_START_SOC,
+    DAQ_K_BS_CUTOFF_MV, DAQ_K_BS_RINT_UOHM, DAQ_K_BS_PEUKERT,
+    DAQ_K_BS_SD_ENABLE, DAQ_K_BS_SD_PCT, DAQ_K_BS_EXT_ENABLE, DAQ_K_BS_EXT_UA,
+    DAQ_K_BS_DITHER, DAQ_K_BS_PROFILE_SLOT, DAQ_K_BS_RUN_SELECT,
 };
 
 void c6_config_send(void)

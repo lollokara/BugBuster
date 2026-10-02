@@ -223,6 +223,14 @@ static void draw_header(uint32_t t_ms)
         pill_left = sr_badge_x - 4;
     }
 
+    // Battery-simulator badge while a run is loaded.
+    bool bat_on = ddp_battsim_mode();
+    int bat_badge_x = 0;
+    if (bat_on) {
+        bat_badge_x = pill_left - gfx_text_w("BAT", 1) - 9;
+        pill_left = bat_badge_x - 4;
+    }
+
     // Temperature indicator: highest of the two AD7415 board sensors, shown as
     // a small readout in the header. Reserving its width here shortens the bolt
     // travel, trading Pac-Man animation space for the temp readout.
@@ -289,6 +297,10 @@ static void draw_header(uint32_t t_ms)
     if (sr_on) {
         ui_draw_dot(sr_badge_x, 9, C_CYAN);
         gfx_text(sr_badge_x + 5, 6, "SR", 1, C_CYAN);
+    }
+    if (bat_on) {
+        ui_draw_dot(bat_badge_x, 9, C_AMBER);
+        gfx_text(bat_badge_x + 5, 6, "BAT", 1, C_AMBER);
     }
     if (src_on) {
         ui_draw_dot(src_badge_x, 9, C_GREEN);
@@ -402,6 +414,87 @@ static void draw_card(int x, int y, int w, int h, const char *label,
     }
 }
 
+// Remaining time as the most significant two units: "12d04h", "5h12m", "42m".
+static void fmt_remaining(uint32_t s, char *out, size_t cap)
+{
+    uint32_t m = s / 60u, h = m / 60u, d = h / 24u;
+    if (d >= 1000u)   snprintf(out, cap, ">999d");
+    else if (d > 0)   snprintf(out, cap, "%lud%02luh", (unsigned long)d, (unsigned long)(h % 24u));
+    else if (h > 0)   snprintf(out, cap, "%luh%02lum", (unsigned long)h, (unsigned long)(m % 60u));
+    else              snprintf(out, cap, "%lum%02lus", (unsigned long)m, (unsigned long)(s % 60u));
+}
+
+// Battery-simulator panel: SOC, charge bar, remaining time and run state.
+static void draw_battsim_panel(int x, int y, int w, int h, const ddp_battsim_t *b)
+{
+    gfx_round_rect(x, y, w, h, 8, C_CARD_B);
+    gfx_round_rect_border(x, y, w, h, 8, C_BORDER);
+
+    const char *st; uint16_t sc;
+    switch (b->state) {
+        case DDP_BS_ST_ACTIVE:   st = "RUN";   sc = C_GREEN; break;
+        case DDP_BS_ST_PAUSED:   st = "PAUSE"; sc = C_AMBER; break;
+        case DDP_BS_ST_DEPLETED: st = "EMPTY"; sc = C_ROSE;  break;
+        default:                 st = "STOP";  sc = C_MUTED; break;
+    }
+    gfx_text(x + 6, y + 5, "SOC", 1, C_AMBER);
+    int sw = gfx_text_w(st, 1);
+    gfx_text(x + w - sw - 6, y + 5, st, 1, sc);
+    gfx_hline(x + 6, y + 14, w - 12, C_BORDER);
+
+    char s[16];
+    unsigned soc = b->soc_x100;
+    snprintf(s, sizeof(s), "%u.%u%%", soc / 100u, (soc % 100u) / 10u);
+    int tw = gfx_text_w(s, 2);
+    gfx_text(x + (w - tw) / 2, y + 17, s, 2, C_TEXT);
+
+    // Charge bar coloured by SOC band.
+    int bx = x + 6, by = y + 33, bw = w - 12, bh = 5;
+    uint16_t bc = (soc > 5000u) ? C_GREEN : (soc > 2000u) ? C_AMBER : C_ROSE;
+    gfx_round_rect(bx, by, bw, bh, 2, C_BG1);
+    int fw = (int)((uint32_t)bw * soc / 10000u);
+    if (fw > 0) gfx_round_rect(bx, by, fw, bh, 2, bc);
+
+    // Remaining time ("~" while the 30 min window is still filling).
+    char r[16];
+    if (b->flags & DDP_BS_F_REMAIN_OK) {
+        char t[12];
+        fmt_remaining(b->remaining_s, t, sizeof(t));
+        snprintf(r, sizeof(r), "%s%s", (b->flags & DDP_BS_F_PROVISIONAL) ? "~" : "", t);
+    } else {
+        snprintf(r, sizeof(r), "--");
+    }
+    int rw = gfx_text_w(r, 1);
+    gfx_text(x + (w - rw) / 2, y + h - 11, r, 1, C_DIM);
+}
+
+static void render_battsim(uint32_t t_ms, const ddp_battsim_t *b)
+{
+    int top = 22;
+    int h = DISP_HEIGHT - top - 3;
+    // Two 98 px value cards fit four baked digits (22 px advance) each.
+    const int cw = 98, pw = 76, gap = 3;
+    int x0 = 3, x1 = x0 + cw + gap, x2 = x1 + cw + gap;
+    bool on = b->state == DDP_BS_ST_ACTIVE && (b->flags & DDP_BS_F_OUTPUT_ON);
+    bool no_data = s_state != DDP_STATE_LIVE;
+
+    // Output off: show the model voltage the run resumes at.
+    char set_s[sizeof(((fmt_value_t *)0)->mantissa) + sizeof(((fmt_value_t *)0)->unit)];
+    const char *set_val = NULL;
+    if (!on) {
+        fmt_value_t fv;
+        fmt_si(b->v_target, 'V', &fv);
+        snprintf(set_s, sizeof(set_s), "%s%s", fv.mantissa, fv.unit);
+        set_val = set_s;
+    }
+    draw_card(x0, top, cw, h, "BATT V", C_BLUE, b->v_meas, 'V', false,
+              on, false, no_data, set_val, NULL);
+    draw_card(x1, top, cw, h, "CURRENT", C_GREEN, b->i_meas, 'A', false,
+              on, !on, no_data, NULL, NULL);
+    draw_battsim_panel(x2, top, pw, h, b);
+    ui_draw_warning(t_ms);
+}
+
 void ui_render(uint32_t t_ms)
 {
     PERF_FRAME_BEGIN();
@@ -411,6 +504,13 @@ void ui_render(uint32_t t_ms)
 
     draw_header(t_ms);
     PERF_MARK("header");
+
+    ddp_battsim_t bs;
+    uint32_t bs_age;
+    if (ddp_get_battsim(&bs, &bs_age) && bs_age < 3000 && bs.state != DDP_BS_ST_NONE) {
+        render_battsim(t_ms, &bs);
+        return;
+    }
 
     int top = 22;
     int cardh = DISP_HEIGHT - top - 3;     // ~51 px tall

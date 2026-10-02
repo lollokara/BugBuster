@@ -60,6 +60,7 @@ typedef enum {
 #define DAQ_GRP_NPX   0x05u   // C6 neopixels
 #define DAQ_GRP_WIFI  0x06u   // S3 mainboard WiFi (relayed; the C6 has no radio)
 #define DAQ_GRP_SYS   0x07u   // system / misc
+#define DAQ_GRP_BATT  0x08u   // battery simulator (P4 battsim/)
 
 #define DAQ_KEY(grp, idx)  ((uint16_t)(((uint16_t)(grp) << 8) | (uint8_t)(idx)))
 #define DAQ_KEY_GROUP(key) ((uint8_t)((key) >> 8))
@@ -112,6 +113,26 @@ typedef enum {
 
     // --- System ---
     DAQ_K_DEVICE_LABEL    = DAQ_KEY(DAQ_GRP_SYS, 0x01),  // str <=24
+
+    // --- Battery simulator ---
+    // The editable battery definition. While a run is loaded these mirror the
+    // run's own copy: identity keys (chem/cells/capacity/start SOC) are then
+    // refused, the rest are live-editable and logged as run events.
+    DAQ_K_BS_CHEM         = DAQ_KEY(DAQ_GRP_BATT, 0x01), // enum LiPo/LiFePO4/NiMH/Lead
+    DAQ_K_BS_CELLS        = DAQ_KEY(DAQ_GRP_BATT, 0x02), // u8 series cells
+    DAQ_K_BS_CAPACITY_MAH = DAQ_KEY(DAQ_GRP_BATT, 0x03), // u32 nameplate mAh
+    DAQ_K_BS_START_SOC    = DAQ_KEY(DAQ_GRP_BATT, 0x04), // u16 0..1000 = 0..100.0 %
+    DAQ_K_BS_CUTOFF_MV    = DAQ_KEY(DAQ_GRP_BATT, 0x05), // u16 per-cell cutoff
+    DAQ_K_BS_RINT_UOHM    = DAQ_KEY(DAQ_GRP_BATT, 0x06), // u32 per-cell R_int
+    DAQ_K_BS_PEUKERT      = DAQ_KEY(DAQ_GRP_BATT, 0x07), // u16 k x1000 (1000 = off)
+    DAQ_K_BS_SD_ENABLE    = DAQ_KEY(DAQ_GRP_BATT, 0x08), // bool self-discharge
+    DAQ_K_BS_SD_PCT       = DAQ_KEY(DAQ_GRP_BATT, 0x09), // u16 %/month x100
+    DAQ_K_BS_EXT_ENABLE   = DAQ_KEY(DAQ_GRP_BATT, 0x0A), // bool virtual external load
+    DAQ_K_BS_EXT_UA       = DAQ_KEY(DAQ_GRP_BATT, 0x0B), // u32 external load uA
+    DAQ_K_BS_DITHER       = DAQ_KEY(DAQ_GRP_BATT, 0x0C), // bool sub-step dithering
+    DAQ_K_BS_PROFILE_SLOT = DAQ_KEY(DAQ_GRP_BATT, 0x0D), // u8 profile slot for save/load
+    DAQ_K_BS_RUN_SELECT   = DAQ_KEY(DAQ_GRP_BATT, 0x0E), // u16 run id for load/delete
+    DAQ_K_BS_NAME         = DAQ_KEY(DAQ_GRP_BATT, 0x0F), // str <=23 profile / run name
 } daq_key_t;
 
 // -----------------------------------------------------------------------------
@@ -121,6 +142,18 @@ typedef enum {
     DAQ_ACT_ENERGY_RESET  = 1,
     DAQ_ACT_CHARGE_RESET  = 2,
     DAQ_ACT_FACTORY_RESET = 3,
+    // Battery simulator (operate on DAQ_K_BS_* / the loaded run).
+    DAQ_ACT_BS_PROFILE_SAVE   = 4,   // keys -> profile DAQ_K_BS_PROFILE_SLOT
+    DAQ_ACT_BS_PROFILE_LOAD   = 5,   // profile DAQ_K_BS_PROFILE_SLOT -> keys
+    DAQ_ACT_BS_PROFILE_DELETE = 6,
+    DAQ_ACT_BS_RUN_NEW        = 7,   // create + load a run from the keys (PAUSED)
+    DAQ_ACT_BS_RUN_START      = 8,   // output on, integrate
+    DAQ_ACT_BS_RUN_PAUSE      = 9,   // output off, everything frozen
+    DAQ_ACT_BS_RUN_STOP       = 10,  // finalise the run (kept on flash)
+    DAQ_ACT_BS_RUN_UNLOAD     = 11,  // leave battery-sim mode
+    DAQ_ACT_BS_RUN_LOAD       = 12,  // load run DAQ_K_BS_RUN_SELECT (PAUSED)
+    DAQ_ACT_BS_RUN_DELETE     = 13,  // delete run DAQ_K_BS_RUN_SELECT
+    DAQ_ACT_BS_DEFAULTS       = 14,  // chemistry defaults -> cutoff/R_int/Peukert/SD
 } daq_action_t;
 
 // -----------------------------------------------------------------------------
@@ -140,6 +173,8 @@ enum { DAQ_WIFI_AP = 0, DAQ_WIFI_STA = 1, DAQ_WIFI_MODE_COUNT };
 enum { DAQ_FILT_WIDEBAND = 0, DAQ_FILT_SINC5, DAQ_FILT_SINC3, DAQ_FILT_COUNT };
 enum { DAQ_DEC_32 = 0, DAQ_DEC_64, DAQ_DEC_128, DAQ_DEC_256, DAQ_DEC_512,
        DAQ_DEC_1024, DAQ_DEC_COUNT };
+// Must match bs_chem_t (P4 battsim_model.h).
+enum { DAQ_BS_LIPO = 0, DAQ_BS_LIFEPO4, DAQ_BS_NIMH, DAQ_BS_LEAD, DAQ_BS_CHEM_COUNT };
 
 // -----------------------------------------------------------------------------
 // Super-Resolution mode (DAQ_K_SR_MODE).

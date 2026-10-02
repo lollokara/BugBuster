@@ -66,6 +66,15 @@ esp_err_t smu_read_output_current(smu_t *s, float *amps);
 /** @brief Convert a target V_DUT to the DS4424 ch1 code (no I2C write). */
 int8_t smu_voltage_to_code(float volts);
 
+/** @brief Nominal (formula, uncalibrated) V_DUT for a DS4424 ch1 code. */
+float smu_code_to_voltage(int8_t code);
+
+/**
+ * @brief Ramp DS4424 ch1 to @p code one step at a time (blocking, ctrl task).
+ *        @p volts_hint becomes vdut_set so a later smu_enable() re-ramps here.
+ */
+esp_err_t smu_step_code(smu_t *s, int8_t code, float volts_hint);
+
 /**
  * @brief Install the factory calibration tables. When present, smu_set_voltage
  *        and smu_set_current_limit interpolate the DS4424 code from the cal

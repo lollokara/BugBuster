@@ -30,7 +30,9 @@
 
 #define DDP_SYNC            0xAAu
 #define DDP_MAX_PAYLOAD     240u
-#define DDP_PROTO_VERSION   9u
+#define DDP_PROTO_VERSION   10u
+// v10 (2026-10-02): battery simulator. DDP_CMD_SET_BATTSIM carries the run
+// status for the C6 main screen; its settings ride the TLV path (DAQ_GRP_BATT).
 // v9 (2026-08-06): Super-Resolution setting (DAQ_K_SR_MODE) rides the existing
 // TLV config path, and the mainboard tunnel gains DDP_MB_FWINFO /
 // DDP_MB_FW_APPLY so the C6 Firmware screen can show installed-vs-available
@@ -71,6 +73,7 @@
 #define DDP_CMD_MB_REQUEST      0x19u  // C6 -> P4: u8 req_type, then req args (mainboard tunnel)
 #define DDP_CMD_MB_RESPONSE     0x1Au  // P4 -> C6: u8 req_type, u8 status, then result data
 #define DDP_CMD_WIFI_STREAM_MODE 0x1Du // u8 enable (1=entering WiFi stream mode, 0=leaving)
+#define DDP_CMD_SET_BATTSIM     0x1Eu  // ddp_battsim_t - battery simulator status (~2 Hz)
 
 // --- Events (C6 -> P4), 0x60..0x7F -----------------------------------------
 // Emitted unsolicited by the C6 when the user changes settings on-device, so
@@ -357,6 +360,43 @@ typedef struct __attribute__((packed)) {
 #define DDP_MB_SCR_RUNNING  1u   // a script is executing
 #define DDP_MB_SCR_CRASHED  2u   // last run ended with an error
 #define DDP_MB_SCR_EXITED   3u   // last run completed cleanly
+
+// ---------------------------------------------------------------------------
+// Battery simulator status (DDP_CMD_SET_BATTSIM, P4 -> C6). state 0 = no run
+// loaded: the C6 shows its normal main screen. Field meanings mirror the P4's
+// battsim_status_t (battsim.h).
+// ---------------------------------------------------------------------------
+#define DDP_BS_ST_NONE      0u
+#define DDP_BS_ST_PAUSED    1u
+#define DDP_BS_ST_ACTIVE    2u
+#define DDP_BS_ST_DEPLETED  3u
+#define DDP_BS_ST_STOPPED   4u
+
+#define DDP_BS_F_PROVISIONAL 0x01u   // remaining time from < 30 min of data
+#define DDP_BS_F_STORE_OK    0x02u
+#define DDP_BS_F_OUTPUT_ON   0x04u
+#define DDP_BS_F_SD          0x08u
+#define DDP_BS_F_EXT         0x10u
+#define DDP_BS_F_DITHER      0x20u
+#define DDP_BS_F_REMAIN_OK   0x40u
+
+typedef struct __attribute__((packed)) {
+    uint8_t  state;          // DDP_BS_ST_*
+    uint8_t  flags;          // DDP_BS_F_*
+    uint8_t  chem;           // DAQ_BS_* (daq_config_registry.h)
+    uint8_t  cells;
+    uint16_t soc_x100;       // 0..10000
+    uint16_t run_id;
+    float    v_meas;         // V, 1 s mean
+    float    i_meas;         // A, 1 s mean
+    float    v_target;       // model terminal voltage
+    float    i_avg;          // A, total drain over the remaining-time window
+    uint32_t elapsed_s;
+    uint32_t remaining_s;    // valid if DDP_BS_F_REMAIN_OK
+    uint32_t capacity_mah;
+    uint8_t  last_error;
+    uint8_t  _rsv[3];
+} ddp_battsim_t;
 
 // CRC-8, poly 0x07, init 0x00 (matches RP2040 HAT protocol).
 static inline uint8_t ddp_crc8(const uint8_t *data, size_t len)

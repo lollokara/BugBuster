@@ -6,6 +6,10 @@ dependencies:
   # Host-side ESP ROM bootloader flasher: lets the P4 flash the on-module C6
   # over UART2 (BOOT/RST controlled), used by link/c6_flasher.c.
   espressif/esp-serial-flasher: "^2.0"
+  # Power-loss-safe FS on the `battlog` partition (battery simulator runs).
+  # Pinned: 1.22.1 is the last release the registry lists as MIT.
+  joltwallet/littlefs:
+    version: "==1.22.1"
   # ESP-Hosted: makes the standard esp_wifi API work transparently over the
   # existing C6_SDIO_* pins (config.h), with the on-module C6 acting as the
   # WiFi radio co-processor (P4 has none). Matches Espressif's own

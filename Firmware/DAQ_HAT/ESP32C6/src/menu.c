@@ -441,6 +441,7 @@ static bool alert_vadj2_en(void) { return s_mbp_valid && (s_mbp.rail_en & DDP_MB
 // Menu tree
 // ===========================================================================
 static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag, m_cal;
+static const menu_t m_bs;
 static const menu_t m_diag_temp, m_diag_power, m_diag_rails, m_diag_p4, m_diag_c6;
 static const menu_t m_srate, m_filter, m_decim;
 static void scripts_open(void);   // opens the custom MicroPython Scripts screen
@@ -451,13 +452,14 @@ static void cal_open_base(void);
 
 static const menu_item_t root_items[] = {
     { .label = "HAT Settings",        .type = IT_SUBMENU, .sub = &m_hat },
+    { .label = "Battery Simulator",   .type = IT_SUBMENU, .sub = &m_bs },
     { .label = "Screen Settings",     .type = IT_SUBMENU, .sub = &m_screen },
     { .label = "Main Board Settings", .type = IT_SUBMENU, .sub = &m_mainboard },
     { .label = "WiFi Settings",       .type = IT_SUBMENU, .sub = &m_wifi },
     { .label = "Diagnostics",         .type = IT_SUBMENU, .sub = &m_diag },
     { .label = "Firmware",            .type = IT_CYCLE,   .ok  = fw_open },
 };
-static const menu_t m_root = { "Settings", root_items, 6 };
+static const menu_t m_root = { "Settings", root_items, 7 };
 
 // DUT supply. Also on the home screen (hold BACK), but that shortcut is
 // undiscoverable, so mirror it here. The 9 V / 3 A USB-PD guard matches
@@ -669,6 +671,185 @@ static const menu_item_t diag_items[] = {
 static const menu_t m_diag = { "Diagnostics", diag_items, 5 };
 
 // ===========================================================================
+// Battery simulator. Settings are P4 registry keys mirrored in g_settings;
+// run control is CONFIG_ACTION. Identity fields lock while a run is loaded.
+// ===========================================================================
+static bool bs_get(ddp_battsim_t *b)
+{
+    uint32_t age;
+    return ddp_get_battsim(b, &age) && age < 3000;
+}
+static uint8_t bs_state(void)
+{
+    ddp_battsim_t b;
+    return bs_get(&b) ? b.state : DDP_BS_ST_NONE;
+}
+static bool bs_loaded(void)     { return bs_state() != DDP_BS_ST_NONE; }
+static bool bs_unloaded(void)   { return !bs_loaded(); }
+static bool bs_resumable(void)  { uint8_t s = bs_state(); return s == DDP_BS_ST_PAUSED || s == DDP_BS_ST_ACTIVE; }
+static bool bs_idle(void)       { return bs_state() != DDP_BS_ST_ACTIVE; }
+static bool bs_loaded_idle(void){ return bs_loaded() && bs_idle(); }
+
+// Two-press confirm for destructive or run-ending actions.
+static bool bs_confirm(const char *what)
+{
+    static uint32_t s_armed_ms = 0;
+    static const char *s_armed_what = NULL;
+    if (s_armed_what == what && s_armed_ms && (s_anim_ms - s_armed_ms) < 4000) {
+        s_armed_ms = 0;
+        s_armed_what = NULL;
+        return true;
+    }
+    s_armed_ms = s_anim_ms ? s_anim_ms : 1;
+    s_armed_what = what;
+    ui_show_warning("Press OK again");
+    return false;
+}
+
+static void bs_action(uint8_t id, const char *msg)
+{
+    ddp_send_config_action(id);
+    if (msg) ui_show_warning(msg);
+}
+
+static void val_bs_status(char *b, int n)
+{
+    ddp_battsim_t s;
+    if (!bs_get(&s) || s.state == DDP_BS_ST_NONE) { snprintf(b, n, "No run"); return; }
+    static const char *const ST[] = { "", "Paused", "Running", "Empty", "Stopped" };
+    snprintf(b, n, "#%u %s %u.%u%%", (unsigned)s.run_id, ST[s.state < 5 ? s.state : 0],
+             s.soc_x100 / 100u, (s.soc_x100 % 100u) / 10u);
+}
+static void val_bs_run(char *b, int n) { snprintf(b, n, "%s", bs_state() == DDP_BS_ST_ACTIVE ? "RUNNING" : "PAUSED"); }
+static bool alert_bs_run(void)          { return bs_state() == DDP_BS_ST_ACTIVE; }
+static void ok_bs_run(void)
+{
+    if (bs_state() == DDP_BS_ST_ACTIVE) { bs_action(DAQ_ACT_BS_RUN_PAUSE, "Pausing"); return; }
+    if (!(dvalid(DDP_DIAG_V_S3PD) && s_dg.pd_mv >= 9000 && s_dg.pd_ma >= 3000)) {
+        ui_show_warning(UI_WARN_NEED_PD);
+        return;
+    }
+    bs_action(DAQ_ACT_BS_RUN_START, "Starting");
+}
+static void ok_bs_new(void)    { if (bs_confirm("new"))    bs_action(DAQ_ACT_BS_RUN_NEW, "New run created"); }
+static void ok_bs_stop(void)   { if (bs_confirm("stop"))   bs_action(DAQ_ACT_BS_RUN_STOP, "Run stopped"); }
+static void ok_bs_unload(void) { bs_action(DAQ_ACT_BS_RUN_UNLOAD, "Run unloaded"); }
+
+static void val_bs_chem(char *b, int n)
+{
+    snprintf(b, n, "%s", daq_config_schema(DAQ_K_BS_CHEM)->options[g_settings.bs_chem % DAQ_BS_CHEM_COUNT]);
+}
+static void ok_bs_chem(void)
+{
+    // The P4 loads the new chemistry's cutoff/R_int/Peukert/SD defaults and
+    // pushes them back.
+    g_settings.bs_chem = (g_settings.bs_chem + 1) % DAQ_BS_CHEM_COUNT;
+    settings_commit();
+}
+static void fmt_int(char *b, int n, int v)      { snprintf(b, n, "%d", v); }
+static void fmt_mah(char *b, int n, int v)
+{
+    if (v >= 10000) snprintf(b, n, "%d.%d Ah", v / 1000, (v % 1000) / 100);
+    else            snprintf(b, n, "%d mAh", v);
+}
+static void fmt_soc(char *b, int n, int v)      { snprintf(b, n, "%d.%d%%", v / 10, v % 10); }
+static void fmt_mv_cell(char *b, int n, int v)  { snprintf(b, n, "%d.%02d V", v / 1000, (v % 1000) / 10); }
+static void fmt_uohm(char *b, int n, int v)
+{
+    if (v >= 1000000) snprintf(b, n, "%d.%02d R", v / 1000000, (v % 1000000) / 10000);
+    else              snprintf(b, n, "%d.%d mR", v / 1000, (v % 1000) / 100);
+}
+static void fmt_peuk(char *b, int n, int v)     { snprintf(b, n, "%d.%03d", v / 1000, v % 1000); }
+static void fmt_sdpct(char *b, int n, int v)    { snprintf(b, n, "%d.%02d%%/mo", v / 100, v % 100); }
+static void fmt_ua(char *b, int n, int v)
+{
+    if (v >= 1000000) snprintf(b, n, "%d.%03d A", v / 1000000, (v % 1000000) / 1000);
+    else if (v >= 1000) snprintf(b, n, "%d.%03d mA", v / 1000, v % 1000);
+    else snprintf(b, n, "%d uA", v);
+}
+static void val_bs_cells(char *b, int n)  { fmt_int(b, n, g_settings.bs_cells); }
+static void val_bs_cap(char *b, int n)    { fmt_mah(b, n, g_settings.bs_capacity_mah); }
+static void val_bs_soc(char *b, int n)    { fmt_soc(b, n, g_settings.bs_start_soc); }
+static void val_bs_cutoff(char *b, int n) { fmt_mv_cell(b, n, g_settings.bs_cutoff_mv); }
+static void val_bs_rint(char *b, int n)   { fmt_uohm(b, n, g_settings.bs_rint_uohm); }
+static void val_bs_peuk(char *b, int n)   { fmt_peuk(b, n, g_settings.bs_peukert); }
+static void val_bs_sd(char *b, int n)     { v_onoff(b, n, g_settings.bs_sd_enable); }
+static void ok_bs_sd(void)                { g_settings.bs_sd_enable = !g_settings.bs_sd_enable; settings_commit(); }
+static bool vis_bs_sd(void)               { return g_settings.bs_sd_enable; }
+static void val_bs_sdpct(char *b, int n)  { fmt_sdpct(b, n, g_settings.bs_sd_pct); }
+static void val_bs_ext(char *b, int n)    { v_onoff(b, n, g_settings.bs_ext_enable); }
+static void ok_bs_ext(void)               { g_settings.bs_ext_enable = !g_settings.bs_ext_enable; settings_commit(); }
+static bool vis_bs_ext(void)              { return g_settings.bs_ext_enable; }
+static void val_bs_extua(char *b, int n)  { fmt_ua(b, n, g_settings.bs_ext_ua); }
+static void val_bs_dither(char *b, int n) { v_onoff(b, n, g_settings.bs_dither); }
+static void ok_bs_dither(void)            { g_settings.bs_dither = !g_settings.bs_dither; settings_commit(); }
+static void ok_bs_defaults(void)          { bs_action(DAQ_ACT_BS_DEFAULTS, "Defaults loaded"); }
+static void val_bs_slot(char *b, int n)   { fmt_int(b, n, g_settings.bs_profile_slot); }
+static void ok_bs_psave(void)             { bs_action(DAQ_ACT_BS_PROFILE_SAVE, "Profile saved"); }
+static void ok_bs_pload(void)             { bs_action(DAQ_ACT_BS_PROFILE_LOAD, "Profile loaded"); }
+static void ok_bs_pdel(void)              { if (bs_confirm("pdel")) bs_action(DAQ_ACT_BS_PROFILE_DELETE, "Profile deleted"); }
+static void val_bs_runsel(char *b, int n) { snprintf(b, n, "#%d", g_settings.bs_run_select); }
+static void ok_bs_rload(void)             { bs_action(DAQ_ACT_BS_RUN_LOAD, "Loading run"); }
+static void ok_bs_rdel(void)              { if (bs_confirm("rdel")) bs_action(DAQ_ACT_BS_RUN_DELETE, "Run deleted"); }
+
+// Identity fields (chemistry/cells/capacity/start SOC) define a run: editable
+// only with no run loaded. The rest are live-editable during a run.
+static const menu_item_t bs_batt_items[] = {
+    { .label = "Chemistry",   .type = IT_CYCLE,    .value = val_bs_chem, .ok = ok_bs_chem, .visible = bs_unloaded },
+    { .label = "Cells",       .type = IT_BARGRAPH, .value = val_bs_cells, .visible = bs_unloaded,
+      .bar_ref = &g_settings.bs_cells, .bar_min = 1, .bar_max = 14, .bar_step = 1, .bar_fmt = fmt_int },
+    { .label = "Capacity",    .type = IT_BARGRAPH, .value = val_bs_cap, .visible = bs_unloaded,
+      .bar_ref = &g_settings.bs_capacity_mah, .bar_min = 10, .bar_max = 2000000, .bar_step = 10, .bar_fmt = fmt_mah },
+    { .label = "Start SOC",   .type = IT_BARGRAPH, .value = val_bs_soc, .visible = bs_unloaded,
+      .bar_ref = &g_settings.bs_start_soc, .bar_min = 0, .bar_max = 1000, .bar_step = 10, .bar_fmt = fmt_soc },
+    { .label = "Cutoff/cell", .type = IT_BARGRAPH, .value = val_bs_cutoff,
+      .bar_ref = &g_settings.bs_cutoff_mv, .bar_min = 800, .bar_max = 4000, .bar_step = 10, .bar_fmt = fmt_mv_cell },
+    { .label = "R int/cell",  .type = IT_BARGRAPH, .value = val_bs_rint,
+      .bar_ref = &g_settings.bs_rint_uohm, .bar_min = 0, .bar_max = 10000000, .bar_step = 100, .bar_fmt = fmt_uohm },
+    { .label = "Peukert k",   .type = IT_BARGRAPH, .value = val_bs_peuk,
+      .bar_ref = &g_settings.bs_peukert, .bar_min = 1000, .bar_max = 1500, .bar_step = 5, .bar_fmt = fmt_peuk },
+    { .label = "Self-Disch.", .type = IT_TOGGLE,   .value = val_bs_sd, .ok = ok_bs_sd },
+    { .label = "  Rate",      .type = IT_BARGRAPH, .value = val_bs_sdpct, .visible = vis_bs_sd,
+      .bar_ref = &g_settings.bs_sd_pct, .bar_min = 0, .bar_max = 5000, .bar_step = 10, .bar_fmt = fmt_sdpct },
+    { .label = "Ext. Load",   .type = IT_TOGGLE,   .value = val_bs_ext, .ok = ok_bs_ext },
+    { .label = "  Current",   .type = IT_BARGRAPH, .value = val_bs_extua, .visible = vis_bs_ext,
+      .bar_ref = &g_settings.bs_ext_ua, .bar_min = 0, .bar_max = 2000000, .bar_step = 1, .bar_fmt = fmt_ua },
+    { .label = "Dithering",   .type = IT_TOGGLE,   .value = val_bs_dither, .ok = ok_bs_dither },
+    { .label = "Chem Defaults", .type = IT_CYCLE,  .ok = ok_bs_defaults, .visible = bs_unloaded },
+};
+static const menu_t m_bs_batt = { "Battery", bs_batt_items, 13 };
+
+static const menu_item_t bs_prof_items[] = {
+    { .label = "Slot",   .type = IT_BARGRAPH, .value = val_bs_slot,
+      .bar_ref = &g_settings.bs_profile_slot, .bar_min = 0, .bar_max = 15, .bar_step = 1, .bar_fmt = fmt_int },
+    { .label = "Save",   .type = IT_CYCLE, .ok = ok_bs_psave },
+    { .label = "Load",   .type = IT_CYCLE, .ok = ok_bs_pload, .visible = bs_unloaded },
+    { .label = "Delete", .type = IT_CYCLE, .ok = ok_bs_pdel },
+};
+static const menu_t m_bs_prof = { "Profiles", bs_prof_items, 4 };
+
+static const menu_item_t bs_runs_items[] = {
+    { .label = "Run #",  .type = IT_BARGRAPH, .value = val_bs_runsel,
+      .bar_ref = &g_settings.bs_run_select, .bar_min = 1, .bar_max = 9999, .bar_step = 1, .bar_fmt = fmt_int },
+    { .label = "Load",   .type = IT_CYCLE, .ok = ok_bs_rload, .visible = bs_idle },
+    { .label = "Delete", .type = IT_CYCLE, .ok = ok_bs_rdel,  .visible = bs_idle },
+};
+static const menu_t m_bs_runs = { "Saved Runs", bs_runs_items, 3 };
+
+static const menu_item_t bs_items[] = {
+    { .label = "Status",    .type = IT_INFO,    .value = val_bs_status },
+    { .label = "Output",    .type = IT_TOGGLE,  .value = val_bs_run, .ok = ok_bs_run,
+      .value_alert = alert_bs_run, .visible = bs_resumable },
+    { .label = "New Run",   .type = IT_CYCLE,   .ok = ok_bs_new, .visible = bs_idle },
+    { .label = "Stop Run",  .type = IT_CYCLE,   .ok = ok_bs_stop, .visible = bs_resumable },
+    { .label = "Unload",    .type = IT_CYCLE,   .ok = ok_bs_unload, .visible = bs_loaded_idle },
+    { .label = "Battery",   .type = IT_SUBMENU, .sub = &m_bs_batt, .value = val_bs_chem },
+    { .label = "Profiles",  .type = IT_SUBMENU, .sub = &m_bs_prof },
+    { .label = "Saved Runs",.type = IT_SUBMENU, .sub = &m_bs_runs },
+};
+static const menu_t m_bs = { "Battery Simulator", bs_items, 8 };
+
+// ===========================================================================
 // Navigation state
 // ===========================================================================
 #define NAV_MAX 6
@@ -860,22 +1041,55 @@ static void handle_menu_event(uint32_t ev)
     }
 }
 
+// Held UP/DOWN auto-repeats every ~110 ms (P4 buttons_p4.c). Consecutive
+// same-direction events inside ACCEL_GAP_MS form a streak; the step grows x10
+// every ACCEL_STREAK events so a 1 .. 2,000,000 mAh range stays reachable, and
+// the value snaps to the coarser grid so it lands on round numbers.
+#define ACCEL_GAP_MS   250
+#define ACCEL_STREAK   12
+static int      s_ed_mult = 1;
+static int      s_ed_streak = 0;
+static int      s_ed_dir = 0;
+static uint32_t s_ed_last_ms = 0;
+
+static int editor_step(const menu_item_t *it, int dir)
+{
+    if (dir != s_ed_dir || (s_anim_ms - s_ed_last_ms) > ACCEL_GAP_MS) {
+        s_ed_streak = 0;
+        s_ed_mult = 1;
+    }
+    s_ed_dir = dir;
+    s_ed_last_ms = s_anim_ms;
+    if (++s_ed_streak % ACCEL_STREAK == 0) {
+        long next = (long)it->bar_step * s_ed_mult * 10;
+        if (next * 10 <= (long)(it->bar_max - it->bar_min)) s_ed_mult *= 10;
+    }
+    return it->bar_step * s_ed_mult;
+}
+
 static void handle_editor_event(uint32_t ev)
 {
     const menu_item_t *it = s_editor;
-    if (ev & BTN_EV_UP) {
-        *it->bar_ref += it->bar_step;
-        if (*it->bar_ref > it->bar_max) *it->bar_ref = it->bar_max;
-        if (it->bar_change) it->bar_change(*it->bar_ref);
-    }
-    if (ev & BTN_EV_DOWN) {
-        *it->bar_ref -= it->bar_step;
-        if (*it->bar_ref < it->bar_min) *it->bar_ref = it->bar_min;
+    int dir = (ev & BTN_EV_UP) ? 1 : (ev & BTN_EV_DOWN) ? -1 : 0;
+    if (dir) {
+        int step = editor_step(it, dir);
+        long v = (long)*it->bar_ref + (long)dir * step;
+        if (step > it->bar_step) {
+            // Snap to the coarse grid in the direction of travel.
+            long rel = v - it->bar_min;
+            rel = (dir > 0) ? (rel / step) * step : ((rel + step - 1) / step) * step;
+            v = it->bar_min + rel;
+        }
+        if (v > it->bar_max) v = it->bar_max;
+        if (v < it->bar_min) v = it->bar_min;
+        *it->bar_ref = (int)v;
         if (it->bar_change) it->bar_change(*it->bar_ref);
     }
     if (ev & (BTN_EV_OK | BTN_EV_BACK)) {
         s_in_editor = false;          // commit & leave editor
         s_editor = NULL;
+        s_ed_mult = 1;
+        s_ed_streak = 0;
         settings_commit();            // persist + push to P4 once, on exit
     }
 }
@@ -1368,14 +1582,24 @@ static void render_editor(void)
     it->bar_fmt(buf, sizeof(buf), *it->bar_ref);
     gfx_text((DISP_WIDTH - gfx_text_w(buf, 2)) / 2, 24, buf, 2, g_theme.text);
 
-    // Horizontal bar.
+    // Horizontal bar. Ranges spanning several decades (capacity, load) use a
+    // log scale so small values still show a visible fill.
     int bx = 18, bw = DISP_WIDTH - 36, by = 52, bh = 10;
     gfx_round_rect_border(bx, by, bw, bh, 3, g_theme.border);
-    float frac = (s_bar_disp - it->bar_min) / (float)(it->bar_max - it->bar_min);
+    float span = (float)(it->bar_max - it->bar_min);
+    float frac = (s_bar_disp - it->bar_min) / span;
+    if (span > 100000.0f) frac = log10f(1.0f + s_bar_disp - it->bar_min) / log10f(1.0f + span);
     if (frac < 0) frac = 0;
     if (frac > 1) frac = 1;
     int fillw = (int)(frac * (bw - 4));
     if (fillw > 0) gfx_round_rect(bx + 2, by + 2, fillw, bh - 4, 2, g_theme.sel);
+
+    // Accelerated step hint while a key is held.
+    if (s_ed_mult > 1) {
+        char st[12];
+        snprintf(st, sizeof(st), "x%d", s_ed_mult);
+        gfx_text(DISP_WIDTH - gfx_text_w(st, 1) - 6, 5, st, 1, g_theme.amber);
+    }
 
     // Min/max hints.
     char mn[16], mx[16];

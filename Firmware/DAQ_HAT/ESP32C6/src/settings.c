@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <string.h>
+#include <stddef.h>
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -9,7 +10,7 @@ static const char *TAG = "settings";
 #define NVS_NS   "daqhat"
 #define NVS_KEY  "settings"
 // Bump when the settings_t layout changes so old blobs are discarded.
-#define SETTINGS_VERSION  6
+#define SETTINGS_VERSION  7
 
 settings_t g_settings;
 
@@ -53,6 +54,23 @@ static void load_defaults(void)
     g_settings.ssid[0]         = '\0';
     g_settings.password[0]     = '\0';
     g_settings.wifi_status     = 0;
+
+    // Mirrors the P4 registry defaults (1S LiPo 2000 mAh); the P4 pushes the
+    // real values on link-up.
+    g_settings.bs_chem         = 0;
+    g_settings.bs_cells        = 1;
+    g_settings.bs_capacity_mah = 2000;
+    g_settings.bs_start_soc    = 1000;
+    g_settings.bs_cutoff_mv    = 3000;
+    g_settings.bs_rint_uohm    = 30000;
+    g_settings.bs_peukert      = 1050;
+    g_settings.bs_sd_enable    = true;
+    g_settings.bs_sd_pct       = 200;
+    g_settings.bs_ext_enable   = false;
+    g_settings.bs_ext_ua       = 1000;
+    g_settings.bs_dither       = false;
+    g_settings.bs_profile_slot = 0;
+    g_settings.bs_run_select   = 0;
 }
 
 void settings_init(void)
@@ -144,7 +162,14 @@ void settings_init(void)
             ESP_LOGI(TAG, "settings version %lu unsupported; using defaults", (unsigned long)blob.version);
         }
     } else {
-        if (err == ESP_OK) {
+        // v6 -> v7: the battery-sim fields were appended, so a v6 blob is a
+        // byte prefix of the current struct; the new fields keep defaults.
+        const size_t v6_len = offsetof(nvs_blob_t, s) + offsetof(settings_t, bs_chem);
+        if (err == ESP_OK && len == v6_len && blob.version == 6) {
+            memcpy(&g_settings, &blob.s, offsetof(settings_t, bs_chem));
+            settings_save();
+            ESP_LOGI(TAG, "settings migrated v6 -> v7");
+        } else if (err == ESP_OK) {
             ESP_LOGI(TAG, "settings blob size mismatch; using defaults");
         }
     }

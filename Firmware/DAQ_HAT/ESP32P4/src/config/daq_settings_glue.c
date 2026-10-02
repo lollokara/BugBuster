@@ -7,6 +7,7 @@
 #include "daq_config_registry.h"
 #include "adaq7769.h"
 #include "adaq7769_regs.h"
+#include "battsim.h"
 
 #include "esp_log.h"
 
@@ -292,6 +293,11 @@ static void on_apply(uint16_t key, int32_t ival, const char *sval, void *user)
     const daq_setting_schema_t *sc = daq_config_schema(key);
     if (sc && (sc->flags & (DAQ_F_C6_LOCAL | DAQ_F_S3_LOCAL))) return;   // applied on the C6 / S3
 
+    if (DAQ_KEY_GROUP(key) == DAQ_GRP_BATT) {
+        battsim_on_setting(key, ival, s_boot_apply);
+        return;
+    }
+
     switch (key) {
     case DAQ_K_AUTORANGING:
     case DAQ_K_RANGE_IDX:
@@ -390,6 +396,18 @@ static bool on_action(uint8_t action_id, void *user)
         power_dsp_reset_energy(&b->dsp);
         power_dsp_reset_stats(&b->dsp);
         return true;
+    case DAQ_ACT_BS_PROFILE_SAVE:
+    case DAQ_ACT_BS_PROFILE_LOAD:
+    case DAQ_ACT_BS_PROFILE_DELETE:
+    case DAQ_ACT_BS_RUN_NEW:
+    case DAQ_ACT_BS_RUN_START:
+    case DAQ_ACT_BS_RUN_PAUSE:
+    case DAQ_ACT_BS_RUN_STOP:
+    case DAQ_ACT_BS_RUN_UNLOAD:
+    case DAQ_ACT_BS_RUN_LOAD:
+    case DAQ_ACT_BS_RUN_DELETE:
+    case DAQ_ACT_BS_DEFAULTS:
+        return battsim_action(action_id);
     default:
         return false;
     }
@@ -417,6 +435,7 @@ void daq_board_bind_settings(daq_board_t *b)
 {
     daq_settings_init();
     daq_settings_set_callbacks(on_apply, on_notify, on_action, b);
+    daq_settings_set_guard(battsim_guard);
     s_boot_apply = true;
     daq_settings_apply_all();
     s_boot_apply = false;

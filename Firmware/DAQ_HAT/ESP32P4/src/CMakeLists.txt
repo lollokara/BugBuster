@@ -35,6 +35,10 @@ idf_component_register(
         "diag/diagnostics.c"
         "config/daq_settings.c"
         "config/daq_settings_glue.c"
+        "battsim/battsim.c"
+        "battsim/battsim_model.c"
+        "battsim/battsim_integ.c"
+        "battsim/battsim_store.c"
         "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
@@ -56,6 +60,7 @@ idf_component_register(
         "perf"
         "diag"
         "config"
+        "battsim"
     REQUIRES
         driver
         esp_driver_spi
@@ -83,4 +88,5 @@ idf_component_register(
         lwip
         espressif__esp_wifi_remote
         espressif__esp_hosted
+        joltwallet__littlefs
 )

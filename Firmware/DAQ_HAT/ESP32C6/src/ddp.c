@@ -47,6 +47,10 @@ static ddp_cal_status_t s_cal;
 static int64_t          s_cal_us = 0;
 static bool             s_cal_have = false;
 
+static ddp_battsim_t    s_bs;
+static int64_t          s_bs_us = 0;
+static bool             s_bs_have = false;
+
 // Button events relayed from the P4 (buttons moved off the C6). OR-accumulated
 // by the RX task; drained by the render loop via ddp_take_buttons().
 static volatile uint8_t s_btn_events = 0;
@@ -228,6 +232,16 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
         }
         send_frame(DDP_RSP_OK, NULL, 0);
         break;
+    case DDP_CMD_SET_BATTSIM:
+        if (len >= sizeof(ddp_battsim_t)) {
+            taskENTER_CRITICAL(&s_mux);
+            memcpy(&s_bs, payload, sizeof(s_bs));
+            s_bs_us = esp_timer_get_time();
+            s_bs_have = true;
+            taskEXIT_CRITICAL(&s_mux);
+        }
+        send_frame(DDP_RSP_OK, NULL, 0);
+        break;
     default: {
         uint8_t e = 0xFF; send_frame(DDP_RSP_ERR, &e, 1);
         break;
@@ -384,6 +398,25 @@ void ddp_announce_presence(void)
 {
     uint8_t info[4] = { DDP_HAT_TYPE, DDP_FW_MAJOR, DDP_FW_MINOR, DDP_PROTO_VERSION };
     send_frame(DDP_RSP_INFO, info, sizeof(info));
+}
+
+bool ddp_get_battsim(ddp_battsim_t *out, uint32_t *age_ms)
+{
+    bool have;
+    taskENTER_CRITICAL(&s_mux);
+    have = s_bs_have;
+    if (out) *out = s_bs;
+    int64_t rx = s_bs_us;
+    taskEXIT_CRITICAL(&s_mux);
+    if (age_ms) *age_ms = have ? (uint32_t)((esp_timer_get_time() - rx) / 1000) : 0xFFFFFFFFu;
+    return have;
+}
+
+bool ddp_battsim_mode(void)
+{
+    ddp_battsim_t b;
+    uint32_t age;
+    return ddp_get_battsim(&b, &age) && age < 3000 && b.state != DDP_BS_ST_NONE;
 }
 
 bool ddp_get_latest(float *v, float *i, uint8_t *flags, uint32_t *age_ms)

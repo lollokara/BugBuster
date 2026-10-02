@@ -80,6 +80,11 @@ void ddp_send_cal_ctrl(uint8_t op, uint8_t arg);
 // received; *age_ms = ms since the most recent.
 bool ddp_get_cal_status(ddp_cal_status_t *out, uint32_t *age_ms);
 
+// Latest battery-simulator status pushed by the P4 (~2 Hz).
+bool ddp_get_battsim(ddp_battsim_t *out, uint32_t *age_ms);
+// True while a battery-sim run is loaded on the P4 (fresh status, state != NONE).
+bool ddp_battsim_mode(void);
+
 // Announce our presence to the P4 (unsolicited RSP_INFO). Called periodically
 // so the C6 and P4 discover each other regardless of boot order / a transient
 // link drop. Safe to call when no P4 is attached (bytes are simply dropped).

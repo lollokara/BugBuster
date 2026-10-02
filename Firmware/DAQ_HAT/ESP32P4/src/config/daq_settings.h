@@ -31,6 +31,7 @@ typedef enum {
     DAQ_SRC_S3    = 1,   // came from the S3 mainboard
     DAQ_SRC_C6    = 2,   // came from the C6 menu
     DAQ_SRC_LOCAL = 3,   // changed by P4 firmware itself
+    DAQ_SRC_BATTSIM = 4, // battery simulator driving the supply / mirroring a run
 } daq_src_t;
 
 // Apply a freshly-changed value to its subsystem. For scalar keys @sval is NULL
@@ -44,6 +45,13 @@ typedef void (*daq_settings_notify_cb_t)(uint16_t key, daq_src_t src, void *user
 
 // Run a stateless action (energy/charge/factory reset). Return true on success.
 typedef bool (*daq_settings_action_cb_t)(uint8_t action_id, void *user);
+
+// Veto hook, consulted before a value is stored. Return false to refuse the
+// write (nothing is stored, applied or notified). action_id != 0 asks about an
+// action instead of a key.
+typedef bool (*daq_settings_guard_cb_t)(uint16_t key, uint8_t action_id,
+                                        int32_t ival, daq_src_t src);
+void daq_settings_set_guard(daq_settings_guard_cb_t guard);
 
 // Initialise the store: seed from schema defaults, then overlay NVS overrides.
 void daq_settings_init(void);

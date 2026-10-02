@@ -166,6 +166,33 @@ esp_err_t smu_set_voltage(smu_t *s, float volts)
     return err;
 }
 
+float smu_code_to_voltage(int8_t code)
+{
+    float i_dac_ua = ((float)code / 127.0f) * SMU_DS4424_IFS_UA *
+                     (float)SMU_VDUT_CODE_POLARITY;
+    return SMU_VDUT_V0 - SMU_VDUT_RFB_OHM * i_dac_ua * 1e-6f;
+}
+
+esp_err_t smu_step_code(smu_t *s, int8_t code, float volts_hint)
+{
+    if (!s->idac || !s->idac->present) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    // Same one-code-per-step ramp as smu_set_voltage (residual-offset rule).
+    int8_t cur = s->v_code;
+    esp_err_t err = ESP_OK;
+    while (cur != code) {
+        cur = (int8_t)(cur + ((code > cur) ? 1 : -1));
+        err = ds4424_set_code(s->idac, DS4424_CH_VDUT, cur);
+        if (err != ESP_OK) return err;
+        s->v_code = cur;
+        if (cur != code) vTaskDelay(pdMS_TO_TICKS(SMU_VDUT_RAMP_STEP_DELAY_MS));
+    }
+    // smu_enable() re-ramps to vdut_set, so keep it consistent with the code.
+    s->vdut_set = clampf(volts_hint, SMU_VDUT_MIN, SMU_VDUT_MAX);
+    return ESP_OK;
+}
+
 esp_err_t smu_set_current_limit(smu_t *s, float amps)
 {
     if (!s->idac || !s->idac->present) {

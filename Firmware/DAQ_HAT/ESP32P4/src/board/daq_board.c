@@ -30,6 +30,8 @@
 #include "daq_perf.h"
 #include "daq_config_registry.h"
 #include "daq_settings.h"
+#include "battsim.h"
+#include "battsim_integ.h"
 
 static const char *TAG = "daq_board";
 
@@ -395,7 +397,7 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // ---------------------------------------------------------------------------
 typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
                CTRL_MSG_RANGE_CAL_START, CTRL_MSG_SET_ACQ_CONFIG,
-               CTRL_MSG_SMU_APPLY } ctrl_msg_type_t;
+               CTRL_MSG_SMU_APPLY, CTRL_MSG_BS_CODE } ctrl_msg_type_t;
 
 typedef struct {
     uint16_t key;      // DAQ_K_SOURCE_ENABLE / _DUT_VOLTAGE_MV / _DUT_ILIMIT_MA
@@ -415,6 +417,11 @@ typedef struct {
 } ctrl_acq_config_t;
 
 typedef struct {
+    int8_t code;
+    float  v_hint;
+} ctrl_bs_code_t;
+
+typedef struct {
     ctrl_msg_type_t type;
     union {
         usb_cmd_rate_t      rate;
@@ -422,6 +429,7 @@ typedef struct {
         usb_cmd_range_cal_t range_cal;
         ctrl_acq_config_t   acq_config;
         ctrl_smu_apply_t    smu;
+        ctrl_bs_code_t      bs;
     };
 } ctrl_msg_t;
 
@@ -434,6 +442,15 @@ bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival)
     // Short wait only: a full queue falls back to the inline apply rather
     // than dropping a supply change.
     return xQueueSend(b->ctrl_queue, &msg, pdMS_TO_TICKS(20)) == pdTRUE;
+}
+
+bool daq_board_defer_bs_code(daq_board_t *b, int8_t code, float v_hint)
+{
+    if (!b->ctrl_queue) return false;
+    ctrl_msg_t msg = { .type = CTRL_MSG_BS_CODE };
+    msg.bs.code = code;
+    msg.bs.v_hint = v_hint;
+    return xQueueSend(b->ctrl_queue, &msg, 0) == pdTRUE;
 }
 
 static void daq_ctrl_task(void *arg)
@@ -499,6 +516,10 @@ static void daq_ctrl_task(void *arg)
                 daq_settings_apply_smu(b, msg.smu.key, msg.smu.ival);
                 break;
 
+            case CTRL_MSG_BS_CODE:
+                smu_step_code(&b->smu, msg.bs.code, msg.bs.v_hint);
+                break;
+
             case CTRL_MSG_RANGE_CAL_START: {
                 const usb_cmd_range_cal_t *rc = &msg.range_cal;
                 b->range_cal.r_cal_a_ohm = (rc->r_cal_a_ohm > 0.0f)
@@ -556,6 +577,11 @@ static void daq_ctrl_task(void *arg)
                 // own digital filter/decimation, which needs no such caveat.
                 const uint8_t filter  = msg.acq_config.filter;
                 const uint8_t adc_dec = msg.acq_config.adc_dec;
+
+                if (battsim_active()) {
+                    ESP_LOGW(TAG, "SET_ACQ_CONFIG refused: battery sim run active");
+                    break;
+                }
 
                 // SR mode is a settings-store value, not a direct register
                 // write: routing it through the store runs apply_sr_mode()
@@ -1026,6 +1052,10 @@ esp_err_t daq_board_set_source(daq_board_t *b, float vdut, float ilimit,
     // not touch b->smu.vdut_set/ilimit_set. <= 0.0f is the sentinel for "leave
     // this axis unchanged" (see the callers of daq_board_set_source) and is
     // deliberately not treated as out-of-range.
+    if (battsim_owns_supply()) {
+        ESP_LOGW(TAG, "SET_SOURCE refused: battery sim run loaded");
+        return ESP_ERR_INVALID_STATE;
+    }
     if (ilimit > 0.0f) {
         if (ilimit < SMU_ILIMIT_MIN_A || ilimit > SMU_ILIMIT_FULLSCALE_A) {
             ESP_LOGW(TAG, "SET_SOURCE: ilimit %.4f A out of range [%.3f, %.3f] -- rejected",
@@ -2211,6 +2241,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
 
         case HATP_CMD_DAQ_VDUT_ENABLE: {
             if (len < 1) return -1;
+            if (battsim_owns_supply()) return -1;
             bool present = (b->smu.idac && b->smu.idac->present);
             if (!present) return -1;
             return (smu_enable(&b->smu, payload[0] != 0) == ESP_OK) ? 0 : -1;
@@ -2218,6 +2249,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
 
         case HATP_CMD_DAQ_VDUT_SETPOINT: {
             if (len < sizeof(s3link_vdut_setpoint_t)) return -1;
+            if (battsim_owns_supply()) return -1;
             const s3link_vdut_setpoint_t *sp = (const s3link_vdut_setpoint_t *)payload;
             // Reject out-of-range requests rather than silently clamping (the
             // S3-side API also bounds-checks before ever sending this, but the
@@ -2272,6 +2304,10 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
                 }
                 relay_target = (relay_target_t)raw_relay_target;
             }
+
+            // OTA stops acquisition, which would stall a running battery
+            // simulation: the user has to pause it first.
+            if (battsim_active()) return -1;
 
             s_ota_target = target;
 
@@ -2515,6 +2551,7 @@ static void daq_ui_task(void *arg)
     daq_board_t *b = (daq_board_t *)arg;
     uint32_t last_meas = 0;
     uint32_t last_hello = 0;
+    uint32_t last_bs = 0;
     uint32_t wifi_disconnect_since_ms = 0;   // 0 == "not counting down"
     for (;;) {
         uint32_t t = (uint32_t)(esp_timer_get_time() / 1000);
@@ -2572,6 +2609,24 @@ static void daq_ui_task(void *arg)
                                            power_dsp_last_v(&b->dsp),
                                            power_dsp_last_i(&b->dsp),
                                            mflags);
+            }
+
+            // Battery simulator status for the C6 main screen. Sent with state
+            // NONE too, so the C6 leaves battery mode when a run is unloaded.
+            if ((t - last_bs) >= 500) {
+                last_bs = t;
+                battsim_status_t st;
+                battsim_get_status(&st);
+                ddp_battsim_t d = {
+                    .state = st.state, .flags = st.flags, .chem = st.chem,
+                    .cells = st.cells, .soc_x100 = st.soc_x100, .run_id = st.run_id,
+                    .v_meas = st.v_meas, .i_meas = st.i_meas,
+                    .v_target = st.v_target, .i_avg = st.i_avg,
+                    .elapsed_s = st.elapsed_s, .remaining_s = st.remaining_s,
+                    .capacity_mah = st.capacity_mah, .last_error = st.last_error,
+                };
+                ddp_master_send(&b->ddp, DDP_CMD_SET_BATTSIM, (const uint8_t *)&d,
+                                sizeof(d));
             }
 
             // Periodic presence probe: prompt the C6 to reply with RSP_INFO so
@@ -2746,6 +2801,8 @@ static void glitch_filter_reset(void)
 static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
                       const adaq_sample_t *coarse)
 {
+    static float    s_bs_isum, s_bs_vsum;   // battsim block sums (daq_fast only)
+    static uint32_t s_bs_n;
     DAQ_PERF_BEGIN(t_emit);
     DAQ_PERF_BEGIN(t_fus);
     // range_manager_step() processes any pending ISR flags from the FF GPIOs
@@ -2841,6 +2898,13 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
     // lag on any single push, which is immaterial to the cumulative mAh/mWh
     // total this is protecting).
     b->dsp_emit_periods++;
+    // Battery sim: every fused sample enters the block mean, so the charge
+    // integral is not a 1-in-dsp_decim subsample (which aliases periodic loads).
+    if (bs_integ_enabled()) {
+        s_bs_isum += emit_fo.amps;
+        s_bs_vsum += v;
+        s_bs_n++;
+    }
     if (++b->dsp_count >= b->dsp_decim) {
         DAQ_PERF_BEGIN(t_dsp);
         b->dsp_count = 0;
@@ -2848,6 +2912,12 @@ static void fast_emit(daq_board_t *b, const adaq_sample_t *fine,
         uint32_t periods = b->dsp_emit_periods / decim;
         b->dsp_emit_periods = b->dsp_emit_periods % decim;   // carry remainder
         power_dsp_push_current_n(&b->dsp, emit_fo.amps, periods);
+        if (s_bs_n) {
+            battsim_fast_push(s_bs_isum / (float)s_bs_n, s_bs_vsum / (float)s_bs_n,
+                              periods * decim);
+            s_bs_isum = s_bs_vsum = 0.0f;
+            s_bs_n = 0;
+        }
         spectrum_push(&b->spectrum,
                       (b->fft_source == 1) ? power_dsp_last_p(&b->dsp) : emit_fo.amps);
         DAQ_PERF_END(DAQ_PERF_FAST_DSP, t_dsp);
@@ -3121,6 +3191,7 @@ esp_err_t daq_board_run_fast(daq_board_t *b, size_t ring_capacity)
                         ? adaq7769_output_data_rate(&b->adaq[ADAQ_ROLE_FINE])
                         : 256000.0f;
         power_dsp_set_rate(&b->dsp, odr / (float)b->dsp_decim);
+        bs_integ_set_odr(odr);
     }
     b->drop_fine    = 0;
     b->drop_coarse  = 0;

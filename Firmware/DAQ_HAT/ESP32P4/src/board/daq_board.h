@@ -210,6 +210,9 @@ bool daq_board_pd_ok(const daq_board_t *b, uint16_t min_mv, uint16_t min_ma);
 /** DAQ-08: post a DUT-supply setting to the ctrl task (the ramp takes up to
  *  ~2.5 s, far past the S3 link's 200 ms reply budget). False if not queued. */
 bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival);
+/** Battery sim: ramp DS4424 ch1 to @p code on the ctrl task. False if the
+ *  queue is full (the caller retries on its next tick). */
+bool daq_board_defer_bs_code(daq_board_t *b, int8_t code, float v_hint);
 /** DAQ-08: apply one DUT-supply setting now (ctrl task or boot). */
 void daq_settings_apply_smu(daq_board_t *b, uint16_t key, int32_t ival);
 

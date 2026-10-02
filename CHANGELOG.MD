@@ -31,6 +31,21 @@
 - Unit, simulator and contract coverage for the MCP tool layer, the HTTP
   route table versus the Python client, BBP event frames, and previously
   untested BBP commands.
+- DAQ HAT battery simulator (firmware, P4 + C6). The P4 drives the DUT supply
+  along a cell discharge curve (LiPo, LiFePO4, NiMH, lead-acid; 1..14 series
+  cells within the 1.8..19.9 V supply range) while integrating the measured
+  DUT current in exact integer pico-coulombs, plus an optional virtual
+  constant-current external load, exponential self-discharge, internal
+  resistance sag and Peukert. Runs, profiles and history (1 s last hour in
+  RAM, 1 min for 7 days, whole run at 15 min doubling) live on a new 4 MiB
+  LittleFS `battlog` partition and survive reboots (resume PAUSED, 60 s
+  checkpoints). Configured through registry group 0x08 and actions 4..14;
+  C6 gains a Battery Simulator menu, a battery main screen (V, I, SOC,
+  remaining time from the last 30 min) and an accelerating slider editor.
+  DDP bumped to v10 (`DDP_CMD_SET_BATTSIM`).
+  **The P4 partition table changed (OTA slots 5 -> 3 MiB): one wired flash per
+  board is required.** Host transport (BBP/HTTP/MCP history download, JSON
+  export) is not built yet.
 
 ## [3.0.0] - 2026-10-02
 
