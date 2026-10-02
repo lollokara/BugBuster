@@ -416,7 +416,12 @@ impl Drop for UsbTransport {
 
 /// DESK-33: user-facing text for a BBP ERR reply (the UI shows this string).
 fn device_error_message(code: u8, cmd_id: u8) -> String {
-    format!("Device error 0x{:02X} for cmd 0x{:02X}", code, cmd_id)
+    format!(
+        "{} (error 0x{:02X}, cmd 0x{:02X})",
+        bbp::error_to_string(code),
+        code,
+        cmd_id
+    )
 }
 
 #[cfg(test)]
@@ -424,7 +429,6 @@ mod device_error_tests {
     /// DESK-33: UI messages carried only a hex code; the generated
     /// `bbp::error_to_string` table was never used.
     #[test]
-    #[ignore = "DESK-33"]
     fn device_errors_read_as_text() {
         let m = super::device_error_message(crate::bbp::ERR_BUSY, 0x10);
         assert!(m.contains("busy"), "{m}");
