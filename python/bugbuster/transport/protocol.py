@@ -9,7 +9,7 @@ implement. Transport-specific methods (USB-only or HTTP-only) are accessed
 through runtime checks in the client code using _require_usb() or similar guards.
 """
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -58,3 +58,47 @@ class Transport(Protocol):
 
     _timeout: float
     """Default timeout in seconds for operations."""
+
+
+@runtime_checkable
+class UsbTransportProtocol(Transport, Protocol):
+    """USB (CDC0 BBP) members the client uses behind ``_require_usb`` (FEAT-4)."""
+
+    _port: str
+    _serial: Any
+
+    def send_command(self, cmd_id: int, payload: bytes = b"",
+                     timeout: Optional[float] = None) -> bytes:
+        """Send a BBP command and return the response payload."""
+        ...
+
+    def on_event(self, evt_id: int, callback: Callable[[bytes], None]) -> None:
+        """Register a callback for an unsolicited event."""
+        ...
+
+    def remove_event(self, evt_id: int) -> None:
+        """Remove the callback for ``evt_id``."""
+        ...
+
+
+@runtime_checkable
+class HttpTransportProtocol(Transport, Protocol):
+    """HTTP REST members the client uses on the HTTP path (FEAT-4)."""
+
+    def get(self, path: str, params: Optional[dict] = None,
+            headers: Optional[dict] = None) -> Any:
+        ...
+
+    def post(self, path: str, body: Optional[dict] = None,
+             headers: Optional[dict] = None) -> Any:
+        ...
+
+    def delete(self, path: str, params: Optional[dict] = None,
+               headers: Optional[dict] = None) -> Any:
+        ...
+
+    def start_dsp_ws_stream(self, callback: Callable[[bytes], None]) -> None:
+        ...
+
+    def stop_dsp_ws_stream(self) -> None:
+        ...

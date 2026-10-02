@@ -9,7 +9,6 @@ send_command, on_event, get/post/delete, ... were undeclared.
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CLIENT = ROOT / "python" / "bugbuster" / "client.py"
@@ -18,12 +17,14 @@ CLIENT = ROOT / "python" / "bugbuster" / "client.py"
 def _declared(proto) -> set:
     names = set()
     for klass in proto.__mro__:
-        names |= {n for n in vars(klass) if not n.startswith("__")}
+        if klass.__module__ != "bugbuster.transport.protocol":
+            continue   # typing.Protocol / Generic internals
+        names |= {n for n in vars(klass) if not n.startswith("__") and not n.startswith("_is_")
+                  and not n.startswith("_abc")}
         names |= set(getattr(klass, "__annotations__", {}))
     return names
 
 
-@pytest.mark.xfail(strict=True, reason="FEAT-4")
 def test_every_transport_member_used_by_the_client_is_declared():
     from bugbuster.transport import protocol as p
 
@@ -32,7 +33,6 @@ def test_every_transport_member_used_by_the_client_is_declared():
     assert sorted(used - declared) == []
 
 
-@pytest.mark.xfail(strict=True, reason="FEAT-4")
 def test_concrete_transports_conform():
     from bugbuster.transport import protocol as p
     from bugbuster.transport.http import HTTPTransport
