@@ -51,6 +51,10 @@ web-sys = { version = "0.3", features = [
     "WebGlUniformLocation",
     "WebGlVertexArrayObject",
     "WebGlContextAttributes",
+    "Storage",
+    "MediaQueryList",
+    "MediaQueryListEvent",
+    "CssStyleDeclaration",
 ] }
 console_error_panic_hook = "0.1.7"
 

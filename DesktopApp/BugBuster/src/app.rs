@@ -3,7 +3,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
+use crate::components::command_palette::CommandPalette;
 use crate::components::connection::ConnectionPanel;
+use crate::components::icons::Icon;
 use crate::components::io_blocked_banner::IoBlockedBanner;
 use crate::tabs::{
     adc::*, board::*, daq::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*,
@@ -49,56 +51,125 @@ fn tab_slots(tab_id: &str) -> &'static [u8] {
     }
 }
 
-const CATEGORIES: &[(&str, &str, &[(&str, &str)])] = &[
+/// (category id, section label, [(view id, label, icon)])
+type NavEntry = (&'static str, &'static str, &'static str);
+const CATEGORIES: &[(&str, &str, &[NavEntry])] = &[
     (
         "overview_cat",
         "Overview",
         &[
-            ("overview", "Dashboard"),
-            ("board", "Board Map"),
-            ("voltages", "Voltages & Cal"),
-            ("faults", "Faults"),
-            ("diag", "Diagnostics"),
+            ("overview", "Dashboard", "layout-dashboard"),
+            ("board", "Board Map", "circuit-board"),
+            ("voltages", "Voltages & Cal", "gauge"),
+            ("faults", "Faults", "triangle-alert"),
+            ("diag", "Diagnostics", "stethoscope"),
         ],
     ),
     (
         "analog_cat",
         "Analog",
         &[
-            ("adc", "ADC"),
-            ("vdac", "VDAC"),
-            ("idac", "IDAC"),
-            ("iin", "IIN"),
+            ("adc", "ADC", "chart-line"),
+            ("vdac", "VDAC", "arrow-up-from-line"),
+            ("idac", "IDAC", "arrow-right-from-line"),
+            ("iin", "IIN", "arrow-down-to-line"),
         ],
     ),
     (
         "digital_cat",
         "Digital",
         &[
-            ("gpio", "GPIO"),
-            ("din", "DIN"),
-            ("dout", "DOUT"),
-            ("hv_io", "HV IO"),
-            ("ioexp", "IO Expander"),
+            ("gpio", "GPIO", "toggle-right"),
+            ("din", "DIN", "log-in"),
+            ("dout", "DOUT", "log-out"),
+            ("hv_io", "HV IO", "zap"),
+            ("ioexp", "IO Expander", "layers"),
         ],
     ),
     (
         "instruments_cat",
         "Instruments",
         &[
-            ("scope", "Scope"),
-            ("la", "Logic Analyzer"),
-            ("daq", "HS DAQ"),
-            ("wavegen", "WaveGen"),
-            ("sigpath", "Signal Path"),
+            ("scope", "Scope", "activity"),
+            ("la", "Logic Analyzer", "binary"),
+            ("daq", "HS DAQ", "chart-spline"),
+            ("wavegen", "WaveGen", "waves"),
+            ("sigpath", "Signal Path", "route"),
         ],
     ),
     (
         "system_cat",
         "System",
-        &[("hat", "HAT"), ("usbpd", "USB PD"), ("uart", "UART")],
+        &[
+            ("hat", "HAT", "cpu"),
+            ("usbpd", "USB PD", "usb"),
+            ("uart", "UART", "terminal"),
+        ],
     ),
 ];
+
+/// Views that own the full content area and manage their own scrolling.
+fn is_fullbleed(tab_id: &str) -> bool {
+    matches!(tab_id, "scope" | "la" | "daq" | "board" | "sigpath")
+}
+
+fn view_meta(tab_id: &str) -> (&'static str, &'static str) {
+    for (_, section, tabs) in CATEGORIES {
+        if let Some((_, label, _)) = tabs.iter().find(|(id, _, _)| *id == tab_id) {
+            return (label, section);
+        }
+    }
+    ("", "")
+}
+
+fn local_flag(key: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(key).ok().flatten())
+        .is_some_and(|v| v == "1")
+}
+
+fn set_local_flag(key: &str, on: bool) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(key, if on { "1" } else { "0" });
+    }
+}
+
+async fn export_config_flow() {
+    let result = try_invoke("pick_config_save_file", JsValue::NULL).await;
+    if let Some(path) = result.and_then(|r| {
+        serde_wasm_bindgen::from_value::<Option<String>>(r)
+            .ok()
+            .flatten()
+    }) {
+        if !path.is_empty() {
+            #[derive(serde::Serialize)]
+            struct Args {
+                path: String,
+            }
+            let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
+            let _ = try_invoke("export_config", args).await;
+        }
+    }
+}
+
+async fn import_config_flow() {
+    let result = try_invoke("pick_config_open_file", JsValue::NULL).await;
+    if let Some(path) = result.and_then(|r| {
+        serde_wasm_bindgen::from_value::<Option<String>>(r)
+            .ok()
+            .flatten()
+    }) {
+        if !path.is_empty() {
+            #[derive(serde::Serialize)]
+            struct Args {
+                path: String,
+            }
+            let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
+            let _ = try_invoke("import_config", args).await;
+        }
+    }
+}
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -295,15 +366,6 @@ pub fn App() -> impl IntoView {
             set_active_tab.set("overview".to_string());
         }
     });
-    let active_category = move || {
-        let tab = active_tab.get();
-        for (cat_id, _, tabs) in CATEGORIES {
-            if tabs.iter().any(|(t_id, _)| *t_id == tab) {
-                return cat_id.to_string();
-            }
-        }
-        "overview_cat".to_string()
-    };
     let uart_config = RwSignal::new(UartConfigState::new());
 
     // Hoist scope UI state so it survives tab switches (Bug 1).
@@ -426,15 +488,6 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let disconnect = move |_: ev::MouseEvent| {
-        spawn_local(async move {
-            try_invoke("disconnect_device", JsValue::NULL).await;
-            daq_disconnect().await;
-        });
-        set_conn_mode.set("Disconnected".to_string());
-        set_conn_addr.set(String::new());
-        set_device_state.set(DeviceState::default());
-    };
 
     // Event listeners
     spawn_local(async move {
@@ -651,92 +704,151 @@ pub fn App() -> impl IntoView {
         set_scanning.set(false);
     });
 
+    let theme = crate::theme::provide_theme();
+    let sidebar_collapsed = RwSignal::new(local_flag("bb-sidebar-collapsed"));
+    Effect::new(move |_| set_local_flag("bb-sidebar-collapsed", sidebar_collapsed.get()));
+    let palette_open = RwSignal::new(false);
+    let theme_menu_open = RwSignal::new(false);
+
+    let is_connected = move || conn_mode.get() != "Disconnected";
+
+    // Visible views in sidebar order, used by Ctrl+1..5 and the palette.
+    let visible_sections = move || {
+        let kind = hat_kind.get();
+        CATEGORIES
+            .iter()
+            .map(|(cat, label, tabs)| {
+                let v: Vec<NavEntry> = tabs
+                    .iter()
+                    .copied()
+                    .filter(|(t, _, _)| tab_visible(t, kind))
+                    .collect();
+                (*cat, *label, v)
+            })
+            .filter(|(_, _, v)| !v.is_empty())
+            .collect::<Vec<_>>()
+    };
+
+    let do_disconnect = move || {
+        spawn_local(async move {
+            try_invoke("disconnect_device", JsValue::NULL).await;
+            daq_disconnect().await;
+        });
+        set_conn_mode.set("Disconnected".to_string());
+        set_conn_addr.set(String::new());
+        set_device_state.set(DeviceState::default());
+    };
+
+    let palette_entries = Signal::derive(move || {
+        let mut out = Vec::new();
+        for (_, section, tabs) in visible_sections() {
+            for (id, label, icon) in tabs {
+                out.push(crate::components::command_palette::PaletteEntry {
+                    id: format!("go:{id}"),
+                    label: label.to_string(),
+                    group: "Views",
+                    icon,
+                    hint: section.to_string(),
+                });
+            }
+        }
+        let action = |id: &str, label: &str, icon: &'static str, hint: &str| {
+            crate::components::command_palette::PaletteEntry {
+                id: id.to_string(),
+                label: label.to_string(),
+                group: "Commands",
+                icon,
+                hint: hint.to_string(),
+            }
+        };
+        out.push(action("sidebar", "Toggle Sidebar", "panel-left", "Ctrl 0"));
+        out.push(action("theme:system", "Appearance: System", "monitor", ""));
+        out.push(action("theme:light", "Appearance: Light", "sun", ""));
+        out.push(action("theme:dark", "Appearance: Dark", "moon", ""));
+        out.push(action("export", "Export Configuration…", "file-down", ""));
+        out.push(action("import", "Import Configuration…", "file-up", ""));
+        out.push(action("disconnect", "Disconnect", "unplug", ""));
+        out
+    });
+
+    let run_command = Callback::new(move |id: String| {
+        use crate::theme::ThemePref;
+        if let Some(view_id) = id.strip_prefix("go:") {
+            set_active_tab.set(view_id.to_string());
+            return;
+        }
+        match id.as_str() {
+            "sidebar" => sidebar_collapsed.update(|c| *c = !*c),
+            "theme:system" => theme.pref.set(ThemePref::System),
+            "theme:light" => theme.pref.set(ThemePref::Light),
+            "theme:dark" => theme.pref.set(ThemePref::Dark),
+            "export" => spawn_local(export_config_flow()),
+            "import" => spawn_local(import_config_flow()),
+            "disconnect" => do_disconnect(),
+            _ => {}
+        }
+    });
+
+    // Global shortcuts: Ctrl/Cmd+K palette, Ctrl/Cmd+0 sidebar, Ctrl/Cmd+1..5 sections.
+    {
+        let handler = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
+            move |e: web_sys::KeyboardEvent| {
+                if !(e.ctrl_key() || e.meta_key()) || e.alt_key() {
+                    return;
+                }
+                if conn_mode.get_untracked() == "Disconnected" {
+                    return;
+                }
+                let key = e.key().to_lowercase();
+                match key.as_str() {
+                    "k" => {
+                        e.prevent_default();
+                        palette_open.update(|o| *o = !*o);
+                    }
+                    "0" => {
+                        e.prevent_default();
+                        sidebar_collapsed.update(|c| *c = !*c);
+                    }
+                    "1" | "2" | "3" | "4" | "5" => {
+                        let idx = key.parse::<usize>().unwrap_or(1) - 1;
+                        let sections = visible_sections();
+                        if let Some((_, _, tabs)) = sections.get(idx) {
+                            if let Some((id, _, _)) = tabs.first() {
+                                e.prevent_default();
+                                set_active_tab.set(id.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        );
+        if let Some(w) = web_sys::window() {
+            let _ = w.add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
+        }
+        // INTENTIONAL: app-lifetime listener
+        handler.forget();
+    }
+
+    let mod_key = if web_sys::window()
+        .and_then(|w| w.navigator().platform().ok())
+        .is_some_and(|p| p.starts_with("Mac"))
+    {
+        "⌘"
+    } else {
+        "Ctrl"
+    };
+
+    let hat_label = move || match hat_kind.get() {
+        HatKind::Daq => "DAQ HAT",
+        HatKind::La => "LA HAT",
+        HatKind::None => "No HAT",
+    };
+
     view! {
         <div class="app">
-            // Header
-            <header class="header">
-                <div class="header-left">
-                    <span class="logo-text">"BugBuster"</span>
-                    <span class="subtitle">"AD74416H Controller"</span>
-                </div>
-                <div class="header-right">
-                    {move || {
-                        let m = conn_mode.get();
-                        if m == "Disconnected" {
-                            view! {
-                                <div class="status-bar">
-                                    <span class="status-dot disconnected"></span>
-                                    <span class="status-text">"Disconnected"</span>
-                                </div>
-                            }.into_any()
-                        } else {
-                            let badge = if m == "Usb" { "USB" } else { "HTTP" };
-                            view! {
-                                <div class="status-bar">
-                                    <span class="status-dot connected"></span>
-                                    <span class="status-badge">{badge}</span>
-                                    <span class="status-text">{move || conn_addr.get()}</span>
-                                    <span class="status-separator">"|"</span>
-                                    <span class={move || if device_state.get().spi_ok { "spi-ok" } else { "spi-err" }}>
-                                        {move || if device_state.get().spi_ok { "SPI OK" } else { "SPI ERR" }}
-                                    </span>
-                                    <span class="status-separator">"|"</span>
-                                    <span class="temp-value">
-                                        {move || format!("{:.1} °C", device_state.get().die_temperature)}
-                                    </span>
-                                    <span class="status-separator">"|"</span>
-                                    {move || {
-                                        if has_update() {
-                                            view! {
-                                                <button class="btn btn-xs update-glow-btn"
-                                                    on:click=move |_| set_active_tab.set("diag".to_string())
-                                                >
-                                                    <span class="update-glow-dot"></span>
-                                                    "Update Available"
-                                                </button>
-                                                <span class="status-separator">"|"</span>
-                                            }.into_any()
-                                        } else {
-                                            view! { <></> }.into_any()
-                                        }
-                                    }}
-                                    <button class="btn btn-ghost btn-xs" on:click=move |_| {
-                                        spawn_local(async move {
-                                            let result = try_invoke("pick_config_save_file", JsValue::NULL).await;
-                                            if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
-                                                if !path.is_empty() {
-                                                    #[derive(serde::Serialize)]
-                                                    struct Args { path: String }
-                                                    let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
-                                                    let _ = try_invoke("export_config", args).await;
-                                                }
-                                            }
-                                        });
-                                    }>"Export"</button>
-                                    <button class="btn btn-ghost btn-xs" on:click=move |_| {
-                                        spawn_local(async move {
-                                            let result = try_invoke("pick_config_open_file", JsValue::NULL).await;
-                                            if let Some(path) = result.and_then(|r| serde_wasm_bindgen::from_value::<Option<String>>(r).ok().flatten()) {
-                                                if !path.is_empty() {
-                                                    #[derive(serde::Serialize)]
-                                                    struct Args { path: String }
-                                                    let args = serde_wasm_bindgen::to_value(&Args { path }).unwrap();
-                                                    let _ = try_invoke("import_config", args).await;
-                                                }
-                                            }
-                                        });
-                                    }>"Import"</button>
-                                    <span class="status-separator">"|"</span>
-                                    <button class="btn btn-danger btn-xs" on:click=disconnect>"Disconnect"</button>
-                                </div>
-                            }.into_any()
-                        }
-                    }}
-                </div>
-            </header>
-
-            // Connection panel (when disconnected)
-            <Show when=move || conn_mode.get() == "Disconnected">
+            // Connection / welcome screen
+            <Show when=move || !is_connected()>
                 <ConnectionPanel
                     devices=devices.into()
                     scanning=scanning.into()
@@ -755,110 +867,222 @@ pub fn App() -> impl IntoView {
                 />
             </Show>
 
-            // Main content (when connected)
-            <Show when=move || conn_mode.get() != "Disconnected">
-                // Category bar
-                <nav class="category-bar">
-                    {move || {
-                        let kind = hat_kind.get();
-                        CATEGORIES.iter()
-                            .filter(|(_, _, tabs)| tabs.iter().any(|(t, _)| tab_visible(t, kind)))
-                            .map(|(cat_id, label, tabs)| {
-                                let cat_id_str = cat_id.to_string();
-                                let first_tab_id = tabs.iter()
-                                    .find(|(t, _)| tab_visible(t, kind))
-                                    .map(|(t, _)| t.to_string())
-                                    .unwrap_or_default();
+            <Show when=is_connected>
+                <div class="window" class:sidebar-collapsed=move || sidebar_collapsed.get()>
+                    // ---------------- Sidebar ----------------
+                    <aside class="sidebar" aria-label="Navigation">
+                        <div class="sidebar-brand">
+                            <div class="brand-mark"><Icon name="bug" size=15 /></div>
+                            <div class="brand-text">
+                                <span class="brand-name">"BugBuster"</span>
+                                <span class="brand-sub">{hat_label}</span>
+                            </div>
+                        </div>
+                        <button class="sidebar-search" title="Search views and commands"
+                            on:click=move |_| palette_open.set(true)>
+                            <Icon name="search" size=14 />
+                            <span>"Search"</span>
+                            <span class="kbd">{format!("{mod_key} K")}</span>
+                        </button>
+                        <nav class="sidebar-nav">
+                            {move || visible_sections().into_iter().map(|(_, section, tabs)| {
                                 view! {
-                                    <button class="category-item"
-                                        class:active=move || active_category() == cat_id_str
-                                        on:click=move |_| set_active_tab.set(first_tab_id.clone())
-                                    >{*label}</button>
+                                    <div class="nav-section">
+                                        <div class="nav-section-title">{section}</div>
+                                        {tabs.into_iter().map(|(id, label, icon)| {
+                                            let id_s = id.to_string();
+                                            view! {
+                                                <button class="nav-item"
+                                                    data-nav-view=id
+                                                    title=label
+                                                    class:active=move || active_tab.get() == id_s
+                                                    aria-current=move || if active_tab.get() == id { "page" } else { "false" }
+                                                    on:click=move |_| set_active_tab.set(id.to_string())
+                                                >
+                                                    <Icon name=icon size=16 />
+                                                    <span class="nav-label">{label}</span>
+                                                    {(id == "faults").then(|| view! {
+                                                        <Show when=move || device_state.get().alert_status != 0>
+                                                            <span class="dot tone-red" aria-label="Active alerts"></span>
+                                                        </Show>
+                                                    })}
+                                                </button>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
                                 }
-                            }).collect::<Vec<_>>()
-                    }}
-                </nav>
+                            }).collect::<Vec<_>>()}
+                        </nav>
+                        <div class="sidebar-footer">
+                            <div class="hstack">
+                                <div class="device-card" title=move || conn_addr.get()>
+                                    <div class="device-card-icon">
+                                        {move || {
+                                            let m = conn_mode.get();
+                                            let icon = if m == "Usb" { "usb" } else if m == "Mock" { "sparkle" } else { "wifi" };
+                                            view! { <Icon name=icon size=16 /> }
+                                        }}
+                                        <span class="dot tone-green"></span>
+                                    </div>
+                                    <div class="device-card-text">
+                                        <span class="device-card-name">"BugBuster"</span>
+                                        <span class="device-card-meta">{move || {
+                                            let m = conn_mode.get();
+                                            let t = match m.as_str() { "Usb" => "USB", "Mock" => "Demo", _ => "Wi-Fi" };
+                                            format!("{t} · {}", conn_addr.get())
+                                        }}</span>
+                                    </div>
+                                </div>
+                                <button class="btn btn-plain btn-icon" title="Disconnect" aria-label="Disconnect"
+                                    on:click=move |_| do_disconnect()>
+                                    <Icon name="unplug" size=15 />
+                                </button>
+                            </div>
+                        </div>
+                    </aside>
 
-                // Tab bar
-                <nav class="tab-bar">
-                    {move || {
-                        let cat = active_category();
-                        let kind = hat_kind.get();
-                        let tabs = CATEGORIES.iter()
-                            .find(|(cat_id, _, _)| **cat_id == cat)
-                            .map(|(_, _, t)| *t)
-                            .unwrap_or(&[]);
+                    // ---------------- Main column ----------------
+                    <main class="main">
+                        <header class="toolbar">
+                            <button class="btn btn-plain btn-icon"
+                                title=format!("Toggle sidebar ({mod_key} 0)") aria-label="Toggle sidebar"
+                                on:click=move |_| sidebar_collapsed.update(|c| *c = !*c)>
+                                <Icon name="panel-left" size=17 />
+                            </button>
+                            <div class="toolbar-title">
+                                <h1>{move || view_meta(&active_tab.get()).0}</h1>
+                                <span>{move || view_meta(&active_tab.get()).1}</span>
+                            </div>
+                            <div class="spacer"></div>
 
-                        tabs.iter()
-                            .filter(|(id, _)| tab_visible(id, kind))
-                            .map(|(id, label)| {
-                                let id_str = id.to_string();
-                                let id_click = id_str.clone();
+                            {move || has_update().then(|| view! {
+                                <button class="status-chip tone-blue" title="Firmware update available"
+                                    on:click=move |_| set_active_tab.set("diag".to_string())>
+                                    <Icon name="cloud-download" size=13 />
+                                    "Update available"
+                                </button>
+                            })}
+                            <span class="status-chip" title="AD74416H SPI link"
+                                class:tone-red=move || !device_state.get().spi_ok>
+                                <span class="dot" class:tone-green=move || device_state.get().spi_ok
+                                    class:tone-red=move || !device_state.get().spi_ok></span>
+                                {move || if device_state.get().spi_ok { "SPI OK" } else { "SPI error" }}
+                            </span>
+                            <span class="status-chip" title="Die temperature">
+                                <Icon name="thermometer" size=13 />
+                                {move || format!("{:.1} °C", device_state.get().die_temperature)}
+                            </span>
+
+                            <div class="toolbar-sep"></div>
+                            <button class="btn btn-plain btn-icon" title="Export configuration" aria-label="Export configuration"
+                                on:click=move |_| spawn_local(export_config_flow())>
+                                <Icon name="file-down" size=16 />
+                            </button>
+                            <button class="btn btn-plain btn-icon" title="Import configuration" aria-label="Import configuration"
+                                on:click=move |_| spawn_local(import_config_flow())>
+                                <Icon name="file-up" size=16 />
+                            </button>
+                            <div class="menu-anchor">
+                                <button class="btn btn-plain btn-icon" title="Appearance" aria-label="Appearance"
+                                    aria-haspopup="menu" aria-expanded=move || theme_menu_open.get().to_string()
+                                    on:click=move |_| theme_menu_open.update(|o| *o = !*o)>
+                                    {move || {
+                                        let icon = match theme.pref.get() {
+                                            crate::theme::ThemePref::System => "monitor",
+                                            crate::theme::ThemePref::Light => "sun",
+                                            crate::theme::ThemePref::Dark => "moon",
+                                        };
+                                        view! { <Icon name=icon size=16 /> }
+                                    }}
+                                </button>
+                                <Show when=move || theme_menu_open.get()>
+                                    <div class="scrim" style="background: transparent" on:click=move |_| theme_menu_open.set(false)></div>
+                                    <div class="popover" role="menu" style="z-index: 950">
+                                        {[
+                                            (crate::theme::ThemePref::System, "monitor"),
+                                            (crate::theme::ThemePref::Light, "sun"),
+                                            (crate::theme::ThemePref::Dark, "moon"),
+                                        ].into_iter().map(|(p, icon)| view! {
+                                            <button class="menu-item" role="menuitemradio"
+                                                aria-checked=move || (theme.pref.get() == p).to_string()
+                                                on:click=move |_| { theme.pref.set(p); theme_menu_open.set(false); }>
+                                                <Icon name=icon size=15 />
+                                                <span class="spacer">{p.label()}</span>
+                                                <Show when=move || theme.pref.get() == p>
+                                                    <Icon name="check" size=14 />
+                                                </Show>
+                                            </button>
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </Show>
+                            </div>
+                            <button class="btn btn-plain btn-icon" title=format!("Command palette ({mod_key} K)")
+                                aria-label="Open command palette" on:click=move |_| palette_open.set(true)>
+                                <Icon name="command" size=16 />
+                            </button>
+                        </header>
+
+                        // IO blocked banner: the active view's slots are held by another interface.
+                        {move || {
+                            if let Some(slots) = io_blocked.get() {
+                                let on_claimed = Callback::new(move |_| {
+                                    set_io_blocked_kind.set(0);
+                                    set_io_blocked.set(None);
+                                });
+                                let kind = io_blocked_kind.get();
                                 view! {
-                                    <button class="tab-item"
-                                        class:active=move || active_tab.get() == id_str
-                                        on:click=move |_| set_active_tab.set(id_click.clone())
-                                    >{*label}</button>
-                                }
-                            }).collect::<Vec<_>>()
-                    }}
-                </nav>
+                                    <IoBlockedBanner slots=slots owner_kind=kind on_claimed=on_claimed />
+                                }.into_any()
+                            } else {
+                                view! { <></> }.into_any()
+                            }
+                        }}
 
-                // IO blocked banner — shown when the active tab's slots are held by another interface.
-                {move || {
-                    if let Some(slots) = io_blocked.get() {
-                        let on_claimed = Callback::new(move |_| {
-                            set_io_blocked_kind.set(0);
-                            set_io_blocked.set(None);
-                        });
-                        let kind = io_blocked_kind.get();
-                        view! {
-                            <IoBlockedBanner slots=slots owner_kind=kind on_claimed=on_claimed />
-                        }.into_any()
-                    } else {
-                        view! { <></> }.into_any()
-                    }
-                }}
-
-                // Tab content
-                <div class="tab-container">
-                    {move || match active_tab.get().as_str() {
-                        "overview" => view! { <OverviewTab state=device_state /> }.into_any(),
-                        "board" => view! { <BoardTab state=device_state /> }.into_any(),
-                        "adc" => view! { <AdcTab state=device_state /> }.into_any(),
-                        "diag" => view! { <DiagTab state=device_state /> }.into_any(),
-                        "vdac" => view! { <VdacTab state=device_state /> }.into_any(),
-                        "idac" => view! { <IdacTab state=device_state /> }.into_any(),
-                        "iin" => view! { <IinTab state=device_state /> }.into_any(),
-                        "hv_io" => view! { <HvIoTab state=device_state /> }.into_any(),
-                        "faults" => view! { <FaultsTab state=device_state /> }.into_any(),
-                        "gpio" => view! { <GpioTab state=device_state /> }.into_any(),
-                        "din" => view! { <DinTab state=device_state /> }.into_any(),
-                        "dout" => view! { <DoutTab state=device_state /> }.into_any(),
-                        "uart" => view! { <UartTab uart_config=uart_config /> }.into_any(),
-                        "scope" => view! { <ScopeTab state=device_state /> }.into_any(),
-                        "wavegen" => view! { <WavegenTab state=device_state /> }.into_any(),
-                        "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
-                        "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
-                        "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
-                        "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
-                        "hat" => view! { <HatTab state=device_state /> }.into_any(),
-                        "la" => view! { <LaTab state=device_state /> }.into_any(),
-                        "daq" => view! { <DaqTab state=device_state /> }.into_any(),
-                        _ => view! { <div>"Unknown tab"</div> }.into_any(),
-                    }}
+                        <div class="tab-container"
+                            data-view=move || active_tab.get()
+                            data-fullbleed=move || is_fullbleed(&active_tab.get()).then_some("")
+                        >
+                            {move || match active_tab.get().as_str() {
+                                "overview" => view! { <OverviewTab state=device_state /> }.into_any(),
+                                "board" => view! { <BoardTab state=device_state /> }.into_any(),
+                                "adc" => view! { <AdcTab state=device_state /> }.into_any(),
+                                "diag" => view! { <DiagTab state=device_state /> }.into_any(),
+                                "vdac" => view! { <VdacTab state=device_state /> }.into_any(),
+                                "idac" => view! { <IdacTab state=device_state /> }.into_any(),
+                                "iin" => view! { <IinTab state=device_state /> }.into_any(),
+                                "hv_io" => view! { <HvIoTab state=device_state /> }.into_any(),
+                                "faults" => view! { <FaultsTab state=device_state /> }.into_any(),
+                                "gpio" => view! { <GpioTab state=device_state /> }.into_any(),
+                                "din" => view! { <DinTab state=device_state /> }.into_any(),
+                                "dout" => view! { <DoutTab state=device_state /> }.into_any(),
+                                "uart" => view! { <UartTab uart_config=uart_config /> }.into_any(),
+                                "scope" => view! { <ScopeTab state=device_state /> }.into_any(),
+                                "wavegen" => view! { <WavegenTab state=device_state /> }.into_any(),
+                                "sigpath" => view! { <SignalPathTab state=device_state /> }.into_any(),
+                                "voltages" => view! { <VoltagesTab state=device_state /> }.into_any(),
+                                "usbpd" => view! { <UsbPdTab state=device_state /> }.into_any(),
+                                "ioexp" => view! { <IoExpTab state=device_state /> }.into_any(),
+                                "hat" => view! { <HatTab state=device_state /> }.into_any(),
+                                "la" => view! { <LaTab state=device_state /> }.into_any(),
+                                "daq" => view! { <DaqTab state=device_state /> }.into_any(),
+                                _ => view! { <div>"Unknown view"</div> }.into_any(),
+                            }}
+                        </div>
+                    </main>
                 </div>
+
+                <CommandPalette open=palette_open entries=palette_entries on_run=run_command />
             </Show>
 
             // Toast notifications
-            <div class="toast-container">
+            <div class="toast-container" role="status" aria-live="polite">
                 {move || toasts.get().into_iter().map(|(msg, kind, _ts)| {
-                    let class = match kind.as_str() {
-                        "ok" => "toast toast-ok",
-                        "err" => "toast toast-err",
-                        _ => "toast toast-info",
+                    let (class, icon) = match kind.as_str() {
+                        "ok" => ("toast toast-ok", "circle-check"),
+                        "err" => ("toast toast-err", "circle-x"),
+                        _ => ("toast toast-info", "info"),
                     };
-                    view! { <div class=class>{msg}</div> }
+                    view! { <div class=class><Icon name=icon size=16 /><span>{msg}</span></div> }
                 }).collect::<Vec<_>>()}
             </div>
         </div>
