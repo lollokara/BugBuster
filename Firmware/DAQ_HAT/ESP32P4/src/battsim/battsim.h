@@ -35,6 +35,7 @@ typedef enum {
 #define BS_FLAG_EXT          0x10u
 #define BS_FLAG_DITHER       0x20u
 #define BS_FLAG_REMAIN_OK    0x40u   // remaining_s is valid
+#define BS_FLAG_STORE_LOW    0x80u   // < BS_STORE_LOW_FREE free at the last RUN_NEW
 
 // Last refused action (battsim_last_error()).
 typedef enum {
@@ -44,7 +45,7 @@ typedef enum {
 
 // Wire status (HAT link / BBP). Little-endian, packed, append-only.
 typedef struct __attribute__((packed)) {
-    uint8_t  version;          // 1
+    uint8_t  version;          // 2 (v2 appended e_dut_uj)
     uint8_t  state;            // battsim_state_t
     uint8_t  flags;            // BS_FLAG_*
     uint8_t  last_error;       // battsim_err_t
@@ -67,7 +68,10 @@ typedef struct __attribute__((packed)) {
     int64_t  q_peuk_nc;
     uint32_t fs_total;         // battlog bytes
     uint32_t fs_used;
+    int64_t  e_dut_uj;         // v2: integrated DUT energy
 } battsim_status_t;
+_Static_assert(sizeof(battsim_status_t) == 96 && sizeof(battsim_status_t) <= 240,
+               "battsim_status_t wire size (append-only, HAT reply cap 240 B)");
 
 /** Mount the store, start the task, reload the active run (always PAUSED).
  *  Call after daq_board_run_fast() and daq_board_usb_start(). */
@@ -95,8 +99,9 @@ bool battsim_delete_run(uint16_t run_id);
 /** Host wall clock (Unix seconds) - stamped into new runs. */
 void battsim_set_epoch(uint32_t unix_s);
 
-/** daq_fast_task hook (see battsim_integ.h). */
-void battsim_fast_push(float amps_mean, float volts_mean, uint32_t raw_periods);
+/** daq_fast_task hook (see battsim_integ.h). watts_mean = block mean of V*I. */
+void battsim_fast_push(float amps_mean, float volts_mean, float watts_mean,
+                       uint32_t raw_periods);
 bool battsim_integrating(void);
 
 #ifdef __cplusplus

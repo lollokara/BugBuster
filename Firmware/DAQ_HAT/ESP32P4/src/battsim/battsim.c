@@ -29,7 +29,6 @@ static const char *TAG = "battsim";
 #define TICK_MS            100
 #define TICKS_PER_S        BS_MCLK_HZ               // MCLK ticks per second
 #define S1_RING            3600u                    // 1 h of 1 s records
-#define CKPT_PERIOD_US     (60LL * 1000000LL)
 #define STALL_US           (2LL * 1000000LL)
 #define START_GRACE_US     (3LL * 1000000LL)
 #define CUTOFF_TICKS       20                       // 2 s below cutoff
@@ -37,11 +36,15 @@ static const char *TAG = "battsim";
 #define GAP_MIN_TICKS      (TICKS_PER_S / 500)      // ignore < 2 ms
 #define LEARN_HOLD         3                        // ticks on one code before learning
 #define NCODES             255
+#define V_ON_MIN           0.5f                     // below this V_DUT the output is off
 
+// One aggregation interval. q_pc / e_nj are measured DUT charge / energy,
+// q_all_pc every drain source; voltage sums cover output-on time only.
 typedef struct {
-    int64_t ticks, q_pc, v_uv_ticks, v_ticks;
-    float   i_min, i_max, v_min, v_max;
-    bool    any;
+    int64_t  ticks, q_pc, e_nj, q_all_pc, v_ticks;
+    double   v_uv_ticks;
+    float    i_min, i_max, v_min, v_max;
+    uint16_t flags;   // BS_RF_*
 } agg_t;
 
 static struct {
@@ -54,14 +57,14 @@ static struct {
     bs_ckpt_t         ck;
 
     // Integrator bookkeeping.
-    int64_t  last_q, last_ticks;
+    int64_t  last_q, last_e, last_ticks;
     uint32_t last_pushes;
     int64_t  last_push_us;
     int64_t  start_us;
     // Lost-sample (gap) fill: wall time vs integrated time.
     int64_t  wall_ref_us, meas_ticks_since_ref;
     int64_t  gap_hist[GAP_WIN];
-    int64_t  gap_q_hist[GAP_WIN], gap_t_hist[GAP_WIN];
+    int64_t  gap_q_hist[GAP_WIN], gap_e_hist[GAP_WIN], gap_t_hist[GAP_WIN];
     int      gap_idx, gap_n;
 
     // Live readouts.
@@ -80,18 +83,29 @@ static struct {
     // History aggregation.
     agg_t    a1, a60, aq;
     int64_t  next_s1, next_m1, next_q;
-    bs_hist_rec_t *ring;
+    bs_hist_rec_v2_t *ring;
     uint32_t ring_head, ring_count;
     int64_t  win_cur_q, win_cur_ticks;
     int64_t  last_ckpt_us;
 
     uint32_t epoch, epoch_us_s;   // host wall clock at esp_timer seconds
+    int64_t  created_us;          // esp_timer at RUN_NEW this boot, 0 = earlier boot
+    bool     store_low;           // free space below BS_STORE_LOW_FREE at RUN_NEW
     bool     mirroring;           // battsim writing keys itself
     uint16_t profile_mask;        // cached bs_store_profile_mask()
 } S;
 
 static void lock(void)   { xSemaphoreTakeRecursive(S.lock, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGiveRecursive(S.lock); }
+
+// v1 runs (written before history v2) are loaded read-only.
+static bool run_writable(void) { return S.loaded && S.meta.version >= 2; }
+
+static uint32_t wall_now(void)
+{
+    if (!S.epoch) return 0;
+    return S.epoch + (uint32_t)(esp_timer_get_time() / 1000000) - S.epoch_us_s;
+}
 
 static void agg_reset(agg_t *a)
 {
@@ -103,15 +117,38 @@ static void agg_add(agg_t *dst, const agg_t *src)
 {
     dst->ticks += src->ticks;
     dst->q_pc += src->q_pc;
+    dst->e_nj += src->e_nj;
+    dst->q_all_pc += src->q_all_pc;
     dst->v_uv_ticks += src->v_uv_ticks;
     dst->v_ticks += src->v_ticks;
-    if (src->any) {
-        if (src->i_min < dst->i_min) dst->i_min = src->i_min;
-        if (src->i_max > dst->i_max) dst->i_max = src->i_max;
-        if (src->v_min < dst->v_min) dst->v_min = src->v_min;
-        if (src->v_max > dst->v_max) dst->v_max = src->v_max;
-        dst->any = true;
-    }
+    dst->flags |= src->flags;
+    if (src->i_min < dst->i_min) dst->i_min = src->i_min;
+    if (src->i_max > dst->i_max) dst->i_max = src->i_max;
+    if (src->v_min < dst->v_min) dst->v_min = src->v_min;
+    if (src->v_max > dst->v_max) dst->v_max = src->v_max;
+}
+
+// Split a at `part` ticks into head + tail, proportionally; sums are conserved
+// exactly, extremes and flags are copied to both halves.
+static void agg_split(const agg_t *a, int64_t part, agg_t *head, agg_t *tail)
+{
+    *head = *a;
+    *tail = *a;
+    if (part >= a->ticks) { tail->ticks = tail->q_pc = tail->e_nj = tail->q_all_pc = tail->v_ticks = 0; tail->v_uv_ticks = 0.0; return; }
+    if (part < 0) part = 0;
+    double f = (double)part / (double)a->ticks;
+    head->ticks = part;
+    head->q_pc = llround((double)a->q_pc * f);
+    head->e_nj = llround((double)a->e_nj * f);
+    head->q_all_pc = llround((double)a->q_all_pc * f);
+    head->v_ticks = llround((double)a->v_ticks * f);
+    head->v_uv_ticks = a->v_uv_ticks * f;
+    tail->ticks = a->ticks - head->ticks;
+    tail->q_pc = a->q_pc - head->q_pc;
+    tail->e_nj = a->e_nj - head->e_nj;
+    tail->q_all_pc = a->q_all_pc - head->q_all_pc;
+    tail->v_ticks = a->v_ticks - head->v_ticks;
+    tail->v_uv_ticks = a->v_uv_ticks - head->v_uv_ticks;
 }
 
 static int64_t sim_ticks(void) { return S.ck.ticks; }
@@ -122,15 +159,17 @@ static int64_t q_used(void)
            S.ck.q_peuk_pc;
 }
 
-static uint32_t soc_ppm_now(void)
+static uint32_t soc_ppm_of(int64_t used)
 {
     int64_t cap = bs_capacity_pc(&S.meta.params);
     if (cap <= 0) return 0;
-    double f = (double)(cap - q_used()) / (double)cap;
+    double f = (double)(cap - used) / (double)cap;
     if (f <= 0.0) return 0;
     if (f >= 1.0) return 1000000u;
     return (uint32_t)(f * 1e6);
 }
+
+static uint32_t soc_ppm_now(void) { return soc_ppm_of(q_used()); }
 
 static uint16_t clamp_u16(float x)
 {
@@ -139,33 +178,42 @@ static uint16_t clamp_u16(float x)
     return (uint16_t)lroundf(x);
 }
 
-static int32_t clamp_i32(double x)
+static int32_t clamp_i32(double x, uint16_t *flags)
 {
-    if (x > 2147483647.0) return INT32_MAX;
-    if (x < -2147483648.0) return INT32_MIN;
+    if (x > 2147483647.0) { *flags |= BS_RF_I_CLAMP; return INT32_MAX; }
+    if (x < -2147483648.0) { *flags |= BS_RF_I_CLAMP; return INT32_MIN; }
     return (int32_t)llround(x);
 }
 
-static bs_hist_rec_t make_rec(const agg_t *a)
+// t_end in MCLK ticks; cq / ce / cu are the cumulative DUT charge (pC), DUT
+// energy (nJ) and all-source charge (pC) at t_end.
+static bs_hist_rec_v2_t make_rec(const agg_t *a, int64_t t_end, int64_t cq,
+                                 int64_t ce, int64_t cu)
 {
-    bs_hist_rec_t r = {0};
-    r.t_s = (uint32_t)(sim_ticks() / TICKS_PER_S);
-    float v_avg = a->v_ticks ? (float)((double)a->v_uv_ticks / (double)a->v_ticks * 1e-3) : 0.0f;
+    bs_hist_rec_v2_t r = {0};
+    r.t_s = (uint32_t)(t_end / TICKS_PER_S);
+    r.flags = a->flags;
+    float v_avg = a->v_ticks ? (float)(a->v_uv_ticks / (double)a->v_ticks * 1e-3) : 0.0f;
     r.v_avg_mv = clamp_u16(v_avg);
-    r.v_min_mv = a->any ? clamp_u16(a->v_min * 1000.0f) : r.v_avg_mv;
-    r.v_max_mv = a->any ? clamp_u16(a->v_max * 1000.0f) : r.v_avg_mv;
-    r.soc_x100 = (uint16_t)(soc_ppm_now() / 100u);
-    double i_avg_na = a->ticks ? (double)a->q_pc * (double)BS_NA_TICKS_PER_PC / (double)a->ticks : 0.0;
-    r.i_avg_na = clamp_i32(i_avg_na);
-    r.i_min_na = a->any ? clamp_i32((double)a->i_min * 1e9) : r.i_avg_na;
-    r.i_max_na = a->any ? clamp_i32((double)a->i_max * 1e9) : r.i_avg_na;
-    r.q_used_nc = q_used() / 1000;
+    r.v_min_mv = isfinite(a->v_min) ? clamp_u16(a->v_min * 1000.0f) : r.v_avg_mv;
+    r.v_max_mv = isfinite(a->v_max) ? clamp_u16(a->v_max * 1000.0f) : r.v_avg_mv;
+    r.soc_x100 = (uint16_t)(soc_ppm_of(cu) / 100u);
+    uint16_t fl = a->flags;
+    r.i_min_na = isfinite(a->i_min) ? clamp_i32((double)a->i_min * 1e9, &fl) : 0;
+    r.i_max_na = isfinite(a->i_max) ? clamp_i32((double)a->i_max * 1e9, &fl) : 0;
+    r.flags = fl;
+    int64_t dt = (a->ticks + TICKS_PER_S / 2) / TICKS_PER_S;
+    if (dt == 0 && a->ticks > 0) dt = 1;   // sub-second resume/pause fragment
+    r.dt_s = (uint16_t)(dt > 65535 ? 65535 : dt);
+    r.q_dut_nc = cq / 1000;
+    r.q_used_nc = cu / 1000;
+    r.e_dut_uj = ce / 1000;
     return r;
 }
 
 static void event(uint16_t code, int32_t a, int32_t b)
 {
-    if (!S.loaded) return;
+    if (!run_writable()) return;
     bs_event_t ev = { .t_s = (uint32_t)(sim_ticks() / TICKS_PER_S), .code = code,
                       .a = a, .b = b };
     bs_store_event(S.meta.run_id, &ev);
@@ -173,7 +221,7 @@ static void event(uint16_t code, int32_t a, int32_t b)
 
 static void checkpoint(void)
 {
-    if (!S.loaded) return;
+    if (!run_writable()) return;
     if (!bs_store_ckpt_write(S.meta.run_id, &S.ck)) {
         ESP_LOGE(TAG, "checkpoint write failed (run %u)", S.meta.run_id);
     }
@@ -182,17 +230,17 @@ static void checkpoint(void)
 
 static void dump_s1(void)
 {
-    if (!S.loaded || !S.ring || S.ring_count == 0) return;
+    if (!run_writable() || !S.ring || S.ring_count == 0) return;
     // Oldest first: the ring is contiguous when not yet wrapped.
     if (S.ring_count < S1_RING) {
         bs_store_s1_write(S.meta.run_id, S.ring, S.ring_count);
         return;
     }
-    bs_hist_rec_t *tmp = heap_caps_malloc(sizeof(bs_hist_rec_t) * S1_RING, MALLOC_CAP_SPIRAM);
+    bs_hist_rec_v2_t *tmp = heap_caps_malloc(sizeof(bs_hist_rec_v2_t) * S1_RING, MALLOC_CAP_SPIRAM);
     if (!tmp) return;
     uint32_t first = S1_RING - S.ring_head;
-    memcpy(tmp, &S.ring[S.ring_head], first * sizeof(bs_hist_rec_t));
-    memcpy(&tmp[first], S.ring, S.ring_head * sizeof(bs_hist_rec_t));
+    memcpy(tmp, &S.ring[S.ring_head], first * sizeof(bs_hist_rec_v2_t));
+    memcpy(&tmp[first], S.ring, S.ring_head * sizeof(bs_hist_rec_v2_t));
     bs_store_s1_write(S.meta.run_id, tmp, S1_RING);
     heap_caps_free(tmp);
 }
@@ -340,29 +388,45 @@ static void learn_update(float v_meas)
 
 // ---------------------------------------------------------------------------
 // History + remaining-time window.
+//
+// Model ticks are split exactly at whole-second boundaries, so s1 / m1 / q15
+// records cover their nominal interval and carry the cumulative totals AT
+// that boundary. A pause flushes partial records (dt_s < nominal), so the
+// dt_s of a tier sums to the integrated time.
 // ---------------------------------------------------------------------------
-static void history_step(const agg_t *tick, int64_t dq_total)
+static int64_t q15_iv_ticks(void)
 {
-    agg_add(&S.a1, tick);
-    S.win_cur_q += dq_total;
-    S.win_cur_ticks += tick->ticks;
+    if (S.ck.q15_interval_s == 0) S.ck.q15_interval_s = 900;
+    return (int64_t)S.ck.q15_interval_s * TICKS_PER_S;
+}
 
-    while (sim_ticks() >= S.next_s1) {
-        bs_hist_rec_t r = make_rec(&S.a1);
+// Close s1, and m1 / q15 when due (or when flushing). Order on the minute:
+// q15 append, checkpoint, m1 append - a power cut can then lose the newest
+// m1 record but never leave history ahead of the checkpoint it resumes from.
+static void close_tiers(int64_t t_end, int64_t cq, int64_t ce, int64_t cu, bool flush)
+{
+    if (S.a1.ticks > 0) {
+        bs_hist_rec_v2_t r = make_rec(&S.a1, t_end, cq, ce, cu);
         if (S.ring) {
             S.ring[S.ring_head] = r;
             S.ring_head = (S.ring_head + 1) % S1_RING;
             if (S.ring_count < S1_RING) S.ring_count++;
         }
+        S.i_1s = (float)((double)S.a1.q_pc / 1e12 / ((double)S.a1.ticks / (double)TICKS_PER_S));
+        S.v_1s = (float)r.v_avg_mv * 1e-3f;
         agg_add(&S.a60, &S.a1);
-        agg_reset(&S.a1);
-        S.next_s1 += TICKS_PER_S;
     }
-    while (sim_ticks() >= S.next_m1) {
-        bs_hist_rec_t r = make_rec(&S.a60);
-        if (!bs_store_m1_append(S.meta.run_id, &r)) ESP_LOGW(TAG, "m1 append failed");
+    agg_reset(&S.a1);
+    if (!flush && t_end < S.next_m1) return;
+
+    bool have_m1 = S.a60.ticks > 0;
+    bs_hist_rec_v2_t m1 = {0};
+    if (have_m1) {
+        m1 = make_rec(&S.a60, t_end, cq, ce, cu);
         agg_add(&S.aq, &S.a60);
-        agg_reset(&S.a60);
+    }
+    agg_reset(&S.a60);
+    if (!flush) {
         S.next_m1 += 60LL * TICKS_PER_S;
         // Close the 1-min remaining-time bucket.
         S.ck.win_q_pc[S.ck.win_head] = S.win_cur_q;
@@ -371,14 +435,53 @@ static void history_step(const agg_t *tick, int64_t dq_total)
         S.win_cur_q = 0;
         S.win_cur_ticks = 0;
     }
-    while (sim_ticks() >= S.next_q) {
-        bs_hist_rec_t r = make_rec(&S.aq);
-        if (!bs_store_q15_append(S.meta.run_id, &r, &S.ck)) ESP_LOGW(TAG, "q15 append failed");
+    if ((flush || t_end >= S.next_q) && S.aq.ticks > 0) {
+        bs_hist_rec_v2_t q = make_rec(&S.aq, t_end, cq, ce, cu);
+        if (!bs_store_q15_append(S.meta.run_id, &q, &S.ck)) ESP_LOGW(TAG, "q15 append failed");
         agg_reset(&S.aq);
-        // Align to the (possibly doubled) interval.
-        int64_t iv = (int64_t)S.ck.q15_interval_s * TICKS_PER_S;
-        S.next_q = (sim_ticks() / iv + 1) * iv;
     }
+    if (!flush && t_end >= S.next_q) {
+        int64_t iv = q15_iv_ticks();   // possibly doubled by compaction
+        S.next_q = (t_end / iv + 1) * iv;
+    }
+    checkpoint();
+    if (have_m1 && !bs_store_m1_append(S.meta.run_id, &m1)) ESP_LOGW(TAG, "m1 append failed");
+}
+
+static void history_absorb(const agg_t *part)
+{
+    agg_add(&S.a1, part);
+    S.win_cur_q += part->q_all_pc;
+    S.win_cur_ticks += part->ticks;
+}
+
+// tick: the interval just banked into S.ck (S.ck already includes it).
+static void history_step(const agg_t *tick)
+{
+    int64_t t0 = sim_ticks() - tick->ticks;
+    int64_t cq = S.ck.q_dut_pc - tick->q_pc;
+    int64_t ce = S.ck.e_dut_nj - tick->e_nj;
+    int64_t cu = q_used() - tick->q_all_pc;
+    agg_t rem = *tick;
+    while (rem.ticks > 0 && t0 + rem.ticks >= S.next_s1) {
+        agg_t head, tail;
+        agg_split(&rem, S.next_s1 - t0, &head, &tail);
+        history_absorb(&head);
+        cq += head.q_pc;
+        ce += head.e_nj;
+        cu += head.q_all_pc;
+        t0 = S.next_s1;
+        S.next_s1 += TICKS_PER_S;
+        close_tiers(t0, cq, ce, cu, false);
+        rem = tail;
+    }
+    if (rem.ticks > 0) history_absorb(&rem);
+}
+
+// Pause / stop: emit the partial s1, m1 and q15 records and checkpoint.
+static void history_flush(void)
+{
+    close_tiers(sim_ticks(), S.ck.q_dut_pc, S.ck.e_dut_nj, q_used(), true);
 }
 
 static void reset_boundaries(void)
@@ -386,7 +489,7 @@ static void reset_boundaries(void)
     int64_t t = sim_ticks();
     S.next_s1 = (t / TICKS_PER_S + 1) * TICKS_PER_S;
     S.next_m1 = (t / (60LL * TICKS_PER_S) + 1) * 60LL * TICKS_PER_S;
-    int64_t iv = (int64_t)S.ck.q15_interval_s * TICKS_PER_S;
+    int64_t iv = q15_iv_ticks();
     S.next_q = (t / iv + 1) * iv;
     agg_reset(&S.a1); agg_reset(&S.a60); agg_reset(&S.aq);
     S.win_cur_q = 0; S.win_cur_ticks = 0;
@@ -419,6 +522,7 @@ static void integ_rebase(void)
     bs_integ_snap_t s;
     bs_integ_snapshot(&s);
     S.last_q = s.q_pc;
+    S.last_e = s.e_nj;
     S.last_ticks = s.ticks;
     S.last_pushes = s.pushes;
     S.last_push_us = S.wall_ref_us = esp_timer_get_time();
@@ -435,13 +539,15 @@ static void tick_model(void);
 
 static void enter_stopped(battsim_state_t st, uint16_t ev_code)
 {
-    if (S.ck.state == BS_ST_ACTIVE) tick_model();   // bank the last interval
+    bool was_active = S.ck.state == BS_ST_ACTIVE;
+    if (was_active) tick_model();   // bank the last interval
     bs_integ_enable(false);
     output(false);
     S.ck.state = (uint8_t)st;
-    event(ev_code, 0, 0);
+    event(ev_code, 0, (int32_t)wall_now());
+    if (was_active) history_flush();   // partial records + checkpoint
+    else checkpoint();
     dump_s1();
-    checkpoint();
     ESP_LOGI(TAG, "run %u -> state %d (event %u)", S.meta.run_id, (int)st, ev_code);
 }
 
@@ -468,12 +574,16 @@ static bool load_locked(uint16_t id, bool at_boot)
     S.meta = m;
     S.ck = ck;
     S.loaded = true;
+    S.created_us = 0;
     S.ring_head = S.ring_count = 0;
     if (S.ck.state == BS_ST_ACTIVE) {
         // Power was lost mid-run. The gap is ignored; resume needs the user.
         S.ck.state = BS_ST_PAUSED;
-        event(at_boot ? BS_EV_REBOOT : BS_EV_PAUSE, 0, 0);
+        event(at_boot ? BS_EV_REBOOT : BS_EV_PAUSE, 0, (int32_t)wall_now());
         checkpoint();
+    }
+    if (!run_writable()) {
+        ESP_LOGW(TAG, "run %u is format v%u: loaded read-only", id, S.meta.version);
     }
     reset_boundaries();
     S.soc_ppm = soc_ppm_now();
@@ -496,6 +606,9 @@ static bool new_run_locked(void)
         return false;
     }
     unload_locked();
+    uint32_t fs_total = 0, fs_used = 0;
+    bs_store_usage(&fs_total, &fs_used);
+    S.store_low = fs_total - fs_used < BS_STORE_LOW_FREE;
     bs_run_meta_t m = {0};
     m.params = p;
     char name[DAQ_TLV_MAX_VAL + 1] = {0};
@@ -506,9 +619,7 @@ static bool new_run_locked(void)
                  (unsigned)p.cells, (unsigned long)p.capacity_mah);
     }
     strncpy(m.name, name, BS_NAME_LEN - 1);
-    if (S.epoch) {
-        m.created_epoch = S.epoch + (uint32_t)(esp_timer_get_time() / 1000000) - S.epoch_us_s;
-    }
+    m.created_epoch = wall_now();
     if (!bs_store_run_create(&m)) { S.err = BS_E_IO; return false; }
 
     bs_ckpt_t ck = {0};
@@ -519,6 +630,7 @@ static bool new_run_locked(void)
     S.meta = m;
     S.ck = ck;
     S.loaded = true;
+    S.created_us = esp_timer_get_time();
     event(BS_EV_CREATED, p.start_soc_x10, (int32_t)p.capacity_mah);
     checkpoint();
     bs_store_active_set(m.run_id);
@@ -536,6 +648,7 @@ static bool start_locked(void)
     if (!S.loaded) { S.err = BS_E_NO_RUN; return false; }
     if (S.ck.state == BS_ST_ACTIVE) return true;
     if (S.ck.state != BS_ST_PAUSED) { S.err = BS_E_STATE; return false; }
+    if (!run_writable()) { S.err = BS_E_STATE; return false; }   // v1 run: read-only
     if (!S.b->fast_running) { S.err = BS_E_NO_ACQ; return false; }
     if (!daq_board_pd_ok(S.b, 9000, 3000)) { S.err = BS_E_NO_PD; return false; }
 
@@ -550,7 +663,8 @@ static bool start_locked(void)
     S.below_cutoff = 0;
     S.ck.state = BS_ST_ACTIVE;
     reset_boundaries();
-    event(BS_EV_START, (int32_t)S.soc_ppm, 0);
+    S.a1.flags |= BS_RF_RESUME;   // ORs up into the first m1 and q15 records
+    event(BS_EV_START, (int32_t)S.soc_ppm, (int32_t)wall_now());
     checkpoint();
     return true;
 }
@@ -566,8 +680,10 @@ static void tick_model(void)
     bs_integ_snapshot(&s);
 
     int64_t dq = s.q_pc - S.last_q;
+    int64_t de = s.e_nj - S.last_e;
     int64_t dt = s.ticks - S.last_ticks;
     S.last_q = s.q_pc;
+    S.last_e = s.e_nj;
     S.last_ticks = s.ticks;
     if (s.pushes != S.last_pushes) { S.last_pushes = s.pushes; S.last_push_us = now; }
 
@@ -579,20 +695,25 @@ static void tick_model(void)
     int64_t deficit = wall_ticks - S.meas_ticks_since_ref;
     S.gap_hist[S.gap_idx] = deficit;
     S.gap_q_hist[S.gap_idx] = dq;
+    S.gap_e_hist[S.gap_idx] = de;
     S.gap_t_hist[S.gap_idx] = dt;
     S.gap_idx = (S.gap_idx + 1) % GAP_WIN;
     if (S.gap_n < GAP_WIN) S.gap_n++;
-    int64_t fill = 0, fill_q = 0;
+    int64_t fill = 0, fill_q = 0, fill_e = 0;
     if (S.gap_n == GAP_WIN) {
-        int64_t mn = INT64_MAX, wq = 0, wt = 0;
+        int64_t mn = INT64_MAX, wq = 0, we = 0, wt = 0;
         for (int k = 0; k < GAP_WIN; k++) {
             if (S.gap_hist[k] < mn) mn = S.gap_hist[k];
             wq += S.gap_q_hist[k];
+            we += S.gap_e_hist[k];
             wt += S.gap_t_hist[k];
         }
         if (mn > GAP_MIN_TICKS && wt > 0) {
             fill = mn;
             fill_q = (int64_t)llround((double)wq * (double)fill / (double)wt);
+            S.ck.e_frac += (double)we * (double)fill / (double)wt;
+            fill_e = (int64_t)floor(S.ck.e_frac);
+            S.ck.e_frac -= (double)fill_e;
             S.meas_ticks_since_ref += fill;
             for (int k = 0; k < GAP_WIN; k++) S.gap_hist[k] -= fill;
         }
@@ -600,6 +721,7 @@ static void tick_model(void)
 
     int64_t dt_tot = dt + fill;
     int64_t dq_dut = dq + fill_q;
+    int64_t de_dut = de + fill_e;
 
     int64_t dq_ext = 0;
     if (p->ext_enable && p->ext_load_ua) {
@@ -626,6 +748,7 @@ static void tick_model(void)
     S.ck.sd_frac -= (double)dq_sd;
 
     S.ck.q_dut_pc += dq_dut;
+    S.ck.e_dut_nj += de_dut;
     S.ck.q_ext_pc += dq_ext;
     S.ck.q_peuk_pc += dq_peuk;
     S.ck.q_sd_pc += dq_sd;
@@ -641,19 +764,18 @@ static void tick_model(void)
     agg_reset(&a);
     a.ticks = dt_tot;
     a.q_pc = dq_dut;
-    a.v_uv_ticks = s.v_uv_ticks;
+    a.e_nj = de_dut;
+    a.q_all_pc = dq_dut + dq_ext + dq_sd + dq_peuk;
+    a.v_uv_ticks = (double)s.v_uv_ticks;
     a.v_ticks = s.int_ticks;
-    if (s.int_ticks > 0) {
-        a.i_min = s.i_min; a.i_max = s.i_max;
-        a.v_min = s.v_min; a.v_max = s.v_max;
-        a.any = true;
+    a.i_min = s.i_min; a.i_max = s.i_max;
+    a.v_min = s.v_min; a.v_max = s.v_max;
+    if (fill) a.flags |= BS_RF_GAP;
+    if (s.off_ticks > 0) a.flags |= BS_RF_OUTPUT_OFF;
+    if (S.v_target < (float)p->cells * (float)p->cutoff_mv_cell * 1e-3f || S.soc_ppm == 0) {
+        a.flags |= BS_RF_CUTOFF;
     }
-    history_step(&a, dq_dut + dq_ext + dq_sd + dq_peuk);
-    if (S.a1.ticks == 0 && S.ring_count) {
-        const bs_hist_rec_t *r = &S.ring[(S.ring_head + S1_RING - 1) % S1_RING];
-        S.i_1s = (float)r->i_avg_na * 1e-9f;
-        S.v_1s = (float)r->v_avg_mv * 1e-3f;
-    }
+    if (dt_tot > 0) history_step(&a);
 }
 
 static void tick_active(void)
@@ -683,8 +805,7 @@ static void tick_active(void)
 
     learn_update(S.v_tick);
     actuate(S.v_target, false);
-
-    if (now - S.last_ckpt_us >= CKPT_PERIOD_US) checkpoint();
+    // Checkpoints ride the 1-min history boundary (close_tiers).
 }
 
 static void battsim_task(void *arg)
@@ -706,7 +827,7 @@ void battsim_init(daq_board_t *b)
 {
     S.b = b;
     S.lock = xSemaphoreCreateRecursiveMutex();
-    S.ring = heap_caps_calloc(S1_RING, sizeof(bs_hist_rec_t), MALLOC_CAP_SPIRAM);
+    S.ring = heap_caps_calloc(S1_RING, sizeof(bs_hist_rec_v2_t), MALLOC_CAP_SPIRAM);
     for (int i = 0; i < NCODES; i++) S.learn[i] = NAN;
 
     if (bs_store_init()) {
@@ -729,30 +850,45 @@ bool battsim_owns_supply(void) { return S.loaded; }
 bool battsim_active(void) { return S.loaded && S.ck.state == BS_ST_ACTIVE; }
 bool battsim_integrating(void) { return bs_integ_enabled(); }
 
-void battsim_fast_push(float amps_mean, float volts_mean, uint32_t raw_periods)
+void battsim_fast_push(float amps_mean, float volts_mean, float watts_mean,
+                       uint32_t raw_periods)
 {
-    bs_integ_push(amps_mean, volts_mean, raw_periods);
+    bool on = S.b && S.b->smu.enabled && volts_mean > V_ON_MIN;
+    bs_integ_push(amps_mean, volts_mean, watts_mean, raw_periods, on);
 }
 
 void battsim_set_epoch(uint32_t unix_s)
 {
     S.epoch = unix_s;
     S.epoch_us_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    if (!S.lock || !unix_s) return;
+    lock();
+    // Runs created before any host connected (C6 menu) get a creation date
+    // on the first SET_EPOCH: exact if created this boot, else now - elapsed.
+    if (run_writable() && S.meta.created_epoch == 0) {
+        uint32_t back = S.created_us
+            ? (uint32_t)((esp_timer_get_time() - S.created_us) / 1000000)
+            : (uint32_t)(sim_ticks() / TICKS_PER_S);
+        S.meta.created_epoch = unix_s > back ? unix_s - back : unix_s;
+        bs_store_meta_write(&S.meta);
+    }
+    unlock();
 }
 
 void battsim_get_status(battsim_status_t *o)
 {
     // Readers include the UI task: never block behind a flash write, serve
     // the last snapshot instead.
-    static battsim_status_t s_cache = { .version = 1 };
+    static battsim_status_t s_cache = { .version = 2 };
     if (!S.lock || xSemaphoreTakeRecursive(S.lock, pdMS_TO_TICKS(20)) != pdTRUE) {
         *o = s_cache;
         return;
     }
     memset(o, 0, sizeof(*o));
-    o->version = 1;
+    o->version = 2;
     o->state = (uint8_t)battsim_state();
     o->last_error = (uint8_t)S.err;
+    if (S.store_low) o->flags |= BS_FLAG_STORE_LOW;
     if (bs_store_available()) {
         o->flags |= BS_FLAG_STORE_OK;
         o->profile_mask = S.profile_mask;
@@ -790,6 +926,7 @@ void battsim_get_status(battsim_status_t *o)
         o->q_ext_nc = S.ck.q_ext_pc / 1000;
         o->q_sd_nc = S.ck.q_sd_pc / 1000;
         o->q_peuk_nc = S.ck.q_peuk_pc / 1000;
+        o->e_dut_uj = S.ck.e_dut_nj / 1000;
     }
     s_cache = *o;
     unlock();
@@ -799,6 +936,14 @@ static bool is_identity_key(uint16_t key)
 {
     return key == DAQ_K_BS_CHEM || key == DAQ_K_BS_CELLS ||
            key == DAQ_K_BS_CAPACITY_MAH || key == DAQ_K_BS_START_SOC;
+}
+
+static bool is_live_key(uint16_t key)
+{
+    return key == DAQ_K_BS_CUTOFF_MV || key == DAQ_K_BS_RINT_UOHM ||
+           key == DAQ_K_BS_PEUKERT || key == DAQ_K_BS_SD_ENABLE ||
+           key == DAQ_K_BS_SD_PCT || key == DAQ_K_BS_EXT_ENABLE ||
+           key == DAQ_K_BS_EXT_UA || key == DAQ_K_BS_DITHER;
 }
 
 static bool is_acq_key(uint16_t key)
@@ -831,6 +976,7 @@ bool battsim_guard(uint16_t key, uint8_t action_id, int32_t ival, daq_src_t src)
     if (key == DAQ_K_DUT_VOLTAGE_MV && S.loaded) { S.err = BS_E_BUSY; return false; }
     if (is_acq_key(key) && battsim_active())      { S.err = BS_E_BUSY; return false; }
     if (is_identity_key(key) && S.loaded)         { S.err = BS_E_BUSY; return false; }
+    if (is_live_key(key) && S.loaded && !run_writable()) { S.err = BS_E_STATE; return false; }
     return true;
 }
 
@@ -853,7 +999,7 @@ void battsim_on_setting(uint16_t key, int32_t ival, bool boot)
         case DAQ_K_BS_DITHER:     p->dither = (uint8_t)(ival != 0); S.dither_acc = 0; break;
         default: changed = false; break;
         }
-        if (changed) {
+        if (changed && run_writable()) {
             if (S.ck.state == BS_ST_ACTIVE) tick_model();   // old params up to now
             bs_store_meta_write(&S.meta);
             event(BS_EV_PARAM, key, ival);
@@ -886,6 +1032,11 @@ bool battsim_delete_run(uint16_t run_id)
     lock();
     bool ok = !(S.loaded && S.meta.run_id == run_id) && bs_store_delete_run(run_id);
     if (!ok) S.err = (S.loaded && S.meta.run_id == run_id) ? BS_E_BUSY : BS_E_NOT_FOUND;
+    if (ok && S.store_low) {
+        uint32_t t = 0, u = 0;
+        bs_store_usage(&t, &u);
+        S.store_low = t - u < BS_STORE_LOW_FREE;
+    }
     unlock();
     return ok;
 }
