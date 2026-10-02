@@ -461,7 +461,6 @@ pub async fn daq_reset_stats(daq: State<'_, DaqState>) -> CmdResult<()> {
 
 const DAQ_CFG_GET: u8 = 0x00;
 const DAQ_CFG_SET: u8 = 0x01;
-const DAQ_CFG_ACTION: u8 = 0x04;
 
 /// Set a single persistent DAQ setting (TLV: [op][key u16 LE][type u8][len u8][value]).
 #[tauri::command]
@@ -477,25 +476,6 @@ pub async fn daq_cfg_set(
     payload.push(value.len() as u8);
     payload.extend_from_slice(&value);
     mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload)
-        .await
-        .map(|_| ())
-        .map_err(map_err)
-}
-
-/// Read a single persistent DAQ setting; returns the raw TLV value bytes.
-#[tauri::command]
-pub async fn daq_cfg_get(key: u16, mgr: State<'_, ConnectionManager>) -> CmdResult<Vec<u8>> {
-    let mut payload = vec![DAQ_CFG_GET];
-    payload.extend_from_slice(&key.to_le_bytes());
-    mgr.send_command(bbp::CMD_DAQ_CONFIG, &payload)
-        .await
-        .map_err(map_err)
-}
-
-/// Trigger a one-shot DAQ action (1=energy reset, 2=charge reset, 3=factory reset).
-#[tauri::command]
-pub async fn daq_cfg_action(action: u8, mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
-    mgr.send_command(bbp::CMD_DAQ_CONFIG, &[DAQ_CFG_ACTION, action])
         .await
         .map(|_| ())
         .map_err(map_err)

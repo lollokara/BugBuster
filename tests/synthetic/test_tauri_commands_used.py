@@ -7,7 +7,6 @@ A: 25 registered commands had no caller."""
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2] / "DesktopApp" / "BugBuster"
 
@@ -28,7 +27,6 @@ def _invoked() -> set:
     return set(re.findall(r"""["']([a-z0-9_]+)["']""", text))
 
 
-@pytest.mark.xfail(strict=True, reason="DESK-REFAC")
 def test_every_registered_command_has_a_frontend_caller():
     dead = [c for c in _registered() if c not in _invoked()]
     assert dead == []
