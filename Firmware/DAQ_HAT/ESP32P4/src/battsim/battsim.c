@@ -245,6 +245,18 @@ static void dump_s1(void)
     heap_caps_free(tmp);
 }
 
+int battsim_s1_since(uint16_t run_id, uint32_t since_t_s, bs_s1_sample_t *out, int max, bool *more)
+{
+    if (more) *more = false;
+    lock();
+    int n = -1;
+    if (S.loaded && S.meta.run_id == run_id && S.ring) {
+        n = bs_s1_since(S.ring, S.ring_head, S.ring_count, S1_RING, since_t_s, out, max, more);
+    }
+    unlock();
+    return n;
+}
+
 // ---------------------------------------------------------------------------
 // Settings mirror.
 // ---------------------------------------------------------------------------

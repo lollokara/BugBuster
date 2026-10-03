@@ -13,6 +13,7 @@
 #include "esp_heap_caps.h"
 #include "battsim.h"
 #include "battsim_store.h"
+#include "battsim_s1.h"
 
 static const char *TAG = "bs_host";
 
@@ -156,6 +157,24 @@ static int op_profile(const uint8_t *a, uint8_t n, uint8_t *out)
     return BS_NAME_LEN + (int)sizeof(p);
 }
 
+static int op_s1_since(const uint8_t *a, uint8_t n, uint8_t *out)
+{
+    if (n < 7) return -1;
+    uint16_t run = rd16(a);
+    uint32_t since = rd32(a + 2);
+    int max = a[6];
+    if (max <= 0 || max > (int)BS_S1_SINCE_MAX) max = (int)BS_S1_SINCE_MAX;
+    bs_s1_sample_t recs[BS_S1_SINCE_MAX];
+    bool more = false;
+    int got = battsim_s1_since(run, since, recs, max, &more);
+    if (got < 0) return -1;
+    wr16(out, run);
+    out[2] = (uint8_t)got;
+    out[3] = more ? 1 : 0;
+    memcpy(out + 4, recs, (size_t)got * sizeof(bs_s1_sample_t));
+    return 4 + got * (int)sizeof(bs_s1_sample_t);
+}
+
 static int serve(const uint8_t *req, uint8_t len, uint8_t *out)
 {
     if (len < 1) return -1;
@@ -172,6 +191,7 @@ static int serve(const uint8_t *req, uint8_t len, uint8_t *out)
     case BS_HOP_RUN_DIR:   return op_run_dir(a, n, out);
     case BS_HOP_READ:      return op_read(a, n, out);
     case BS_HOP_PROFILE:   return op_profile(a, n, out);
+    case BS_HOP_S1_SINCE:  return op_s1_since(a, n, out);
     case BS_HOP_SET_EPOCH:
         if (n < 4) return -1;
         battsim_set_epoch(rd32(a));

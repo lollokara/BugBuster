@@ -14,6 +14,8 @@
 //   BS_HOP_READ      u16 run, u16 file, u32 off, u8 len -> raw bytes (0 = EOF)
 //   BS_HOP_PROFILE   u8 slot                            -> char name[24], bs_params_t
 //   BS_HOP_SET_EPOCH u32 unix_s                         -> empty
+//   BS_HOP_S1_SINCE  u16 run, u32 since_t_s, u8 max      -> u16 run, u8 n, u8 more,
+//                                                          bs_s1_sample_t[n] (n <= 14, loaded run only)
 // Any failure (bad args, missing run/file, busy) -> RSP_ERROR.
 // =============================================================================
 
@@ -31,6 +33,7 @@ enum {
     BS_HOP_READ      = 3,
     BS_HOP_PROFILE   = 4,
     BS_HOP_SET_EPOCH = 5,
+    BS_HOP_S1_SINCE  = 6,
 };
 
 #define BS_HOST_IDS_MAX   100u

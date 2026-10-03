@@ -40,6 +40,7 @@ idf_component_register(
         "battsim/battsim_integ.c"
         "battsim/battsim_store.c"
         "battsim/battsim_host.c"
+        "battsim/battsim_s1.c"
         "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
