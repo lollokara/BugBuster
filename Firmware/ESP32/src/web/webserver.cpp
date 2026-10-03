@@ -324,7 +324,7 @@ static cJSON* recv_json_body_cap(httpd_req_t *req, int cap)
     if (!buf) return NULL;
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, buf + received, total - received);
+        int ret = upload_recv(req, buf + received, total - received);
         if (ret <= 0) { free(buf); return NULL; }
         received += ret;
     }
