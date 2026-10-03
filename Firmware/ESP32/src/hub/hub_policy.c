@@ -74,3 +74,14 @@ uint32_t hub_backoff_next(uint32_t cur_ms)
     if (cur_ms == 0) return 5000;
     return cur_ms >= 30000 ? 60000 : cur_ms * 2;
 }
+
+uint32_t hub_hat_backoff_next(uint32_t cur_ms)
+{
+    if (cur_ms == 0) return 100;
+    return cur_ms >= 500 ? 1000 : cur_ms * 2;
+}
+
+bool hub_pace_due(uint32_t now_ms, uint32_t last_ms, uint32_t period_ms)
+{
+    return (uint32_t)(now_ms - last_ms) >= period_ms;
+}

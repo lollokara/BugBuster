@@ -903,13 +903,25 @@ int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
 #define HAT_RSP_BS_DATA         0x9Au
 #define HAT_BS_REQ_MAX          16
 
+// Local error return code for wide path when s_hat_mutex is busy (distinct from wire HAT_ERR_*)
+#define HAT_ERR_LOCK_BUSY       (-3)
+
 /**
  * @brief One battery-simulator request to the DAQ HAT (HAT_CMD_BS).
  * @return reply length (0..rsp_cap), -1 transport error / timeout,
- *         -2 the P4 answered RSP_ERROR (bad args, missing run/file, busy).
+ *         -2 the P4 answered RSP_ERROR (bad args, missing run/file, busy),
+ *         -3 (HAT_ERR_LOCK_BUSY) mutex busy.
  */
 int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
                    uint32_t timeout_ms);
+
+/**
+ * @brief Polite battery-simulator request with bounded mutex wait timeout.
+ *        Background tasks (hub task) use this with a short lock_timeout_ms (e.g. 10 ms)
+ *        so they never starve user or CLI commands.
+ */
+int hat_bs_request_polite(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                          uint32_t timeout_ms, uint32_t lock_timeout_ms);
 
 // P4 ERROR / LOG_IMPORTANT records for the hub (spec 2026-10-03 section 6).
 // Request: u32 after_seq LE. Reply (<= 240 B): see Firmware/DAQ_HAT/ESP32P4/src/diag/log_ring.h.
@@ -917,8 +929,10 @@ int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t r
 #define HAT_CMD_LOG_PULL        0x7Eu
 #define HAT_RSP_LOG_DATA        0x9Bu
 
-/** @return reply length (0..rsp_cap), -1 transport error / timeout / no DAQ HAT, -2 P4 answered RSP_ERROR. */
+/** @return reply length (0..rsp_cap), -1 transport error / timeout / no DAQ HAT, -2 P4 answered RSP_ERROR, -3 (HAT_ERR_LOCK_BUSY) mutex busy. */
 int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms);
+int hat_log_pull_polite(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                        uint32_t lock_timeout_ms);
 
 /**
  * @brief Begin an OTA image transfer to the DAQ HAT.

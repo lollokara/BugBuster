@@ -139,10 +139,15 @@ uint32_t hub_logs_backlog(void) { return s_ring.count; }
 void hub_logs_pull_p4(void)
 {
     uint32_t now = hub_uptime_ms();
-    if (!s_lock || now - s_last_p4_pull_ms < P4_PULL_MS) return;
+    if (!s_lock || !hub_pace_due(now, s_last_p4_pull_ms, P4_PULL_MS)) return;
     s_last_p4_pull_ms = now;
     uint8_t buf[240];
     int n = hat_log_pull(s_p4_seq, buf, sizeof buf, 400);
+    if (n == HAT_ERR_LOCK_BUSY) {
+        // HAT link busy: back off and retry in 1000 ms instead of waiting a full 5 s period
+        s_last_p4_pull_ms = now - P4_PULL_MS + 1000u;
+        return;
+    }
     if (n < 14) return;                                   // no DAQ HAT, timeout or nothing to say
     uint32_t p4_now = rd32(buf), first = rd32(buf + 4), dropped = rd32(buf + 8);
     uint8_t cnt = buf[12];

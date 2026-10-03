@@ -138,7 +138,14 @@ static void ratelimit_tests(void) {
     printf("rl_new_window %d\n", f6);
 }
 
-int main(void) { ring_tests(); log_tests(); sample_tests(); policy_tests(); mpy_tests(); ratelimit_tests(); return 0; }
+static void hat_backoff_tests(void) {
+    uint32_t hb = 0; printf("hat_backoff");
+    for (int k = 0; k < 6; k++) { hb = hub_hat_backoff_next(hb); printf(" %u", hb); }
+    printf("\n");
+    printf("pace %d%d%d\n", hub_pace_due(1000, 500, 500), hub_pace_due(999, 500, 500), hub_pace_due(100, 0xFFFFFFF0u, 200));
+}
+
+int main(void) { ring_tests(); log_tests(); sample_tests(); policy_tests(); mpy_tests(); ratelimit_tests(); hat_backoff_tests(); return 0; }
 """
 
 
@@ -200,4 +207,10 @@ def test_hub_ratelimit_suppresses_and_summarizes():
     assert out[34] == "rl_flush_early"
     assert out[35] == "emit tusb_cdc_acm: suppressed 2 x tusb_cdc_acm: Flush failed"
     assert out[36] == "rl_new_window 1"
+
+
+def test_hat_backoff_and_pacing():
+    out = _run()
+    assert out[37] == "hat_backoff 100 200 400 800 1000 1000"
+    assert out[38] == "pace 100"
 

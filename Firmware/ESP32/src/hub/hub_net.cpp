@@ -20,6 +20,9 @@
 #include "esp_timer.h"
 #include "mdns.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "hat.h"
 #include "hub_json.h"
 #include "hub_policy.h"
@@ -217,7 +220,7 @@ int hub_bs(uint8_t op, const uint8_t *args, uint8_t nargs, uint8_t *rsp, uint16_
     if (nargs + 1u > sizeof req) return -1;
     req[0] = op;
     if (nargs) memcpy(req + 1, args, nargs);
-    return hat_bs_request(req, (uint8_t)(1 + nargs), rsp, cap, 600);
+    return hat_bs_request_polite(req, (uint8_t)(1 + nargs), rsp, cap, 600, 10);
 }
 
 int hub_bs_read(uint16_t run, uint16_t file, uint32_t off, uint8_t len, uint8_t *out)
@@ -253,5 +256,6 @@ void hub_p4_wallmap(uint16_t run, uint32_t created, hub_wallmap_t *wm)
         n -= n % 16;
         hub_wallmap_add_events(wm, ev, (size_t)n);
         off += (uint32_t)n;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }

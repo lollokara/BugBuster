@@ -10,7 +10,10 @@
 #include "cJSON.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
+#include "hat.h"
 #include "hub_json.h"
 #include "hub_policy.h"
 #include "hub_runs.h"
@@ -27,7 +30,7 @@ typedef struct {
     uint32_t created;
     char     uid[48];
     uint32_t cursor;                 /* run time (s) of the newest sample already queued */
-    uint32_t next_poll, next_flush, retry_until, backoff;
+    uint32_t next_poll, next_flush, retry_until, backoff, hat_backoff;
     int8_t   state;
     hub_wallmap_t wm;
 } live_t;
@@ -116,6 +119,7 @@ static void drain_s1(void)
             L.cursor = t;
         }
         if (!rsp[3]) return;                                /* no more newer records */
+        vTaskDelay(pdMS_TO_TICKS(2));                       /* Yield between chunk transactions */
     }
 }
 
@@ -162,6 +166,12 @@ hub_step_t hub_live_tick(const char *base)
         L.next_poll = now + POLL_MS;
         uint8_t st[96];
         int n = hub_bs(0 /* BS_HOP_STATUS */, NULL, 0, st, sizeof st);
+        if (n == HAT_ERR_LOCK_BUSY) {
+            L.hat_backoff = hub_hat_backoff_next(L.hat_backoff);
+            L.next_poll = now + L.hat_backoff;
+            return HUB_STEP_IDLE;
+        }
+        L.hat_backoff = 0;
         if (n < 8) { L.active = false; }
         else if (st[1] == 2) {                              /* BS_ST_ACTIVE */
             uint16_t id = rd16(st + 4);

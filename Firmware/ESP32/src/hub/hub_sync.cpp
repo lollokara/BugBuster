@@ -11,6 +11,8 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "hat.h"
 #include "hub_json.h"
@@ -56,6 +58,8 @@ typedef struct {
     int      n_cov;
     hub_meta_t meta;
     hub_wallmap_t wm;                  // run time -> unix time for the current run
+    uint32_t hat_backoff;
+    uint32_t retry_until;
 } sync_state_t;
 
 static EXT_RAM_BSS_ATTR sync_state_t S;
@@ -78,6 +82,8 @@ void hub_sync_reset(void)
     S.next_list_ms = 0;
     S.listed = false;
     S.phase = PH_LIST;
+    S.hat_backoff = 0;
+    S.retry_until = 0;
 }
 
 static void report_progress(void)
@@ -90,24 +96,31 @@ static void report_progress(void)
 // ---- P4 queries ----------------------------------------------------------------------------
 
 // LIST_RUNS, paged: [1][u16 start] -> u16 total, u16 active, u16 ids[]
-static bool p4_list(uint16_t *ids, int cap, int *n, uint16_t *active)
+static bool p4_list(uint16_t *ids, int cap, int *n, uint16_t *active, bool *busy)
 {
+    if (busy) *busy = false;
     uint8_t rsp[240];
     *n = 0;
     for (;;) {
         const uint8_t a[2] = { (uint8_t)*n, (uint8_t)(*n >> 8) };
         int len = hub_bs(1, a, sizeof a, rsp, sizeof rsp);
+        if (len == HAT_ERR_LOCK_BUSY) {
+            if (busy) *busy = true;
+            return false;
+        }
         if (len < 4) return false;
         *active = rd16(rsp + 2);
         int page = (len - 4) / 2;
         for (int k = 0; k < page && *n < cap; k++) ids[(*n)++] = rd16(rsp + 4 + 2 * k);
         if (page == 0 || *n >= rd16(rsp) || *n >= cap) return true;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
 
 // RUN_DIR, paged: [2][u16 run][u8 start] -> u16 run, u8 total, u8 start, {u16 id, u32 size}[]
-static bool p4_dir(uint16_t run, file_t *files, int cap, int *n, uint32_t *sig, uint16_t q15_res)
+static bool p4_dir(uint16_t run, file_t *files, int cap, int *n, uint32_t *sig, uint16_t q15_res, bool *busy)
 {
+    if (busy) *busy = false;
     uint8_t rsp[240];
     int seen = 0;
     *n = 0;
@@ -115,6 +128,10 @@ static bool p4_dir(uint16_t run, file_t *files, int cap, int *n, uint32_t *sig, 
     for (;;) {
         const uint8_t a[3] = { (uint8_t)run, (uint8_t)(run >> 8), (uint8_t)seen };
         int len = hub_bs(2, a, sizeof a, rsp, sizeof rsp);
+        if (len == HAT_ERR_LOCK_BUSY) {
+            if (busy) *busy = true;
+            return false;
+        }
         if (len < 4) return false;
         int page = (len - 4) / 6;
         for (int k = 0; k < page; k++) {
@@ -126,6 +143,7 @@ static bool p4_dir(uint16_t run, file_t *files, int cap, int *n, uint32_t *sig, 
         }
         seen += page;
         if (page == 0 || seen >= rsp[2]) return true;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
 
@@ -138,6 +156,7 @@ static uint16_t p4_q15_res(uint16_t run)
         int n = hub_bs_read(run, 1, (uint32_t)have, want, ck + have);
         if (n <= 0) break;
         have += (size_t)n;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
     return hub_q15_res(ck, have);
 }
@@ -155,6 +174,7 @@ static const char *p4_final_state(uint16_t run, uint32_t *t_s)
         const char *s = hub_events_final_state(ev, (size_t)n, &t);
         if (s) { state = s; *t_s = t; }
         off += (uint32_t)n;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
     return state;
 }
@@ -201,11 +221,19 @@ static hub_step_t phase_list(void)
     uint16_t ids[MAX_RUNS];
     int n = 0;
     uint16_t active = 0;
-    if (!p4_list(ids, MAX_RUNS, &n, &active)) {            // no DAQ HAT / busy: try again later
+    bool busy = false;
+    if (!p4_list(ids, MAX_RUNS, &n, &active, &busy)) {            // no DAQ HAT / busy: try again later
+        if (busy) {
+            S.hat_backoff = hub_hat_backoff_next(S.hat_backoff);
+            S.retry_until = hub_uptime_ms() + S.hat_backoff;
+            return HUB_STEP_IDLE;
+        }
+        S.hat_backoff = 0;
         S.next_list_ms = hub_uptime_ms() + 30000u;
         S.phase = PH_LIST;
         return HUB_STEP_IDLE;
     }
+    S.hat_backoff = 0;
     run_t keep[MAX_RUNS];
     memcpy(keep, S.runs, sizeof keep);
     int nkeep = S.n_runs;
@@ -221,6 +249,7 @@ static hub_step_t phase_list(void)
         }
         if (ids[k] == active) r.meta_sent = false;          // the loaded run's state changes: resend metadata
         S.runs[S.n_runs++] = r;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
     S.active_id = active;
     if (unset_clock && hub_clock_valid()) hub_push_epoch_to_p4();   // the P4 dates undated runs on SET_EPOCH
@@ -244,6 +273,11 @@ static hub_step_t phase_meta(const char *base)
         if (r->id == S.active_id) {
             uint8_t st[96];
             int n = hub_bs(0, NULL, 0, st, sizeof st);
+            if (n == HAT_ERR_LOCK_BUSY) {
+                S.hat_backoff = hub_hat_backoff_next(S.hat_backoff);
+                S.retry_until = hub_uptime_ms() + S.hat_backoff;
+                return HUB_STEP_IDLE;
+            }
             if (n >= 2 && st[1] < 5) state = STATE_NAME[st[1]];
         } else {
             uint32_t t = 0;
@@ -261,8 +295,10 @@ static hub_step_t phase_meta(const char *base)
         hub_res_t res = post(base, path, body, w.len);
         if (res == HUB_RES_RETRY) return HUB_STEP_RETRY;
         r->meta_sent = true;
+        S.hat_backoff = 0;
         return HUB_STEP_MORE;
     }
+    S.hat_backoff = 0;
     S.phase = PH_PICK;
     return HUB_STEP_MORE;
 }
@@ -277,7 +313,16 @@ static hub_step_t phase_pick(const char *base)
         uint16_t q15 = p4_q15_res(r->id);
         int n = 0;
         uint32_t sig = 0;
-        if (!p4_dir(r->id, S.files, MAX_FILES, &n, &sig, q15)) return HUB_STEP_IDLE;
+        bool busy = false;
+        if (!p4_dir(r->id, S.files, MAX_FILES, &n, &sig, q15, &busy)) {
+            if (busy) {
+                S.hat_backoff = hub_hat_backoff_next(S.hat_backoff);
+                S.retry_until = hub_uptime_ms() + S.hat_backoff;
+                return HUB_STEP_IDLE;
+            }
+            return HUB_STEP_IDLE;
+        }
+        S.hat_backoff = 0;
         if (r->done && r->sig == sig) continue;             // nothing new on the P4 since the last full pass
         r->done = false;
         S.sig = sig;
@@ -300,6 +345,7 @@ static hub_step_t phase_pick(const char *base)
         S.phase = PH_STREAM;
         return HUB_STEP_MORE;
     }
+    S.hat_backoff = 0;
     S.phase = PH_LIST;
     report_progress();
     return HUB_STEP_IDLE;
@@ -332,14 +378,28 @@ static hub_step_t phase_stream(const char *base)
     if (whole > BATCH_RECORDS) whole = BATCH_RECORDS;
     size_t want = whole * rs, have = 0;
     const size_t chunk = (236 / rs) * rs;
+    bool lock_busy = false;
     while (have < want) {
         uint8_t len = (uint8_t)(want - have < chunk ? want - have : chunk);
         int n = hub_bs_read(r->id, f->id, S.off + (uint32_t)have, len, s_raw + have);
+        if (n == HAT_ERR_LOCK_BUSY) {
+            lock_busy = true;
+            break;
+        }
         if (n <= 0) break;
         have += (size_t)n;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
     size_t recs = have / rs;
-    if (recs == 0) { S.fi++; S.off = 0; S.has_prev = false; return HUB_STEP_MORE; }   // file shrank or read failed: skip it
+    if (recs == 0) {
+        if (lock_busy) {
+            S.hat_backoff = hub_hat_backoff_next(S.hat_backoff);
+            S.retry_until = hub_uptime_ms() + S.hat_backoff;
+            return HUB_STEP_IDLE;
+        }
+        S.fi++; S.off = 0; S.has_prev = false; return HUB_STEP_MORE;   // file shrank or read failed: skip it
+    }
+    S.hat_backoff = 0;
 
     char *body = hub_net_body();
     hub_jw_t w;
@@ -376,6 +436,8 @@ static hub_step_t phase_stream(const char *base)
 hub_step_t hub_sync_step(const char *base)
 {
     if (!s_raw) return HUB_STEP_IDLE;
+    if (S.retry_until && hub_uptime_ms() < S.retry_until) return HUB_STEP_IDLE;
+    S.retry_until = 0;
     if (S.phase == PH_LIST) {
         if (S.listed && hub_uptime_ms() < S.next_list_ms) return HUB_STEP_IDLE;
         return phase_list();

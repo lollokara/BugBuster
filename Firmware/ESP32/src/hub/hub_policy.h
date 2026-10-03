@@ -20,6 +20,10 @@ typedef enum { HUB_RES_OK = 0, HUB_RES_RETRY, HUB_RES_DROP } hub_res_t;
 hub_res_t hub_classify_status(int transport_ok, int http_status);
 /** 0 -> 5000, then doubling, capped at 60000 ms. */
 uint32_t hub_backoff_next(uint32_t cur_ms);
+/** HAT mutex busy backoff: 100 ms -> 200 ms -> 400 ms -> 800 ms -> capped at 1000 ms. 0 returns 100. */
+uint32_t hub_hat_backoff_next(uint32_t cur_ms);
+/** True if the periodic pacing interval has elapsed (handles uptime rollover). */
+bool hub_pace_due(uint32_t now_ms, uint32_t last_ms, uint32_t period_ms);
 
 #ifdef __cplusplus
 }

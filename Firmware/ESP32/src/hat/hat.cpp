@@ -2000,11 +2000,13 @@ static uint8_t hat_recv_frame_wide(uint8_t *out, uint16_t cap, uint16_t *out_len
 
 // One request/reply on the wide (<= 240 B) path. HAT_CMD_BS and HAT_CMD_LOG_PULL share it.
 static int hat_wide_request(uint8_t cmd, uint8_t rsp_code, const uint8_t *req, uint8_t req_len,
-                            uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms)
+                            uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                            uint32_t lock_timeout_ms)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return -1;
-    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        return -1;
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(lock_timeout_ms)) != pdTRUE) {
+        ESP_LOGD(TAG, "HAT wide cmd 0x%02X: mutex busy", cmd);
+        return HAT_ERR_LOCK_BUSY;
     }
     int result = -1;
     if (!s_commit_in_progress) uart_flush_input(HAT_UART_NUM);
@@ -2032,15 +2034,31 @@ int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t r
                    uint32_t timeout_ms)
 {
     if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
-    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap, timeout_ms);
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, timeout_ms + 100);
 }
 
-int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms)
+int hat_bs_request_polite(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                          uint32_t timeout_ms, uint32_t lock_timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull_polite(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                        uint32_t lock_timeout_ms)
 {
     if (!rsp) return -1;
     const uint8_t req[4] = { (uint8_t)after_seq, (uint8_t)(after_seq >> 8),
                              (uint8_t)(after_seq >> 16), (uint8_t)(after_seq >> 24) };
-    return hat_wide_request(HAT_CMD_LOG_PULL, HAT_RSP_LOG_DATA, req, sizeof req, rsp, rsp_cap, timeout_ms);
+    return hat_wide_request(HAT_CMD_LOG_PULL, HAT_RSP_LOG_DATA, req, sizeof req, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms)
+{
+    return hat_log_pull_polite(after_seq, rsp, rsp_cap, timeout_ms, 10);
 }
 
 bool hat_daq_vdut_status(hat_vdut_status_t *out)

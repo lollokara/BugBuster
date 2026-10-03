@@ -948,6 +948,15 @@ the ESPFleet hub.
 
 Each record: `[uptime_ms: u32 LE][level: u8 ('E'|'W'|'I')][tag_len: u8][msg_len: u8][tag: tag_len B][msg: msg_len B]`.
 
+#### Link arbitration and polite clients
+
+The S3 HAT driver arbitrates link access across RTOS tasks via `s_hat_mutex`. To preserve user-facing command responsiveness and avoid starving real-time telemetry (such as 4 Hz `HAT_CMD_MB_POLL` and 1 Hz `HAT_CMD_DAQ_TELEMETRY`), background clients (e.g. ESPFleet hub log pulls, battery simulator backfill, and live telemetry) act as polite clients:
+
+- **Try-lock timeout:** Background requests use `lock_timeout_ms = 10` ms (`hat_bs_request_polite()`, `hat_log_pull_polite()`). If the lock is busy, the call returns immediately with `HAT_ERR_LOCK_BUSY (-3)` instead of blocking.
+- **No link reset on lock busy:** Contention does not reset the UART or flush the link. The client backs off exponentially (`hub_hat_backoff_next`: 500 ms → 1000 ms → 2000 ms → 4000 ms).
+- **Chunk yielding:** Bulk multi-chunk reads (e.g. backfill stream, directory pages, wallmap event scans) insert a 2 ms task delay (`vTaskDelay(pdMS_TO_TICKS(2))`) between consecutive transactions so higher-priority tasks can interleave commands.
+- **Pacing:** Log pulls are rate-limited to at most 1 Hz at idle and 2 Hz when draining backlog (`hub_pace_due`).
+
 ---
 
 ### 5.2 Responses (Slave → Master)
