@@ -2662,6 +2662,35 @@ static esp_err_t handle_post_daq_bs_read(httpd_req_t *req)
     return send_api_core_result(req, resp, "battsim read failed");
 }
 
+// GET /api/hub/status - hub streaming counters (no secrets, no admin token).
+// GET/POST /api/hub/config and POST /api/hub/resync change or reveal the hub URL: admin only.
+static esp_err_t handle_get_hub_status(httpd_req_t *req)
+{
+    return send_api_core_result(req, api_core_handle("GET", "/api/hub/status", NULL), "hub status failed");
+}
+
+static esp_err_t handle_get_hub_config(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    return send_api_core_result(req, api_core_handle("GET", "/api/hub/config", NULL), "hub config failed");
+}
+
+static esp_err_t handle_post_hub_config(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    char *resp = api_core_handle("POST", "/api/hub/config", body);
+    cJSON_Delete(body);
+    return send_api_core_result(req, resp, "hub config failed");
+}
+
+static esp_err_t handle_post_hub_resync(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    return send_api_core_result(req, api_core_handle("POST", "/api/hub/resync", NULL), "hub resync failed");
+}
+
 // POST /api/daq/config  body: {"op": 0..4, "args": hex}. SET (1) and ACTION (4)
 // change device state and need the admin token; GET/GET_ALL/SCHEMA do not.
 static esp_err_t handle_post_daq_config(httpd_req_t *req)
@@ -5433,6 +5462,27 @@ bool initWebServer(void)
         .uri = "/api/daq/bs/read", .method = HTTP_POST, .handler = handle_post_daq_bs_read, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_bs_read);
+    httpd_uri_t uri_hub_status = {
+        .uri = "/api/hub/status", .method = HTTP_GET, .handler = handle_get_hub_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_status);
+    // POST alias: iOS only has a POST helper (ConnectionManager.postJSON), which also works over BLE.
+    httpd_uri_t uri_hub_status_post = {
+        .uri = "/api/hub/status", .method = HTTP_POST, .handler = handle_get_hub_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_status_post);
+    httpd_uri_t uri_hub_config_get = {
+        .uri = "/api/hub/config", .method = HTTP_GET, .handler = handle_get_hub_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_config_get);
+    httpd_uri_t uri_hub_config_post = {
+        .uri = "/api/hub/config", .method = HTTP_POST, .handler = handle_post_hub_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_config_post);
+    httpd_uri_t uri_hub_resync = {
+        .uri = "/api/hub/resync", .method = HTTP_POST, .handler = handle_post_hub_resync, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_resync);
     httpd_uri_t uri_daq_config = {
         .uri = "/api/daq/config", .method = HTTP_POST, .handler = handle_post_daq_config, .user_ctx = NULL
     };
