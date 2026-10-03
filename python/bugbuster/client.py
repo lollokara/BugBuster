@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Callable, Optional, Union
 import serial  # pyserial - needed for SerialException in drain-loop guard
 
 from .transport.usb  import USBTransport, DeviceError
-from .transport.http import HTTPTransport
+from .transport.http import HTTPTransport, HTTPLogicalError
 from .transport.protocol import Transport
 
 if TYPE_CHECKING:
@@ -171,8 +171,31 @@ _IDAC_CH_LEN = struct.calcsize(_IDAC_CH_FMT)
 ScriptStatusResult = namedtuple("ScriptStatusResult",
     ["is_running", "script_id", "total_runs", "total_errors", "last_error",
      "mode", "globals_bytes_est", "globals_count", "auto_reset_count",
-     "last_eval_at_ms", "idle_for_ms", "watermark_soft_hit"],
-    defaults=(0, 0, 0, 0, 0, 0, False))
+     "last_eval_at_ms", "idle_for_ms", "watermark_soft_hit",
+     # runtime v2 (HTTP only; empty over USB)
+     "name", "source", "state", "last_exit", "started_at", "file_slot_id"],
+    defaults=(0, 0, 0, 0, 0, 0, False, "", "", "", "", 0, 0))
+
+
+class ScriptBusyError(RuntimeError):
+    """The device refused: a script holds the single run slot (HTTP 409)."""
+
+    def __init__(self, running: str, script_id: int):
+        super().__init__(f"script {running!r} (id {script_id}) is running; "
+                         "pass replace=True to stop it")
+        self.running = running
+        self.script_id = script_id
+
+
+def _script_busy_error(exc: Exception) -> Optional[ScriptBusyError]:
+    resp = getattr(exc, "response", None)
+    if resp is None or getattr(resp, "status_code", None) != 409:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    return ScriptBusyError(str(data.get("running", "")), int(data.get("id", 0)))
 AutorunStatus      = namedtuple("AutorunStatus",      ["enabled", "has_script", "io12_high", "last_run_ok", "last_run_id"])
 
 
@@ -706,7 +729,13 @@ class BugBuster:
             headers = {"Content-Type": "text/plain; charset=utf-8"}
             if self._admin_token:
                 headers["X-BugBuster-Admin-Token"] = self._admin_token
-            data = self._t.post(f"/scripts/eval{qs}", encoded, headers=headers)
+            try:
+                data = self._t.post(f"/scripts/eval{qs}", encoded, headers=headers)
+            except HTTPLogicalError as exc:
+                busy = _script_busy_error(exc)
+                if busy:
+                    raise busy from exc
+                raise
             if not data.get("ok"):
                 raise RuntimeError(f"script_eval: {data.get('err', 'unknown error')}")
             script_id = int(data.get("id", 0))
@@ -737,6 +766,12 @@ class BugBuster:
                 last_eval_at_ms=int(data.get("lastEvalAtMs", 0)),
                 idle_for_ms=int(data.get("idleForMs", 0)),
                 watermark_soft_hit=bool(data.get("watermarkSoftHit", False)),
+                name=str(data.get("name", "")),
+                source=str(data.get("source", "")),
+                state=str(data.get("state", "")),
+                last_exit=str(data.get("lastExit", "")),
+                started_at=int(data.get("startedAt", 0)),
+                file_slot_id=int(data.get("fileSlotId", 0)),
             )
         resp = self._usb_cmd(CmdId.SCRIPT_STATUS)
         pos = 0
@@ -935,43 +970,50 @@ class BugBuster:
             if not result.get("ok"):
                 raise RuntimeError(f"script_delete failed: {result.get('err', 'unknown')}")
 
-    def script_run_file(self, name: str) -> "ScriptStatusResult":
+    def script_run_file(self, name: str, background: bool = False,
+                        replace: bool = False) -> "ScriptStatusResult":
         """
-        Run the stored script named *name* from SPIFFS.
+        Run the stored script named *name* from SPIFFS. Returns as soon as it
+        is queued; the script keeps running on the device.
 
-        USB: uses BBP_CMD_SCRIPT_RUN_FILE (0xFB).
-        HTTP: POST /api/scripts/run-file?name=<name>.
-        Returns a :class:`ScriptStatusResult` (is_running=True on success).
-        Raises ``RuntimeError`` if the device reports failure.
+        USB: BBP_CMD_SCRIPT_RUN_FILE (0xFB); ``replace`` needs HTTP.
+        HTTP: POST /api/scripts/run-file?name=<name>[&background=1][&replace=1].
+        ``background`` only tells the device the caller will not watch the
+        logs (it is echoed back); ``replace`` stops the running script first
+        (3 s cooperative stop, then a VM reset).
+        Raises :class:`ScriptBusyError` if another script holds the slot.
         """
         if self._usb:
+            if replace:
+                raise NotImplementedError("script_run_file(replace=True) needs the HTTP transport")
             name_b = name.encode("utf-8")
             payload = bytes([len(name_b)]) + name_b
             resp = self._usb_cmd(CmdId.SCRIPT_RUN_FILE, payload)
             ok = bool(resp[0])
             script_id, = struct.unpack_from('<I', resp, 1)
             if not ok:
-                raise RuntimeError("script_run_file: queue full or file not found")
-            return ScriptStatusResult(
-                is_running=True,
-                script_id=script_id,
-                total_runs=0,
-                total_errors=0,
-                last_error="",
-            )
-        else:
-            import urllib.parse
-            qs = urllib.parse.urlencode({"name": name})
+                raise RuntimeError("script_run_file: busy, queue full or file not found")
+            return ScriptStatusResult(is_running=True, script_id=script_id, total_runs=0,
+                                      total_errors=0, last_error="")
+        import urllib.parse
+        params = {"name": name}
+        if background:
+            params["background"] = "1"
+        if replace:
+            params["replace"] = "1"
+        qs = urllib.parse.urlencode(params)
+        try:
             result = self._http_post(f"/scripts/run-file?{qs}")
-            if not result.get("ok"):
-                raise RuntimeError(f"script_run_file failed: {result.get('err', 'unknown')}")
-            return ScriptStatusResult(
-                is_running=True,
-                script_id=int(result.get("id", 0)),
-                total_runs=0,
-                total_errors=0,
-                last_error="",
-            )
+        except HTTPLogicalError as exc:
+            busy = _script_busy_error(exc)
+            if busy:
+                raise busy from exc
+            raise
+        if not result.get("ok"):
+            raise RuntimeError(f"script_run_file failed: {result.get('error', result.get('err', 'unknown'))}")
+        return ScriptStatusResult(is_running=True, script_id=int(result.get("id", 0)),
+                                  total_runs=0, total_errors=0, last_error="",
+                                  name=str(result.get("name", name)))
 
     # ── Autorun (Phase 6b) ──────────────────────────────────────────────────
 
