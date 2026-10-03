@@ -392,6 +392,14 @@ struct OverviewTab: View {
             if hatPresent {
                 Divider().background(Color.white.opacity(0.1))
 
+                if connectionManager.lastHatStatus?.isDaqHat == true {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("DAQ HAT")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.purple)
+                        VDUTControlsCard()
+                    }
+                } else {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("HAT Rails")
                         .font(.system(size: 14, weight: .semibold))
@@ -470,6 +478,7 @@ struct OverviewTab: View {
                             }
                         }
                     }
+                }
                 }
             }
         }

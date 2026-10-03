@@ -5,6 +5,7 @@ import SwiftUI
 struct BatterySimTab: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.verticalSizeClass) private var vSizeClass
     @State private var status: BsStatus?
     @State private var runs: [BsRunSummary] = []
     @State private var cached: [BsCachedRun] = []
@@ -17,6 +18,7 @@ struct BatterySimTab: View {
     @State private var wallClock = false
     @State private var follow = true
     @State private var showNew = false
+    @State private var showParams = false
     @State private var pendingDelete: Int?
     @State private var pollTask: Task<Void, Never>?
     @State private var liveTail: [BsRec] = []
@@ -24,6 +26,9 @@ struct BatterySimTab: View {
     @State private var scrubbing = false
 
     private var wide: Bool { sizeClass == .regular }
+    /// iPad / landscape: full-height chart with a header bar, stat strip and navigator;
+    /// the rest of the content lives in the Params sheet. Compact portrait keeps the scrolling page.
+    private var dashboard: Bool { sizeClass == .regular || vSizeClass == .compact }
 
     /// Synced history plus status-poll points newer than the last stored record.
     private var displayed: BsHistory? {
@@ -36,9 +41,27 @@ struct BatterySimTab: View {
     private static let presets: [(String, Double)] = [("1h", 3600), ("6h", 21600), ("1d", 86400), ("7d", 604800), ("30d", 2_592_000), ("All", 0)]
 
     var body: some View {
+        Group {
+            if dashboard { dashboardBody } else { pageBody }
+        }
+        .onAppear { startPolling() }
+        .onDisappear { pollTask?.cancel() }
+        .sheet(isPresented: $showNew) {
+            NewBatteryRunSheet { cfg in await createRun(cfg) }
+        }
+        .sheet(isPresented: $showParams) { paramsSheet }
+        .confirmationDialog("Delete run from the device?", isPresented: Binding(
+            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
+            Button("Delete run #\(pendingDelete ?? 0)", role: .destructive) {
+                if let id = pendingDelete { Task { await act(.delete, run: id) } }
+            }
+        } message: { Text("The copy on this device (if any) is kept.") }
+    }
+
+    private var pageBody: some View {
         ScrollView {
             VStack(spacing: 14) {
-                liveCard
+                liveCard()
                 if let message { errorBanner(message) }
                 chartCard
                 if wide {
@@ -56,22 +79,11 @@ struct BatterySimTab: View {
             .padding(.bottom, 110)
         }
         .scrollDisabled(scrubbing)
-        .onAppear { startPolling() }
-        .onDisappear { pollTask?.cancel() }
-        .sheet(isPresented: $showNew) {
-            NewBatteryRunSheet { cfg in await createRun(cfg) }
-        }
-        .confirmationDialog("Delete run from the device?", isPresented: Binding(
-            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
-            Button("Delete run #\(pendingDelete ?? 0)", role: .destructive) {
-                if let id = pendingDelete { Task { await act(.delete, run: id) } }
-            }
-        } message: { Text("The copy on this device (if any) is kept.") }
     }
 
     // MARK: Live status
 
-    private var liveCard: some View {
+    private func liveCard(controls showControls: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "battery.75percent").foregroundColor(.green)
@@ -99,7 +111,7 @@ struct BatterySimTab: View {
                 Text(status == nil ? "Battery simulator not reachable." : "No run loaded. Create a new run or load one from the list.")
                     .font(.system(size: 12)).foregroundColor(.secondary)
             }
-            controls
+            if showControls { controls }
         }
         .bsCard()
     }
@@ -114,6 +126,123 @@ struct BatterySimTab: View {
             if wide { Spacer() }
             actionButton("New run", "plus", .cyan, prominent: true, enabled: st != 2) { showNew = true }
         }
+    }
+
+    // MARK: Dashboard (iPad / landscape)
+
+    private var dashboardBody: some View {
+        VStack(spacing: 10) {
+            dashboardHeader
+            if let message { errorBanner(message) }
+            ZStack {
+                if let h = displayed {
+                    BatteryHistoryChart(history: h, window: $window, scrubbing: $scrubbing, logCurrent: logCurrent,
+                                        wallEpoch: wallClock && h.meta.createdEpoch > 0 ? Double(h.meta.createdEpoch) : nil,
+                                        compact: !wide)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "chart.xyaxis.line").font(.system(size: 28)).foregroundColor(.secondary)
+                        Text(busy ?? "Pick a run (Params) to open its history.").font(.system(size: 13)).foregroundColor(.secondary)
+                    }
+                }
+                if history != nil, let busy {
+                    Text(busy).font(.system(size: 11, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(10)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            statStrip
+            if let h = displayed {
+                BsNavigator(history: h, window: $window, scrubbing: $scrubbing, logCurrent: logCurrent).frame(height: 40)
+            }
+        }
+        .padding(.horizontal, wide ? 18 : 12)
+        .padding(.top, 8)
+        .padding(.bottom, wide ? 12 : 8)
+    }
+
+    private var dashboardHeader: some View {
+        let st = status?.state ?? 0
+        return HStack(spacing: 10) {
+            Image(systemName: "battery.75percent").foregroundColor(.green)
+            Text(history?.meta.name ?? "Battery simulator").font(.system(size: 16, weight: .bold)).lineLimit(1)
+            if let s = status, s.state != 0 { Text("#\(s.runId)").font(.system(size: 12, design: .monospaced)).foregroundColor(.secondary) }
+            if st == 2 { liveBadge }
+            if let s = status { stateBadge(s.state) }
+            Spacer(minLength: 6)
+            iconButton("Start", "play.fill", .green, prominent: true, enabled: st == 1) { await act(.start) }
+            iconButton("Pause", "pause.fill", .yellow, enabled: st == 2) { await act(.pause) }
+            iconButton("Stop", "stop.fill", .red, enabled: st == 1 || st == 2) { await act(.stop) }
+            iconButton("New run", "plus", .cyan, enabled: st != 2) { showNew = true }
+            iconButton("Parameters", "gearshape", .white, enabled: true) { showParams = true }
+        }
+    }
+
+    private var liveBadge: some View {
+        HStack(spacing: 4) {
+            Circle().fill(Color.red).frame(width: 6, height: 6)
+            Text("LIVE").font(.system(size: 10, weight: .heavy))
+        }
+        .foregroundColor(.red)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Capsule().fill(Color.red.opacity(0.15)))
+        .overlay(Capsule().stroke(Color.red.opacity(0.5), lineWidth: 1))
+    }
+
+    private func iconButton(_ label: String, _ icon: String, _ tint: Color, prominent: Bool = false,
+                            enabled: Bool, _ run: @escaping () async -> Void) -> some View {
+        Button { Task { await run() } } label: {
+            Image(systemName: icon).font(.system(size: 14, weight: .semibold)).frame(minWidth: 22)
+        }
+        .buttonStyle(BsButtonStyle(tint: tint, on: prominent && enabled, compact: !wide))
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+    }
+
+    private var statStrip: some View {
+        let s = status.flatMap { $0.state != 0 ? $0 : nil }
+        return HStack(spacing: 8) {
+            stripTile("SOC", s.map { String(format: "%.1f %%", $0.socPct) } ?? "-")
+            stripTile("V", s.map { BattSim.si($0.vMeas, "V") } ?? "-")
+            stripTile("I", s.map { BattSim.si($0.iMeas, "A") } ?? "-")
+            stripTile("W", s.map { BattSim.si($0.vMeas * $0.iMeas, "W") } ?? "-")
+            stripTile("Elapsed", s.map { BattSim.duration(Double($0.elapsedS)) } ?? "-")
+            stripTile("Battery", s.map { "\(BattSim.chemNames[safe: $0.chem] ?? "?") \($0.cells)S" } ?? "-")
+        }
+    }
+
+    private func stripTile(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundColor(.secondary)
+            Text(value).font(.system(size: wide ? 15 : 13, weight: .semibold, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+
+    private var paramsSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 14) {
+                    liveCard(controls: false)
+                    VStack(alignment: .leading, spacing: 10) { toolbar }.bsCard()
+                    statsCard
+                    runsCard
+                }
+                .padding(12)
+            }
+            .scrollDisabled(scrubbing)
+            .navigationTitle("Run parameters")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showParams = false } } }
+        }
+        .presentationDetents([.large])
     }
 
     // MARK: Chart
@@ -497,6 +626,9 @@ struct BatterySimTab: View {
 
     private func startPolling() {
         pollTask?.cancel()
+        #if DEBUG
+        if connectionManager.isMockActive { seedMock(); return }
+        #endif
         cached = BattSim.cachedRuns()
         pollTask = Task {
             await client.setEpoch()
@@ -516,6 +648,25 @@ struct BatterySimTab: View {
             }
         }
     }
+
+    #if DEBUG
+    /// Synthetic run for the simulated-device (BB_MOCK_MODE) layout check; never touches the network.
+    private func seedMock() {
+        var meta = BsMeta(runId: 7, version: 2, createdEpoch: 1_760_000_000, name: "Bench discharge")
+        meta.params = BsParams(chem: 0, cells: 2, capacityMah: 2500)
+        let recs = (0..<240).map { k -> BsRec in
+            let t = Double(k) * 60, soc = 100 - Double(k) * 0.3
+            let v = 8.4 - (100 - soc) * 0.02, i = 0.18 + 0.05 * sin(Double(k) / 6)
+            return BsRec(t: t, dt: 60, vAvg: v, vMin: v - 0.02, vMax: v + 0.02, soc: soc,
+                         iAvg: i, iMin: i * 0.6, iMax: i * 1.5, flags: 0, qDut: nil, qUsed: 0, eDut: nil, tier: 1)
+        }
+        history = BsHistory(meta: meta, events: [], recs: recs)
+        window = history!.bounds
+        openFromDevice = false
+        status = BsStatus(state: 2, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,
+                          remainingS: 36_000, vMeas: 7.96, iMeas: 0.214, vTarget: 7.96, fsTotal: 4 << 20, fsUsed: 1 << 20)
+    }
+    #endif
 
     private func refreshRuns() async {
         do { runs = try await client.listRuns() } catch { message = error.localizedDescription }
