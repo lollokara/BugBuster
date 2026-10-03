@@ -20,6 +20,7 @@
 #include "cJSON.h"
 #include "esp_err.h"
 #include "update/update_manager.h"
+#include "wifi_manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,15 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body);
 // These own the cache and reuse this file's single TLS worker; do not add
 // another one (.mex/patterns/tls-call-needs-dedicated-worker.md).
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Shared JSON builder: the blocking HTTP /api/wifi/scan in webserver.cpp and the
+// bounded BLE tunnel scan in api_core_handle() both call it, so the two
+// transports cannot drift. Returns a new cJSON object the caller owns.
+// ---------------------------------------------------------------------------
+
+/** @brief GET /api/wifi/scan body, {"networks":[{ssid,rssi,auth}]}. */
+cJSON *api_core_wifi_scan_json(const wifi_scan_result_t *results, int count);
 
 /** @brief Copy the cached snapshot, with installed versions refreshed. Never blocks. */
 void api_core_fw_get_snapshot(update_snapshot_t *out);

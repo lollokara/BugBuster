@@ -17,6 +17,30 @@ public enum TransportKind: String, Codable {
     case ble
 }
 
+/// Errors from the control-plane helpers that callers show to the user.
+public enum ConnectionAPIError: LocalizedError {
+    case bleNoResponse(String)
+    case bleRejected(path: String, message: String)
+    case needsWiFi(String)
+    case httpStatus(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bleNoResponse(let path): return "No reply over Bluetooth for \(path)"
+        case .bleRejected(let path, let message): return "\(path) is not available over Bluetooth (\(message)). Connect over Wi-Fi."
+        case .needsWiFi(let what): return "\(what) needs a Wi-Fi connection"
+        case .httpStatus(let code): return "Server returned \(code)"
+        }
+    }
+}
+
+/// The BLE API tunnel surface ConnectionManager depends on.
+public protocol BLEAPITransport: AnyObject {
+    func apiRequest(path: String, body: [String: Any]?, timeout: TimeInterval) async -> Data?
+}
+
+extension BLETransport: BLEAPITransport {}
+
 public struct DiscoveredDevice: Identifiable, Hashable, Codable {
     public var id: String { isBle ? "ble:\(bleId?.uuidString ?? hostname)" : (mac.isEmpty ? hostname : mac) }
     public let hostname: String
@@ -54,6 +78,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     // MARK: - BLE
     /// CoreBluetooth control plane mirroring the WiFi API surface.
     public let ble = BLETransport()
+    /// Tunnel used for BLE control-plane requests. Defaults to `ble`; a test
+    /// can swap in a fake so routing is verifiable without CoreBluetooth.
+    public lazy var bleAPI: BLEAPITransport = ble
     /// BugBuster peripherals seen over BLE (separate list from Bonjour results).
     @Published public var bleDevices: [DiscoveredDevice] = []
     /// True once CoreBluetooth is powered on and authorised.
@@ -1443,9 +1470,76 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return res
     }
 
+    /// GET and decode over HTTP or the BLE tunnel, same selection as `postJSON`.
+    /// Over BLE `activeDevice.ip` is empty, so the HTTP path would throw badURL.
     public func getRequest<T: Decodable>(path: String) async throws -> T {
         guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
+        if transport == .ble {
+            return try await bleThrowingDecoded(T.self, path: path)
+        }
         return try await performRequest(ip: device.ip, path: path, token: adminToken)
+    }
+
+    /// BLE tunnel request that surfaces failures. The tunnel answers paths it
+    /// does not implement with `{"error":"..."}`, which would otherwise decode
+    /// "successfully" into all-optional models or fail with a generic decode error.
+    private func bleThrowingDecoded<T: Decodable>(_ type: T.Type, path: String, body: [String: Any]? = nil) async throws -> T {
+        let data = try await bleRawData(path: path, body: body)
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func bleRawData(path: String, body: [String: Any]? = nil) async throws -> Data {
+        guard let data = await bleAPI.apiRequest(path: path, body: body, timeout: 6.0) else {
+            throw ConnectionAPIError.bleNoResponse(path)
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let err = obj["error"] as? String {
+            throw ConnectionAPIError.bleRejected(path: path, message: err)
+        }
+        return data
+    }
+
+    /// Raw request for endpoints with non-JSON bodies/replies (script files).
+    /// HTTP goes through the shared session + gate with the admin token. Over
+    /// BLE only body-less requests can be tunnelled (the tunnel carries a JSON
+    /// body), so uploads throw `.needsWiFi`.
+    public func rawRequest(method: String, path: String, query: [String: String] = [:],
+                           body: Data? = nil, contentType: String? = nil) async throws -> Data {
+        guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
+        if transport == .ble {
+            guard body == nil else { throw ConnectionAPIError.needsWiFi("Uploading script text") }
+            var tunnelPath = path
+            if !query.isEmpty {
+                var c = URLComponents()
+                c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+                tunnelPath += "?" + (c.percentEncodedQuery ?? "")
+            }
+            return try await bleRawData(path: tunnelPath)
+        }
+        let trimmed = device.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw URLError(.badURL) }
+        var base = trimmed
+        if !base.lowercased().hasPrefix("http://") && !base.lowercased().hasPrefix("https://") { base = "http://\(base)" }
+        guard var comps = URLComponents(string: "\(base)\(path)") else { throw URLError(.badURL) }
+        if !query.isEmpty { comps.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        guard let url = comps.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let contentType = contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        if !adminToken.isEmpty { request.setValue(adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token") }
+        request.httpBody = body
+        let (data, response) = try await gatedData(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200...299).contains(http.statusCode) else { throw ConnectionAPIError.httpStatus(http.statusCode) }
+        return data
+    }
+
+    /// Decode a JSON reply from `rawRequest` (POST/DELETE with no JSON model of its own).
+    public func rawRequest<T: Decodable>(_ type: T.Type, method: String, path: String,
+                                         query: [String: String] = [:], body: Data? = nil,
+                                         contentType: String? = nil) async throws -> T {
+        let data = try await rawRequest(method: method, path: path, query: query, body: body, contentType: contentType)
+        return try JSONDecoder().decode(type, from: data)
     }
     
     public func setLShiftOe(on: Bool) async -> Bool {

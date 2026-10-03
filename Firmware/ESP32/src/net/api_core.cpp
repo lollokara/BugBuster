@@ -1196,6 +1196,111 @@ static char *api_hat_calibrate_start(const cJSON *body)
 // OTA — drives the on-device updater that pulls signed git releases. Small JSON
 // commands (no binary transfer), so they work identically over BLE and HTTP.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Selftest supplies + WiFi scan. The HTTP handlers delegate here (supplies) or
+// share the scan JSON builder (wifi/scan).
+// ---------------------------------------------------------------------------
+static cJSON *selftest_supplies_json(void)
+{
+    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "valid", s->valid);
+    cJSON_AddBoolToObject(root, "suppliesOk", s->supplies_ok);
+    cJSON_AddNumberToObject(root, "avddHiV", s->avdd_hi_v);
+    cJSON_AddNumberToObject(root, "dvccV", s->dvcc_v);
+    cJSON_AddNumberToObject(root, "avccV", s->avcc_v);
+    cJSON_AddNumberToObject(root, "avssV", s->avss_v);
+    cJSON_AddNumberToObject(root, "tempC", s->temp_c);
+    return root;
+}
+
+static cJSON *selftest_supplies_cached_json(void)
+{
+    // PWR-10: cache only - the main loop's monitor step is the sampler.
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+
+    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "available", sv->available);
+    cJSON_AddNumberToObject(root, "timestampMs", sv->timestamp_ms);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "rail", i);
+        cJSON_AddStringToObject(obj, "name", rail_names[i]);
+        cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return root;
+}
+
+cJSON *api_core_wifi_scan_json(const wifi_scan_result_t *results, int count)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "networks");
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", results[i].ssid);
+        cJSON_AddNumberToObject(item, "rssi", results[i].rssi);
+        cJSON_AddNumberToObject(item, "auth", results[i].auth);
+        cJSON_AddItemToArray(arr, item);
+    }
+    return root;
+}
+
+// wifi_scan() blocks for ~3 s, and the BLE client gives up after 6 s while the
+// single in-flight tunnel slot stays held. The scan therefore runs on its own
+// task into a cache; the tunnel waits a bounded time for it and otherwise
+// answers with the last completed scan (same shape, possibly empty).
+#define BLE_WIFI_SCAN_MAX       20
+#define BLE_WIFI_SCAN_WAIT_MS   4500
+
+static wifi_scan_result_t s_scan_cache[BLE_WIFI_SCAN_MAX];
+static int                s_scan_cache_n = 0;
+static volatile bool      s_scan_running = false;
+static SemaphoreHandle_t  s_scan_done = NULL;
+static portMUX_TYPE       s_scan_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void wifi_scan_task(void *arg)
+{
+    (void)arg;
+    wifi_scan_result_t results[BLE_WIFI_SCAN_MAX];
+    int count = wifi_scan(results, BLE_WIFI_SCAN_MAX);
+    portENTER_CRITICAL(&s_scan_lock);
+    memcpy(s_scan_cache, results, sizeof(wifi_scan_result_t) * (size_t)count);
+    s_scan_cache_n = count;
+    s_scan_running = false;
+    portEXIT_CRITICAL(&s_scan_lock);
+    xSemaphoreGive(s_scan_done);
+    vTaskDelete(NULL);
+}
+
+static char *api_wifi_scan(void)
+{
+    if (!s_scan_done) {
+        s_scan_done = xSemaphoreCreateBinary();
+        if (!s_scan_done) return api_error("out of memory");
+    }
+    if (!s_scan_running) {
+        xSemaphoreTake(s_scan_done, 0);  // drop a stale completion
+        s_scan_running = true;
+        if (xTaskCreate(wifi_scan_task, "ble_wscan", 4096, NULL, 4, NULL) != pdPASS) {
+            s_scan_running = false;
+        }
+    }
+    xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(BLE_WIFI_SCAN_WAIT_MS));
+
+    wifi_scan_result_t snap[BLE_WIFI_SCAN_MAX];
+    int n;
+    portENTER_CRITICAL(&s_scan_lock);
+    n = s_scan_cache_n;
+    memcpy(snap, s_scan_cache, sizeof(wifi_scan_result_t) * (size_t)n);
+    portEXIT_CRITICAL(&s_scan_lock);
+    return json_take(api_core_wifi_scan_json(snap, n));
+}
+
 static char *api_ota_status(void)
 {
     cJSON *r = update_manager_status_json();
@@ -1895,6 +2000,13 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/overview") == 0)    return api_overview();
     if (strcmp(path, "/api/gpio") == 0)        return api_gpio_list();
     if (strcmp(path, "/api/ota/status") == 0)  return api_ota_status();
+    // HTTP names for the same updater queries (webserver.cpp routes them here /
+    // to update_manager_status_json()), so BLE clients can use either spelling.
+    if (strcmp(path, "/api/update/status") == 0) return api_ota_status();
+    if (strcmp(path, "/api/update/check") == 0)  return api_ota_check();
+    if (strcmp(path, "/api/selftest/supplies") == 0)        return json_take(selftest_supplies_json());
+    if (strcmp(path, "/api/selftest/supplies/cached") == 0) return json_take(selftest_supplies_cached_json());
+    if (strcmp(path, "/api/wifi/scan") == 0)   return api_wifi_scan();
     if (strcmp(path, "/api/ota/releases") == 0) return api_ota_releases();
     if (strcmp(path, "/api/selftest") == 0)    return api_selftest_get();
     if (strcmp(path, "/api/selftest/efuse_imon") == 0) return api_efuse_imon(is_post, body);

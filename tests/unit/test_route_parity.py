@@ -44,6 +44,12 @@ API_CORE = REPO / "Firmware/ESP32/src/net/api_core.cpp"
 # unified. Each entry must carry a reason. Remove entries as they are fixed --
 # never add one without a finding to point at.
 KNOWN_DIVERGENCES: dict[str, str] = {
+    "/api/wifi/scan": (
+        "Both transports share api_core_wifi_scan_json() for the document, but "
+        "HTTP runs the full blocking wifi_scan() while the BLE tunnel scans on "
+        "a worker and answers with the last cached result after 4.5 s so it "
+        "stays inside the client's 6 s timeout."
+    ),
     "/api/gpio": (
         "HTTP emits name/modeName/pulldown; the api_core copy omits all three, "
         "so the same GET returns a different document per transport. "
@@ -201,3 +207,16 @@ def test_known_divergences_are_still_real():
             stale.append(f"{uri}: now delegates -- remove it from ALIAS_KNOWN_DIVERGENCES")
 
     assert not stale, "Stale allowlist entries:\n  " + "\n  ".join(stale)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/selftest/supplies",
+    "/api/selftest/supplies/cached",
+    "/api/wifi/scan",
+    "/api/update/status",
+    "/api/update/check",
+])
+def test_diagnostics_gets_are_served_over_the_ble_tunnel(path):
+    """The iOS Diagnostics tab reads these over BLE; unknown path there means a blank card."""
+    ac = _read(API_CORE)
+    assert f'strcmp(path, "{path}") == 0' in ac
