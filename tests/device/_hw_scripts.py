@@ -210,6 +210,21 @@ class ScriptsApi:
                 vals.append(ast.literal_eval(text[len(tag) + 1:]))
         return vals
 
+    @staticmethod
+    def kv_results(log_text: str, tag: str = "R") -> dict:
+        """``print("R", key, repr(value))`` lines -> {key: literal_eval(value)}.
+
+        One short line per value: the firmware's log-line cap splits a long line,
+        which breaks ``ast.literal_eval`` on a printed dict.
+        """
+        out = {}
+        for _, _, src, text in ScriptsApi.parse_lines(log_text):
+            if src == "mpy" and text.startswith(tag + " "):
+                parts = text[len(tag) + 1:].split(" ", 1)
+                if len(parts) == 2:
+                    out[parts[0]] = ast.literal_eval(parts[1])
+        return out
+
     def cleanup(self) -> None:
         try:
             self.ensure_idle()

@@ -11,6 +11,10 @@ import pytest
 
 pytestmark = pytest.mark.requires_daq_http
 
+# Tests that WRITE (setpoint / enable / acq_config) additionally need --daq and the
+# battery-sim guard (a loaded non-bbt_ run is the user's: skip, never touch it).
+requires_daq = pytest.mark.requires_daq
+
 
 def test_vdut_status_shape(daq_http, daq_http_base):
     r = daq_http.get(daq_http_base + "/api/daq/vdut/status", timeout=10)
@@ -27,7 +31,8 @@ def test_wifi_stream_status_shape(daq_http, daq_http_base):
     assert "state" in r.json(), "no 'state' field: %r" % r.json()
 
 
-def test_vdut_setpoint_roundtrip(daq_http, daq_http_base):
+@requires_daq
+def test_vdut_setpoint_roundtrip(daq_http, daq_http_base, battsim_guard):
     """A valid setpoint is applied and visible in status."""
     try:
         r = daq_http.post(daq_http_base + "/api/daq/vdut/setpoint",
@@ -42,12 +47,13 @@ def test_vdut_setpoint_roundtrip(daq_http, daq_http_base):
                       json={"voltageV": 1.8, "currentLimitMa": 50.0}, timeout=10)
 
 
+@requires_daq
 @pytest.mark.parametrize("body", [
     {"voltageV": 0.5, "currentLimitMa": 200.0},     # below HAT_DAQ_VDUT_MIN_V 1.76
     {"voltageV": 25.0, "currentLimitMa": 200.0},    # above HAT_DAQ_VDUT_MAX_V 19.94
     {"voltageV": 6.0, "currentLimitMa": 5000.0},    # above HAT_DAQ_VDUT_ILIMIT_MAX_A*1000 2636 mA
 ])
-def test_vdut_setpoint_rejects_out_of_range_with_http_400(daq_http, daq_http_base, body):
+def test_vdut_setpoint_rejects_out_of_range_with_http_400(daq_http, daq_http_base, body, battsim_guard):
     """The HTTP path REJECTS out-of-range setpoints with a 400.
 
     USB `CMD_SET_SOURCE` now agrees: it also rejects (daq_board_set_source()
@@ -68,7 +74,8 @@ def test_vdut_setpoint_rejects_out_of_range_with_http_400(daq_http, daq_http_bas
         "expected HTTP 400 for %r, got %d: %s" % (body, r.status_code, r.text[:200]))
 
 
-def test_vdut_enable_roundtrip(daq_http, daq_http_base):
+@requires_daq
+def test_vdut_enable_roundtrip(daq_http, daq_http_base, battsim_guard):
     """Enable then disable, verifying each in status. Always leaves it disabled."""
     try:
         r = daq_http.post(daq_http_base + "/api/daq/vdut/enable",
@@ -85,7 +92,8 @@ def test_vdut_enable_roundtrip(daq_http, daq_http_base):
         "DUT supply left ENABLED after the test — safety cleanup failed")
 
 
-def test_acq_config_accepts_a_filter_selection(daq_http, daq_http_base):
+@requires_daq
+def test_acq_config_accepts_a_filter_selection(daq_http, daq_http_base, battsim_guard):
     # api_daq_acq_config() in api_core.cpp reads body_get(body, "filter") and
     # body_get(body, "adc_dec") -- NOT "adcDecimation". The plan drafting this
     # test guessed "adcDecimation"; the real key is "adc_dec".
@@ -97,7 +105,8 @@ def test_acq_config_accepts_a_filter_selection(daq_http, daq_http_base):
         pytest.skip("acq_config rejected this combination: %s" % r.text[:160])
 
 
-def test_unauthenticated_writes_are_rejected(daq_http_base):
+@requires_daq
+def test_unauthenticated_writes_are_rejected(daq_http_base, battsim_guard):
     """MUTATING routes must require the admin token. Reads deliberately do not.
 
     The auth model here is intentional, not an oversight: `check_admin_auth()`

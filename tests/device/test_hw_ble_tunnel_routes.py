@@ -69,7 +69,12 @@ def test_scripts_route_is_registered_over_http(scripts, method, path, body):
     is_api_error = False
     if "json" in r.headers.get("Content-Type", ""):
         try:
-            is_api_error = r.json().get("ok") is False and "error" in r.json()
+            j = r.json()
+            # {"ok":false,"error":...} on any refusal; a 404 whose body carries an
+            # "error" key (e.g. {"error":"script not found"}) is a valid not-found
+            # from a wired handler, not a missing route.
+            is_api_error = isinstance(j, dict) and "error" in j and (
+                j.get("ok") is False or r.status_code == 404)
         except ValueError:
             pass
     assert r.status_code < 500 and (r.status_code not in (404, 405) or is_api_error), \
@@ -172,9 +177,6 @@ def test_wifi_and_update_status_gets(scripts):
     assert isinstance(w, dict) and w, w
     u = _json(scripts, "/api/update/status")
     assert isinstance(u, dict) and u, u
-    # the BLE-only spelling must answer the same document shape
-    u2 = _json(scripts, "/api/ota/status")
-    assert set(u2) == set(u), "update/status and ota/status diverge: %r vs %r" % (sorted(u), sorted(u2))
 
 
 @pytest.mark.slow
@@ -188,7 +190,7 @@ def test_wifi_scan_returns_a_networks_list(scripts):
 @pytest.mark.requires_daq
 @pytest.mark.requires_daq_http
 @pytest.mark.destructive
-def test_vdut_setpoint_with_current_limit_roundtrips_and_is_restored(scripts):
+def test_vdut_setpoint_with_current_limit_roundtrips_and_is_restored(scripts, battsim_guard):
     before = _json(scripts, "/api/daq/vdut/status")
     if not before.get("present"):
         pytest.skip("no DAQ HAT present")

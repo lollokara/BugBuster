@@ -81,19 +81,22 @@ def test_daq_module_imports_and_exposes_the_spec_surface(scripts):
     assert present in (True, False) and isinstance(present, bool), present
 
 
+PRESENT_SRC = """\
+import daq
+print("R", repr(daq.present()))
+"""
+
 ENODEV_SRC = """\
 import daq
-import errno
-out = {}
 def probe(label, fn):
     try:
         fn()
-        out[label] = "no-error"
+        v = "no-error"
     except OSError as e:
-        out[label] = e.args[0] if e.args else -1
+        v = e.args[0] if e.args else -1
     except Exception as e:
-        out[label] = type(e).__name__
-print("R", repr(daq.present()))
+        v = type(e).__name__
+    print("R", label, repr(v))
 probe("read", lambda: daq.read())
 probe("vdut", lambda: daq.vdut())
 probe("vdut_set", lambda: daq.vdut(True, volts=3.3))
@@ -106,16 +109,22 @@ probe("stop", lambda: daq.run.stop())
 probe("edit", lambda: daq.run.edit(capacity_mah=10))
 probe("delete", lambda: daq.run.delete(1))
 probe("samples", lambda: daq.samples(1))
-print("R", repr(out))
 """
 
 
 def test_without_a_daq_hat_every_call_raises_enodev(scripts):
-    st, text, res = _py(scripts, "daqnodev", ENODEV_SRC)
+    # SAFETY: the probes below call daq.run.start/pause/stop/... and would act on a
+    # real HAT (an earlier version finalised a user's paused battery-sim run). Ask a
+    # read-only question first and never run the probes when a HAT is fitted.
+    st, text, res = _py(scripts, "daqnodevp", PRESENT_SRC)
     _ok(st, text)
-    present, out = res
-    if present:
-        pytest.skip("a DAQ HAT is connected; the ENODEV contract only applies to a board without one")
+    if res != [False]:
+        pytest.skip("a DAQ HAT is connected; the ENODEV probes would mutate real DAQ state "
+                    "(this test only runs on a board without one)")
+    st, text = scripts.run_source(script_name("daqnodev"), ENODEV_SRC, timeout=45.0)
+    _ok(st, text)
+    out = ScriptsApi.kv_results(text)
+    assert len(out) == 12, "expected 12 probe results, got %r. Log:\n%s" % (out, text)
     wrong = {k: v for k, v in out.items() if v != errno.ENODEV}
     assert not wrong, "calls that did not raise OSError(ENODEV=%d): %r" % (errno.ENODEV, wrong)
 
@@ -133,7 +142,7 @@ def hat_or_skip(scripts):
 
 
 @pytest.fixture
-def daq_restore(scripts, hat_or_skip):
+def daq_restore(scripts, hat_or_skip, battsim_guard):
     """Snapshot VDUT over the REST status route; restore it and delete test runs after."""
     r = scripts.get("/api/daq/vdut/status")
     assert r.status_code == 200, r.text
@@ -158,8 +167,12 @@ def daq_restore(scripts, hat_or_skip):
 
 CLEANUP_SRC = """\
 import daq
+# Only ever stop a run this suite made (bbt_*); a loaded run with any other
+# name is the user's and must be left exactly as it is.
 try:
-    daq.run.stop()
+    nm = daq.run.status().get("name") or ""
+    if nm.startswith("bbt_"):
+        daq.run.stop()
 except Exception:
     pass
 n = 0
