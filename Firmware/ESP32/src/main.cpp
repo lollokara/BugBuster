@@ -48,6 +48,7 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "diag/hub_recovery.h"
+#include "hub/hub_task.h"
 #include "diag/crash_report.h"
 #include "diag/crash_util.h"
 #include "io_owner.h"
@@ -268,6 +269,7 @@ extern "C" void app_main(void)
     status_led_init();
     auth_init();
     board_profile_init();
+    hub_early_init();
 
     // Helper: run breathing animation for N milliseconds during boot
     auto breathe_for = [](uint32_t ms) {
@@ -547,6 +549,8 @@ extern "C" void app_main(void)
     } else {
         serial_println("[BugBuster] HAT: init FAILED — features disabled");
     }
+
+    hub_start();   // device -> ESPFleet hub streaming (after the web server and the HAT are up)
 
     // 14. UART bridge (CDC #1+ ↔ UART)
     uart_bridge_init();
