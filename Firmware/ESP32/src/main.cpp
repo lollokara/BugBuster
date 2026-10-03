@@ -48,6 +48,8 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "diag/hub_recovery.h"
+#include "diag/crash_report.h"
+#include "diag/crash_util.h"
 #include "io_owner.h"
 #include "esp_timer.h"
 
@@ -193,6 +195,9 @@ static void mainLoopTask(void* pvParam)
         // USB hub enumeration recovery watchdog (no-op once mounted or budget exhausted)
         hub_recovery_tick();
 
+        // Pre-crash breadcrumb refresh + one-shot boot report scheduler (cheap).
+        crash_report_tick(millis_now());
+
         // NOTE: cliProcess() has been moved to bbpCliTask (Core 1) so that
         // BBP command dispatch and HAT relay do not block the background work
         // below.  Do NOT add cliProcess() back here.
@@ -277,6 +282,7 @@ extern "C" void app_main(void)
     usb_cdc_init();
     breathe_for(500);  // breathing animation during USB enumeration wait
     serial_init();
+    crash_report_init();
     serial_println("\n[BugBuster] Booting (ESP-IDF)...");
     esp_reset_reason_t rr = esp_reset_reason();
     serial_printf("[BugBuster] Reset reason: %d\r\n", (int)rr);
@@ -296,6 +302,7 @@ extern "C" void app_main(void)
     pin_mode_input_pullup(PIN_ADC_RDY);
 
     // 4. WiFi AP+STA
+    crash_report_phase(CRASH_PHASE_NET);
     serial_println("[BugBuster] Starting WiFi...");
     wifi_init(WIFI_SSID, WIFI_PASSWORD, WIFI_STA_SSID, WIFI_STA_PASSWORD);
 
@@ -501,9 +508,12 @@ extern "C" void app_main(void)
     cmd_registry_init();
     serial_println("[BugBuster] Command registry initialized");
 
+    crash_report_phase(CRASH_PHASE_DRIVERS);
+
     // 13c. Web server — start before later service tasks fragment internal heap.
     coredump_diag_print_boot_report();
     log_internal_heap("before webserver");
+    crash_report_phase(CRASH_PHASE_WEB);
     bool webServerStarted = initWebServer();
     log_internal_heap("after webserver");
     if (webServerStarted) {
@@ -513,6 +523,7 @@ extern "C" void app_main(void)
     }
 
     // On-device scripting (MicroPython) — Phase 1: in-memory eval only.
+    crash_report_phase(CRASH_PHASE_SCRIPTING);
     scripting_init();
     serial_println("[BugBuster] Scripting engine ready");
 
@@ -606,4 +617,8 @@ extern "C" void app_main(void)
     //     activity can be detected during the grace window.
     //     Also owns esp_ota_mark_app_valid_cancel_rollback() (moved from above).
     autorun_boot_check();
+
+    // 19. Boot diagnostics package: the module loads the coredump summary now and
+    //     emits the report CRASH_REPORT_SETTLE_MS later, once the system is steady.
+    crash_report_boot_complete();
 }

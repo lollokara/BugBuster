@@ -52,6 +52,7 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+#include "diag/crash_report.h"
 
 // Shared buffer for script-name listing handlers. Declared at file scope so that
 // EXT_RAM_BSS_ATTR actually takes effect (the attribute is silently ignored on
@@ -664,6 +665,59 @@ static esp_err_t handle_get_system_memory(httpd_req_t *req)
 {
     char *resp = api_core_handle("GET", "/api/system/memory", NULL);
     if (!resp) return send_error(req, 500, "memory status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// GET /api/system/crash[?report=1 | ?offset=N&len=M | ?raw=1]  (admin)
+// JSON via api_core_handle (shared with BLE). ?raw=1 streams the stored ELF
+// coredump as a download: 1 KB heap slice at a time, nothing else buffered.
+static esp_err_t handle_get_system_crash(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    char query[64] = {0};
+    char flag[8] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "raw", flag, sizeof(flag)) == ESP_OK && flag[0] == '1') {
+        size_t total = crash_report_dump_size();
+        if (total == 0) return send_error(req, 404, "No coredump stored");
+        const size_t SLICE = 1024;
+        uint8_t *buf = (uint8_t *)malloc(SLICE);
+        if (!buf) return send_error(req, 500, "Out of memory");
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
+        httpd_resp_set_type(req, "application/octet-stream");
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"bugbuster-coredump.elf\"");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+        esp_err_t rc = ESP_OK;
+        for (size_t off = 0; off < total && rc == ESP_OK; off += SLICE) {
+            size_t n = total - off < SLICE ? total - off : SLICE;
+            if (crash_report_dump_read(off, buf, n) != ESP_OK) { rc = ESP_FAIL; break; }
+            rc = httpd_resp_send_chunk(req, (const char *)buf, n);
+        }
+        free(buf);
+        if (rc != ESP_OK) {
+            httpd_resp_sendstr_chunk(req, NULL);   // abort: truncated body, client sees bad length
+            return ESP_FAIL;
+        }
+        return httpd_resp_send_chunk(req, NULL, 0);
+    }
+
+    char *resp = api_core_handle("GET", req->uri, NULL);
+    if (!resp) return send_error(req, 500, "crash info failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// POST /api/system/crash/clear  (admin) — erase the stored coredump
+static esp_err_t handle_post_system_crash_clear(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    char *resp = api_core_handle("POST", "/api/system/crash/clear", NULL);
+    if (!resp) return send_error(req, 500, "crash clear failed");
     esp_err_t rc = send_raw_json(req, resp);
     cJSON_free(resp);
     return rc;
@@ -5010,6 +5064,8 @@ bool initWebServer(void)
     // Keep route capacity close to the real table size. httpd_register_uri_handler
     // call count as of 2026-08-06: 128 in this file + 4 registry routes
     // (http_adapter_register) + 1 WS stream route + 1 REPL WS route = 134.
+    // 2026-10-03 recount: 134 httpd_register_uri_handler(s_server) calls in this file
+    // (incl. the 2 /api/system/crash routes) + 4 registry + 2 WS = 140 of 150.
     // 128 alone silently starved the last ~6 registrations (registry routes,
     // this file's own wildcard "/*" catch-all) with ESP_ERR_HTTPD_HANDLERS_FULL.
     // 150 gives headroom without reserving a large unused slot table from heap.
@@ -5091,6 +5147,16 @@ bool initWebServer(void)
         .uri = "/api/system/memory", .method = HTTP_GET, .handler = handle_get_system_memory, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_system_memory);
+
+    httpd_uri_t uri_system_crash = {
+        .uri = "/api/system/crash", .method = HTTP_GET, .handler = handle_get_system_crash, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_system_crash);
+
+    httpd_uri_t uri_system_crash_clear = {
+        .uri = "/api/system/crash/clear", .method = HTTP_POST, .handler = handle_post_system_crash_clear, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_system_crash_clear);
 
     httpd_uri_t uri_faults = {
         .uri = "/api/faults", .method = HTTP_GET, .handler = handle_get_faults, .user_ctx = NULL

@@ -20,6 +20,8 @@
 //          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint},
 //          /api/daq/bs, /api/daq/bs/read (battery simulator), /api/daq/config
 //          (DAQ settings registry passthrough)
+//   CRASH  : GET /api/system/crash[?report=1|?offset=N&len=M] (summary, boot bundle,
+//            base64 coredump slice), POST /api/system/crash/clear — crash_report.cpp.
 //   SCRIPTS: /api/scripts/{status,logs,stop,files,files/get,files/delete,
 //            files/chunk,run-file,eval,autorun/status,autorun/enable,
 //            autorun/disable} — bodies in api_scripts.cpp (the REPL WebSocket
@@ -73,6 +75,7 @@
 #include "power/pd_manager.h"
 #include "quicksetup.h"
 #include "api_scripts.h"
+#include "diag/crash_report.h"
 #include "mbedtls/base64.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
@@ -1995,6 +1998,8 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/device/info") == 0) return api_device_info();
     if (strcmp(path, "/api/status") == 0)      return api_status();
     if (strcmp(path, "/api/system/memory") == 0) return api_system_memory();
+    if (strncmp(path, "/api/system/crash", 17) == 0 && (path[17] == '\0' || path[17] == '?'))
+        return crash_report_api_get(path);
     if (strcmp(path, "/api/hat") == 0)         return api_hat();
     if (strcmp(path, "/api/hat/v2/rails") == 0) return api_hat_v2_rails();
     if (strncmp(path, "/api/hat/calibration", 20) == 0) return api_hat_calibration(path);
@@ -2048,6 +2053,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);
     if (strcmp(path, "/api/device/reset") == 0)     return api_device_reset();
+    if (strcmp(path, "/api/system/crash/clear") == 0) return crash_report_api_clear();
     if (strcmp(path, "/api/ota/check") == 0)        return api_ota_check();
     if (strcmp(path, "/api/ota/apply") == 0)        return api_ota_apply(body);
     if (strcmp(path, "/api/selftest/worker") == 0)    return api_selftest_worker(body);

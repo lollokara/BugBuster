@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Boot diagnostics package and crash dump API.** 30 s after boot the S3 logs
+  `BOOTRPT` lines (system, heap/DMA/PSRAM, per-task stack headroom, network, HAT,
+  scripts, crash summary) for the remote logger. `GET /api/system/crash`
+  (`?report=1`, `?offset=&len=` chunks, `?raw=1` ELF download) and
+  `POST /api/system/crash/clear` expose the stored coredump (2 URIs, admin token,
+  BLE-reachable except `raw`). The crash summary now carries the exception name,
+  registers, whether the dump matches the running build, and a pre-crash RTC
+  snapshot (heap, tightest stack, boot phase, consecutive-crash count).
 - **Scripts as background jobs.** One named script slot with source
   (manual/autorun/repl), state and last exit in `/api/scripts/status`;
   `run-file` returns at once and answers 409 naming the running script unless
