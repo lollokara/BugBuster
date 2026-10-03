@@ -39,6 +39,12 @@ public protocol BLEAPITransport: AnyObject {
     func apiRequest(path: String, body: [String: Any]?, timeout: TimeInterval) async -> Data?
 }
 
+extension BLEAPITransport {
+    public func apiRequest(path: String, body: [String: Any]? = nil, timeout: TimeInterval = 6.0) async -> Data? {
+        await apiRequest(path: path, body: body, timeout: timeout)
+    }
+}
+
 extension BLETransport: BLEAPITransport {}
 
 public struct DiscoveredDevice: Identifiable, Hashable, Codable {
@@ -1190,7 +1196,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     /// Issue a JSON request over the BLE API tunnel and decode the `{...}` body.
     private func bleJSON(_ path: String, body: [String: Any]? = nil) async -> [String: Any]? {
-        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        guard let data = await bleAPI.apiRequest(path: path, body: body) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
@@ -1198,7 +1204,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// Used for endpoints whose BLE payload mirrors the HTTP shape 1:1
     /// (e.g. /api/overview, /api/gpio).
     private func bleDecoded<T: Decodable>(_ type: T.Type, path: String, body: [String: Any]? = nil) async -> T? {
-        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        guard let data = await bleAPI.apiRequest(path: path, body: body) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 
