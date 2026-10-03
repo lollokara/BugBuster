@@ -70,6 +70,7 @@
 #include "power/pd_manager.h"
 #include "quicksetup.h"
 #include "mbedtls/base64.h"
+#include "api_hub.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
 extern AD74416H_SPI spiDriver;
@@ -1958,6 +1959,11 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
         if (strcmp(sfx, "rtd/config") == 0) return api_channel_rtd_config(ch, body);
         if (strcmp(sfx, "adc") == 0)        return api_channel_adc(ch);
     }
+
+    // Hub streaming settings and status (spec 2026-10-03 section 6): BLE-reachable like every route.
+    if (strcmp(path, "/api/hub/status") == 0)  return api_hub_status(path, body);
+    if (strcmp(path, "/api/hub/config") == 0)  return api_hub_config(path, body);
+    if (strcmp(path, "/api/hub/resync") == 0)  return api_hub_resync(path, body);
 
     // QuickSetup: /api/quicksetup (list) and /api/quicksetup/<slot>[/apply|delete]
     if (strcmp(path, "/api/quicksetup") == 0) return api_quicksetup_list();
