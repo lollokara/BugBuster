@@ -10,6 +10,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "script_runtime.h"   // ScriptSource / ScriptState / ScriptExit (pure C)
+#include "script_storage.h"   // SCRIPT_NAME_MAX
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,10 +39,9 @@ typedef enum {
 // ---------------------------------------------------------------------------
 
 /**
- * Copy src into a heap buffer and enqueue for execution.
+ * Enqueue an eval (source = manual, name "<eval>"). Thin wrapper over
+ * scripting_submit(); refused (false) while a file script holds the slot.
  * persist=true keeps the MicroPython VM alive after eval (persistent mode).
- * In persistent mode, persist=false is a no-op (sticky until explicit reset).
- * Returns true if enqueued, false if the queue is full or src is NULL.
  * Thread-safe; callable from any context.
  */
 bool scripting_run_string(const char *src, size_t len, bool persist);
@@ -52,13 +54,46 @@ bool scripting_run_string(const char *src, size_t len, bool persist);
 bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t max_err);
 
 /**
- * Load the named script file from SPIFFS and enqueue it for execution.
- * name must be a valid script name (validated by script_storage).
- * Returns true if the file was loaded and enqueued.
- * If out_id is non-NULL, the assigned script ID is written to *out_id.
- * Thread-safe; callable from any context.
+ * Load the named script file from SPIFFS and enqueue it (source = manual,
+ * takes the file-script slot, never replaces). Wrapper over
+ * scripting_submit_file(). Returns true if enqueued.
  */
 bool scripting_run_file(const char *name, uint32_t *out_id);
+
+// ---------------------------------------------------------------------------
+// Runtime v2 submission (spec 2026-10-03 §2)
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    SCRIPT_SUBMIT_OK = 0,
+    SCRIPT_SUBMIT_BUSY,         // a file/autorun script holds the slot (HTTP 409)
+    SCRIPT_SUBMIT_QUEUE_FULL,   // queue full or out of memory
+    SCRIPT_SUBMIT_NOT_FOUND,    // file missing, unreadable or empty
+    SCRIPT_SUBMIT_DISABLED,     // engine not initialised or bad arguments
+} ScriptSubmitResult;
+
+typedef struct {
+    const char  *name;     // NULL -> "<repl>" for SCRIPT_SRC_REPL, else "<eval>"
+    ScriptSource source;
+    bool         is_file;  // takes the single file-script slot
+    bool         persist;  // persistent VM (see scripting_run_string)
+    bool         replace;  // is_file only: stop the holder first (MP_REPLACE_STOP_TIMEOUT_MS, then VM reset)
+} ScriptSubmitOpts;
+
+/** Copy src and enqueue it under the single-slot rule. *out_id gets the id on OK. */
+ScriptSubmitResult scripting_submit(const char *src, size_t len, const ScriptSubmitOpts *opts,
+                                    uint32_t *out_id);
+
+/** Read /scripts/<name> and submit it as a file script. */
+ScriptSubmitResult scripting_submit_file(const char *name, ScriptSource source, bool replace,
+                                         uint32_t *out_id);
+
+/** Block until no file script holds the slot, or timeout. True if free. */
+bool scripting_wait_slot_free(uint32_t timeout_ms);
+
+/** Write one `<ts> <level> sys <text>` line to the log ring (and ESP_LOGI). */
+void scripting_log_event(char level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
 
 // ---------------------------------------------------------------------------
 // Control
@@ -126,6 +161,16 @@ typedef struct {
     uint32_t last_eval_at_ms;        // xTaskGetTickCount() ms of last eval enqueue
     uint32_t idle_for_ms;            // ms since last eval (0 when running)
     bool     watermark_soft_hit;     // true if GC heap >= MP_HEAP_SOFT_WATERMARK_PCT
+    // Script runtime v2 (spec 2026-10-03 §2) — appended; existing fields unchanged.
+    char         name[SCRIPT_NAME_MAX + 1];   // running/last script: file name, "<eval>", "<repl>"
+    ScriptSource source;
+    ScriptState  state;
+    ScriptExit   last_exit;
+    uint32_t     started_at;                  // epoch s when started_at_epoch, else uptime ms
+    bool         started_at_epoch;
+    uint32_t     file_slot_id;                // id holding the single file-script slot, 0 = free
+    char         file_slot_name[SCRIPT_NAME_MAX + 1];
+
 } ScriptStatus;
 
 void scripting_get_status(ScriptStatus *out);

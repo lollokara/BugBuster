@@ -190,3 +190,5 @@ static inline uint32_t millis_now(void) {
 #define MP_LOG_RING_SIZE       4096u                    // Log ring buffer size (bytes)
 #define MP_PERSISTENT_IDLE_MS  (10u * 60u * 1000u)     // Auto-reset VM after 10 min idle
 #define MP_IDLE_CHECK_MS       10000u                   // Queue poll interval in persistent mode
+#define MP_REPLACE_STOP_TIMEOUT_MS 3000u                // run-file replace=1: cooperative stop budget before a VM reset is queued
+
