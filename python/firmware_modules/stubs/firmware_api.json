@@ -1,0 +1,3191 @@
+{
+ "schema": "bugbuster.firmware-api/1",
+ "modules": [
+  {
+   "name": "bugbuster",
+   "doc": "BugBuster board control from on-device MicroPython scripts: analog/digital\nchannels, the external I2C/SPI buses, HTTP/MQTT, IO ownership and the HAT.\n\n    import bugbuster\n    ch = bugbuster.Channel(0)\n    ch.set_function(bugbuster.FUNC_VOUT)\n    ch.set_voltage(2.5)",
+   "functions": [
+    {
+     "name": "sleep",
+     "signature": "sleep(ms: int) -> None",
+     "params": [
+      {
+       "name": "ms",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Sleep ``ms`` milliseconds; a stop request interrupts it."
+    },
+    {
+     "name": "vadj_pd_warning",
+     "signature": "vadj_pd_warning(rail: int, voltage: float) -> str | None",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "voltage",
+       "kind": "positional",
+       "annotation": "float",
+       "default": null
+      }
+     ],
+     "returns": "str | None",
+     "doc": "USB-PD headroom warning for VADJ ``rail`` (1-2) at ``voltage``, or None."
+    },
+    {
+     "name": "rail_power_up",
+     "signature": "rail_power_up(rail: int, volts: float, efuse_mask: int) -> dict",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "volts",
+       "kind": "positional",
+       "annotation": "float",
+       "default": null
+      },
+      {
+       "name": "efuse_mask",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "dict",
+     "doc": "Bring VADJ ``rail`` (1-2) to ``volts`` (3-12 V) behind e-fuses\n``efuse_mask`` (1-3). Returns ``{\"pg\": bool, \"fault\": bool}``."
+    },
+    {
+     "name": "efuse_set",
+     "signature": "efuse_set(efuse: int, on: bool) -> None",
+     "params": [
+      {
+       "name": "efuse",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "on",
+       "kind": "positional",
+       "annotation": "bool",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Switch e-fuse 1-4."
+    },
+    {
+     "name": "http_get",
+     "signature": "http_get(url: str, *, headers: dict | None = None, timeout_ms: int = 10000) -> dict",
+     "params": [
+      {
+       "name": "url",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      },
+      {
+       "name": "headers",
+       "kind": "keyword_only",
+       "annotation": "dict | None",
+       "default": "None"
+      },
+      {
+       "name": "timeout_ms",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "10000"
+      }
+     ],
+     "returns": "dict",
+     "doc": "HTTP(S) GET. Returns ``{\"status\", \"body\", ...}``."
+    },
+    {
+     "name": "http_post",
+     "signature": "http_post(url: str, body: str | bytes | None = None, *, headers: dict | None = None, timeout_ms: int = 10000) -> dict",
+     "params": [
+      {
+       "name": "url",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      },
+      {
+       "name": "body",
+       "kind": "positional",
+       "annotation": "str | bytes | None",
+       "default": "None"
+      },
+      {
+       "name": "headers",
+       "kind": "keyword_only",
+       "annotation": "dict | None",
+       "default": "None"
+      },
+      {
+       "name": "timeout_ms",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "10000"
+      }
+     ],
+     "returns": "dict",
+     "doc": "HTTP(S) POST."
+    },
+    {
+     "name": "mqtt_publish",
+     "signature": "mqtt_publish(topic: str, payload: str | bytes, host: str, *, port: int = 1883, username: str | None = None, password: str | None = None) -> None",
+     "params": [
+      {
+       "name": "topic",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      },
+      {
+       "name": "payload",
+       "kind": "positional",
+       "annotation": "str | bytes",
+       "default": null
+      },
+      {
+       "name": "host",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      },
+      {
+       "name": "port",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "1883"
+      },
+      {
+       "name": "username",
+       "kind": "keyword_only",
+       "annotation": "str | None",
+       "default": "None"
+      },
+      {
+       "name": "password",
+       "kind": "keyword_only",
+       "annotation": "str | None",
+       "default": "None"
+      }
+     ],
+     "returns": "None",
+     "doc": "Publish one MQTT message."
+    },
+    {
+     "name": "claim",
+     "signature": "claim(slots: list[int], *, purpose: str | None = None, lease_ms: int = 0) -> Claim",
+     "params": [
+      {
+       "name": "slots",
+       "kind": "positional",
+       "annotation": "list[int]",
+       "default": null
+      },
+      {
+       "name": "purpose",
+       "kind": "keyword_only",
+       "annotation": "str | None",
+       "default": "None"
+      },
+      {
+       "name": "lease_ms",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "0"
+      }
+     ],
+     "returns": "Claim",
+     "doc": "Claim IO slots for this script (other owners are refused)."
+    },
+    {
+     "name": "release",
+     "signature": "release(*, slots: list[int] | None = None) -> None",
+     "params": [
+      {
+       "name": "slots",
+       "kind": "keyword_only",
+       "annotation": "list[int] | None",
+       "default": "None"
+      }
+     ],
+     "returns": "None",
+     "doc": "Release claimed IO slots (all when ``slots`` is None)."
+    },
+    {
+     "name": "owner_status",
+     "signature": "owner_status() -> list[dict]",
+     "params": [],
+     "returns": "list[dict]",
+     "doc": "Per-slot IO ownership."
+    },
+    {
+     "name": "hat_status",
+     "signature": "hat_status() -> dict",
+     "params": [],
+     "returns": "dict",
+     "doc": "HAT detection, link and firmware state."
+    },
+    {
+     "name": "hat_caps",
+     "signature": "hat_caps() -> dict",
+     "params": [],
+     "returns": "dict",
+     "doc": "HAT capabilities."
+    },
+    {
+     "name": "hat_rails",
+     "signature": "hat_rails() -> list[dict]",
+     "params": [],
+     "returns": "list[dict]",
+     "doc": "HAT rail states."
+    },
+    {
+     "name": "hat_set_rail_enable",
+     "signature": "hat_set_rail_enable(rail: int, enable: bool) -> None",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "enable",
+       "kind": "positional",
+       "annotation": "bool",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Enable/disable a ``HAT_RAIL_*``."
+    },
+    {
+     "name": "hat_set_rail_voltage",
+     "signature": "hat_set_rail_voltage(rail: int, mv: int) -> None",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "mv",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Set a ``HAT_RAIL_*`` voltage in mV."
+    },
+    {
+     "name": "hat_led",
+     "signature": "hat_led(led: int, color: int) -> None",
+     "params": [
+      {
+       "name": "led",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "color",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Set a HAT LED to a ``HAT_LED_*`` colour."
+    },
+    {
+     "name": "hat_io_bank",
+     "signature": "hat_io_bank(dirs: int, *, ups: int = 0, dns: int = 0, vals: int = 0) -> dict",
+     "params": [
+      {
+       "name": "dirs",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "ups",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "0"
+      },
+      {
+       "name": "dns",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "0"
+      },
+      {
+       "name": "vals",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "0"
+      }
+     ],
+     "returns": "dict",
+     "doc": "Configure the HAT IO bank (bit masks)."
+    },
+    {
+     "name": "hat_level_shift",
+     "signature": "hat_level_shift(oe: bool, dir: int) -> None",
+     "params": [
+      {
+       "name": "oe",
+       "kind": "positional",
+       "annotation": "bool",
+       "default": null
+      },
+      {
+       "name": "dir",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "HAT level-shifter output enable and direction."
+    },
+    {
+     "name": "hat_calibrate_start",
+     "signature": "hat_calibrate_start(rail: int) -> None",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Start calibrating a HAT rail."
+    },
+    {
+     "name": "hat_calibrate_status",
+     "signature": "hat_calibrate_status() -> dict",
+     "params": [],
+     "returns": "dict",
+     "doc": "Calibration progress/result."
+    },
+    {
+     "name": "hat_calibrate_import",
+     "signature": "hat_calibrate_import(rail: int, points: list) -> None",
+     "params": [
+      {
+       "name": "rail",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "points",
+       "kind": "positional",
+       "annotation": "list",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Import calibration points for a rail."
+    },
+    {
+     "name": "hat_setup_swd",
+     "signature": "hat_setup_swd(target_voltage_mv: int = 3300, *, connector: int = 0) -> dict",
+     "params": [
+      {
+       "name": "target_voltage_mv",
+       "kind": "positional",
+       "annotation": "int",
+       "default": "3300"
+      },
+      {
+       "name": "connector",
+       "kind": "keyword_only",
+       "annotation": "int",
+       "default": "0"
+      }
+     ],
+     "returns": "dict",
+     "doc": "Power and route the SWD target connector."
+    }
+   ],
+   "classes": [
+    {
+     "name": "Channel",
+     "kind": "class",
+     "doc": "One AD74416H channel (0-3).",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(channel: int) -> None",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "set_function",
+       "signature": "set_function(func: int) -> None",
+       "params": [
+        {
+         "name": "func",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": "Select a ``FUNC_*`` channel function."
+      },
+      {
+       "name": "set_voltage",
+       "signature": "set_voltage(voltage: float, bipolar: bool = False) -> None",
+       "params": [
+        {
+         "name": "voltage",
+         "kind": "positional",
+         "annotation": "float",
+         "default": null
+        },
+        {
+         "name": "bipolar",
+         "kind": "positional",
+         "annotation": "bool",
+         "default": "False"
+        }
+       ],
+       "returns": "None",
+       "doc": "Drive the DAC output (VOUT)."
+      },
+      {
+       "name": "read_voltage",
+       "signature": "read_voltage() -> float",
+       "params": [],
+       "returns": "float",
+       "doc": "Read the channel ADC in volts."
+      },
+      {
+       "name": "set_do",
+       "signature": "set_do(value: bool) -> None",
+       "params": [
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": "bool",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": "Set the channel's digital output."
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "I2C",
+     "kind": "class",
+     "doc": "External I2C master on two IO terminals.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(sda_io: int, scl_io: int, *, freq: int = 400000, pullups: str = 'external', supply: float | None = None, vlogic: float | None = None, allow_split_supplies: bool = False) -> None",
+       "params": [
+        {
+         "name": "sda_io",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "scl_io",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "freq",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "400000"
+        },
+        {
+         "name": "pullups",
+         "kind": "keyword_only",
+         "annotation": "str",
+         "default": "'external'"
+        },
+        {
+         "name": "supply",
+         "kind": "keyword_only",
+         "annotation": "float | None",
+         "default": "None"
+        },
+        {
+         "name": "vlogic",
+         "kind": "keyword_only",
+         "annotation": "float | None",
+         "default": "None"
+        },
+        {
+         "name": "allow_split_supplies",
+         "kind": "keyword_only",
+         "annotation": "bool",
+         "default": "False"
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "close",
+       "signature": "close() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Release the bus and its IO terminals."
+      },
+      {
+       "name": "scan",
+       "signature": "scan(start: int = 8, stop: int = 119, skip_reserved: bool = True, timeout_ms: int = 50) -> list[int]",
+       "params": [
+        {
+         "name": "start",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "8"
+        },
+        {
+         "name": "stop",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "119"
+        },
+        {
+         "name": "skip_reserved",
+         "kind": "positional",
+         "annotation": "bool",
+         "default": "True"
+        },
+        {
+         "name": "timeout_ms",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "50"
+        }
+       ],
+       "returns": "list[int]",
+       "doc": "Addresses that ACK."
+      },
+      {
+       "name": "writeto",
+       "signature": "writeto(addr: int, buf: bytes, timeout_ms: int = 50) -> None",
+       "params": [
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        },
+        {
+         "name": "timeout_ms",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "50"
+        }
+       ],
+       "returns": "None",
+       "doc": "Write ``buf`` to ``addr``."
+      },
+      {
+       "name": "readfrom",
+       "signature": "readfrom(addr: int, n: int, timeout_ms: int = 50) -> bytes",
+       "params": [
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "n",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "timeout_ms",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "50"
+        }
+       ],
+       "returns": "bytes",
+       "doc": "Read ``n`` bytes from ``addr``."
+      },
+      {
+       "name": "writeto_then_readfrom",
+       "signature": "writeto_then_readfrom(addr: int, buf: bytes, rd_n: int, timeout_ms: int = 50) -> bytes",
+       "params": [
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        },
+        {
+         "name": "rd_n",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "timeout_ms",
+         "kind": "positional",
+         "annotation": "int",
+         "default": "50"
+        }
+       ],
+       "returns": "bytes",
+       "doc": "Write then repeated-start read ``rd_n`` bytes."
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "SPI",
+     "kind": "class",
+     "doc": "External SPI master on IO terminals.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(sck_io: int, *, mosi_io: int | None = None, miso_io: int | None = None, cs_io: int | None = None, freq: int = 1000000, mode: int = 0, supply: float | None = None, vlogic: float | None = None, allow_split_supplies: bool = False) -> None",
+       "params": [
+        {
+         "name": "sck_io",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "mosi_io",
+         "kind": "keyword_only",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "miso_io",
+         "kind": "keyword_only",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "cs_io",
+         "kind": "keyword_only",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "freq",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "1000000"
+        },
+        {
+         "name": "mode",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "0"
+        },
+        {
+         "name": "supply",
+         "kind": "keyword_only",
+         "annotation": "float | None",
+         "default": "None"
+        },
+        {
+         "name": "vlogic",
+         "kind": "keyword_only",
+         "annotation": "float | None",
+         "default": "None"
+        },
+        {
+         "name": "allow_split_supplies",
+         "kind": "keyword_only",
+         "annotation": "bool",
+         "default": "False"
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "transfer",
+       "signature": "transfer(buf: bytes) -> bytes",
+       "params": [
+        {
+         "name": "buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        }
+       ],
+       "returns": "bytes",
+       "doc": "Full-duplex transfer; returns the bytes clocked in."
+      },
+      {
+       "name": "close",
+       "signature": "close() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Release the bus and its IO terminals."
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "Claim",
+     "kind": "class",
+     "doc": "Context manager returned by :func:`claim`; releases on exit.",
+     "methods": [
+      {
+       "name": "__enter__",
+       "signature": "__enter__() -> 'Claim'",
+       "params": [],
+       "returns": "'Claim'",
+       "doc": ""
+      },
+      {
+       "name": "__exit__",
+       "signature": "__exit__(exc_type, exc, tb) -> None",
+       "params": [
+        {
+         "name": "exc_type",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "exc",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "tb",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      }
+     ],
+     "constants": []
+    }
+   ],
+   "constants": [
+    {
+     "name": "FUNC_HIGH_IMP",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_VOUT",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IOUT",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_VIN",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IIN_EXT_PWR",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IIN_LOOP_PWR",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_RES_MEAS",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_DIN_LOGIC",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_DIN_LOOP",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IOUT_HART",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IIN_EXT_PWR_HART",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "FUNC_IIN_LOOP_PWR_HART",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_RAIL_3V3_ADJ",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_RAIL_VADJ3",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_RAIL_VADJ4",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_OFF",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_RED",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_GREEN",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_BLUE",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_YELLOW",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_CYAN",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_MAGENTA",
+     "annotation": "int",
+     "value": null
+    },
+    {
+     "name": "HAT_LED_WHITE",
+     "annotation": "int",
+     "value": null
+    }
+   ]
+  },
+  {
+   "name": "daq",
+   "doc": "DAQ HAT control from on-device scripts: the VDUT programmable supply and the\nbattery simulator. Every call raises ``OSError(ENODEV)`` when no DAQ HAT is\nconnected; HAT link failures raise ``OSError(EIO)``; battery-simulator refusals\nraise ``RuntimeError`` naming the simulator's reason (e.g. ``\"busy\"``).\n\n    import daq\n    if daq.present():\n        daq.vdut(True, volts=3.3, amps_limit=0.5)\n        print(daq.read())",
+   "functions": [
+    {
+     "name": "present",
+     "signature": "present() -> bool",
+     "params": [],
+     "returns": "bool",
+     "doc": "True when a DAQ HAT is connected (never raises)."
+    },
+    {
+     "name": "vdut",
+     "signature": "vdut(enable: bool | None = None, *, volts: float | None = None, amps_limit: float | None = None) -> dict",
+     "params": [
+      {
+       "name": "enable",
+       "kind": "positional",
+       "annotation": "bool | None",
+       "default": "None"
+      },
+      {
+       "name": "volts",
+       "kind": "keyword_only",
+       "annotation": "float | None",
+       "default": "None"
+      },
+      {
+       "name": "amps_limit",
+       "kind": "keyword_only",
+       "annotation": "float | None",
+       "default": "None"
+      }
+     ],
+     "returns": "dict",
+     "doc": "Set any of the given VDUT values, then return the supply state.\n\n``volts`` 1.76-19.94 V and ``amps_limit`` 0.05-2.636 A (``ValueError``\noutside). The setpoint is applied before ``enable``. Returns\n``{\"present\", \"enabled\", \"fault\", \"volts\", \"amps_limit\", \"v\", \"i\"}`` with\nsetpoints in ``volts``/``amps_limit`` and measurements in ``v``/``i`` (V, A)."
+    },
+    {
+     "name": "read",
+     "signature": "read() -> dict",
+     "params": [],
+     "returns": "dict",
+     "doc": "Measured DUT output: ``{\"v\": V, \"i\": A, \"p\": W, \"enabled\": bool}``."
+    },
+    {
+     "name": "samples",
+     "signature": "samples(run_id: int, since_s: int = 0, max: int = 600) -> list[tuple[int, float, float, float, int]]",
+     "params": [
+      {
+       "name": "run_id",
+       "kind": "positional",
+       "annotation": "int",
+       "default": null
+      },
+      {
+       "name": "since_s",
+       "kind": "positional",
+       "annotation": "int",
+       "default": "0"
+      },
+      {
+       "name": "max",
+       "kind": "positional",
+       "annotation": "int",
+       "default": "600"
+      }
+     ],
+     "returns": "list[tuple[int, float, float, float, int]]",
+     "doc": "Live 1 s battery-run samples newer than ``since_s`` (simulated seconds).\n\nTuples are ``(t_s, v, i, soc, flags)``: interval end, mean V, mean A, SOC %,\nand the history ``RF_*`` flags (1 gap, 2 current clamp, 4 resume, 8 output\noff, 16 below cutoff). Only the loaded run's last hour is available;\nanother run raises ``OSError(ENOENT)``. ``max`` is 1-3600."
+    }
+   ],
+   "classes": [
+    {
+     "name": "run",
+     "kind": "namespace",
+     "doc": "Battery-simulator runs. A namespace: call as ``daq.run.status()``.",
+     "methods": [
+      {
+       "name": "status",
+       "signature": "status() -> dict",
+       "params": [],
+       "returns": "dict",
+       "doc": "Loaded run: ``{\"run_id\", \"state\", \"soc\", \"v\", \"i\", \"elapsed_s\",\n\"remaining_s\", \"energy_j\", \"error\", \"name\", \"params\"}``. ``state`` is\nnone/paused/active/depleted/stopped; ``params`` is the dict accepted by\n:func:`edit` (``None`` when no run is loaded)."
+      },
+      {
+       "name": "list",
+       "signature": "list() -> list[dict]",
+       "params": [],
+       "returns": "list[dict]",
+       "doc": "Every stored run: ``{\"run_id\", \"name\", \"created\", \"chem\", \"cells\",\n\"capacity_mah\", \"active\"}``."
+      },
+      {
+       "name": "new",
+       "signature": "new(name: str, chem: str | int, cells: int, capacity_mah: int, soc: float = 100, self_discharge: float | None = None, ext_load: int | None = None) -> int",
+       "params": [
+        {
+         "name": "name",
+         "kind": "positional",
+         "annotation": "str",
+         "default": null
+        },
+        {
+         "name": "chem",
+         "kind": "positional",
+         "annotation": "str | int",
+         "default": null
+        },
+        {
+         "name": "cells",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "capacity_mah",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "soc",
+         "kind": "positional",
+         "annotation": "float",
+         "default": "100"
+        },
+        {
+         "name": "self_discharge",
+         "kind": "positional",
+         "annotation": "float | None",
+         "default": "None"
+        },
+        {
+         "name": "ext_load",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "int",
+       "doc": "Create and load a run (paused) and return its id.\n\n``name`` <= 23 bytes; ``chem`` 'lipo' | 'lifepo4' | 'nimh' | 'lead';\n``soc`` start state of charge %; ``self_discharge`` %/month (None = off);\n``ext_load`` extra virtual load in µA (None = off)."
+      },
+      {
+       "name": "start",
+       "signature": "start(run_id: int | None = None) -> None",
+       "params": [
+        {
+         "name": "run_id",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "None",
+       "doc": "Start (or resume) integrating; loads ``run_id`` first if given."
+      },
+      {
+       "name": "pause",
+       "signature": "pause() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Output off, everything frozen."
+      },
+      {
+       "name": "stop",
+       "signature": "stop() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Finalise the run (kept on flash)."
+      },
+      {
+       "name": "edit",
+       "signature": "edit(run_id: int | None = None, **params) -> dict",
+       "params": [
+        {
+         "name": "run_id",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "params",
+         "kind": "var_keyword",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": "dict",
+       "doc": "Change parameters of the loaded run live (loads ``run_id`` first).\n\nKeys: name, chem, cells, capacity_mah, soc, cutoff_mv_cell,\nrint_uohm_cell, peukert, self_discharge, ext_load, dither. Unknown keys\nraise ``TypeError``. Returns :func:`status`."
+      },
+      {
+       "name": "delete",
+       "signature": "delete(run_id: int) -> None",
+       "params": [
+        {
+         "name": "run_id",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": "Delete a stored run."
+      }
+     ],
+     "constants": []
+    }
+   ],
+   "constants": []
+  },
+  {
+   "name": "machine",
+   "doc": "MicroPython ``machine`` on BugBuster: ESP32-S3 GPIO pins, software I2C/SPI\nand chip control. Prefer ``bugbuster.I2C``/``SPI`` for the IO terminals.",
+   "functions": [
+    {
+     "name": "reset",
+     "signature": "reset() -> None",
+     "params": [],
+     "returns": "None",
+     "doc": "Reboot the board."
+    },
+    {
+     "name": "reset_cause",
+     "signature": "reset_cause() -> int",
+     "params": [],
+     "returns": "int",
+     "doc": "``esp_reset_reason()`` code."
+    },
+    {
+     "name": "unique_id",
+     "signature": "unique_id() -> bytes",
+     "params": [],
+     "returns": "bytes",
+     "doc": "Wi-Fi STA MAC (6 bytes)."
+    },
+    {
+     "name": "freq",
+     "signature": "freq() -> int",
+     "params": [],
+     "returns": "int",
+     "doc": "CPU frequency in Hz (read-only)."
+    },
+    {
+     "name": "idle",
+     "signature": "idle() -> None",
+     "params": [],
+     "returns": "None",
+     "doc": "Yield the CPU."
+    }
+   ],
+   "classes": [
+    {
+     "name": "Pin",
+     "kind": "class",
+     "doc": "ESP32-S3 GPIO.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(id: int, mode: int | None = None, pull: int | None = None, *, value: int | None = None) -> None",
+       "params": [
+        {
+         "name": "id",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "mode",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "pull",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "value",
+         "kind": "keyword_only",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "init",
+       "signature": "init(mode: int | None = None, pull: int | None = None, *, value: int | None = None) -> None",
+       "params": [
+        {
+         "name": "mode",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "pull",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        },
+        {
+         "name": "value",
+         "kind": "keyword_only",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "None",
+       "doc": "Reconfigure the pin."
+      },
+      {
+       "name": "value",
+       "signature": "value(x: int | None = None) -> int | None",
+       "params": [
+        {
+         "name": "x",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "int | None",
+       "doc": "Read (no argument) or drive the pin."
+      },
+      {
+       "name": "on",
+       "signature": "on() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Drive high."
+      },
+      {
+       "name": "off",
+       "signature": "off() -> None",
+       "params": [],
+       "returns": "None",
+       "doc": "Drive low."
+      }
+     ],
+     "constants": [
+      {
+       "name": "IN",
+       "annotation": "int",
+       "value": null
+      },
+      {
+       "name": "OUT",
+       "annotation": "int",
+       "value": null
+      },
+      {
+       "name": "OPEN_DRAIN",
+       "annotation": "int",
+       "value": null
+      },
+      {
+       "name": "PULL_UP",
+       "annotation": "int",
+       "value": null
+      },
+      {
+       "name": "PULL_DOWN",
+       "annotation": "int",
+       "value": null
+      }
+     ]
+    },
+    {
+     "name": "SoftI2C",
+     "kind": "class",
+     "doc": "Bit-banged I2C on ESP GPIOs.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(scl: Pin, sda: Pin, *, freq: int = 400000) -> None",
+       "params": [
+        {
+         "name": "scl",
+         "kind": "positional",
+         "annotation": "Pin",
+         "default": null
+        },
+        {
+         "name": "sda",
+         "kind": "positional",
+         "annotation": "Pin",
+         "default": null
+        },
+        {
+         "name": "freq",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "400000"
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "scan",
+       "signature": "scan() -> list[int]",
+       "params": [],
+       "returns": "list[int]",
+       "doc": ""
+      },
+      {
+       "name": "readfrom",
+       "signature": "readfrom(addr: int, nbytes: int) -> bytes",
+       "params": [
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "nbytes",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        }
+       ],
+       "returns": "bytes",
+       "doc": ""
+      },
+      {
+       "name": "writeto",
+       "signature": "writeto(addr: int, buf: bytes) -> int",
+       "params": [
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        },
+        {
+         "name": "buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        }
+       ],
+       "returns": "int",
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "I2C",
+     "kind": "class",
+     "doc": "Alias of :class:`SoftI2C` on this port.",
+     "methods": [],
+     "constants": []
+    },
+    {
+     "name": "SoftSPI",
+     "kind": "class",
+     "doc": "Bit-banged SPI on ESP GPIOs.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(*, baudrate: int = 500000, polarity: int = 0, phase: int = 0, sck: Pin | None = None, mosi: Pin | None = None, miso: Pin | None = None) -> None",
+       "params": [
+        {
+         "name": "baudrate",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "500000"
+        },
+        {
+         "name": "polarity",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "0"
+        },
+        {
+         "name": "phase",
+         "kind": "keyword_only",
+         "annotation": "int",
+         "default": "0"
+        },
+        {
+         "name": "sck",
+         "kind": "keyword_only",
+         "annotation": "Pin | None",
+         "default": "None"
+        },
+        {
+         "name": "mosi",
+         "kind": "keyword_only",
+         "annotation": "Pin | None",
+         "default": "None"
+        },
+        {
+         "name": "miso",
+         "kind": "keyword_only",
+         "annotation": "Pin | None",
+         "default": "None"
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read(nbytes: int) -> bytes",
+       "params": [
+        {
+         "name": "nbytes",
+         "kind": "positional",
+         "annotation": "int",
+         "default": null
+        }
+       ],
+       "returns": "bytes",
+       "doc": ""
+      },
+      {
+       "name": "write",
+       "signature": "write(buf: bytes) -> None",
+       "params": [
+        {
+         "name": "buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      },
+      {
+       "name": "write_readinto",
+       "signature": "write_readinto(write_buf: bytes, read_buf: bytearray) -> None",
+       "params": [
+        {
+         "name": "write_buf",
+         "kind": "positional",
+         "annotation": "bytes",
+         "default": null
+        },
+        {
+         "name": "read_buf",
+         "kind": "positional",
+         "annotation": "bytearray",
+         "default": null
+        }
+       ],
+       "returns": "None",
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "SPI",
+     "kind": "class",
+     "doc": "Alias of :class:`SoftSPI` on this port.",
+     "methods": [],
+     "constants": []
+    }
+   ],
+   "constants": []
+  },
+  {
+   "name": "bb_helpers",
+   "doc": "Small helpers for channel ramps and sweeps (``bb_helpers.py`` on the device).",
+   "functions": [
+    {
+     "name": "settle",
+     "signature": "settle(ms) -> None",
+     "params": [
+      {
+       "name": "ms",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Sleep for ms milliseconds (cooperative)."
+    },
+    {
+     "name": "dac_ramp",
+     "signature": "dac_ramp(channel, lo, hi, step, settle_ms=50) -> None",
+     "params": [
+      {
+       "name": "channel",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "lo",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "hi",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "step",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "settle_ms",
+       "kind": "positional",
+       "annotation": null,
+       "default": "50"
+      }
+     ],
+     "returns": "None",
+     "doc": "Ramp DAC output on `channel` from `lo` V to `hi` V in `step` V increments."
+    },
+    {
+     "name": "channel_sweep",
+     "signature": "channel_sweep(channel, voltages, settle_ms=100, readback=True) -> list",
+     "params": [
+      {
+       "name": "channel",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "voltages",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      },
+      {
+       "name": "settle_ms",
+       "kind": "positional",
+       "annotation": null,
+       "default": "100"
+      },
+      {
+       "name": "readback",
+       "kind": "positional",
+       "annotation": null,
+       "default": "True"
+      }
+     ],
+     "returns": "list",
+     "doc": "Drive `channel` through an explicit list of voltages."
+    }
+   ],
+   "classes": [],
+   "constants": []
+  },
+  {
+   "name": "bb_devices",
+   "doc": "Drivers for common I2C/SPI/1-Wire parts (``bb_devices.py`` on the device).\nPass a ``bugbuster.I2C``/``SPI`` bus object.",
+   "functions": [],
+   "classes": [
+    {
+     "name": "TMP102",
+     "kind": "class",
+     "doc": "TI TMP102 I2C temperature sensor driver.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=72)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "72"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_celsius",
+       "signature": "read_celsius()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "BMP280",
+     "kind": "class",
+     "doc": "Bosch BMP280 I2C pressure/temperature sensor driver.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=118)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "118"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "MCP3008",
+     "kind": "class",
+     "doc": "Microchip MCP3008 SPI 10-bit ADC driver.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(spi, channels=8)",
+       "params": [
+        {
+         "name": "spi",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "channels",
+         "kind": "positional",
+         "annotation": null,
+         "default": "8"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read(channel, single_ended=True)",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "single_ended",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "DS18B20",
+     "kind": "class",
+     "doc": "Dallas/Maxim DS18B20 1-Wire temperature sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(pin)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "scan",
+       "signature": "scan()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "roms",
+       "signature": "roms()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_celsius",
+       "signature": "read_celsius(rom=None, wait_ms=750)",
+       "params": [
+        {
+         "name": "rom",
+         "kind": "positional",
+         "annotation": null,
+         "default": "None"
+        },
+        {
+         "name": "wait_ms",
+         "kind": "positional",
+         "annotation": null,
+         "default": "750"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_all",
+       "signature": "read_all(wait_ms=750)",
+       "params": [
+        {
+         "name": "wait_ms",
+         "kind": "positional",
+         "annotation": null,
+         "default": "750"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "DS3231",
+     "kind": "class",
+     "doc": "Maxim DS3231 RTC with temperature readback.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=104)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "104"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "status",
+       "signature": "status()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "clear_osf",
+       "signature": "clear_osf()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "temperature_c",
+       "signature": "temperature_c()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_datetime",
+       "signature": "read_datetime()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_datetime",
+       "signature": "set_datetime(year, month, day, weekday, hour, minute, second)",
+       "params": [
+        {
+         "name": "year",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "month",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "day",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "weekday",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "hour",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "minute",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "second",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "BH1750",
+     "kind": "class",
+     "doc": "ROHM BH1750 ambient light sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=35)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "35"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "power_on",
+       "signature": "power_on()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "power_down",
+       "signature": "power_down()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "reset",
+       "signature": "reset()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_mtreg",
+       "signature": "set_mtreg(mtreg)",
+       "params": [
+        {
+         "name": "mtreg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_lux",
+       "signature": "read_lux(high_res=True, one_time=True, mtreg=69)",
+       "params": [
+        {
+         "name": "high_res",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        },
+        {
+         "name": "one_time",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        },
+        {
+         "name": "mtreg",
+         "kind": "positional",
+         "annotation": null,
+         "default": "69"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "AHT20",
+     "kind": "class",
+     "doc": "Aosong AHT20 humidity and temperature sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=56)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "56"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "reset",
+       "signature": "reset()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "initialize",
+       "signature": "initialize()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_temperature",
+       "signature": "read_temperature()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_humidity",
+       "signature": "read_humidity()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "SHT31",
+     "kind": "class",
+     "doc": "Sensirion SHT31 temperature and humidity sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=68)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "68"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "soft_reset",
+       "signature": "soft_reset()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "status",
+       "signature": "status()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read(repeatability='high', clock_stretch=False)",
+       "params": [
+        {
+         "name": "repeatability",
+         "kind": "positional",
+         "annotation": null,
+         "default": "'high'"
+        },
+        {
+         "name": "clock_stretch",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "BME280",
+     "kind": "class",
+     "doc": "Bosch BME280 compensated temperature / pressure / humidity sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=118)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "118"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_raw",
+       "signature": "read_raw()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "INA219",
+     "kind": "class",
+     "doc": "TI INA219 current/power monitor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=64, shunt_ohms=0.1, max_expected_amps=2.0)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "64"
+        },
+        {
+         "name": "shunt_ohms",
+         "kind": "positional",
+         "annotation": null,
+         "default": "0.1"
+        },
+        {
+         "name": "max_expected_amps",
+         "kind": "positional",
+         "annotation": null,
+         "default": "2.0"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_shunt_voltage",
+       "signature": "read_shunt_voltage()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_bus_voltage",
+       "signature": "read_bus_voltage()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_current",
+       "signature": "read_current()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_power",
+       "signature": "read_power()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "ADS1115",
+     "kind": "class",
+     "doc": "TI ADS1115 I2C ADC.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=72)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "72"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_raw",
+       "signature": "read_raw(channel=0, pga=4.096, data_rate=128, continuous=False, differential=False)",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": null,
+         "default": "0"
+        },
+        {
+         "name": "pga",
+         "kind": "positional",
+         "annotation": null,
+         "default": "4.096"
+        },
+        {
+         "name": "data_rate",
+         "kind": "positional",
+         "annotation": null,
+         "default": "128"
+        },
+        {
+         "name": "continuous",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        },
+        {
+         "name": "differential",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_voltage",
+       "signature": "read_voltage(channel=0, pga=4.096, data_rate=128, continuous=False, differential=False)",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": null,
+         "default": "0"
+        },
+        {
+         "name": "pga",
+         "kind": "positional",
+         "annotation": null,
+         "default": "4.096"
+        },
+        {
+         "name": "data_rate",
+         "kind": "positional",
+         "annotation": null,
+         "default": "128"
+        },
+        {
+         "name": "continuous",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        },
+        {
+         "name": "differential",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "MCP23017",
+     "kind": "class",
+     "doc": "Microchip MCP23017 16-bit GPIO expander.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=32)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "32"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write_reg",
+       "signature": "write_reg(reg, value)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_reg",
+       "signature": "read_reg(reg)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_direction",
+       "signature": "set_direction(direction_mask)",
+       "params": [
+        {
+         "name": "direction_mask",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_dir",
+       "signature": "set_dir(pin, output=True)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "output",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pullups",
+       "signature": "set_pullups(pullup_mask)",
+       "params": [
+        {
+         "name": "pullup_mask",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pullup",
+       "signature": "set_pullup(pin, enable=True)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "enable",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write_port",
+       "signature": "write_port(value)",
+       "params": [
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_port",
+       "signature": "read_port()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pin",
+       "signature": "set_pin(pin, value)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_pin",
+       "signature": "read_pin(pin)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "pin_mode",
+       "signature": "pin_mode(pin, output=True, pullup=False)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "output",
+         "kind": "positional",
+         "annotation": null,
+         "default": "True"
+        },
+        {
+         "name": "pullup",
+         "kind": "positional",
+         "annotation": null,
+         "default": "False"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "PCF8574",
+     "kind": "class",
+     "doc": "NXP PCF8574 quasi-bidirectional I/O expander.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=32, value=255)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "32"
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": "255"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write",
+       "signature": "write(value)",
+       "params": [
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pin",
+       "signature": "set_pin(pin, value)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_pin",
+       "signature": "read_pin(pin)",
+       "params": [
+        {
+         "name": "pin",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "PCA9685",
+     "kind": "class",
+     "doc": "NXP PCA9685 16-channel PWM controller.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=64, osc_hz=25000000)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "64"
+        },
+        {
+         "name": "osc_hz",
+         "kind": "positional",
+         "annotation": null,
+         "default": "25000000"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write_reg",
+       "signature": "write_reg(reg, value)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_reg",
+       "signature": "read_reg(reg)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pwm_freq",
+       "signature": "set_pwm_freq(freq_hz)",
+       "params": [
+        {
+         "name": "freq_hz",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_pwm",
+       "signature": "set_pwm(channel, on=0, off=0)",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "on",
+         "kind": "positional",
+         "annotation": null,
+         "default": "0"
+        },
+        {
+         "name": "off",
+         "kind": "positional",
+         "annotation": null,
+         "default": "0"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_duty",
+       "signature": "set_duty(channel, duty)",
+       "params": [
+        {
+         "name": "channel",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "duty",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "TCS34725",
+     "kind": "class",
+     "doc": "ams OSRAM TCS34725 RGBC color sensor.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=41, integration_ms=50, gain=4)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "41"
+        },
+        {
+         "name": "integration_ms",
+         "kind": "positional",
+         "annotation": null,
+         "default": "50"
+        },
+        {
+         "name": "gain",
+         "kind": "positional",
+         "annotation": null,
+         "default": "4"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write_u8",
+       "signature": "write_u8(reg, value)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_u8",
+       "signature": "read_u8(reg)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_words",
+       "signature": "read_words(reg, count=4)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "count",
+         "kind": "positional",
+         "annotation": null,
+         "default": "4"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "enable",
+       "signature": "enable()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "disable",
+       "signature": "disable()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_integration_time",
+       "signature": "set_integration_time(integration_ms)",
+       "params": [
+        {
+         "name": "integration_ms",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_gain",
+       "signature": "set_gain(gain)",
+       "params": [
+        {
+         "name": "gain",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_rgbc",
+       "signature": "read_rgbc()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "MPU6050",
+     "kind": "class",
+     "doc": "InvenSense MPU6050 6-axis IMU.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=104, accel_range=2, gyro_range=250)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "104"
+        },
+        {
+         "name": "accel_range",
+         "kind": "positional",
+         "annotation": null,
+         "default": "2"
+        },
+        {
+         "name": "gyro_range",
+         "kind": "positional",
+         "annotation": null,
+         "default": "250"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_u8",
+       "signature": "read_u8(reg)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "write_u8",
+       "signature": "write_u8(reg, value)",
+       "params": [
+        {
+         "name": "reg",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "value",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "wake",
+       "signature": "wake()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_ranges",
+       "signature": "set_ranges(accel_range=2, gyro_range=250)",
+       "params": [
+        {
+         "name": "accel_range",
+         "kind": "positional",
+         "annotation": null,
+         "default": "2"
+        },
+        {
+         "name": "gyro_range",
+         "kind": "positional",
+         "annotation": null,
+         "default": "250"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_temperature",
+       "signature": "read_temperature()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_accel",
+       "signature": "read_accel()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read_gyro",
+       "signature": "read_gyro()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "read",
+       "signature": "read()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    },
+    {
+     "name": "MCP4725",
+     "kind": "class",
+     "doc": "Microchip MCP4725 12-bit I2C DAC.",
+     "methods": [
+      {
+       "name": "__init__",
+       "signature": "__init__(i2c, addr=96, vref=3.3)",
+       "params": [
+        {
+         "name": "i2c",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "addr",
+         "kind": "positional",
+         "annotation": null,
+         "default": "96"
+        },
+        {
+         "name": "vref",
+         "kind": "positional",
+         "annotation": null,
+         "default": "3.3"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_raw",
+       "signature": "set_raw(code)",
+       "params": [
+        {
+         "name": "code",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "set_voltage",
+       "signature": "set_voltage(voltage, vref=None)",
+       "params": [
+        {
+         "name": "voltage",
+         "kind": "positional",
+         "annotation": null,
+         "default": null
+        },
+        {
+         "name": "vref",
+         "kind": "positional",
+         "annotation": null,
+         "default": "None"
+        }
+       ],
+       "returns": null,
+       "doc": ""
+      },
+      {
+       "name": "sleep",
+       "signature": "sleep()",
+       "params": [],
+       "returns": null,
+       "doc": ""
+      }
+     ],
+     "constants": []
+    }
+   ],
+   "constants": []
+  },
+  {
+   "name": "bb_logging",
+   "doc": "Timestamped print helpers (``bb_logging.py`` on the device).",
+   "functions": [
+    {
+     "name": "info",
+     "signature": "info(msg) -> None",
+     "params": [
+      {
+       "name": "msg",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Print an INFO-level message with timestamp."
+    },
+    {
+     "name": "warn",
+     "signature": "warn(msg) -> None",
+     "params": [
+      {
+       "name": "msg",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Print a WARN-level message with timestamp."
+    },
+    {
+     "name": "error",
+     "signature": "error(msg) -> None",
+     "params": [
+      {
+       "name": "msg",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Print an ERROR-level message with timestamp."
+    }
+   ],
+   "classes": [],
+   "constants": []
+  }
+ ],
+ "examples": [
+  {
+   "name": "background_logger.py",
+   "title": "Background job: log channel 0's voltage once a second until stopped.",
+   "doc": "Background job: log channel 0's voltage once a second until stopped.\n\nRun it with \"Run in background\"; its output goes to the log console and the\nStop button (or a replace) ends it.",
+   "source": "\"\"\"Background job: log channel 0's voltage once a second until stopped.\n\nRun it with \"Run in background\"; its output goes to the log console and the\nStop button (or a replace) ends it.\n\"\"\"\nimport bugbuster\nimport bb_logging\n\nch = bugbuster.Channel(0)\nch.set_function(bugbuster.FUNC_VIN)\nwhile True:\n    bb_logging.info(\"ch0 = %.4f V\" % ch.read_voltage())\n    bugbuster.sleep(1000)\n"
+  },
+  {
+   "name": "daq_battery_run.py",
+   "title": "Run a simulated 1-cell LiPo for 60 s and print its 1 s samples.",
+   "doc": "Run a simulated 1-cell LiPo for 60 s and print its 1 s samples.\n\nCreates a 500 mAh run at 100 % SOC, starts it, waits a minute, prints the\nsamples recorded so far and stops the run (it stays on flash).",
+   "source": "\"\"\"Run a simulated 1-cell LiPo for 60 s and print its 1 s samples.\n\nCreates a 500 mAh run at 100 % SOC, starts it, waits a minute, prints the\nsamples recorded so far and stops the run (it stays on flash).\n\"\"\"\nimport bugbuster\nimport daq\n\nrid = daq.run.new(\"example\", \"lipo\", 1, 500, soc=100)\ndaq.run.start(rid)\nbugbuster.sleep(60000)\nfor t_s, v, i, soc, flags in daq.samples(rid, 0, 60):\n    print(\"%4d s  %.3f V  %.2f mA  %.2f %%  flags=%d\" % (t_s, v, i * 1e3, soc, flags))\ndaq.run.stop()\nprint(daq.run.status())\n"
+  },
+  {
+   "name": "daq_vdut_sweep.py",
+   "title": "Sweep the DAQ VDUT supply and log V/I at each step.",
+   "doc": "Sweep the DAQ VDUT supply and log V/I at each step.\n\nSteps 1.8 V to 5.0 V in 0.2 V increments with a 200 mA limit, waits 300 ms\nper step, prints one line per point and switches the output off at the end.",
+   "source": "\"\"\"Sweep the DAQ VDUT supply and log V/I at each step.\n\nSteps 1.8 V to 5.0 V in 0.2 V increments with a 200 mA limit, waits 300 ms\nper step, prints one line per point and switches the output off at the end.\n\"\"\"\nimport bugbuster\nimport daq\n\nif not daq.present():\n    raise OSError(\"no DAQ HAT\")\n\ntry:\n    v = 1.8\n    while v <= 5.0001:\n        daq.vdut(True, volts=v, amps_limit=0.2)\n        bugbuster.sleep(300)\n        r = daq.read()\n        print(\"set=%.2f V  v=%.3f V  i=%.1f mA  p=%.1f mW\" % (v, r[\"v\"], r[\"i\"] * 1e3, r[\"p\"] * 1e3))\n        v += 0.2\nfinally:\n    daq.vdut(False)\n"
+  },
+  {
+   "name": "i2c_scan.py",
+   "title": "Scan an I2C bus on IO1 (SDA) / IO2 (SCL) at 3.3 V and print the addresses.",
+   "doc": "Scan an I2C bus on IO1 (SDA) / IO2 (SCL) at 3.3 V and print the addresses.",
+   "source": "\"\"\"Scan an I2C bus on IO1 (SDA) / IO2 (SCL) at 3.3 V and print the addresses.\"\"\"\nimport bugbuster\n\nbus = bugbuster.I2C(1, 2, freq=100000, pullups=\"internal\", supply=3.3, vlogic=3.3)\ntry:\n    print([\"0x%02X\" % a for a in bus.scan()])\nfinally:\n    bus.close()\n"
+  }
+ ]
+}
