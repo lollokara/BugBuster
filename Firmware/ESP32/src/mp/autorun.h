@@ -17,6 +17,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "script_storage.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,8 @@ typedef struct {
                              // Default with no jumper (internal pull-up) → true.
     bool     last_run_ok;    // true if most recent autorun completed without error
     uint32_t last_run_id;    // script_id of last autorun attempt (0 = never)
+    bool     ran_this_boot;                     // the boot check started autorun.py this boot
+    char     script_name[SCRIPT_NAME_MAX + 1];  // script copied at enable ("" if unknown)
 } AutorunStatus;
 
 // ---------------------------------------------------------------------------
