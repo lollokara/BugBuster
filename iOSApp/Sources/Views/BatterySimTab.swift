@@ -24,6 +24,11 @@ struct BatterySimTab: View {
     @State private var liveTail: [BsRec] = []
     @State private var syncing = false
     @State private var scrubbing = false
+    @State private var deviceHistory: BsHistory?
+    @State private var hubLabel = ""
+    @State private var hubTask: Task<Void, Never>?
+    @State private var hubClient = HubClient()
+    @State private var showHub = false
 
     private var wide: Bool { sizeClass == .regular }
     /// iPad / landscape: full-height chart with a header bar, stat strip and navigator;
@@ -50,6 +55,7 @@ struct BatterySimTab: View {
             NewBatteryRunSheet { cfg in await createRun(cfg) }
         }
         .sheet(isPresented: $showParams) { paramsSheet }
+        .sheet(isPresented: $showHub) { HubSettingsView().environmentObject(connectionManager) }
         .confirmationDialog("Delete run from the device?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
             Button("Delete run #\(pendingDelete ?? 0)", role: .destructive) {
@@ -367,6 +373,9 @@ struct BatterySimTab: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: window)
+        .onChange(of: window) { _ in
+            if !scrubbing { refreshHub() }
+        }
     }
 
     private var toggles: some View {
@@ -374,6 +383,16 @@ struct BatterySimTab: View {
             chip("Log I", "waveform.path.ecg", $logCurrent)
             chip("Clock", "clock", $wallClock)
             chip("Follow", "arrow.right.to.line", $follow)
+            if !hubLabel.isEmpty {
+                Text(hubLabel)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
+            }
+            Button { showHub = true } label: { Image(systemName: "network") }
+                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide))
+                .accessibilityLabel("Hub settings")
         }
     }
 
@@ -681,10 +700,29 @@ struct BatterySimTab: View {
             }
             apply(try BattSim.buildHistory(files), previous: openFromDevice ? prev : nil, previousWindow: prevWindow)
             openFromDevice = true
+            deviceHistory = history
+            refreshHub()
             if !quiet { cached = BattSim.cachedRuns() }
         } catch { if !quiet { message = error.localizedDescription } }
         busy = nil
         syncing = false
+    }
+
+    /// Debounced: merge the hub into the open device history for the visible window. Silent on failure.
+    private func refreshHub() {
+        hubTask?.cancel()
+        guard openFromDevice, let base = deviceHistory else { hubLabel = ""; return }
+        let w = window
+        hubTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+            hubClient.baseURL = HubSettings.current()
+            let mac = UserDefaults.standard.string(forKey: "bugbuster_last_mac") ?? ""
+            let (h, label) = await BattSimHub.merged(base, mac: mac, window: w, hub: hubClient)
+            if Task.isCancelled { return }
+            history = h
+            hubLabel = label
+        }
     }
 
     private func appendLive(_ s: BsStatus) {
