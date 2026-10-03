@@ -46,6 +46,7 @@ static const char *TAG = "autorun";
 // ---------------------------------------------------------------------------
 #define AUTORUN_SENTINEL_PATH  "/spiffs/.autorun_enabled"
 #define AUTORUN_SCRIPT_PATH    "/spiffs/autorun.py"
+#define AUTORUN_NAME_PATH      "/spiffs/.autorun_name"   // source script name, written at enable
 
 // ---------------------------------------------------------------------------
 // Timing
@@ -78,6 +79,7 @@ void autorun_note_inbound(void)
 // ---------------------------------------------------------------------------
 static bool     s_last_run_ok  = false;
 static uint32_t s_last_run_id  = 0;
+static bool     s_ran_this_boot = false;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -154,56 +156,58 @@ static bool run_autorun_script(bool keep_running)
     }
     src_buf[n] = '\0';
 
-    ScriptStatus before;
-    scripting_get_status(&before);
-    bool enqueued = scripting_run_string(src_buf, n, false);
-    // scripting_run_string copies the payload internally; free our PSRAM buf.
+    // A file script: takes the single slot and shows as source=autorun.
+    ScriptSubmitOpts opts = {};
+    opts.name    = "autorun.py";
+    opts.source  = SCRIPT_SRC_AUTORUN;
+    opts.is_file = true;
+    uint32_t id = 0;
+    ScriptSubmitResult sr = scripting_submit(src_buf, n, &opts, &id);
+    // scripting_submit copies the payload internally; free our PSRAM buf.
     heap_caps_free(src_buf);
-    if (!enqueued) {
-        ESP_LOGE(TAG, "scripting_run_string failed (queue full?)");
+    if (sr != SCRIPT_SUBMIT_OK) {
+        ESP_LOGE(TAG, "autorun.py not started (%s)",
+                 sr == SCRIPT_SUBMIT_BUSY ? "a script is already running" : "queue full");
         return false;
     }
+    s_last_run_id = id;
 
     // Poll for completion (or timeout)
     int64_t deadline = esp_timer_get_time() + (int64_t)AUTORUN_MAX_WALL_MS * 1000;
     ScriptStatus st;
-    bool started = false;
+    bool started = false, finished = false;
     do {
         vTaskDelay(pdMS_TO_TICKS(100));
         scripting_get_status(&st);
-        started |= st.is_running || st.total_runs > before.total_runs;
-        if (started && !st.is_running) break;
+        started |= st.current_script_id == id || st.last_script_id == id;
+        finished = st.last_script_id == id && st.current_script_id != id;
+        if (finished) break;
     } while (esp_timer_get_time() < deadline);
 
-    if (keep_running && st.is_running) {
-        s_last_run_id = st.current_script_id;
+    if (!finished && keep_running && started) {
         s_last_run_ok = false;
         ESP_LOGI(TAG, "autorun.py still running after %d ms", AUTORUN_MAX_WALL_MS);
         return true;
     }
-    if (st.is_running) {
+    if (!finished && started) {
         ESP_LOGW(TAG, "autorun.py exceeded %d ms wall time — stopping", AUTORUN_MAX_WALL_MS);
         scripting_stop();
         // Let the script task see the stop flag
         vTaskDelay(pdMS_TO_TICKS(200));
         scripting_get_status(&st);
+        finished = st.last_script_id == id && st.current_script_id != id;
     }
-
     if (!started) {
         ESP_LOGE(TAG, "autorun.py did not start within %d ms", AUTORUN_MAX_WALL_MS);
         return false;
     }
 
-    s_last_run_id = st.last_script_id;
-
-    bool ok = (st.total_errors == 0 &&
-               (st.last_error_msg[0] == '\0'));
+    bool ok = finished && st.last_exit == SCRIPT_EXIT_OK;
     s_last_run_ok = ok;
-
     if (!ok) {
         ESP_LOGE(TAG, "autorun.py error: %s", st.last_error_msg);
     } else {
-        ESP_LOGI(TAG, "autorun.py completed OK (id=%lu)", (unsigned long)s_last_run_id);
+        ESP_LOGI(TAG, "autorun.py completed OK (id=%lu)", (unsigned long)id);
     }
     return ok;
 }
@@ -273,6 +277,7 @@ void autorun_boot_check(void)
 
     // ── Fire ────────────────────────────────────────────────────────────────
     ESP_LOGI(TAG, "All gates passed — running autorun.py");
+    s_ran_this_boot = true;
     run_autorun_script(true);
 }
 
@@ -322,6 +327,13 @@ bool autorun_set_enabled(const char *script_name, char *err, size_t err_len)
     }
     fclose(f);
 
+    // Remember which script autorun.py came from, for the status panel.
+    f = fopen(AUTORUN_NAME_PATH, "w");
+    if (f) {
+        fputs(script_name, f);
+        fclose(f);
+    }
+
     ESP_LOGI(TAG, "Autorun enabled with script '%s'", script_name);
     return true;
 }
@@ -349,6 +361,13 @@ void autorun_get_status(AutorunStatus *out)
     out->io12_high   = read_io12_high();
     out->last_run_ok = s_last_run_ok;
     out->last_run_id = s_last_run_id;
+    out->ran_this_boot = s_ran_this_boot;
+    out->script_name[0] = '\0';
+    FILE *f = fopen(AUTORUN_NAME_PATH, "r");
+    if (f) {
+        if (!fgets(out->script_name, sizeof(out->script_name), f)) out->script_name[0] = '\0';
+        fclose(f);
+    }
 }
 
 bool autorun_run_now(uint32_t *out_id, char *err, size_t err_len)
