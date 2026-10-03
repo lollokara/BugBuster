@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import ast
 import base64
-import json
 import re
 import time
-from typing import Callable, Optional
+from typing import Optional
 
 import pytest
 
@@ -239,7 +238,7 @@ class ScriptsApi:
 
 
 # ---------------------------------------------------------------------------
-# Fixtures (import these into a test module: ``from tests.device._hw_scripts import *``)
+# Fixtures (registered for the whole tier in tests/device/conftest.py)
 # ---------------------------------------------------------------------------
 
 def _real_board_http(request, token):

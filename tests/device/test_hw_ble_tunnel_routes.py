@@ -29,9 +29,7 @@ import json
 
 import pytest
 
-from tests.device._hw_scripts import (  # noqa: F401  (fixtures are used by name)
-    ScriptsApi, hw_scripts_session, script_name, scripts,
-)
+from tests.device._hw_scripts import script_name
 
 pytestmark = [pytest.mark.timeout(60), pytest.mark.http_only]
 

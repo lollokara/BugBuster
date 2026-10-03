@@ -52,7 +52,7 @@ int main() {
 
 def _run(tmp_path: Path) -> list[str]:
     out = compile_and_run(MAIN, cxx=True, sources=[SRC], include_dirs=INC,
-                          defines=[f'SCRIPTS_BASE="{tmp_path}"'])
+                          defines=[f'SCRIPTS_BASE="{tmp_path.as_posix()}"'])
     return out.splitlines()
 
 

@@ -5,7 +5,6 @@ the real parameter lists."""
 
 import ast
 import re
-from pathlib import Path
 
 from tests.lib.srcread import REPO_ROOT, read_source
 
@@ -77,7 +76,7 @@ def _params(fn: ast.FunctionDef) -> list[tuple[str, str | None]]:
     a = fn.args
     pos = a.posonlyargs + a.args
     defaults = [None] * (len(pos) - len(a.defaults)) + [ast.unparse(d) for d in a.defaults]
-    return [(p.arg, d) for p, d in zip(pos, defaults)]
+    return [(p.arg, d) for p, d in zip(pos, defaults, strict=True)]
 
 
 def _public_defs(tree: ast.Module) -> dict[str, ast.FunctionDef]:

@@ -11,6 +11,10 @@ import base64
 
 import pytest
 
+# Registered here (not imported per module) so the test files can take ``scripts`` as a
+# parameter without ruff reading it as a redefinition of an imported name (F811).
+from tests.device._hw_scripts import hw_scripts_session, scripts  # noqa: F401
+
 RUN_PREFIX = "bbt_"
 
 

@@ -3,7 +3,6 @@ slot; the REPL is read-only (output only) while a file script runs; the
 autorun panel can show which script it is and whether it ran this boot."""
 
 from tests.firmware_host.fwhost import extract_function
-from tests.lib.srcread import read_source
 
 AUTORUN = "Firmware/ESP32/src/mp/autorun.cpp"
 REPL = "Firmware/ESP32/src/mp/repl_ws.cpp"

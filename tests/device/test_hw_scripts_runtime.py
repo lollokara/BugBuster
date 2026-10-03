@@ -17,9 +17,8 @@ import time
 
 import pytest
 
-from tests.device._hw_scripts import (  # noqa: F401  (fixtures are used by name)
-    EXITS, LONG_RUNNING_SRC, SOURCES, STATES, ScriptsApi, hw_scripts_session,
-    script_name, scripts,
+from tests.device._hw_scripts import (
+    LONG_RUNNING_SRC, SOURCES, STATES, script_name,
 )
 
 pytestmark = [pytest.mark.timeout(120), pytest.mark.http_only]

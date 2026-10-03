@@ -36,13 +36,13 @@ def _params(args: ast.arguments, drop_self: bool) -> list[dict]:
     out = []
     pos = list(args.posonlyargs) + list(args.args)
     defaults = [None] * (len(pos) - len(args.defaults)) + list(args.defaults)
-    for a, d in zip(pos, defaults):
+    for a, d in zip(pos, defaults, strict=True):
         out.append({"name": a.arg, "kind": "positional", "annotation": _ann(a.annotation),
                     "default": _ann(d)})
     if args.vararg:
         out.append({"name": args.vararg.arg, "kind": "var_positional",
                     "annotation": _ann(args.vararg.annotation), "default": None})
-    for a, d in zip(args.kwonlyargs, args.kw_defaults):
+    for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True):
         out.append({"name": a.arg, "kind": "keyword_only", "annotation": _ann(a.annotation),
                     "default": _ann(d)})
     if args.kwarg:
