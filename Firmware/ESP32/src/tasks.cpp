@@ -1691,9 +1691,8 @@ static void taskWavegen(void* /*pvParameters*/)
             delay_ms(10);  // Let range change settle
         }
 
-        ESP_LOGI("wavegen", "Start: ch=%d wf=%d freq=%.1fHz amp=%.2f off=%.2f mode=%d bipolar=%d spp=%lu intv=%luus",
-                 wg.channel, wg.waveform, wg.freq_hz, wg.amplitude, wg.offset,
-                 wg.mode, needsBipolar, (unsigned long)samplesPerPeriod, (unsigned long)sampleIntervalUs);
+        // No formatted logging on this task: a float vfprintf frame alone is
+        // 0x320 B. bbpStartWavegen() logs the parameters on bbpCli.
 
         // Generation loop
         uint32_t sampleIndex = 0;
@@ -1771,7 +1770,6 @@ static void taskWavegen(void* /*pvParameters*/)
 
         esp_timer_stop(pace);
         esp_timer_delete(pace);
-        ESP_LOGI("wavegen", "Stopped");
     }
 }
 
