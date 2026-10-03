@@ -911,6 +911,15 @@ int hat_stage_read(uint32_t offset, uint8_t *out, uint8_t len);
 int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
                    uint32_t timeout_ms);
 
+// P4 ERROR / LOG_IMPORTANT records for the hub (spec 2026-10-03 section 6).
+// Request: u32 after_seq LE. Reply (<= 240 B): see Firmware/DAQ_HAT/ESP32P4/src/diag/log_ring.h.
+// MUST match P4 HATP_CMD_LOG_PULL / HATP_RSP_LOG_DATA (s3_link.h).
+#define HAT_CMD_LOG_PULL        0x7Eu
+#define HAT_RSP_LOG_DATA        0x9Bu
+
+/** @return reply length (0..rsp_cap), -1 transport error / timeout / no DAQ HAT, -2 P4 answered RSP_ERROR. */
+int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms);
+
 /**
  * @brief Begin an OTA image transfer to the DAQ HAT.
  * @param target One of HAT_OTA_TARGET_P4 / _C6 / _STAGE. P4 streams straight to
