@@ -19,6 +19,7 @@ char *api_scripts_status(const char *path, const cJSON *body);
 char *api_scripts_logs(const char *path, const cJSON *body);          // ?since=N pages, else drains
 char *api_scripts_stop(const char *path, const cJSON *body);
 char *api_scripts_files(const char *path, const cJSON *body);         // list
+char *api_scripts_storage(const char *path, const cJSON *body);       // SPIFFS totals + limits
 char *api_scripts_file_get(const char *path, const cJSON *body);      // name, off, len -> base64 page
 char *api_scripts_file_delete(const char *path, const cJSON *body);   // name
 char *api_scripts_file_chunk(const char *path, const cJSON *body);    // name, off, b64, final

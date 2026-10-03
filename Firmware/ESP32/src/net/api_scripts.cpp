@@ -13,6 +13,7 @@
 #include <stdlib.h>
 
 #include "esp_heap_caps.h"
+#include "esp_spiffs.h"
 #include "mbedtls/base64.h"
 
 #include "config.h"
@@ -201,6 +202,26 @@ char *api_scripts_files(const char *path, const cJSON *body)
     cJSON *arr = cJSON_AddArrayToObject(root, "files");
     for (int i = 0; i < count; i++) cJSON_AddItemToArray(arr, cJSON_CreateString(names[i]));
     heap_caps_free(names);
+    return take(root);
+}
+
+char *api_scripts_storage(const char *path, const cJSON *body)
+{
+    (void)path; (void)body;
+    size_t total = 0, used = 0;
+    if (esp_spiffs_info("scripts", &total, &used) != ESP_OK) return err_json("SPIFFS info unavailable");
+    typedef char name_t[SCRIPT_NAME_MAX + 1];
+    name_t *names = (name_t *)heap_caps_malloc(sizeof(name_t) * SCRIPT_LIST_MAX, MALLOC_CAP_SPIRAM);
+    if (!names) return err_json("out of memory");
+    int count = script_storage_list(names, SCRIPT_LIST_MAX);
+    heap_caps_free(names);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "totalBytes", (double)total);
+    cJSON_AddNumberToObject(root, "usedBytes", (double)used);
+    cJSON_AddNumberToObject(root, "freeBytes", (double)((total > used) ? (total - used) : 0));
+    cJSON_AddNumberToObject(root, "scriptCount", count);
+    cJSON_AddNumberToObject(root, "maxScriptBytes", SCRIPT_BODY_MAX);
+    cJSON_AddNumberToObject(root, "maxScripts", SCRIPT_LIST_MAX);
     return take(root);
 }
 

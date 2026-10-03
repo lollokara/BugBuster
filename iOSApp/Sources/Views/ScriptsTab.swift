@@ -576,7 +576,8 @@ struct ScriptsTab: View {
         Task {
             do {
                 let res: ScriptListResponse = try await connectionManager.getRequest(path: "/api/scripts/files")
-                let storage: StorageInfo = try await connectionManager.getRequest(path: "/api/scripts/storage")
+                // Best effort: firmware that predates the shared storage route (BLE) must not hide the list.
+                let storage: StorageInfo? = try? await connectionManager.getRequest(path: "/api/scripts/storage")
                 DispatchQueue.main.async {
                     self.files = res.files.map { ScriptFile(name: $0) }
                     self.storageInfo = storage

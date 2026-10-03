@@ -67,6 +67,12 @@
 
 ### Fixed
 
+- **Scripts tab over BLE.** `/api/scripts/storage` was HTTP-only, so over BLE it
+  answered `unknown path` and the whole file list failed to load; it now lives in
+  `api_scripts.cpp` and is dispatched by `api_core_handle` (HTTP delegates to it).
+  `rawRequest` over BLE also keeps DELETE (mapped to `files/delete`, so swipe-delete
+  really deletes) and decodes the base64 `files/get` pages, following `off` until
+  `size` so long scripts are not truncated.
 - **iOS Diagnostics and Scripts over BLE.** The AD74416H supplies card now
   decodes the flat object the firmware returns (the old `{supplies:[...]}`
   shape failed silently), and GET requests and script calls are routed through

@@ -1499,6 +1499,34 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return data
     }
 
+    private static func bleTunnelPath(_ path: String, query: [String: String]) -> String {
+        guard !query.isEmpty else { return path }
+        var c = URLComponents()
+        c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return path + "?" + (c.percentEncodedQuery ?? "")
+    }
+
+    /// Whole script source over BLE. `/api/scripts/files/get` answers one base64 page
+    /// `{size, off, n, data}`, so follow `off` until `size` bytes are in; stopping at the
+    /// first page would hand the editor a truncated file that a later save would persist.
+    private func bleScriptFileData(query: [String: String]) async throws -> Data {
+        let path = "/api/scripts/files/get"
+        var out = Data()
+        while true {
+            var q = query
+            q["off"] = String(out.count)
+            let page = try await bleRawData(path: Self.bleTunnelPath(path, query: q))
+            guard let obj = try JSONSerialization.jsonObject(with: page) as? [String: Any],
+                  let b64 = obj["data"] as? String,
+                  let chunk = Data(base64Encoded: b64),
+                  let size = obj["size"] as? Int else {
+                throw ConnectionAPIError.bleRejected(path: path, message: "Malformed script file reply")
+            }
+            out.append(chunk)
+            if chunk.isEmpty || out.count >= size { return out }
+        }
+    }
+
     /// Raw request for endpoints with non-JSON bodies/replies (script files).
     /// HTTP goes through the shared session + gate with the admin token. Over
     /// BLE only body-less requests can be tunnelled (the tunnel carries a JSON
@@ -1508,13 +1536,13 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
         if transport == .ble {
             guard body == nil else { throw ConnectionAPIError.needsWiFi("Uploading script text") }
-            var tunnelPath = path
-            if !query.isEmpty {
-                var c = URLComponents()
-                c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
-                tunnelPath += "?" + (c.percentEncodedQuery ?? "")
+            // The tunnel carries a path only, never the HTTP verb: DELETE has its own spelling.
+            if method == "DELETE" && path == "/api/scripts/files" {
+                return try await bleRawData(path: Self.bleTunnelPath("/api/scripts/files/delete", query: query))
             }
-            return try await bleRawData(path: tunnelPath)
+            // HTTP reframes the shared base64 reply as the script text; do the same here.
+            if path == "/api/scripts/files/get" { return try await bleScriptFileData(query: query) }
+            return try await bleRawData(path: Self.bleTunnelPath(path, query: query))
         }
         let trimmed = device.ip.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw URLError(.badURL) }

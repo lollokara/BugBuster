@@ -22,7 +22,7 @@
 //          (DAQ settings registry passthrough)
 //   CRASH  : GET /api/system/crash[?report=1|?offset=N&len=M] (summary, boot bundle,
 //            base64 coredump slice), POST /api/system/crash/clear — crash_report.cpp.
-//   SCRIPTS: /api/scripts/{status,logs,stop,files,files/get,files/delete,
+//   SCRIPTS: /api/scripts/{status,logs,stop,files,storage,files/get,files/delete,
 //            files/chunk,run-file,eval,autorun/status,autorun/enable,
 //            autorun/disable} — bodies in api_scripts.cpp (the REPL WebSocket
 //            stays HTTP-only).
@@ -2111,6 +2111,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
         if (strcmp(sfx, "logs") == 0)            return api_scripts_logs(path, body);
         if (strcmp(sfx, "stop") == 0)            return api_scripts_stop(path, body);
         if (strcmp(sfx, "files") == 0)           return api_scripts_files(path, body);
+        if (strcmp(sfx, "storage") == 0)         return api_scripts_storage(path, body);
         if (strcmp(sfx, "files/get") == 0)       return api_scripts_file_get(path, body);
         if (strcmp(sfx, "files/delete") == 0)    return api_scripts_file_delete(path, body);
         if (strcmp(sfx, "files/chunk") == 0)     return api_scripts_file_chunk(path, body);

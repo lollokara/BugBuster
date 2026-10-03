@@ -4940,28 +4940,19 @@ static esp_err_t handle_get_scripts_files(httpd_req_t *req)
     return send_scripts_result(req, api_core_handle("GET", req->uri, NULL));
 }
 
-// GET /api/scripts/storage — SPIFFS/script storage telemetry
+// GET /api/scripts/storage — SPIFFS/script storage telemetry (shared with BLE via api_scripts.cpp)
 static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    size_t total = 0;
-    size_t used = 0;
-    esp_err_t err = esp_spiffs_info("scripts", &total, &used);
-    if (err != ESP_OK) {
+    char *resp = api_core_handle("GET", "/api/scripts/storage", NULL);
+    if (!resp) return send_error(req, 500, "SPIFFS info unavailable");
+    if (strstr(resp, "\"error\"")) {
+        cJSON_free(resp);
         return send_error(req, 500, "SPIFFS info unavailable");
     }
-
-    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "totalBytes", (double)total);
-    cJSON_AddNumberToObject(root, "usedBytes", (double)used);
-    cJSON_AddNumberToObject(root, "freeBytes", (double)((total > used) ? (total - used) : 0));
-    cJSON_AddNumberToObject(root, "scriptCount", count);
-    cJSON_AddNumberToObject(root, "maxScriptBytes", SCRIPT_BODY_MAX);
-    cJSON_AddNumberToObject(root, "maxScripts", SCRIPT_LIST_MAX);
-    return send_json(req, root);
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
 // GET /api/scripts/files/get?name=X — whole file as text/x-python (one page)
