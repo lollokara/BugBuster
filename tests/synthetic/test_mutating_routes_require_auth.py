@@ -21,6 +21,7 @@ OPEN_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/daq/bs"): "battsim status/list/dir/read/profile are reads; SET_EPOCH only stamps "
                              "the host clock once per run (same data class as the open GET routes)",
     ("POST", "/api/daq/bs/read"): "battsim history file read, POST only to carry the request body",
+    ("POST", "/api/hub/status"): "hub streaming status counters read-only, POST alias for iOS ConnectionManager",
 }
 
 _ROUTE_RES = (

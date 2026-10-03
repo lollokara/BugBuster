@@ -20,6 +20,7 @@ struct BatterySimTab: View {
     @State private var showNew = false
     @State private var showParams = false
     @State private var pendingDelete: Int?
+    @State private var pendingReopen: Int?
     @State private var pollTask: Task<Void, Never>?
     @State private var liveTail: [BsRec] = []
     @State private var syncing = false
@@ -62,6 +63,22 @@ struct BatterySimTab: View {
                 if let id = pendingDelete { Task { await act(.delete, run: id) } }
             }
         } message: { Text("The copy on this device (if any) is kept.") }
+        .alert(
+            "Reopen run \(pendingReopen ?? 0)?",
+            isPresented: Binding(
+                get: { pendingReopen != nil },
+                set: { if !$0 { pendingReopen = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { pendingReopen = nil }
+            Button("Reopen") {
+                if let id = pendingReopen {
+                    Task { await act(.reopen, run: id) }
+                }
+            }
+        } message: {
+            Text("It returns to Paused; press Start to resume.")
+        }
     }
 
     private var pageBody: some View {
@@ -118,13 +135,23 @@ struct BatterySimTab: View {
                     .font(.system(size: 12)).foregroundColor(.secondary)
             }
             if showControls { controls }
+            if status?.state == 3 {
+                Text("A depleted run cannot be reopened.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
         }
         .bsCard()
     }
 
     private var controls: some View {
         let st = status?.state ?? 0
-        return HStack(spacing: 8) {
+        return HStack(spacing: wide ? 8 : 5) {
+            if BattSim.canReopen(state: st) {
+                actionButton("Reopen", "arrow.uturn.backward", .cyan, prominent: true, enabled: true, accessibilityLabel: "Reopen run") {
+                    confirmReopen(status?.runId ?? 0)
+                }
+            }
             actionButton("Start", "play.fill", .green, prominent: true, enabled: st == 1) { await act(.start) }
             actionButton("Pause", "pause.fill", .yellow, enabled: st == 2) { await act(.pause) }
             actionButton("Stop", "stop.fill", .red, enabled: st == 1 || st == 2) { await act(.stop) }
@@ -140,6 +167,14 @@ struct BatterySimTab: View {
         VStack(spacing: 10) {
             dashboardHeader
             if let message { errorBanner(message) }
+            if status?.state == 3 {
+                HStack {
+                    Text("A depleted run cannot be reopened.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
             ZStack {
                 if let h = displayed {
                     BatteryHistoryChart(history: h, window: $window, scrubbing: $scrubbing, logCurrent: logCurrent,
@@ -180,6 +215,11 @@ struct BatterySimTab: View {
             if st == 2 { liveBadge }
             if let s = status { stateBadge(s.state) }
             Spacer(minLength: 6)
+            if BattSim.canReopen(state: st) {
+                iconButton("Reopen run", "arrow.uturn.backward", .cyan, prominent: true, enabled: true) {
+                    confirmReopen(status?.runId ?? 0)
+                }
+            }
             iconButton("Start", "play.fill", .green, prominent: true, enabled: st == 1) { await act(.start) }
             iconButton("Pause", "pause.fill", .yellow, enabled: st == 2) { await act(.pause) }
             iconButton("Stop", "stop.fill", .red, enabled: st == 1 || st == 2) { await act(.stop) }
@@ -484,6 +524,11 @@ struct BatterySimTab: View {
             }
             if runs.isEmpty { Text("No runs stored.").font(.system(size: 12)).foregroundColor(.secondary) }
             ForEach(runs.reversed()) { r in runRow(r) }
+            if status?.state == 3 {
+                Text("A depleted run cannot be reopened.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
         }
         .bsCard()
     }
@@ -505,6 +550,13 @@ struct BatterySimTab: View {
                 Text(runSubtitle(r)).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
+            if r.active && BattSim.canReopen(state: status?.state ?? 0) {
+                Button { confirmReopen(r.runId) } label: {
+                    Label("Reopen", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(BsButtonStyle(tint: .cyan, compact: true))
+                .accessibilityLabel("Reopen run")
+            }
             Button { Task { await act(.load, run: r.runId) } } label: { Text("Load") }
                 .buttonStyle(BsButtonStyle(tint: .cyan, compact: true)).disabled(r.active)
             Button { pendingDelete = r.runId } label: { Image(systemName: "trash") }
@@ -584,22 +636,26 @@ struct BatterySimTab: View {
         .accessibilityAddTraits(on.wrappedValue ? .isSelected : [])
     }
 
+    private func confirmReopen(_ id: Int) {
+        pendingReopen = id
+    }
+
     private func actionButton(_ title: String, _ icon: String, _ tint: Color, prominent: Bool = false,
-                              enabled: Bool, _ run: @escaping () async -> Void) -> some View {
+                              enabled: Bool, accessibilityLabel: String? = nil, _ run: @escaping () async -> Void) -> some View {
         Button { Task { await run() } } label: {
             if wide {
                 Label(title, systemImage: icon).frame(minWidth: 92)
             } else {
                 VStack(spacing: 3) {
                     Image(systemName: icon).font(.system(size: 14, weight: .semibold))
-                    Text(title).font(.system(size: 10, weight: .semibold)).lineLimit(1)
+                    Text(title).font(.system(size: 10, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
                 }
                 .frame(maxWidth: .infinity, minHeight: 40)
             }
         }
         .buttonStyle(BsButtonStyle(tint: tint, on: prominent && enabled, compact: !wide))
         .disabled(!enabled)
-        .accessibilityLabel(title)
+        .accessibilityLabel(accessibilityLabel ?? title)
     }
 
     private func errorBanner(_ m: String) -> some View {
@@ -682,8 +738,12 @@ struct BatterySimTab: View {
         history = BsHistory(meta: meta, events: [], recs: recs)
         window = history!.bounds
         openFromDevice = false
-        status = BsStatus(state: 2, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,
+        let mockState = ProcessInfo.processInfo.environment["BB_MOCK_STATE"].flatMap(Int.init) ?? 4
+        status = BsStatus(state: mockState, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,
                           remainingS: 36_000, vMeas: 7.96, iMeas: 0.214, vTarget: 7.96, fsTotal: 4 << 20, fsUsed: 1 << 20)
+        runs = [
+            BsRunSummary(runId: 7, active: true, meta: meta, bytes: 48 * 240 + 68)
+        ]
     }
     #endif
 
@@ -767,15 +827,40 @@ struct BatterySimTab: View {
 
     private func act(_ a: BattSim.Action, run: Int? = nil) async {
         message = nil
+        #if DEBUG
+        if connectionManager.isMockActive {
+            if a == .reopen {
+                status?.state = 1
+            } else if a == .start {
+                status?.state = 2
+            } else if a == .pause {
+                status?.state = 1
+            } else if a == .stop {
+                status?.state = 4
+            }
+            return
+        }
+        #endif
         do {
-            try await client.action(a, run: run)
+            if a == .reopen {
+                try await client.reopen(run: run)
+            } else {
+                try await client.action(a, run: run)
+            }
             try? await Task.sleep(nanoseconds: 400_000_000)
             if let s = try? await client.status() {
                 status = s
                 if s.lastError != 0 { message = BattSim.errorText[safe: s.lastError] ?? "error \(s.lastError)" }
             }
-            if [.newRun, .delete, .stop, .unload, .load].contains(a) { await refreshRuns() }
-        } catch { message = error.localizedDescription }
+            if [.newRun, .delete, .stop, .unload, .load, .reopen].contains(a) { await refreshRuns() }
+        } catch {
+            if let s = try? await client.status(), s.lastError != 0 {
+                status = s
+                message = BattSim.errorText[safe: s.lastError] ?? "error \(s.lastError)"
+            } else {
+                message = error.localizedDescription
+            }
+        }
     }
 
     private func createRun(_ c: NewBatteryRunSheet.Config) async {
@@ -837,7 +922,7 @@ struct BsButtonStyle: ButtonStyle {
         return configuration.label
             .font(.system(size: compact ? 12 : 13, weight: .semibold))
             .foregroundStyle(fg)
-            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.horizontal, compact ? 4 : 14)
             .frame(minHeight: compact ? 34 : 38)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(fill))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(stroke, lineWidth: 1))
