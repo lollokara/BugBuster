@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Scripts as background jobs.** One named script slot with source
+  (manual/autorun/repl), state and last exit in `/api/scripts/status`;
+  `run-file` returns at once and answers 409 naming the running script unless
+  `replace=1` (3 s cooperative stop, then VM reset). Eval and REPL input are
+  refused while a script runs. The log ring holds structured
+  `<ts_ms> <L> <src> <text>` lines. The whole scripts API, plus chunked
+  uploads, is now reachable over the BLE tunnel.
+- **MicroPython `daq` module.** VDUT control (`daq.vdut`, `daq.read`), battery
+  simulator runs (`daq.run.new/start/pause/stop/edit/delete/list/status`) and
+  live 1 s samples (`daq.samples`, new P4 op `BS_HOP_S1_SINCE`).
+- **Script API stubs.** `.pyi` stubs and examples for every on-device module,
+  compiled by `python/tools/stubs_to_json.py` into
+  `python/firmware_modules/stubs/firmware_api.json` for iOS and the portal.
+- **iOS DAQ-aware VDUT card.** The Overview VDUT card follows the attached DAQ
+  HAT, and the Battery tab gets a dashboard layout on iPad and in landscape.
+
 - **MicroPython example.** On-device VADJ1/e-fuse 1 pulse script with a random
   1-12 minute test interval (switchable to 1-12 hours).
 
@@ -35,6 +51,17 @@
   sizes).
 
 ### Fixed
+
+- **iOS Diagnostics and Scripts over BLE.** The AD74416H supplies card now
+  decodes the flat object the firmware returns (the old `{supplies:[...]}`
+  shape failed silently), and GET requests and script calls are routed through
+  the BLE tunnel instead of throwing `badURL`; the REPL shows a "needs Wi-Fi"
+  state.
+- **Selftest, Wi-Fi and update routes over BLE.** `api_core_handle` now serves
+  `/api/selftest/supplies[/cached]`, `/api/wifi/scan` and
+  `/api/update/{status,check}`, so the iOS Diagnostics tab is no longer blank
+  over BLE. The BLE Wi-Fi scan runs on a worker and returns the last cached
+  result after 4.5 s.
 
 - **Scripting over MCP HTTP.** The Python client now uses the existing HTTP
   status, logs and stop routes for scripts; the MCP wrapper recognizes scripts
