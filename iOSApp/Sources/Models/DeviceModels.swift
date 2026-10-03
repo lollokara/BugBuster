@@ -389,15 +389,33 @@ public struct GPIOStatusResponse: Codable, Equatable {
 
 // MARK: - Internal Selftest Supplies (AD74416H diagnostics)
 
-public struct InternalSupplyEntry: Codable, Identifiable, Equatable {
+public struct InternalSupplyEntry: Equatable, Identifiable {
     public var id: String { name }
     public let name: String
     public let value: Double
     public let unit: String
 }
 
+/// Mirrors handle_get_selftest_supplies() in webserver.cpp: a flat object, not a list.
 public struct InternalSuppliesResponse: Codable, Equatable {
-    public let supplies: [InternalSupplyEntry]
+    public let valid: Bool
+    public let suppliesOk: Bool
+    public let avddHiV: Double
+    public let dvccV: Double
+    public let avccV: Double
+    public let avssV: Double
+    public let tempC: Double
+
+    /// Display rows for the diagnostics card.
+    public var supplies: [InternalSupplyEntry] {
+        [
+            InternalSupplyEntry(name: "AVDD_HI", value: avddHiV, unit: "V"),
+            InternalSupplyEntry(name: "DVCC", value: dvccV, unit: "V"),
+            InternalSupplyEntry(name: "AVCC", value: avccV, unit: "V"),
+            InternalSupplyEntry(name: "AVSS", value: avssV, unit: "V"),
+            InternalSupplyEntry(name: "Temp", value: tempC, unit: "°C"),
+        ]
+    }
 }
 
 // MARK: - Script Autorun

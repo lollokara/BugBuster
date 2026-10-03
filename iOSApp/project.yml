@@ -74,3 +74,25 @@ targets:
       - sdk: SwiftUI.framework
       - sdk: Combine.framework
       - sdk: CoreBluetooth.framework
+  bugbuster_iOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: bugbuster_iOS
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.lorenzo.bugbuster.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/BugBuster.app/BugBuster
+        BUNDLE_LOADER: $(TEST_HOST)
+schemes:
+  bugbuster_iOS:
+    build:
+      targets:
+        bugbuster_iOS: all
+    test:
+      targets:
+        - bugbuster_iOSTests

@@ -10,8 +10,6 @@
 		0066B8C4B046B64A6DEDE4D5 /* AdaptiveRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */; };
 		0612859A274C667B2908A00F /* ScopeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BE3A2BF72606706AD83539 /* ScopeTab.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
-		85003B8C7AD4E854A144D330 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E261BA2CD141BAA6F4D0A5F5 /* KeychainHelper.swift */; };
-		3EBC28580F753D717A3AB9BB /* BattSimService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16C21D8DC2CFD09E52839FC2 /* BattSimService.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
 		13059480F9B0D1EA524DC2A4 /* ScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */; };
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
@@ -20,12 +18,13 @@
 		181681F2955495F3399D11BD /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */; };
 		1842946A4E6147C93A3D6A36 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */; };
 		2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */; };
-		5BCC1BDD30AA92B617AFF00B /* BatterySimTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E9D93D1C5B77ED6A90704E /* BatterySimTab.swift */; };
 		3209482B755A326EB20D34A3 /* DaqExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CE02C081BB4C8A5DE3486B /* DaqExport.swift */; };
 		358D54C496EB885CEE42D7FC /* DaqMeasurementsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */; };
 		3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */; };
+		4355D36D59FB1699E8BC6E8B /* BattSimService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F481E6F3CC98291FF849EAD8 /* BattSimService.swift */; };
 		4A8C38889012D7DE5CA83D42 /* VDUTControlsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */; };
 		503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */; };
+		50B3C04B7B4811FB76BD3499 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */; };
 		51307E7F5E37522E853606C4 /* ScopeAxis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */; };
 		5690A725C04CE7DA1B9F9132 /* iPadRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF21832F5299C18916D0CD1 /* iPadRootView.swift */; };
 		5BBA94C26CC6511A65185B8A /* ScopeRenderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */; };
@@ -33,25 +32,36 @@
 		72205E65D91FFED897042A95 /* AppSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119CBEAE1BC796A98E90F29D /* AppSections.swift */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
-		7FA190A1B219A3C41D5E6F70 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
 		A53DADBDC4C71A85E0DFC655 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC53F9312E830D2D4BECD57 /* SidebarView.swift */; };
 		B08212B904701C4769026071 /* DaqLinkState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A9988F8F3540297C3821CA /* DaqLinkState.swift */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
+		B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
 		B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */; };
 		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
 		CDAFAA870E358140FA3DF18A /* DaqAcquisitionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */; };
 		D1093AAAA48AE31E32FB24FD /* ScopeSampleSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */; };
+		E17221B858F9B293E3856104 /* BatterySimTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6683C8CA14E444FC60415F19 /* BatterySimTab.swift */; };
 		E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */; };
 		EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */; };
 		EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B963A369295728D4B4FFF7 /* ScriptsTab.swift */; };
 		FA69B5E19EB18B396DD53371 /* ScopeOrientationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */; };
 		FFC36E32AE0E90F02B2EBDEC /* RotatePromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AFFA25743190680DB48BB50A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B9F5AB5DA441747EF1114CF7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 59DA578C24EC6A47A3CFE067;
+			remoteInfo = bugbuster_iOS;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
@@ -69,8 +79,7 @@
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
 		30CE02C081BB4C8A5DE3486B /* DaqExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqExport.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
-		E261BA2CD141BAA6F4D0A5F5 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
-		16C21D8DC2CFD09E52839FC2 /* BattSimService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimService.swift; sourceTree = "<group>"; };
+		39328C7FDF3342CE44DC8B08 /* bugbuster_iOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = bugbuster_iOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3FF21832F5299C18916D0CD1 /* iPadRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iPadRootView.swift; sourceTree = "<group>"; };
 		44F79EAE8560DF5764EA0B5A /* SharedShellChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedShellChrome.swift; sourceTree = "<group>"; };
@@ -79,25 +88,27 @@
 		52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRenderModel.swift; sourceTree = "<group>"; };
 		55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveRootView.swift; sourceTree = "<group>"; };
 		5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqMeasurementsCard.swift; sourceTree = "<group>"; };
+		6683C8CA14E444FC60415F19 /* BatterySimTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatterySimTab.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		86255F7609BC5D70B4A0AB8A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		875AACD9B934157EF7C7FCFC /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTab.swift; sourceTree = "<group>"; };
+		93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTransportTests.swift; sourceTree = "<group>"; };
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
 		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
+		BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
 		CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDUTControlsCard.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqScopeCanvasView.swift; sourceTree = "<group>"; };
-		94E9D93D1C5B77ED6A90704E /* BatterySimTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatterySimTab.swift; sourceTree = "<group>"; };
 		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
+		F481E6F3CC98291FF849EAD8 /* BattSimService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimService.swift; sourceTree = "<group>"; };
 		F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -149,10 +160,19 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		8F0958850B44D524385BD559 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		9A2F64562D3022BEF7333027 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */,
+				39328C7FDF3342CE44DC8B08 /* bugbuster_iOSTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -175,6 +195,7 @@
 				3E36A75C2AB886192C02B5EB /* Assets.xcassets */,
 				F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */,
 				0E66E3775F8A4DFC012D7C43 /* Sources */,
+				8F0958850B44D524385BD559 /* Tests */,
 				9FA8EF5C6BE1BD36D7526D19 /* Frameworks */,
 				9A2F64562D3022BEF7333027 /* Products */,
 			);
@@ -184,10 +205,10 @@
 			isa = PBXGroup;
 			children = (
 				55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */,
+				6683C8CA14E444FC60415F19 /* BatterySimTab.swift */,
 				166FC5B5DD45B8F1FAE47673 /* ConnectionDashboardView.swift */,
 				5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */,
 				E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */,
-				94E9D93D1C5B77ED6A90704E /* BatterySimTab.swift */,
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
 				3FF21832F5299C18916D0CD1 /* iPadRootView.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
@@ -207,15 +228,14 @@
 		F9E2158FB6FD0709ABEA7FD7 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				F481E6F3CC98291FF849EAD8 /* BattSimService.swift */,
 				B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */,
 				354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */,
-				E261BA2CD141BAA6F4D0A5F5 /* KeychainHelper.swift */,
-				16C21D8DC2CFD09E52839FC2 /* BattSimService.swift */,
 				27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */,
 				30CE02C081BB4C8A5DE3486B /* DaqExport.swift */,
 				08A9988F8F3540297C3821CA /* DaqLinkState.swift */,
 				81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */,
-				7FA190A1B219A3C41D5E6F71 /* KeychainHelper.swift */,
+				BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */,
 				282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */,
 				52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */,
 				29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */,
@@ -244,6 +264,24 @@
 			productName = bugbuster_iOS;
 			productReference = 785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		6CC949372D52DE3E20188116 /* bugbuster_iOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A06A8CC62BBB8E5F17378B3C /* Build configuration list for PBXNativeTarget "bugbuster_iOSTests" */;
+			buildPhases = (
+				EE20B5ADF6311AFF3CDF2C27 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B4AFC645839D00CCB68BCB58 /* PBXTargetDependency */,
+			);
+			name = bugbuster_iOSTests;
+			packageProductDependencies = (
+			);
+			productName = bugbuster_iOSTests;
+			productReference = 39328C7FDF3342CE44DC8B08 /* bugbuster_iOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -274,6 +312,7 @@
 			projectRoot = "";
 			targets = (
 				59DA578C24EC6A47A3CFE067 /* bugbuster_iOS */,
+				6CC949372D52DE3E20188116 /* bugbuster_iOSTests */,
 			);
 		};
 /* End PBXProject section */
@@ -300,21 +339,20 @@
 				3F3C63BF1F58082976E16792 /* AppDelegate.swift in Sources */,
 				72205E65D91FFED897042A95 /* AppSections.swift in Sources */,
 				E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */,
+				4355D36D59FB1699E8BC6E8B /* BattSimService.swift in Sources */,
+				E17221B858F9B293E3856104 /* BatterySimTab.swift in Sources */,
 				B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */,
 				503CE64F4170E0B6231CDBF4 /* ConnectionDashboardView.swift in Sources */,
 				08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */,
-				85003B8C7AD4E854A144D330 /* KeychainHelper.swift in Sources */,
-				3EBC28580F753D717A3AB9BB /* BattSimService.swift in Sources */,
 				CDAFAA870E358140FA3DF18A /* DaqAcquisitionConfig.swift in Sources */,
 				3209482B755A326EB20D34A3 /* DaqExport.swift in Sources */,
 				B08212B904701C4769026071 /* DaqLinkState.swift in Sources */,
 				358D54C496EB885CEE42D7FC /* DaqMeasurementsCard.swift in Sources */,
 				2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */,
-				5BCC1BDD30AA92B617AFF00B /* BatterySimTab.swift in Sources */,
 				7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */,
-				7FA190A1B219A3C41D5E6F70 /* KeychainHelper.swift in Sources */,
 				EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */,
 				B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */,
+				50B3C04B7B4811FB76BD3499 /* KeychainHelper.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
 				BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */,
 				781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */,
@@ -336,7 +374,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EE20B5ADF6311AFF3CDF2C27 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B4AFC645839D00CCB68BCB58 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 59DA578C24EC6A47A3CFE067 /* bugbuster_iOS */;
+			targetProxy = AFFA25743190680DB48BB50A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		157F50409290441AD0722C1A /* debug */ = {
@@ -357,6 +411,24 @@
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
+		2B2974F451796303BB0AD95B /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lorenzo.bugbuster.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BugBuster.app/BugBuster";
 			};
 			name = debug;
 		};
@@ -500,6 +572,24 @@
 			};
 			name = debug;
 		};
+		A5CEE62B94C7B47AEE6400F0 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.lorenzo.bugbuster.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BugBuster.app/BugBuster";
+			};
+			name = release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -508,6 +598,15 @@
 			buildConfigurations = (
 				157F50409290441AD0722C1A /* debug */,
 				4F4703D9AB02A8F3D1CD2DF4 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		A06A8CC62BBB8E5F17378B3C /* Build configuration list for PBXNativeTarget "bugbuster_iOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B2974F451796303BB0AD95B /* debug */,
+				A5CEE62B94C7B47AEE6400F0 /* release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = debug;
