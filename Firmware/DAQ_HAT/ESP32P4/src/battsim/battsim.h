@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "daq_settings.h"
+#include "battsim_s1.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -98,6 +99,10 @@ bool battsim_load_run(uint16_t run_id);
 bool battsim_delete_run(uint16_t run_id);
 /** Host wall clock (Unix seconds) - stamped into new runs. */
 void battsim_set_epoch(uint32_t unix_s);
+
+/** Live 1 s samples of the loaded run (BS_HOP_S1_SINCE). -1 if run_id is not
+ *  the loaded run; otherwise the count copied (see bs_s1_since()). */
+int battsim_s1_since(uint16_t run_id, uint32_t since_t_s, bs_s1_sample_t *out, int max, bool *more);
 
 /** daq_fast_task hook (see battsim_integ.h). watts_mean = block mean of V*I. */
 void battsim_fast_push(float amps_mean, float volts_mean, float watts_mean,
