@@ -368,6 +368,14 @@ void autorun_get_status(AutorunStatus *out)
         if (!fgets(out->script_name, sizeof(out->script_name), f)) out->script_name[0] = '\0';
         fclose(f);
     }
+    // Strip a trailing newline, then fall back to the runtime name when the
+    // source-name sidecar is missing (enabled by older firmware / hand-placed
+    // autorun.py): the script that runs is always called autorun.py.
+    size_t n = strlen(out->script_name);
+    while (n > 0 && (out->script_name[n - 1] == '\n' || out->script_name[n - 1] == '\r'))
+        out->script_name[--n] = '\0';
+    if (out->script_name[0] == '\0' && out->has_script)
+        snprintf(out->script_name, sizeof(out->script_name), "autorun.py");
 }
 
 bool autorun_run_now(uint32_t *out_id, char *err, size_t err_len)
