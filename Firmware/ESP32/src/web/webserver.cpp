@@ -1919,23 +1919,8 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
 // GET /api/selftest/supplies/cached — cached supply rail voltages
 static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 {
-    // PWR-10: cache only - the main loop's monitor step is the sampler.
-    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
-
-    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "available", sv->available);
-    cJSON_AddNumberToObject(root, "timestampMs", sv->timestamp_ms);
-    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
-    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
-        cJSON *obj = cJSON_CreateObject();
-        cJSON_AddNumberToObject(obj, "rail", i);
-        cJSON_AddStringToObject(obj, "name", rail_names[i]);
-        cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
-        cJSON_AddItemToArray(arr, obj);
-    }
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/selftest/supplies/cached", NULL);
+    return send_api_core_result(req, resp, "supplies unavailable");
 }
 
 // GET /api/overview — coalesced snapshot for the on-device Overview tab.
@@ -2006,17 +1991,8 @@ static esp_err_t handle_post_efuse_imon(httpd_req_t *req)
 // GET /api/selftest/supplies — measure internal ADC supplies
 static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
 {
-    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "valid", s->valid);
-    cJSON_AddBoolToObject(root, "suppliesOk", s->supplies_ok);
-    cJSON_AddNumberToObject(root, "avddHiV", s->avdd_hi_v);
-    cJSON_AddNumberToObject(root, "dvccV", s->dvcc_v);
-    cJSON_AddNumberToObject(root, "avccV", s->avcc_v);
-    cJSON_AddNumberToObject(root, "avssV", s->avss_v);
-    cJSON_AddNumberToObject(root, "tempC", s->temp_c);
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/selftest/supplies", NULL);
+    return send_api_core_result(req, resp, "supplies unavailable");
 }
 
 // =============================================================================
@@ -3795,17 +3771,7 @@ static esp_err_t handle_get_wifi_scan(httpd_req_t *req)
 {
     wifi_scan_result_t results[20];
     int count = wifi_scan(results, 20);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(root, "networks");
-    for (int i = 0; i < count; i++) {
-        cJSON *item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "ssid", results[i].ssid);
-        cJSON_AddNumberToObject(item, "rssi", results[i].rssi);
-        cJSON_AddNumberToObject(item, "auth", results[i].auth);
-        cJSON_AddItemToArray(arr, item);
-    }
-    return send_json(req, root);
+    return send_json(req, api_core_wifi_scan_json(results, count));
 }
 
 // POST /api/wifi/ap_password  body: {"password":"..."}  (admin auth required)
@@ -4347,7 +4313,8 @@ static esp_err_t handle_get_update_status(httpd_req_t *req)
     if (check_admin_auth(req) != ESP_OK) {
         return send_error(req, 401, "Admin token required");
     }
-    return send_json(req, update_manager_status_json());
+    char *resp = api_core_handle("GET", "/api/update/status", NULL);
+    return send_api_core_result(req, resp, "Update status unavailable");
 }
 
 typedef struct { uint32_t targets; } http_update_apply_args_t;
