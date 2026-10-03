@@ -85,10 +85,11 @@ class BsEvent(IntEnum):
     OUTPUT_OFF = 9
     PD_LOST = 10
     STORE_ERR = 11
+    REOPEN = 12
 
 
 BS_ERRORS = ["none", "no store", "no run", "busy", "invalid", "state", "no PD contract",
-             "acquisition not running", "I/O error", "not found"]
+             "acquisition not running", "I/O error", "not found", "run depleted"]
 
 FLAG_PROVISIONAL = 0x01
 FLAG_STORE_OK = 0x02
@@ -661,6 +662,11 @@ class BattSim:
 
     def stop(self) -> None:
         self._act(DaqAction.BS_RUN_STOP)
+
+    def reopen(self) -> None:
+        """Resume a STOPPED loaded run: STOPPED -> PAUSED (output stays off).
+        Refused for a depleted run; press start to continue integrating."""
+        self._act(DaqAction.BS_RUN_REOPEN)
 
     def unload(self) -> None:
         self._act(DaqAction.BS_RUN_UNLOAD)

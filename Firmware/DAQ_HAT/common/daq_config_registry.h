@@ -154,6 +154,7 @@ typedef enum {
     DAQ_ACT_BS_RUN_LOAD       = 12,  // load run DAQ_K_BS_RUN_SELECT (PAUSED)
     DAQ_ACT_BS_RUN_DELETE     = 13,  // delete run DAQ_K_BS_RUN_SELECT
     DAQ_ACT_BS_DEFAULTS       = 14,  // chemistry defaults -> cutoff/R_int/Peukert/SD
+    DAQ_ACT_BS_RUN_REOPEN     = 15,  // STOPPED run -> PAUSED (refused for DEPLETED)
 } daq_action_t;
 
 // -----------------------------------------------------------------------------

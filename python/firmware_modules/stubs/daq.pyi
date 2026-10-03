@@ -72,6 +72,12 @@ class run:
         """Finalise the run (kept on flash)."""
 
     @staticmethod
+    def reopen(run_id: int | None = None) -> None:
+        """Resume a ``stopped`` run: back to ``paused`` (output off); call
+        :func:`start` to continue. Loads ``run_id`` first if given. Raises
+        ``RuntimeError`` for a ``depleted`` run (cutoff is final)."""
+
+    @staticmethod
     def edit(run_id: int | None = None, **params) -> dict:
         """Change parameters of the loaded run live (loads ``run_id`` first).
 

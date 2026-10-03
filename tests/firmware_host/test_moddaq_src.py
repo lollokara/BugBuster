@@ -28,7 +28,7 @@ def test_api_surface_matches_spec():
     globals_ = _table("daq_module_globals_table")
     assert globals_[:5] == ["present", "vdut", "read", "samples", "run"]
     assert _table("daq_run_globals_table") == [
-        "status", "list", "new", "start", "pause", "stop", "edit", "delete"]
+        "status", "list", "new", "start", "pause", "stop", "reopen", "edit", "delete"]
 
 
 def test_every_hardware_call_checks_for_a_daq_hat():
