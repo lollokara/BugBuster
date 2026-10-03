@@ -126,7 +126,7 @@
  "script_list": "(self) -> list",
  "script_logs": "(self) -> str",
  "script_reset": "(self) -> None",
- "script_run_file": "(self, name: str) -> 'ScriptStatusResult'",
+ "script_run_file": "(self, name: str, background: bool = False, replace: bool = False) -> 'ScriptStatusResult'",
  "script_session": "(self) -> 'ScriptSession'",
  "script_status": "(self) -> 'ScriptStatusResult'",
  "script_stop": "(self) -> None",

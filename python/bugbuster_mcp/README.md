@@ -131,7 +131,7 @@ Claude Code, or your client's tool inspector. The groups:
 | `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
 | `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |
 | `advanced` | 3 | `mux_control`, `register_access`, `idac_control` - risk-gated |
-| `scripting` | 6 | `run_device_script` (waits for the end and returns all logs), `script_list` / `script_get` / `script_put` / `script_delete`, `script_autorun` |
+| `scripting` | 7 | `run_device_script` (waits for the end and returns all logs), `script_run_file` (background job; `replace` to take over the single slot), `script_list` / `script_get` / `script_put` / `script_delete`, `script_autorun` |
 
 Two rules the model has to follow, and the tools enforce:
 

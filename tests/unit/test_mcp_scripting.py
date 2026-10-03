@@ -110,3 +110,16 @@ class TestScriptingTools(unittest.TestCase):
         self.bb.script_autorun_enable.assert_called_once_with("a.py")
         with self.assertRaises(ValueError):
             t["script_autorun"](action="bogus")
+
+    def test_script_run_file_reports_the_busy_holder(self):
+        from bugbuster.client import ScriptBusyError
+        self.bb.script_run_file.side_effect = ScriptBusyError("loop.py", 12)
+        r = self.mcp.tools["script_run_file"](name="b.py")
+        self.assertFalse(r["success"])
+        self.assertEqual((r["running"], r["id"]), ("loop.py", 12))
+
+    def test_script_run_file_replace_starts_in_background(self):
+        self.bb.script_run_file.return_value = _status(True, sid=13)
+        r = self.mcp.tools["script_run_file"](name="b.py", replace=True)
+        self.bb.script_run_file.assert_called_once_with("b.py", background=True, replace=True)
+        self.assertEqual(r, {"success": True, "id": 13, "name": "b.py"})
