@@ -25,7 +25,7 @@ typedef enum {
     BS_ST_PAUSED   = 1,   // run loaded, output off, everything frozen
     BS_ST_ACTIVE   = 2,   // output on, integrating
     BS_ST_DEPLETED = 3,   // cutoff reached, output off (final)
-    BS_ST_STOPPED  = 4,   // finalised by the user (final)
+    BS_ST_STOPPED  = 4,   // finalised by the user (REOPEN -> PAUSED)
 } battsim_state_t;
 
 // battsim_status_t.flags
@@ -42,6 +42,7 @@ typedef enum {
 typedef enum {
     BS_E_NONE = 0, BS_E_NO_STORE, BS_E_NO_RUN, BS_E_BUSY, BS_E_INVALID,
     BS_E_STATE, BS_E_NO_PD, BS_E_NO_ACQ, BS_E_IO, BS_E_NOT_FOUND,
+    BS_E_DEPLETED,   // REOPEN refused: cutoff reached (physical end)
 } battsim_err_t;
 
 // Wire status (HAT link / BBP). Little-endian, packed, append-only.

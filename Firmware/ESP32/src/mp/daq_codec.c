@@ -201,7 +201,7 @@ static const char *const k_chem[] = { "lipo", "lifepo4", "nimh", "lead" };
 static const char *const k_state[] = { "none", "paused", "active", "depleted", "stopped" };
 static const char *const k_err[] = { "none", "no store", "no run", "busy", "invalid", "state",
                                      "no PD contract", "acquisition not running", "I/O error",
-                                     "not found" };
+                                     "not found", "run depleted" };
 
 int daqc_chem_from_name(const char *s)
 {
@@ -220,4 +220,4 @@ int daqc_chem_from_name(const char *s)
 
 const char *daqc_chem_name(uint8_t chem)  { return chem < 4 ? k_chem[chem] : "unknown"; }
 const char *daqc_state_name(uint8_t st)   { return st < 5 ? k_state[st] : "unknown"; }
-const char *daqc_error_name(uint8_t err)  { return err < 10 ? k_err[err] : "unknown"; }
+const char *daqc_error_name(uint8_t err)  { return err < 11 ? k_err[err] : "unknown"; }

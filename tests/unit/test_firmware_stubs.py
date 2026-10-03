@@ -106,7 +106,7 @@ def test_daq_stub_matches_spec_surface():
     tree = _stub("daq")
     assert {"present", "vdut", "read", "samples", "run"} <= _names(tree)
     run = _class(tree, "run")
-    assert _methods(run) == {"status", "list", "new", "start", "pause", "stop", "edit", "delete"}
+    assert _methods(run) == {"status", "list", "new", "start", "pause", "stop", "reopen", "edit", "delete"}
     for fn in run.body:
         if isinstance(fn, ast.FunctionDef):
             assert any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in fn.decorator_list)

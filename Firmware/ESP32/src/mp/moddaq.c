@@ -382,6 +382,15 @@ static mp_obj_t daq_run_stop(void)
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(daq_run_stop_obj, daq_run_stop);
 
+static mp_obj_t daq_run_reopen(size_t n_args, const mp_obj_t *args)
+{
+    require_daq();
+    if (n_args == 1 && args[0] != mp_const_none) ensure_loaded(mp_obj_get_int(args[0]));
+    action(DAQC_ACT_BS_RUN_REOPEN, "run reopen failed");
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(daq_run_reopen_obj, 0, 1, daq_run_reopen);
+
 static mp_obj_t daq_run_edit(size_t n_args, const mp_obj_t *args, mp_map_t *kw)
 {
     require_daq();
@@ -418,6 +427,7 @@ static const mp_rom_map_elem_t daq_run_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_start),  MP_ROM_PTR(&daq_run_start_obj) },
     { MP_ROM_QSTR(MP_QSTR_pause),  MP_ROM_PTR(&daq_run_pause_obj) },
     { MP_ROM_QSTR(MP_QSTR_stop),   MP_ROM_PTR(&daq_run_stop_obj) },
+    { MP_ROM_QSTR(MP_QSTR_reopen), MP_ROM_PTR(&daq_run_reopen_obj) },
     { MP_ROM_QSTR(MP_QSTR_edit),   MP_ROM_PTR(&daq_run_edit_obj) },
     { MP_ROM_QSTR(MP_QSTR_delete), MP_ROM_PTR(&daq_run_delete_obj) },
 };

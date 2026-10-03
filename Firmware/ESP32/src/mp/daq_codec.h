@@ -46,6 +46,7 @@ enum {
     DAQC_ACT_BS_RUN_UNLOAD = 11,
     DAQC_ACT_BS_RUN_LOAD   = 12,
     DAQC_ACT_BS_RUN_DELETE = 13,
+    DAQC_ACT_BS_RUN_REOPEN = 15,   // 14 = BS_DEFAULTS (not used by the S3 codec)
 };
 
 #define DAQC_CFG_CMD_SET    0x71u   // HAT cmd 0x70 + SET

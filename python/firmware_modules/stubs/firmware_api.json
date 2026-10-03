@@ -1109,6 +1109,20 @@
        "doc": "Finalise the run (kept on flash)."
       },
       {
+       "name": "reopen",
+       "signature": "reopen(run_id: int | None = None) -> None",
+       "params": [
+        {
+         "name": "run_id",
+         "kind": "positional",
+         "annotation": "int | None",
+         "default": "None"
+        }
+       ],
+       "returns": "None",
+       "doc": "Resume a ``stopped`` run: back to ``paused`` (output off); call\n:func:`start` to continue. Loads ``run_id`` first if given. Raises\n``RuntimeError`` for a ``depleted`` run (cutoff is final)."
+      },
+      {
        "name": "edit",
        "signature": "edit(run_id: int | None = None, **params) -> dict",
        "params": [

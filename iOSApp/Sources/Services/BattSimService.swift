@@ -98,11 +98,11 @@ enum BattSim {
     static let chemNames = ["LiPo", "LiFePO4", "NiMH", "Lead-acid"]
     static let errorText = ["", "battlog partition missing", "no run loaded", "busy", "invalid parameters",
                             "not allowed in this state", "USB-PD contract below 9 V / 3 A",
-                            "acquisition not running", "flash I/O error", "run not found"]
+                            "acquisition not running", "flash I/O error", "run not found", "run depleted"]
     static let eventNames: [Int: String] = [1: "created", 2: "start", 3: "pause", 4: "stop", 5: "depleted",
                                             6: "reboot", 7: "param", 8: "stall", 9: "output off",
-                                            10: "PD lost", 11: "store error"]
-    enum Action: Int { case defaults = 14, newRun = 7, start = 8, pause = 9, stop = 10, unload = 11, load = 12, delete = 13 }
+                                            10: "PD lost", 11: "store error", 12: "reopen"]
+    enum Action: Int { case defaults = 14, newRun = 7, start = 8, pause = 9, stop = 10, unload = 11, load = 12, delete = 13, reopen = 15 }
 
     // MARK: Decoders
 

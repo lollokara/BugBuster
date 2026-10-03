@@ -406,6 +406,7 @@ static bool on_action(uint8_t action_id, void *user)
     case DAQ_ACT_BS_RUN_UNLOAD:
     case DAQ_ACT_BS_RUN_LOAD:
     case DAQ_ACT_BS_RUN_DELETE:
+    case DAQ_ACT_BS_RUN_REOPEN:
     case DAQ_ACT_BS_DEFAULTS:
         return battsim_action(action_id);
     default:
