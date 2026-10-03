@@ -37,6 +37,7 @@ from tests.lib.srcread import REPO_ROOT, read_source
 WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
 ADAPTER = "Firmware/ESP32/src/web/http_adapter.cpp"
 API_CORE = "Firmware/ESP32/src/net/api_core.cpp"
+API_SCRIPTS = "Firmware/ESP32/src/net/api_scripts.cpp"
 PY_PKG = REPO_ROOT / "python" / "bugbuster"
 
 # Concrete stand-in for an f-string path parameter (/channel/{ch}/..). "0" is
@@ -144,6 +145,8 @@ class Firmware:
         web = c_functions(web_src)
         web.update(c_functions(adapter_src))
         core = c_functions(core_src)
+        # api_core_handle()'s /api/scripts/ block calls into api_scripts.cpp.
+        core.update(c_functions(read_source(API_SCRIPTS)))
         return cls(routes, web, core, core.get("api_core_handle", ""))
 
 

@@ -20,6 +20,10 @@
 //          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint},
 //          /api/daq/bs, /api/daq/bs/read (battery simulator), /api/daq/config
 //          (DAQ settings registry passthrough)
+//   SCRIPTS: /api/scripts/{status,logs,stop,files,files/get,files/delete,
+//            files/chunk,run-file,eval,autorun/status,autorun/enable,
+//            autorun/disable} — bodies in api_scripts.cpp (the REPL WebSocket
+//            stays HTTP-only).
 //
 // PENDING (planned, mirror the HTTP handler then expose here): IDAC cal writes
 //   (/api/idac/cal/{point,clear,save}), channel signal-path config
@@ -28,7 +32,6 @@
 // NOT supported over BLE (USB/WiFi only — too high-rate or out of scope):
 //   - Scope waveform streaming (/api/scope/*)
 //   - Logic analyzer / DAQ power-analyzer streaming
-//   - Scripts + Python REPL (/api/scripts/*, WebSocket)
 //   - Binary OTA upload (/api/ota/upload*) — superseded over BLE by the
 //     git-release updater above (/api/ota/check|apply).
 //
@@ -69,6 +72,7 @@
 #include "esp_wifi.h"
 #include "power/pd_manager.h"
 #include "quicksetup.h"
+#include "api_scripts.h"
 #include "mbedtls/base64.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
@@ -2085,6 +2089,32 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
             if (*sfx == '\0')               return api_quicksetup_get(slot);
         }
     }
+
+    // Scripts runtime (spec 2026-10-03 §2). BLE is the only path to the S3
+    // while the phone sits on the DAQ hotspot, so every scripts route lives
+    // here. BLE requests carry "?name=..." in the path: the suffix stops at '?'.
+    if (strncmp(path, "/api/scripts/", 13) == 0) {
+        char sfx[32] = "";
+        const char *q = strchr(path, '?');
+        size_t n = q ? (size_t)(q - (path + 13)) : strlen(path + 13);
+        if (n < sizeof(sfx)) {
+            memcpy(sfx, path + 13, n);
+            sfx[n] = '\0';
+        }
+        if (strcmp(sfx, "status") == 0)          return api_scripts_status(path, body);
+        if (strcmp(sfx, "logs") == 0)            return api_scripts_logs(path, body);
+        if (strcmp(sfx, "stop") == 0)            return api_scripts_stop(path, body);
+        if (strcmp(sfx, "files") == 0)           return api_scripts_files(path, body);
+        if (strcmp(sfx, "files/get") == 0)       return api_scripts_file_get(path, body);
+        if (strcmp(sfx, "files/delete") == 0)    return api_scripts_file_delete(path, body);
+        if (strcmp(sfx, "files/chunk") == 0)     return api_scripts_file_chunk(path, body);
+        if (strcmp(sfx, "run-file") == 0)        return api_scripts_run_file(path, body);
+        if (strcmp(sfx, "eval") == 0)            return api_scripts_eval(path, body);
+        if (strcmp(sfx, "autorun/status") == 0)  return api_scripts_autorun_status(path, body);
+        if (strcmp(sfx, "autorun/enable") == 0)  return api_scripts_autorun_enable(path, body);
+        if (strcmp(sfx, "autorun/disable") == 0) return api_scripts_autorun_disable(path, body);
+    }
+
 
     return api_error("unknown path");
 }
