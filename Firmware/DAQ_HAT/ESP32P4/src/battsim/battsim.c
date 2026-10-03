@@ -10,6 +10,7 @@
 #include "battsim_model.h"
 #include "battsim_integ.h"
 #include "battsim_store.h"
+#include "log_forward.h"
 
 #include <math.h>
 #include <string.h>
@@ -213,6 +214,16 @@ static bs_hist_rec_v2_t make_rec(const agg_t *a, int64_t t_end, int64_t cq,
 
 static void event(uint16_t code, int32_t a, int32_t b)
 {
+    switch (code) {
+    case BS_EV_START:     LOG_IMPORTANT("battsim", "run %u start", (unsigned)S.meta.run_id); break;
+    case BS_EV_PAUSE:     LOG_IMPORTANT("battsim", "run %u pause", (unsigned)S.meta.run_id); break;
+    case BS_EV_STOP:      LOG_IMPORTANT("battsim", "run %u stop", (unsigned)S.meta.run_id); break;
+    case BS_EV_DEPLETED:  LOG_IMPORTANT("battsim", "run %u depleted", (unsigned)S.meta.run_id); break;
+    case BS_EV_STALL:     LOG_IMPORTANT("battsim", "run %u stalled", (unsigned)S.meta.run_id); break;
+    case BS_EV_PD_LOST:   LOG_IMPORTANT("battsim", "USB-PD lost, run %u paused", (unsigned)S.meta.run_id); break;
+    case BS_EV_STORE_ERR: LOG_IMPORTANT("battsim", "flash store error"); break;
+    default: break;
+    }
     if (!run_writable()) return;
     bs_event_t ev = { .t_s = (uint32_t)(sim_ticks() / TICKS_PER_S), .code = code,
                       .a = a, .b = b };

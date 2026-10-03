@@ -7,6 +7,7 @@
 #include "daq_board.h"
 #include "daq_settings_glue.h"
 #include "diagnostics.h"
+#include "log_forward.h"
 #include "cli.h"
 #include "usb_backend.h"
 #include "battsim.h"
@@ -17,6 +18,7 @@ static daq_board_t s_board;
 
 void app_main(void)
 {
+    log_forward_init();
     // LDO channel 4 (VO4) supplies GPIO47/48 via VDD_IO_5. Must be set to 3.3V
     // before any GPIO on that domain is driven; default after reset is ~1.2V.
     static esp_ldo_channel_handle_t s_ldo4_handle;
