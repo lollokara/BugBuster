@@ -178,12 +178,16 @@ static uint32_t now_ms(void)
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-// sr_emit_fn: append one finished structured line. Caller holds s_log_mutex.
+static scripting_log_tee_fn s_log_tee;
+void scripting_set_log_tee(scripting_log_tee_fn fn) { s_log_tee = fn; }
+
 static void ring_emit(void *ctx, const char *line, size_t len)
 {
     (void)ctx;
     log_push_locked(line, len);
+    if (s_log_tee) s_log_tee(line, len);
 }
+
 
 // Level stamped on MicroPython output ('E' while a traceback prints).
 static void log_set_level(char level)

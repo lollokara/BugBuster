@@ -128,6 +128,12 @@ size_t scripting_get_logs_since(char *out, size_t max, uint64_t since, uint64_t 
  */
 void scripting_log_push(const char *str, size_t len);
 
+/** Observer of every finished structured log line ("<ts_ms> <L> <src> <text>\n"). Called with the
+ *  script log mutex held: it must never block. NULL removes it. */
+typedef void (*scripting_log_tee_fn)(const char *line, size_t len);
+void scripting_set_log_tee(scripting_log_tee_fn fn);
+
+
 // ---------------------------------------------------------------------------
 // Stop flag accessor (for mphalport.c and the VM hook)
 // ---------------------------------------------------------------------------
