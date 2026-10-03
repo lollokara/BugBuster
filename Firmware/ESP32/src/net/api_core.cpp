@@ -1998,8 +1998,8 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/device/info") == 0) return api_device_info();
     if (strcmp(path, "/api/status") == 0)      return api_status();
     if (strcmp(path, "/api/system/memory") == 0) return api_system_memory();
-    if (strncmp(path, "/api/system/crash", 17) == 0 && (path[17] == '\0' || path[17] == '?'))
-        return crash_report_api_get(path);
+    if (strcmp(path, "/api/system/crash") == 0) return crash_report_api_get(path);
+    if (strncmp(path, "/api/system/crash?", 18) == 0) return crash_report_api_get(path);  // BLE keeps the query
     if (strcmp(path, "/api/hat") == 0)         return api_hat();
     if (strcmp(path, "/api/hat/v2/rails") == 0) return api_hat_v2_rails();
     if (strncmp(path, "/api/hat/calibration", 20) == 0) return api_hat_calibration(path);

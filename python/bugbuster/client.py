@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     # import here would be circular.
     from .script import ScriptSession
     from .memory import MemoryStatus
+    from .crash import BootReport, CrashSummary
 
 
 class BugBusterWarning(UserWarning):
@@ -1224,6 +1225,72 @@ class BugBuster:
         if self._usb:
             return parse_mem_status(self._usb_cmd(CmdId.MEM_STATUS))
         return parse_mem_status_json(self._http_get("/system/memory"))
+
+    # ------------------------------------------------------------------
+    # ── Crash dump & boot report (HTTP only) ────────────────────────────
+    # ------------------------------------------------------------------
+
+    def _require_http(self, method: str):
+        if self._usb:
+            raise NotImplementedError(
+                f"{method} is only available over HTTP (/api/system/crash needs the admin token)")
+
+    def get_crash_info(self) -> "CrashSummary":
+        """
+        Reset reason, boot count, consecutive-crash streak and, when a coredump
+        is stored, its decoded summary (task, PC, exception name, backtrace,
+        registers, whether it matches the running build, and the last RTC
+        snapshot before the crash). **HTTP only**, admin token required.
+        """
+        from .crash import parse_crash_json
+        self._require_http("get_crash_info")
+        return parse_crash_json(self._http_get("/system/crash"))
+
+    def get_boot_report(self) -> "BootReport":
+        """The full diagnostics bundle the firmware logs 30 s after boot, built now. **HTTP only.**"""
+        from .crash import parse_boot_report_json
+        self._require_http("get_boot_report")
+        return parse_boot_report_json(self._http_get("/system/crash", report=1))
+
+    def download_coredump(self, path: Optional[str] = None, *,
+                          progress: Optional[Callable[[int, int], None]] = None) -> bytes:
+        """
+        Download the stored ELF coredump in 768-byte base64 slices and return it.
+        With *path* the bytes are also written there. **HTTP only.**
+
+        Raises :class:`FileNotFoundError` when no valid dump is stored and
+        :class:`ValueError` if the device reports an error or the size changes
+        mid-download. Decode with ``espcoredump.py info_corefile`` against the ELF
+        of the build named by ``CrashSummary.dump_elf``.
+        """
+        from .crash import decode_chunk
+        self._require_http("download_coredump")
+        out = bytearray()
+        total = None
+        while total is None or len(out) < total:
+            resp = self._http_get("/system/crash", offset=len(out), len=768)
+            if not resp.get("ok"):
+                if total is None and "no coredump" in str(resp.get("error", "")):
+                    raise FileNotFoundError("no coredump stored on the device")
+                raise ValueError(resp.get("error", "coredump chunk failed"))
+            if total is not None and int(resp["total"]) != total:
+                raise ValueError("coredump changed while downloading")
+            total = int(resp["total"])
+            out += decode_chunk(resp)
+            if progress:
+                progress(len(out), total)
+        if path:
+            with open(path, "wb") as fh:
+                fh.write(out)
+        return bytes(out)
+
+    def clear_coredump(self) -> bool:
+        """Erase the stored coredump. Returns whether one existed. **HTTP only**, admin token."""
+        self._require_http("clear_coredump")
+        resp = self._http_post("/system/crash/clear")
+        if not resp.get("ok", True):
+            raise RuntimeError(resp.get("error", "clear failed"))
+        return bool(resp.get("had_dump", False))
 
     def reset(self) -> None:
         """

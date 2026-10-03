@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**142 tools in 19 groups, 6 resources, 4 prompt workflows.**
+**146 tools in 19 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -114,7 +114,7 @@ Claude Code, or your client's tool inspector. The groups:
 
 | Group | Count | Covers |
 |---|---:|---|
-| `discovery` | 10 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
+| `discovery` | 14 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, `crash_info` / `boot_report` / `crash_dump_save` / `crash_clear` (reset cause, coredump, boot diagnostics), board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
 | `io_config` | 3 | `configure_io` (required before any read/write), `set_supply_voltage`, `reset_device` |
 | `analog` | 6 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current`, `observe_adc` (bounded summary) |
 | `digital` | 2 | `read_digital`, `write_digital` |

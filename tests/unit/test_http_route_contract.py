@@ -38,6 +38,7 @@ WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
 ADAPTER = "Firmware/ESP32/src/web/http_adapter.cpp"
 API_CORE = "Firmware/ESP32/src/net/api_core.cpp"
 API_SCRIPTS = "Firmware/ESP32/src/net/api_scripts.cpp"
+CRASH_REPORT = "Firmware/ESP32/src/diag/crash_report.cpp"
 PY_PKG = REPO_ROOT / "python" / "bugbuster"
 
 # Concrete stand-in for an f-string path parameter (/channel/{ch}/..). "0" is
@@ -147,6 +148,8 @@ class Firmware:
         core = c_functions(core_src)
         # api_core_handle()'s /api/scripts/ block calls into api_scripts.cpp.
         core.update(c_functions(read_source(API_SCRIPTS)))
+        # ...and so does its /api/system/crash block (diag/crash_report.cpp).
+        core.update(c_functions(read_source(CRASH_REPORT)))
         return cls(routes, web, core, core.get("api_core_handle", ""))
 
 

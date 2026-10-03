@@ -12,6 +12,13 @@
   BLE-reachable except `raw`). The crash summary now carries the exception name,
   registers, whether the dump matches the running build, and a pre-crash RTC
   snapshot (heap, tightest stack, boot phase, consecutive-crash count).
+- **Python and MCP consumers of the boot package.** `bugbuster.crash` decodes the
+  crash summary, the `?report=1` bundle and `BOOTRPT` log lines exported from the
+  log platform (`parse_bootrpt_lines`, multi-boot, tolerant of ESP prefixes and
+  lost parts). `BugBuster.get_crash_info / get_boot_report / download_coredump /
+  clear_coredump` (HTTP) and four MCP tools in `discovery`: `crash_info`,
+  `boot_report` (live or from log text), `crash_dump_save`, `crash_clear`
+  (needs `confirm=True`).
 - **Scripts as background jobs.** One named script slot with source
   (manual/autorun/repl), state and last exit in `/api/scripts/status`;
   `run-file` returns at once and answers 409 naming the running script unless
