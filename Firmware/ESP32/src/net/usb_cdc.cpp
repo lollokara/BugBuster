@@ -145,6 +145,11 @@ void usb_cdc_init(void)
         }
     }
 
+    // Suppress "Flush failed" warnings from tinyusb_cdcacm_write_flush()
+    // which the driver emits at ESP_LOGW when no USB host is attached or
+    // reading endpoints.
+    esp_log_level_set("tusb_cdc_acm", ESP_LOG_ERROR);
+
     // Route stdout/stderr to CDC #0 for ESP_LOG and printf
     ret = esp_tusb_init_console(TINYUSB_CDC_ACM_0);
     if (ret != ESP_OK) {

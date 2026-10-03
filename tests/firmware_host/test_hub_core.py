@@ -2,7 +2,7 @@
 from tests.firmware_host.fwhost import compile_and_run
 
 HUB = "Firmware/ESP32/src/hub"
-SRC = [f"{HUB}/{n}" for n in ("hub_ring.c", "hub_log.c", "hub_json.c", "hub_policy.c")]
+SRC = [f"{HUB}/{n}" for n in ("hub_ring.c", "hub_log.c", "hub_json.c", "hub_policy.c", "hub_ratelimit.c")]
 
 MAIN = r"""
 #include <stdio.h>
@@ -11,6 +11,7 @@ MAIN = r"""
 #include "hub_log.h"
 #include "hub_json.h"
 #include "hub_policy.h"
+#include "hub_ratelimit.h"
 
 static void ring_tests(void) {
     static uint8_t store[64];
@@ -111,7 +112,33 @@ static void mpy_tests(void) {
            hub_log_parse_mpy("12 E", 4, &lv, &src, &sl, &msg, &ml), hub_log_parse_mpy("", 0, &lv, &src, &sl, &msg, &ml));
 }
 
-int main(void) { ring_tests(); log_tests(); sample_tests(); policy_tests(); mpy_tests(); return 0; }
+static void test_emit_cb(void *user, uint32_t ms, uint8_t src, char level,
+                         const char *tag, const char *msg, size_t len) {
+    (void)user; (void)ms; (void)src; (void)level;
+    printf("emit %s: %.*s\n", tag, (int)len, msg);
+}
+
+static void ratelimit_tests(void) {
+    hub_ratelimit_t rl;
+    hub_ratelimit_init(&rl, 3, 1000);
+    // Send 5 identical logs within window
+    int f1 = hub_ratelimit_filter(&rl, 100, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    int f2 = hub_ratelimit_filter(&rl, 200, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    int f3 = hub_ratelimit_filter(&rl, 300, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    int f4 = hub_ratelimit_filter(&rl, 400, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    int f5 = hub_ratelimit_filter(&rl, 500, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    printf("rl_burst %d%d%d%d%d\n", f1, f2, f3, f4, f5);
+    // Flush before expiry -> nothing emitted
+    hub_ratelimit_flush_expired(&rl, 600, test_emit_cb, NULL);
+    printf("rl_flush_early\n");
+    // Flush after window closes -> summary emitted
+    hub_ratelimit_flush_expired(&rl, 1150, test_emit_cb, NULL);
+    // Next log starts new window
+    int f6 = hub_ratelimit_filter(&rl, 1200, 0, 'W', "tusb_cdc_acm", "Flush failed", 12);
+    printf("rl_new_window %d\n", f6);
+}
+
+int main(void) { ring_tests(); log_tests(); sample_tests(); policy_tests(); mpy_tests(); ratelimit_tests(); return 0; }
 """
 
 
@@ -165,3 +192,12 @@ def test_micropython_output_lines_are_parsed():
     assert out[30] == "mpy1 1 E repl|Traceback (most recent call last):"
     assert out[31] == "mpy2 1 I manual|0"
     assert out[32] == "mpy3 000"
+
+
+def test_hub_ratelimit_suppresses_and_summarizes():
+    out = _run()
+    assert out[33] == "rl_burst 11100"
+    assert out[34] == "rl_flush_early"
+    assert out[35] == "emit tusb_cdc_acm: suppressed 2 x tusb_cdc_acm: Flush failed"
+    assert out[36] == "rl_new_window 1"
+

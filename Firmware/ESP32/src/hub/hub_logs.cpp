@@ -16,6 +16,7 @@
 #include "hat.h"
 #include "hub_json.h"
 #include "hub_policy.h"
+#include "hub_ratelimit.h"
 #include "hub_ring.h"
 #include "scripting.h"
 
@@ -36,6 +37,7 @@ static volatile uint32_t s_hook_dropped;
 static uint32_t s_reported_overflow;
 static uint32_t s_last_ship_ms;
 static uint32_t s_p4_seq, s_p4_last_now, s_last_p4_pull_ms;
+static hub_ratelimit_t *s_rl;
 
 static uint32_t rd32(const uint8_t *p)
 {
@@ -49,12 +51,31 @@ static void push_locked(uint32_t ms, uint8_t src, char level, const char *tag, c
     if (n) hub_ring_push(&s_ring, s_rec, (uint16_t)n);
 }
 
+static void ratelimit_emit_cb(void *user, uint32_t ms, uint8_t src, char level,
+                              const char *tag, const char *msg, size_t len)
+{
+    (void)user;
+    push_locked(ms, src, level, tag, msg, len);
+}
+
+// Caller holds s_lock.
+static void push_rate_limited_locked(uint32_t ms, uint8_t src, char level, const char *tag, const char *msg, size_t len)
+{
+    if (s_rl) {
+        hub_ratelimit_flush_expired(s_rl, ms, ratelimit_emit_cb, NULL);
+        if (!hub_ratelimit_filter(s_rl, ms, src, level, tag, msg, len)) {
+            return;
+        }
+    }
+    push_locked(ms, src, level, tag, msg, len);
+}
+
 void hub_logs_push(uint8_t src, char level, const char *tag, const char *msg, size_t len)
 {
     if (!s_lock) return;
     if (src == HUB_LOGSRC_S3 && !hub_level_enabled(level, s_level)) return;
     if (xSemaphoreTake(s_lock, 0) != pdTRUE) { s_hook_dropped = s_hook_dropped + 1; return; }
-    push_locked(hub_uptime_ms(), src, level, tag, msg, len);
+    push_rate_limited_locked(hub_uptime_ms(), src, level, tag, msg, len);
     xSemaphoreGive(s_lock);
 }
 
@@ -69,7 +90,7 @@ static int hub_vprintf(const char *fmt, va_list ap)
         const char *msg;
         size_t ml;
         if (hub_log_parse_esp(s_line, &level, tag, sizeof tag, &msg, &ml) && hub_level_enabled(level, s_level))
-            push_locked(hub_uptime_ms(), HUB_LOGSRC_S3, level, tag, msg, ml);
+            push_rate_limited_locked(hub_uptime_ms(), HUB_LOGSRC_S3, level, tag, msg, ml);
         xSemaphoreGive(s_lock);
     } else if (s_lock) {
         s_hook_dropped = s_hook_dropped + 1;
@@ -97,6 +118,11 @@ bool hub_logs_init(void)
     SemaphoreHandle_t lock = xSemaphoreCreateMutex();
     if (!lock) { heap_caps_free(buf); return false; }
     hub_ring_init(&s_ring, buf, RING_BYTES);
+    hub_ratelimit_t *rl = (hub_ratelimit_t *)heap_caps_malloc(sizeof(hub_ratelimit_t), MALLOC_CAP_SPIRAM);
+    if (rl) {
+        hub_ratelimit_init(rl, HUB_RATELIMIT_DEFAULT_BURST, HUB_RATELIMIT_DEFAULT_WINDOW_MS);
+        s_rl = rl;
+    }
     s_prev_vprintf = esp_log_set_vprintf(hub_vprintf);
     s_lock = lock;                           // set last: the hook and the tee are live from here
     scripting_set_log_tee(mpy_tee);
@@ -166,6 +192,9 @@ hub_step_t hub_logs_ship(const char *base, bool force)
         s_reported_overflow = s_ring.dropped;
         s_hook_dropped = 0;
         push_locked(now, HUB_LOGSRC_S3, 'W', "hub", m, (size_t)l);
+    }
+    if (s_rl) {
+        hub_ratelimit_flush_expired(s_rl, now, ratelimit_emit_cb, NULL);
     }
     bool due = s_ring.count && (force || s_ring.used >= SHIP_BYTES || now - s_last_ship_ms >= SHIP_PERIOD_MS);
     if (!due) { xSemaphoreGive(s_lock); return HUB_STEP_IDLE; }
