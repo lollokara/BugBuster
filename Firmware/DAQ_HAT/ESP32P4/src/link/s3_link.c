@@ -12,6 +12,7 @@
 #include "daq_settings.h"
 #include "daq_config_registry.h"
 #include "battsim_host.h"
+#include "log_forward.h"
 
 static const char *TAG = "s3_link";
 
@@ -219,6 +220,17 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
             int n = battsim_host_handle(payload, len, resp, sizeof(resp));
             if (n < 0) send_error();
             else send_frame(HATP_RSP_BS_DATA, resp, (uint8_t)n);
+            break;
+        }
+
+        // P4 ERROR / important log records for the hub (RAM only, served inline).
+        case HATP_CMD_LOG_PULL: {
+            uint8_t resp[HATP_MAX_PAYLOAD];
+            uint32_t after = len >= 4 ? (uint32_t)payload[0] | (uint32_t)payload[1] << 8
+                                        | (uint32_t)payload[2] << 16 | (uint32_t)payload[3] << 24 : 0;
+            size_t n = log_forward_pull(after, resp, sizeof(resp));
+            if (n == 0) send_error();
+            else send_frame(HATP_RSP_LOG_DATA, resp, (uint8_t)n);
             break;
         }
 

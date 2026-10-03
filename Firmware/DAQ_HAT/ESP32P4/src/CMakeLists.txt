@@ -33,6 +33,8 @@ idf_component_register(
         "cli/cli.c"
         "perf/daq_perf.c"
         "diag/diagnostics.c"
+        "diag/log_ring.c"
+        "diag/log_forward.c"
         "config/daq_settings.c"
         "config/daq_settings_glue.c"
         "battsim/battsim.c"
