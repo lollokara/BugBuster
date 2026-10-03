@@ -1,4 +1,4 @@
-﻿# HAT UART protocol
+# HAT UART protocol
 
 The control link between the ESP32-S3 mainboard and whichever HAT is attached.
 UART 921600 8N1 (ESP32 GPIO43 TX, GPIO44 RX). The mainboard is always bus
@@ -920,13 +920,33 @@ control, acquisition config, and multi-MCU OTA relay.
 
 These commands are byte-for-byte mirrored between the two firmwares and are
 defined in [ESP32/src/hat/hat.h](ESP32/src/hat/hat.h) (`HAT_CMD_DAQ_*`,
-`HAT_CMD_MB_*`) and
+`HAT_CMD_MB_*`, `HAT_CMD_LOG_PULL`) and
 [DAQ_HAT/ESP32P4/src/link/s3_link.h](DAQ_HAT/ESP32P4/src/link/s3_link.h)
 (`HATP_CMD_*`). Those headers are the reference - do not add a payload to one
 without the other.
 
 The C6 display link that sits behind this tunnel is documented separately in
 [DAQ_HAT/display-protocol.md](DAQ_HAT/display-protocol.md).
+
+#### 0x7E HATP_CMD_LOG_PULL (S3 → P4)
+
+Pull queued ERROR and `LOG_IMPORTANT` records from the P4's ring for shipping to
+the ESPFleet hub.
+
+**Request payload:** `[after_seq: u32 LE]` (0 = from the oldest).
+
+**Response:** `HATP_RSP_LOG_DATA` (0x9B), up to 240 bytes:
+
+| Field | Type | Description |
+|---|---|---|
+| `uptime_ms_now` | u32 LE | P4 uptime at reply time (ms) |
+| `first_seq` | u32 LE | Sequence number of the first record in this batch |
+| `dropped` | u32 LE | Records lost to ring overwrite since `after_seq` |
+| `n` | u8 | Number of records in this batch |
+| `more` | u8 | 1 if more unread records remain in the ring, else 0 |
+| `records` | `n` entries | Variable-length log records (see layout below) |
+
+Each record: `[uptime_ms: u32 LE][level: u8 ('E'|'W'|'I')][tag_len: u8][msg_len: u8][tag: tag_len B][msg: msg_len B]`.
 
 ---
 
@@ -947,6 +967,7 @@ Response IDs use the range **0x80–0xFF**.
 | 0x88 | RSP_RAIL_STATUS | GET_RAIL_STATUS, SET_RAIL_ENABLE, SET_RAIL_VOLTAGE | `[count:u8, rail×7]` |
 | 0x89 | RSP_LA_LOG | Unsolicited | Log line bytes (≤ 32 chars) - forwarded to host via `BBP_EVT_LA_LOG` (0xEC) |
 | 0x8A | RSP_CALIBRATE_STATUS | CALIBRATE_STATUS (0x44) | 30-byte calibration status payload (see §5.1 Group 6) |
+| 0x9B | RSP_LOG_DATA | HATP_CMD_LOG_PULL (0x7E) | Up to 240-byte log records payload (`uptime_ms_now`, `first_seq`, `dropped`, `n`, `more`, records) |
 
 ### 5.3 Error Codes
 

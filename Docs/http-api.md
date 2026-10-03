@@ -192,6 +192,16 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 
 ---
 
+## 8b. ESPFleet Hub Streaming (3 URIs)
+
+| Endpoint | Method | Body / Query |
+| :--- | :--- | :--- |
+| `/api/hub/status` | GET | Connection state, discovery source, push epoch, backlogs, synced runs. |
+| `/api/hub/config` | GET/POST | Body: `{"hub_url": "...", "hub_enabled": bool, "log_level_s3": "W"}`. |
+| `/api/hub/resync` | POST | Clears per-run synced marks to trigger full coverage re-diff. |
+
+---
+
 ## 9. Connectivity & Bus (10 URIs)
 
 | Endpoint | Method | Description |

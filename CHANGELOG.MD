@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Device streams logs and battery runs to the ESPFleet hub; hub-first battery view.**
+  The ESP32-S3 automatically discovers the local ESPFleet hub via mDNS (`_espfleet._tcp`),
+  registers via agent heartbeat, sets its system clock from hub time, ships S3,
+  MicroPython and P4 logs from a 64 KB PSRAM ring, streams active 1 Hz battery runs
+  with a 2 h backlog, and backfills historical runs across all tiers (`s1.bin`, `mDDDD.bin`,
+  `q15.bin`) driven by hub coverage diffs. The P4 DAQ HAT exposes a pull ring for ERROR
+  and important logs (`HATP_CMD_LOG_PULL`). iOS app reads hub series data first with seamless
+  fallback to device tiers when on the DAQ softAP hotspot. New S3 configuration and status
+  routes (`/api/hub/status`, `/api/hub/config`, `/api/hub/resync`).
 - **Boot diagnostics package and crash dump API.** 30 s after boot the S3 logs
   `BOOTRPT` lines (system, heap/DMA/PSRAM, per-task stack headroom, network, HAT,
   scripts, crash summary) for the remote logger. `GET /api/system/crash`
