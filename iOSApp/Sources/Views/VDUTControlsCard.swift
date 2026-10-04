@@ -52,7 +52,7 @@ struct VDUTControlsCard: View {
                         error = nil
                         if newValue { resetIntegration() }
                         if await connectionManager.setVdutEnable(newValue) == false {
-                            error = "Enable request failed (no response or non-2xx)."
+                            error = connectionManager.vdutLastError ?? "Enable request failed (no response or non-2xx)."
                         }
                     }
                 }
@@ -274,7 +274,7 @@ struct VDUTControlsCard: View {
         error = nil
         Task {
             let ok = await connectionManager.setVdutSetpoint(voltageV: v, currentLimitMa: ma)
-            if !ok { error = "Setpoint request failed (no response or non-2xx); showing the last confirmed values."; syncDrafts() }
+            if !ok { error = connectionManager.vdutLastError ?? "Setpoint request failed (no response or non-2xx); showing the last confirmed values."; syncDrafts() }
             isApplying = false
         }
     }

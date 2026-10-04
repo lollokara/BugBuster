@@ -479,11 +479,29 @@ static char *api_daq_vdut_status(void)
 }
 
 // POST /api/daq/vdut/enable — enable/disable the DAQ HAT DUT power supply.
+// A loaded battery-sim run makes the P4 refuse VDUT writes with the same reject
+// as a dead HAT. Called only after a write failed (success path unchanged).
+// Returns a 409 body {"error", "runId"} or NULL when no run owns the supply.
+static char *vdut_owned_by_run_error(void)
+{
+    int run = hat_daq_vdut_owner_run();
+    if (run < 0) return NULL;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "battery simulator run %d is loaded and owns VDUT; unload it first", run);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", false);
+    cJSON_AddStringToObject(r, "error", msg);
+    cJSON_AddNumberToObject(r, "runId", run);
+    return json_take(r);
+}
+
 static char *api_daq_vdut_enable(const cJSON *body)
 {
     cJSON *jen = body_get(body, "enabled");
     if (!cJSON_IsBool(jen)) return api_error("enabled required");
     if (!hat_daq_vdut_enable(cJSON_IsTrue(jen))) {
+        char *owned = vdut_owned_by_run_error();
+        if (owned) return owned;
         return api_error("HAT not responding or not a DAQ HAT");
     }
     cJSON *root = cJSON_CreateObject();
@@ -510,6 +528,8 @@ static char *api_daq_vdut_setpoint(const cJSON *body)
         return api_error("currentLimitMa out of range");
     }
     if (!hat_daq_vdut_setpoint(vdut_v, ilimit_a)) {
+        char *owned = vdut_owned_by_run_error();
+        if (owned) return owned;
         return api_error("HAT not responding, not a DAQ HAT, or setpoint rejected");
     }
     cJSON *root = cJSON_CreateObject();

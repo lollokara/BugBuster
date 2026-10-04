@@ -1063,6 +1063,15 @@ bool hat_daq_vdut_enable(bool enable);
 bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a);
 
 /**
+ * @brief Which battery-simulator run (if any) owns VDUT. Call only AFTER a VDUT
+ *        setpoint/enable failed: the P4 refuses both while a run is loaded
+ *        (battsim_owns_supply()) with the same generic reject as a dead HAT, so
+ *        this reads a battsim STATUS to tell the two apart.
+ * @return the loaded run id (>= 0), or -1 if no run is loaded / HAT unreachable.
+ */
+int hat_daq_vdut_owner_run(void);
+
+/**
  * @brief Request the ADAQ7769-1 digital filter + hardware decimation (the
  *        sample rate) the P4 should apply. Fire-and-forget: the P4 accepts/
  *        validates the filter code synchronously but applies it via its own
