@@ -126,10 +126,14 @@ def _normalise(lit: str) -> str:
     return lit
 
 
+# ESPFleet hub API clients (http://<hub>:8080/api/v1/...), not device routes.
+HUB_API_FILES = {"HubClient.swift", "HubStatus.swift", "HubMerge.swift"}
+
+
 def ui_literals() -> list[tuple[str, int, str]]:
     out = []
     files = [p for p in WEB_SRC.rglob("*.ts*") if not p.name.endswith(".test.ts")]
-    files += [p for p in IOS_SRC.rglob("*.swift") if p.name != "HubClient.swift"]
+    files += [p for p in IOS_SRC.rglob("*.swift") if p.name not in HUB_API_FILES]
     for p in sorted(files):
         for i, line in enumerate(read_source(p).splitlines(), 1):
             if line.lstrip().startswith(("//", "*")):
