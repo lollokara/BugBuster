@@ -38,9 +38,9 @@ struct ScriptLintResult: Equatable {
 /// the firmware plan's "Shared JSON contract":
 /// - logs: HTTP `text/plain` + `X-BugBuster-Log-Next`; BLE `{next, n, dropped, data: base64}`
 /// - files/get: HTTP the whole file as text; BLE base64 pages of 3072 bytes
-/// - upload: HTTP raw body to `/api/scripts/files`; BLE `files/chunk` requests ≤ 512 bytes
-/// - lint: HTTP raw text; BLE `{"name"}` (stored file) or `{"src"}` when it fits 512 bytes
-/// - eval: HTTP raw text + `?persist=1`; BLE `{"src", "persist"}` ≤ 512 bytes
+/// - upload: HTTP raw body to `/api/scripts/files`; BLE `files/chunk` requests ≤ 511 bytes
+/// - lint: HTTP raw text; BLE `{"name"}` (stored file) or `{"src"}` when it fits 511 bytes
+/// - eval: HTTP raw text + `?persist=1`; BLE `{"src", "persist"}` ≤ 511 bytes
 final class ScriptsClient {
     static let logPageBytes = 4096      // MP_LOG_RESP_MAX (config.h)
     static let filePageBytes = 3072     // SCRIPTS_FILE_PAGE (api_scripts.cpp)
@@ -144,14 +144,29 @@ final class ScriptsClient {
 
     /// Syntax check. Over BLE the stored file `name` is linted on the device (its
     /// source never crosses the tunnel); without a name the source goes inline when
-    /// the request fits 512 bytes. Firmware without BLE lint, or a source too large
+    /// the request fits 511 bytes. Firmware without BLE lint, or a source too large
     /// for the tunnel, throws `.needsWiFi("Checking syntax")`.
     func lint(_ source: String, name: String? = nil) async throws -> ScriptLintResult {
         let path = "/api/scripts/lint"
-        let reply: ScriptsWireReply
         switch wire.kind {
         case .wifi:
-            reply = try await call("POST", path, body: .text(source), acceptsNotOK: true)
+            let reply: ScriptsWireReply
+            do {
+                reply = try await wire.send("POST", path, query: [:], body: .text(source))
+            } catch ConnectionAPIError.needsWiFi(let what) {
+                throw ScriptsClientError.needsWiFi(what)
+            }
+            if reply.status == 401 { throw ScriptsClientError.unauthorized }
+            if let object = reply.json, let ok = object["ok"] as? Bool {
+                return ScriptLintResult(ok: ok, message: Self.errorText(object))
+            }
+            if let object = reply.json, let text = Self.errorText(object) {
+                throw ScriptsClientError.firmware(text)
+            }
+            if !reply.isSuccess {
+                throw ScriptsClientError.http(reply.status)
+            }
+            throw ScriptsClientError.malformed("lint")
         case .ble:
             let body: [String: Any]
             if let name {
@@ -163,15 +178,16 @@ final class ScriptsClient {
                     throw ScriptsClientError.needsWiFi("Checking syntax")
                 }
             }
+            let reply: ScriptsWireReply
             do {
                 reply = try await call("POST", path, body: .json(body), acceptsNotOK: true)
             } catch ScriptsClientError.firmware(let text) where text == "unknown path" {
                 // Firmware that predates BLE lint answers api_core's fallback.
                 throw ScriptsClientError.needsWiFi("Checking syntax")
             }
+            guard let object = reply.json, let ok = object["ok"] as? Bool else { throw ScriptsClientError.malformed("lint") }
+            return ScriptLintResult(ok: ok, message: Self.errorText(object))
         }
-        guard let object = reply.json, let ok = object["ok"] as? Bool else { throw ScriptsClientError.malformed("lint") }
-        return ScriptLintResult(ok: ok, message: Self.errorText(object))
     }
 
     /// Submits a snippet to the REPL context; returns the script id. Output arrives

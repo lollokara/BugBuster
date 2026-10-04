@@ -200,8 +200,10 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
         await readValue(Self.chrSensor)
     }
 
-    /// Firmware `s_api_req_buf[512]` (ble_service.cpp): the whole request JSON must fit.
-    public static let maxTunnelRequestBytes = 512
+    /// Firmware `s_api_req_buf[512]` (Firmware/ESP32/src/net/ble_service.cpp:73):
+    /// `ble_write_to_buf` (lines 170-175, 465) rejects writes with `len >= buf_sz`
+    /// to leave room for the NUL terminator, so the request JSON must be <= 511 bytes.
+    public static let maxTunnelRequestBytes = 511
 
     /// The exact bytes written to the API-request characteristic. Slashes stay
     /// unescaped so a base64 upload chunk costs one byte per character.
