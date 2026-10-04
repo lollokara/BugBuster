@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Scripting API deep documentation, smarter autocomplete, flush key bar.** Every
+  module, class, function, method and constant in the `.pyi` stubs now has a summary,
+  per-parameter docs (type, units, range, default), return shape, raised exceptions,
+  safety notes and an example, written from the firmware sources; the stubs gained
+  `machine.soft_reset/lightsleep/deepsleep/WDT`, the SSD1306 drivers and the HTTP
+  `Response` type, and wrong return types were fixed. `stubs_to_json.py` emits the new
+  fields additively (schema stays `/1`) plus the web editor's completion table, and 18
+  more safe example scripts ship. iOS: Python built-ins, exceptions and keywords
+  complete; accepting a call inserts `name(arg, arg)` with the required arguments as
+  placeholders (Tab walks them); the docs browser shows parameters, returns, raises,
+  safety notes and examples with Insert/Copy; the editor key bar is a native keyboard
+  accessory with 44 pt buttons and the editor ends flush above it.
 - **iOS Scripts rework: background runs, live logs and a real editor.** One script
   slot with Run / Run in background; starting a second asks "Stop 'x' and run 'y'?"
   and replaces it. A status pill on every tab, including Scripts, and a live log
