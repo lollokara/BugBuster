@@ -89,6 +89,7 @@ static size_t   s_log_head = 0;   // write position
 static size_t   s_log_used = 0;   // bytes in ring
 static uint64_t s_log_total = 0;  // absolute bytes accepted into the ring
 static bool     s_log_truncated = false;
+static uint32_t s_log_dropped = 0;
 
 // Structured-line assembler for MicroPython output (guarded by s_log_mutex).
 static sr_line_asm_t s_line_asm;
@@ -190,6 +191,21 @@ static void ring_emit(void *ctx, const char *line, size_t len)
 }
 
 
+static void emit_drop_warning_locked(uint32_t ts)
+{
+    uint32_t dropped = __atomic_exchange_n(&s_log_dropped, 0, __ATOMIC_RELAXED);
+    if (dropped > 0) {
+        char drop_msg[64];
+        int dn = snprintf(drop_msg, sizeof(drop_msg), "%lu log lines dropped (busy)", (unsigned long)dropped);
+        if (dn > 0) {
+            char drop_line[SR_LINE_MAX + 40];
+            size_t dlen = sr_format_line(drop_line, sizeof(drop_line), ts, 'W', "sys", drop_msg, (size_t)dn);
+            ring_emit(NULL, drop_line, dlen);
+        }
+    }
+}
+
+
 // Level stamped on MicroPython output ('E' while a traceback prints).
 static void log_set_level(char level)
 {
@@ -224,10 +240,13 @@ void scripting_log_event(char level, const char *fmt, ...)
     char line[SR_LINE_MAX + 40];
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         uint32_t ts = now_ms();
+        emit_drop_warning_locked(ts);
         sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
         size_t len = sr_format_line(line, sizeof(line), ts, level, "sys", text, tlen);
         log_push_locked(line, len);
         xSemaphoreGive(s_log_mutex);
+    } else {
+        __atomic_fetch_add(&s_log_dropped, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -241,34 +260,73 @@ void scripting_log(char level, const char *msg, size_t len)
         len = 0;
     }
 
-    // Strip trailing \r and \n so we format exactly one clean line
-    size_t text_len = len;
-    while (text_len > 0 && (msg[text_len - 1] == '\n' || msg[text_len - 1] == '\r')) {
-        text_len--;
+    // Count non-empty segments separated by \r or \n
+    size_t non_empty_segments = 0;
+    size_t seg_start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+            if (i > seg_start) {
+                non_empty_segments++;
+            }
+            seg_start = i + 1;
+        }
     }
 
-    // Tee to stderr (CDC #0) for console visibility, except while a BBP host owns it:
-    // raw bytes there corrupt the COBS stream. Output still reaches the log ring.
-    if (!bbpCdcClaimed()) {
-        fwrite(msg, 1, text_len, stderr);
-        fputc('\n', stderr);
+    // Tee to stderr (CDC #0) and browser REPL terminal
+    if (non_empty_segments == 0) {
+        if (!bbpCdcClaimed()) {
+            fputc('\n', stderr);
+        }
+        repl_ws_forward("\n", 1);
+    } else {
+        seg_start = 0;
+        for (size_t i = 0; i <= len; i++) {
+            if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+                size_t seg_len = i - seg_start;
+                if (seg_len > 0) {
+                    if (!bbpCdcClaimed()) {
+                        fwrite(msg + seg_start, 1, seg_len, stderr);
+                        fputc('\n', stderr);
+                    }
+                    repl_ws_forward(msg + seg_start, seg_len);
+                    repl_ws_forward("\n", 1);
+                }
+                seg_start = i + 1;
+            }
+        }
     }
-
-    // Also feed the browser REPL terminal. repl_ws_forward() is non-blocking
-    // and becomes a no-op until a WebSocket session is authenticated.
-    repl_ws_forward(msg, text_len);
-    repl_ws_forward("\n", 1);
 
     if (!s_log_mutex) return;
-    char line[SR_LINE_MAX + 40];
-    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        uint32_t ts = now_ms();
-        sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
-        size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", msg, text_len);
-        ring_emit(NULL, line, n);
-        sr_line_set_level(&s_line_asm, 'I', ts, ring_emit, NULL);
-        xSemaphoreGive(s_log_mutex);
+    size_t lines_to_emit = (non_empty_segments == 0) ? 1 : non_empty_segments;
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        __atomic_fetch_add(&s_log_dropped, (uint32_t)lines_to_emit, __ATOMIC_RELAXED);
+        return;
     }
+
+    uint32_t ts = now_ms();
+    emit_drop_warning_locked(ts);
+    sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
+
+    char line[SR_LINE_MAX + 40];
+    if (non_empty_segments == 0) {
+        size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", "", 0);
+        ring_emit(NULL, line, n);
+    } else {
+        seg_start = 0;
+        for (size_t i = 0; i <= len; i++) {
+            if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+                size_t seg_len = i - seg_start;
+                if (seg_len > 0) {
+                    size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", msg + seg_start, seg_len);
+                    ring_emit(NULL, line, n);
+                }
+                seg_start = i + 1;
+            }
+        }
+    }
+
+    sr_line_set_level(&s_line_asm, 'I', ts, ring_emit, NULL);
+    xSemaphoreGive(s_log_mutex);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,8 +347,11 @@ void scripting_log_push(const char *str, size_t len)
     // the raw bytes so interactive output still looks like a terminal.
     if (!s_log_mutex) return;
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        emit_drop_warning_locked(now_ms());
         sr_line_feed(&s_line_asm, now_ms(), str, len, ring_emit, NULL);
         xSemaphoreGive(s_log_mutex);
+    } else {
+        __atomic_fetch_add(&s_log_dropped, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -786,6 +847,7 @@ static void taskMicroPython(void *pvParam)
 void scripting_init(void)
 {
     memset(&s_status, 0, sizeof(s_status));
+    s_log_dropped = 0;
     sr_line_init(&s_line_asm, "mpy", 'I');
 
 
