@@ -11,12 +11,32 @@ JSON document that is committed next to them:
 
 A class whose methods are all @staticmethod is a namespace (``daq.run``) and is
 emitted with ``"kind": "namespace"``.
+
+Docstring format (Google style). Everything before the first section header is
+the summary (first line) and description; the sections below are parsed into
+structured fields and also stay in the raw ``doc`` string:
+
+    Args:      one ``name: text`` entry per parameter (indented continuation lines join)
+    Returns:   free text
+    Keys:      ``name: text`` entries describing the keys of a returned dict
+    Raises:    ``ExceptionName: text`` entries
+    Safety:    free text (also accepted: Warning, Note, Notes)
+    Example:   a code block (Examples is accepted); repeatable
+
+Each function/method/class gains ``summary``, ``description``, ``param_docs``
+(a ``{name: text}`` map, also merged into ``params`` as ``doc``), ``returns_doc``,
+``return_keys``, ``raises``, ``notes`` and ``examples``. All are additive: the
+schema stays ``bugbuster.firmware-api/1`` and ``doc`` is still the full text.
+A string literal straight after a constant (``X: int = 1`` then a bare string)
+documents it.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import inspect
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -26,6 +46,84 @@ EXAMPLES = STUBS / "examples"
 OUT = STUBS / "firmware_api.json"
 SCHEMA = "bugbuster.firmware-api/1"
 MODULE_ORDER = ["bugbuster", "daq", "machine", "bb_helpers", "bb_devices", "bb_logging"]
+
+
+_SECTIONS = {"args": "args", "arguments": "args", "returns": "returns", "keys": "keys",
+             "raises": "raises", "safety": "notes", "warning": "notes", "note": "notes",
+             "notes": "notes", "example": "examples", "examples": "examples"}
+_HEADER = re.compile(r"^([A-Za-z]+):\s*$")
+_ENTRY = re.compile(r"^(\*{0,2}[A-Za-z_][A-Za-z0-9_.*]*)\s*:\s*(.*)$")
+
+
+def _dedent(lines: list[str]) -> list[str]:
+    body = [ln for ln in lines if ln.strip()]
+    if not body:
+        return []
+    pad = min(len(ln) - len(ln.lstrip()) for ln in body)
+    return [ln[pad:] if ln.strip() else "" for ln in lines]
+
+
+def _trim(lines: list[str]) -> list[str]:
+    while lines and not lines[0].strip():
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines = lines[:-1]
+    return lines
+
+
+def _entries(lines: list[str]) -> list[tuple[str, str]]:
+    """``name: text`` entries; deeper-indented or non-matching lines continue the previous one."""
+    out: list[list[str]] = []
+    for raw in _dedent(lines):
+        m = _ENTRY.match(raw) if raw and not raw[0].isspace() else None
+        if m:
+            out.append([m.group(1), m.group(2).strip()])
+        elif raw.strip() and out:
+            out[-1][1] = (out[-1][1] + " " + raw.strip()).strip()
+    return [(n, t) for n, t in out]
+
+
+def _paragraphs(lines: list[str]) -> str:
+    return "\n".join(_trim(_dedent(lines))).strip()
+
+
+def parse_doc(doc: str) -> dict:
+    """Split a docstring into summary, description and the structured sections."""
+    lines = doc.splitlines()
+    head: list[str] = []
+    sections: list[tuple[str, list[str]]] = []
+    current: list[str] | None = None
+    for raw in lines:
+        m = _HEADER.match(raw)
+        if m and m.group(1).lower() in _SECTIONS and not raw.startswith(" "):
+            current = []
+            sections.append((_SECTIONS[m.group(1).lower()], current))
+        elif current is not None:
+            current.append(raw)
+        else:
+            head.append(raw)
+    head = _trim(head)
+    summary = head[0].strip() if head else ""
+    description = "\n".join(_trim(head[1:])).strip()
+    out: dict = {"summary": summary, "description": description, "param_docs": {},
+                 "returns_doc": "", "return_keys": [], "raises": [], "notes": "", "examples": []}
+    for kind, body in sections:
+        if kind == "args":
+            out["param_docs"].update((n.lstrip("*"), t) for n, t in _entries(body))
+        elif kind == "returns":
+            out["returns_doc"] = _paragraphs(body)
+        elif kind == "keys":
+            out["return_keys"] = [{"name": n, "doc": t} for n, t in _entries(body)]
+        elif kind == "raises":
+            out["raises"] = [{"type": n, "doc": t} for n, t in _entries(body)]
+        elif kind == "notes":
+            text = _paragraphs(body)
+            out["notes"] = (out["notes"] + "\n\n" + text).strip()
+        elif kind == "examples":
+            code = "\n".join(_trim(_dedent(body)))
+            if code:
+                out["examples"].append(code)
+    return out
 
 
 def _ann(node: ast.expr | None) -> str | None:
@@ -79,17 +177,26 @@ def _signature(name: str, params: list[dict], returns: str | None) -> str:
 def _function(node: ast.FunctionDef, drop_self: bool = False) -> dict:
     params = _params(node.args, drop_self)
     returns = _ann(node.returns)
+    doc = ast.get_docstring(node) or ""
+    parsed = parse_doc(doc)
+    for p in params:
+        p["doc"] = parsed["param_docs"].get(p["name"].lstrip("*"), "")
     return {"name": node.name, "signature": _signature(node.name, params, returns),
-            "params": params, "returns": returns, "doc": ast.get_docstring(node) or ""}
+            "params": params, "returns": returns, "doc": doc, **parsed}
 
 
 def _constants(body: list[ast.stmt]) -> list[dict]:
     out = []
-    for n in body:
+    for i, n in enumerate(body):
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) \
                 and not n.target.id.startswith("_"):
+            doc = ""
+            nxt = body[i + 1] if i + 1 < len(body) else None
+            if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Constant) \
+                    and isinstance(nxt.value.value, str):
+                doc = inspect.cleandoc(nxt.value.value)
             out.append({"name": n.target.id, "annotation": _ann(n.annotation),
-                        "value": _ann(n.value)})
+                        "value": _ann(n.value), "doc": doc})
     return out
 
 
@@ -101,17 +208,20 @@ def _class(node: ast.ClassDef) -> dict:
     funcs = [n for n in node.body if isinstance(n, ast.FunctionDef)
              and (not n.name.startswith("_") or n.name in ("__init__", "__enter__", "__exit__"))]
     namespace = bool(funcs) and all(_is_static(f) for f in funcs)
+    doc = ast.get_docstring(node) or ""
     return {"name": node.name, "kind": "namespace" if namespace else "class",
-            "doc": ast.get_docstring(node) or "",
+            "doc": doc, **parse_doc(doc),
             "methods": [_function(f, drop_self=not namespace) for f in funcs],
             "constants": _constants(node.body)}
 
 
 def module_doc(path: Path) -> dict:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    doc = ast.get_docstring(tree) or ""
     return {
         "name": path.stem,
-        "doc": ast.get_docstring(tree) or "",
+        "doc": doc,
+        **parse_doc(doc),
         "functions": [_function(n) for n in tree.body
                       if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")],
         "classes": [_class(n) for n in tree.body
