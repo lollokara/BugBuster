@@ -1124,13 +1124,24 @@ bool battsim_action(uint8_t action_id)
         if (S.ck.state == BS_ST_ACTIVE || S.ck.state == BS_ST_PAUSED) {
             enter_stopped(BS_ST_STOPPED, BS_EV_STOP);
         }
+        // A stopped run is finished: release the HAT (output off, battsim mode left) so it
+        // can be used as a plain power analyzer again. The run stays on flash; LOAD brings
+        // it back as STOPPED and REOPEN turns it into PAUSED. DEPLETED stays loaded.
+        if (S.ck.state == BS_ST_STOPPED) unload_locked();
         ok = true;
         break;
     case DAQ_ACT_BS_RUN_REOPEN: {
         // STOPPED -> PAUSED, output stays off. ck.ticks / counters untouched;
         // START re-bases the wall clock, so the stopped gap is never integrated.
+        // STOP unloads the run, so REOPEN loads the selected one first when nothing is loaded.
+        bool loaded_here = false;
+        if (!S.loaded && sel > 0) {
+            if (!load_locked((uint16_t)sel, false)) break;   // load_locked set S.err
+            loaded_here = true;
+        }
         bs_reopen_t r = bs_reopen_check(S.loaded ? S.ck.state : BS_ST_NONE, S.loaded,
                                         S.loaded && run_writable());
+        if (r != BS_REOPEN_OK && loaded_here) unload_locked();   // leave the HAT as we found it
         if (r == BS_REOPEN_NO_RUN)       { S.err = BS_E_NO_RUN; break; }
         if (r == BS_REOPEN_DEPLETED)     { S.err = BS_E_DEPLETED; break; }
         if (r != BS_REOPEN_OK)           { S.err = BS_E_STATE; break; }
