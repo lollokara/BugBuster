@@ -247,6 +247,7 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
     let t1 = RwSignal::new(1.0f64);
     let sync = RwSignal::new(None::<SyncProgress>);
     let busy = RwSignal::new(false);
+    let busy_label = RwSignal::new(None::<String>);
     let error = RwSignal::new(None::<String>);
     let log_i = RwSignal::new(true);
     let wall = RwSignal::new(false);
@@ -492,7 +493,23 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
             struct A { action: u8, run_id: Option<u16>, slot: Option<u8> }
-            if let Err(e) = call::<()>("bs_action", A { action, run_id, slot: None }).await {
+            // Long actions finish on the P4 before it replies; the backend polls until the device
+            // shows the result, so just say what is going on meanwhile.
+            let long = matches!(action, ACT_NEW | ACT_UNLOAD | ACT_LOAD | ACT_DELETE);
+            if long {
+                error.set(None);
+                busy_label.set(Some(match (action, run_id) {
+                    (ACT_DELETE, Some(id)) => format!("Deleting run #{id}..."),
+                    (ACT_DELETE, None) => "Deleting run...".into(),
+                    (ACT_LOAD, Some(id)) => format!("Loading run #{id}..."),
+                    (ACT_LOAD, None) => "Loading run...".into(),
+                    (ACT_UNLOAD, _) => "Unloading run...".into(),
+                    _ => "Creating run...".into(),
+                }));
+            }
+            let res = call::<()>("bs_action", A { action, run_id, slot: None }).await;
+            busy_label.set(None);
+            if let Err(e) = res {
                 let hint = status.get_untracked().and_then(|s| ERRORS.get(s.last_error as usize).copied()).filter(|s| !s.is_empty());
                 error.set(Some(match hint { Some(h) => format!("{e} ({h})"), None => e }));
             }
@@ -657,10 +674,11 @@ pub fn BattSimTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             <div class="bs-empty">
                                 {move || match sync.get() {
                                     Some(p) => view! { <span>{format!("Downloading {} - {} / {}", p.file, fmt_bytes(p.done), fmt_bytes(p.total))}</span> }.into_any(),
-                                    None => view! { <span>{if busy.get() { "Opening run..." } else { "Pick a run above. Wheel to zoom, drag to pan, Shift+drag to zoom to a range, double-click for the whole run." }}</span> }.into_any(),
+                                    None => view! { <span>{if let Some(l) = busy_label.get() { l } else if busy.get() { "Opening run...".to_string() } else { "Pick a run above. Wheel to zoom, drag to pan, Shift+drag to zoom to a range, double-click for the whole run.".to_string() }}</span> }.into_any(),
                                 }}
                             </div>
                         })}
+                        {move || busy_label.get().filter(|_| open.get().is_some()).map(|l| view! { <div class="bs-sync">{l}</div> })}
                         {move || (open.get().is_some() && busy.get()).then(|| view! {
                             <div class="bs-sync">{move || sync.get().map(|p| format!("Syncing {} {:.0} %", p.file, p.done as f64 / p.total.max(1) as f64 * 100.0)).unwrap_or_else(|| "Syncing...".into())}</div>
                         })}
@@ -804,6 +822,12 @@ fn NewRunDialog(
             #[derive(Serialize)]
             #[serde(rename_all = "camelCase")]
             struct A { action: u8, run_id: Option<u16>, slot: Option<u8> }
+            if let Err(e) = call::<()>("bs_prepare_new_run", NoArgs {}).await {
+                working.set(false);
+                error.set(Some(format!("New run: {e}")));
+                return;
+            }
+
             let ident = BsConfig { chem: Some(chem.get_untracked()), cells: Some(cells.get_untracked()), capacity_mah: Some(cap.get_untracked()), ..Default::default() };
             let rest = BsConfig {
                 start_soc_pct: Some(soc.get_untracked()),
@@ -825,7 +849,17 @@ fn NewRunDialog(
             working.set(false);
             match r {
                 Ok(()) => { show.set(false); on_done.run(()); }
-                Err(e) => error.set(Some(format!("New run: {e}"))),
+                Err(e) => {
+                    // "rejected by the DAQ HAT" alone says nothing: add the device's reason.
+                    let mut msg = format!("New run: {e}");
+                    if let Ok(st) = call::<BsStatus>("bs_status", NoArgs {}).await {
+                        if let Some(h) = ERRORS.get(st.last_error as usize).filter(|h| !h.is_empty()) {
+                            msg = format!("{msg} ({h})");
+                        }
+                        status.set(Some(st));
+                    }
+                    error.set(Some(msg));
+                }
             }
         });
     };

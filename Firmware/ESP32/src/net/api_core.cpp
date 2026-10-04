@@ -1936,6 +1936,7 @@ static char *api_daq_bs(const cJSON *body)
     if (!rsp) return api_error("out of memory");
     int got = hat_bs_request(req, (uint8_t)(1 + n), rsp, HAT_OTA_WIDE_MAX, 600);
     char *out = got == -2 ? api_error("battsim request rejected")
+              : got == HAT_ERR_LOCK_BUSY ? api_error("HAT busy: a run action is in progress")
               : got < 0   ? api_error("HAT not responding or not a DAQ HAT")
                           : b64_result(rsp, (size_t)got);
     heap_caps_free(rsp);
@@ -2001,7 +2002,7 @@ static char *api_daq_config(const cJSON *body)
     if (!rsp) return api_error("out of memory");
     uint8_t rsp_len = 0;
     uint8_t code = hat_request((uint8_t)(0x70 + jop->valueint), args, (uint8_t)n,
-                               rsp, &rsp_len, 300, 240);
+                               rsp, &rsp_len, HAT_REQ_DEFAULT_TIMEOUT_MS, 240);
     char *out = code == 0 ? api_error("HAT timeout")
               : (code != HAT_RSP_OK && code != 0x93 && code != 0x94) ? api_error("rejected by the DAQ HAT")
               : b64_result(rsp, rsp_len);

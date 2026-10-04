@@ -696,6 +696,8 @@ bool hat_init(void);
  *
  * @return Error code as described above.
  */
+#include "hat_action_policy.h"
+
 uint8_t hat_get_last_error(void);
 
 /**

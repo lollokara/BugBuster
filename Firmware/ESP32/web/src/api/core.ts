@@ -51,6 +51,10 @@ export function isPersistentlyRemembered(mac: string): boolean {
   }
 }
 
+// Page-lifetime fallback: browser storage can be missing or throw (private window, blocked site
+// data, sandboxed frame), and without this the token was silently dropped and pairing looped.
+const memoryTokens = new Map<string, string>();
+
 export function getCachedToken(mac: string): string | null {
   const key = tokenKey(mac);
   try {
@@ -69,7 +73,7 @@ export function getCachedToken(mac: string): string | null {
       return persistent;
     }
   } catch { /* ignore */ }
-  return null;
+  return memoryTokens.get(key) ?? null;
 }
 
 export function setCachedToken(
@@ -78,6 +82,7 @@ export function setCachedToken(
   options: { remember?: boolean } = {},
 ): void {
   const key = tokenKey(mac);
+  memoryTokens.set(key, token);
   const persist = options.remember ?? isPersistentlyRemembered(mac);
   try {
     if (persist) {
@@ -96,6 +101,7 @@ export function setCachedToken(
 
 export function clearCachedToken(mac: string): void {
   const key = tokenKey(mac);
+  memoryTokens.delete(key);
   try { sessionStorage.removeItem(key); } catch { /* ignore */ }
   try {
     localStorage.removeItem(key);

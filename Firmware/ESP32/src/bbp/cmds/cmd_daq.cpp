@@ -69,7 +69,7 @@ static int handler_daq_config(const uint8_t *payload, size_t len,
     uint8_t rsp[240];
     uint8_t rsp_len = 0;
     uint8_t rsp_code = hat_request(hat_cmd, payload + 1, fwd_len,
-                                   rsp, &rsp_len, /*timeout_ms=*/300, sizeof(rsp));
+                                   rsp, &rsp_len, HAT_REQ_DEFAULT_TIMEOUT_MS, sizeof(rsp));
 
     if (rsp_code == 0) return -CMD_ERR_TIMEOUT;
     // OK (0x80, e.g. SET/ACTION) and the data responses are all success; any

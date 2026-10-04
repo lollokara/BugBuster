@@ -7,12 +7,12 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { PairingRequiredError } from "../../api/client";
 import { deviceMac, pollIntervalFor } from "../../state/signals";
 import * as dev from "./device";
+import { ACT, actionLabel, isLongAction, isRefusal, prepareForNewRun, refusalText, runLongAction } from "./settle";
 import {
   buildHistory, CHEM_NAMES, ERROR_TEXT, EVENT_NAMES, fmtDuration, fmtElapsedTick, fmtSi,
   STATE_NAMES, stats as winStats, stepSegments, timeStep, view as mkView, type BsStatus, type History, type View,
 } from "./history";
 
-const ACT = { defaults: 14, newRun: 7, start: 8, pause: 9, stop: 10, unload: 11, load: 12, del: 13 };
 const LANES = [
   { key: "v", label: "Voltage", unit: "V", color: "var(--green)" },
   { key: "i", label: "Current", unit: "A", color: "var(--amber)" },
@@ -216,14 +216,31 @@ export function BattSim() {
     if (!mac) return;
     setMsg(null);
     try {
-      await dev.action(mac, id, run !== undefined ? { run } : {});
-      await new Promise((r) => setTimeout(r, 400));
+      if (isLongAction(id)) {
+        // The P4 finishes these before it replies; a lost reply is not a failure, so poll until it shows.
+        setMsg(actionLabel(id, run));
+        const deps = { status: dev.status, runIds: dev.runIds, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), now: Date.now };
+        await runLongAction(deps, () => dev.action(mac, id, run !== undefined ? { run } : {}), id, run);
+        setMsg(null);
+        if (id === ACT.del && hist?.meta.runId === run) setHist(null);
+      } else {
+        await dev.action(mac, id, run !== undefined ? { run } : {});
+        await new Promise((r) => setTimeout(r, 400));
+      }
       const now = await dev.status();
       setSt(now);
-      if (now.lastError) setMsg(ERROR_TEXT[now.lastError] ?? `error ${now.lastError}`);
-      if ([ACT.newRun, ACT.del, ACT.stop, ACT.unload, ACT.load].includes(id)) refreshRuns();
+      if (now.lastError && !isLongAction(id)) setMsg(ERROR_TEXT[now.lastError] ?? `error ${now.lastError}`);
+      if ([ACT.newRun, ACT.del, ACT.stop, ACT.unload, ACT.load, ACT.reopen].includes(id)) refreshRuns();
     } catch (e) {
-      if (!(e instanceof PairingRequiredError)) setMsg(errMsg(e));
+      if (e instanceof PairingRequiredError) return;
+      if (isRefusal(e)) {
+        try {
+          const now = await dev.status();
+          setSt(now);
+          if (now.lastError) { setMsg(refusalText(id, now.lastError, ERROR_TEXT)); return; }
+        } catch { /* fall through to the raw message */ }
+      }
+      setMsg(errMsg(e));
     }
   };
 
@@ -389,6 +406,8 @@ function NewRun({ mac, onClose, onDone, onError }: { mac: string; onClose: () =>
   const create = async () => {
     setBusy(true);
     try {
+      const deps = { status: dev.status, runIds: dev.runIds, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), now: Date.now };
+      await prepareForNewRun(deps, () => dev.action(mac, ACT.unload));
       await dev.cfgSet(mac, 0x0801, "enum", f.chem);
       await dev.cfgSet(mac, 0x0802, "u8", f.cells);
       await dev.cfgSet(mac, 0x0803, "u32", f.cap);
@@ -400,10 +419,19 @@ function NewRun({ mac, onClose, onDone, onError }: { mac: string; onClose: () =>
       await dev.cfgSet(mac, 0x080b, "u32", f.extUa);
       await dev.cfgSet(mac, 0x080c, "bool", f.dither);
       await dev.cfgSet(mac, 0x080f, "str", f.name);
-      await dev.action(mac, ACT.newRun);
+      await runLongAction(deps, () => dev.action(mac, ACT.newRun), ACT.newRun);
       onDone();
     } catch (e) {
-      if (!(e instanceof PairingRequiredError)) onError(`New run: ${errMsg(e)}`);
+      if (!(e instanceof PairingRequiredError)) {
+        let why = errMsg(e);
+        if (isRefusal(e)) {
+          try {
+            const st = await dev.status();
+            if (st.lastError) why = refusalText(ACT.newRun, st.lastError, ERROR_TEXT);
+          } catch { /* keep the raw message */ }
+        }
+        onError(`New run: ${why}`);
+      }
     }
     setBusy(false);
   };

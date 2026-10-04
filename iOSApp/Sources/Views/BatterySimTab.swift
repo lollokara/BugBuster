@@ -905,9 +905,12 @@ struct BatterySimTab: View {
             return
         }
         #endif
+        let long = BattSim.isLongAction(a)
+        if long { busy = "\(BattSim.actionName(a))\(run.map { " #\($0)" } ?? "")..." }
+        defer { if long { busy = nil } }
         do {
-            if a == .reopen {
-                try await client.reopen(run: run)
+            if long {
+                try await client.runAction(a, run: run)
             } else {
                 try await client.action(a, run: run)
             }
@@ -918,18 +921,23 @@ struct BatterySimTab: View {
             }
             if [.newRun, .delete, .stop, .unload, .load, .reopen].contains(a) { await refreshRuns() }
         } catch {
-            if let s = try? await client.status(), s.lastError != 0 {
+            if let s = try? await client.status() {
                 status = s
-                message = BattSim.errorText[safe: s.lastError] ?? "error \(s.lastError)"
-            } else {
-                message = error.localizedDescription
+                if case BattSimError.rejected = error, s.lastError != 0 {
+                    message = BattSim.refusalText(a, lastError: s.lastError)
+                    return
+                }
             }
+            message = error.localizedDescription
         }
     }
 
     private func createRun(_ c: NewBatteryRunSheet.Config) async {
         let cl = client
         do {
+            busy = "Preparing new run..."
+            defer { busy = nil }
+            try await cl.prepareForNewRun()
             try await cl.cfgSet(0x0801, .enumV, c.chem)
             try await cl.cfgSet(0x0802, .u8, c.cells)
             try await cl.cfgSet(0x0803, .u32, c.capacityMah)
@@ -939,8 +947,16 @@ struct BatterySimTab: View {
             try await cl.cfgSet(0x080A, .bool, c.externalLoad ? 1 : 0)
             try await cl.cfgSet(0x080B, .u32, c.externalLoadUa)
             try await cl.cfgSetString(0x080F, c.name)
+            busy = nil
             await act(.newRun)
-        } catch { message = "New run: \(error.localizedDescription)" }
+        } catch {
+            if case BattSimError.rejected = error, let st = try? await cl.status(), st.lastError != 0 {
+                status = st
+                message = "New run: \(BattSim.refusalText(.newRun, lastError: st.lastError))"
+            } else {
+                message = "New run: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func preset(_ secs: Double) {
