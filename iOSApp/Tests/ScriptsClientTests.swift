@@ -229,12 +229,39 @@ final class ScriptsClientTests: XCTestCase {
         XCTAssertEqual(wire.calls.first?.textBody, "x = (")
     }
 
+    func testLintHTTPStatus400SyntaxErrorReturnsLintResult() async throws {
+        let wire = FakeScriptsWire { _ in .json(400, ["ok": false, "err": "line 1: invalid syntax"]) }
+        let r = try await ScriptsClient(wire: wire).lint("def bad(")
+        XCTAssertEqual(r, ScriptLintResult(ok: false, message: "line 1: invalid syntax"))
+    }
+
+    func testLintHTTPStatus400BusyReturnsLintResult() async throws {
+        let wire = FakeScriptsWire { _ in .json(400, ["ok": false, "err": "Interpreter is busy running a script"]) }
+        let r = try await ScriptsClient(wire: wire).lint("x = 1")
+        XCTAssertEqual(r, ScriptLintResult(ok: false, message: "Interpreter is busy running a script"))
+    }
+
     func testLintHTTPIgnoresTheName() async throws {
         let wire = FakeScriptsWire { _ in .json(200, ["ok": true]) }
         let r = try await ScriptsClient(wire: wire).lint("x = 1", name: "a.py")
         XCTAssertEqual(r, ScriptLintResult(ok: true, message: nil))
         XCTAssertEqual(wire.calls.first?.textBody, "x = 1")
         XCTAssertEqual(wire.calls.first?.query, [:])
+    }
+
+    func testLintHTTPUnauthorizedThrows() async {
+        let wire = FakeScriptsWire { _ in .json(401, ["error": "Admin token required"]) }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).lint("x = 1"), .unauthorized)
+    }
+
+    func testLintHTTPServerErrorWithoutJSONThrows() async {
+        let wire = FakeScriptsWire { _ in .text(500, "Internal Server Error") }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).lint("x = 1"), .http(500))
+    }
+
+    func testLintHTTPMalformedThrows() async {
+        let wire = FakeScriptsWire { _ in .json(200, ["unexpected": "format"]) }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).lint("x = 1"), .malformed("lint"))
     }
 
     func testLintOverBLEByName() async throws {

@@ -31,7 +31,7 @@ final class ScriptsTabModelTests: XCTestCase {
                 return .json(200, ["ok": true, "received": (body["off"] as? Int ?? 0) + n, "final": body["final"] as? Bool ?? false])
             case "/api/scripts/lint":
                 if kind == .ble && oldFirmware { return .json(400, ["error": "unknown path"]) }
-                return lintError.map { .json(200, ["ok": false, "err": $0]) } ?? .json(200, ["ok": true])
+                return lintError.map { .json(400, ["ok": false, "err": $0]) } ?? .json(200, ["ok": true])
             case "/api/scripts/status":
                 return .json(200, ["running": false, "state": "idle"])
             default:

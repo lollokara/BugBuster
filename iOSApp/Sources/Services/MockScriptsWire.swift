@@ -108,7 +108,7 @@ final class MockScriptsWire: ScriptsWire {
                                     body: ring.subdata(in: from..<to))
         case "/api/scripts/lint":
             if running != nil {
-                return .json(200, ["ok": false, "err": "Interpreter is busy running a script"])
+                return .json(400, ["ok": false, "err": "Interpreter is busy running a script"])
             }
             var srcToCheck: String?
             if case .text(let source)? = body {
@@ -116,7 +116,7 @@ final class MockScriptsWire: ScriptsWire {
             } else if case .json(let dict)? = body {
                 if let name = dict["name"] as? String {
                     guard let fileContent = files[name] else {
-                        return .json(200, ["ok": false, "err": "script not found"])
+                        return .json(400, ["ok": false, "err": "script not found"])
                     }
                     srcToCheck = fileContent
                 } else if let inline = dict["src"] as? String {
@@ -125,7 +125,7 @@ final class MockScriptsWire: ScriptsWire {
             }
             if let src = srcToCheck {
                 if src.contains("syntax_error") {
-                    return .json(200, ["ok": false, "err": "line 1: invalid syntax"])
+                    return .json(400, ["ok": false, "err": "line 1: invalid syntax"])
                 }
                 return .json(200, ["ok": true])
             }
