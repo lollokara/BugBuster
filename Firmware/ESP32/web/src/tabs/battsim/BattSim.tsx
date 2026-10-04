@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { PairingRequiredError } from "../../api/client";
 import { deviceMac, pollIntervalFor } from "../../state/signals";
 import * as dev from "./device";
-import { ACT, actionLabel, isLongAction, isRefusal, refusalText, runLongAction } from "./settle";
+import { ACT, actionLabel, isLongAction, isRefusal, prepareForNewRun, refusalText, runLongAction } from "./settle";
 import {
   buildHistory, CHEM_NAMES, ERROR_TEXT, EVENT_NAMES, fmtDuration, fmtElapsedTick, fmtSi,
   STATE_NAMES, stats as winStats, stepSegments, timeStep, view as mkView, type BsStatus, type History, type View,
@@ -406,6 +406,8 @@ function NewRun({ mac, onClose, onDone, onError }: { mac: string; onClose: () =>
   const create = async () => {
     setBusy(true);
     try {
+      const deps = { status: dev.status, runIds: dev.runIds, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), now: Date.now };
+      await prepareForNewRun(deps, () => dev.action(mac, ACT.unload));
       await dev.cfgSet(mac, 0x0801, "enum", f.chem);
       await dev.cfgSet(mac, 0x0802, "u8", f.cells);
       await dev.cfgSet(mac, 0x0803, "u32", f.cap);
@@ -417,10 +419,19 @@ function NewRun({ mac, onClose, onDone, onError }: { mac: string; onClose: () =>
       await dev.cfgSet(mac, 0x080b, "u32", f.extUa);
       await dev.cfgSet(mac, 0x080c, "bool", f.dither);
       await dev.cfgSet(mac, 0x080f, "str", f.name);
-      await dev.action(mac, ACT.newRun);
+      await runLongAction(deps, () => dev.action(mac, ACT.newRun), ACT.newRun);
       onDone();
     } catch (e) {
-      if (!(e instanceof PairingRequiredError)) onError(`New run: ${errMsg(e)}`);
+      if (!(e instanceof PairingRequiredError)) {
+        let why = errMsg(e);
+        if (isRefusal(e)) {
+          try {
+            const st = await dev.status();
+            if (st.lastError) why = refusalText(ACT.newRun, st.lastError, ERROR_TEXT);
+          } catch { /* keep the raw message */ }
+        }
+        onError(`New run: ${why}`);
+      }
     }
     setBusy(false);
   };

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../../api/core";
 import type { BsStatus } from "./history";
-import { ACT, actionSettled, isLongAction, isRefusal, refusalText, runLongAction, type SettleDeps } from "./settle";
+import { ACT, actionSettled, isLongAction, isRefusal, prepareForNewRun, refusalText, runLongAction, type SettleDeps } from "./settle";
 
 const st = (state: number, runId: number) => ({ state, runId } as BsStatus);
 
@@ -62,5 +62,19 @@ describe("battsim long actions", () => {
     expect(refusalText(ACT.del, 3, [])).toContain("Unload it first");
     expect(refusalText(ACT.load, 3, [])).toContain("Pause or stop");
     expect(refusalText(ACT.del, 9, ["", "", "", "", "", "", "", "", "", "run not found"])).toBe("run not found");
+  });
+
+  it("a new run unloads a loaded run first and never touches an active one", async () => {
+    let state = 4;
+    const { d } = deps({ status: () => st(state, state ? 2 : 0), ids: () => [1, 2] });
+    let unloads = 0;
+    await prepareForNewRun(d, async () => { unloads++; state = 0; });
+    expect(unloads).toBe(1);
+
+    const idle = deps({ status: () => st(0, 0), ids: () => [1, 2] });
+    await prepareForNewRun(idle.d, async () => { throw new Error("must not unload"); });
+
+    const active = deps({ status: () => st(2, 2), ids: () => [1, 2] });
+    await expect(prepareForNewRun(active.d, async () => { throw new Error("must not unload"); })).rejects.toThrow(/active/);
   });
 });

@@ -142,4 +142,37 @@ final class BattSimDeleteTests: XCTestCase {
         XCTAssertEqual(BattSim.refusalText(.delete, lastError: 9), "run not found")
         XCTAssertTrue(BattSim.isLongAction(.load) && !BattSim.isLongAction(.start))
     }
+
+    @MainActor
+    func testNewRunUnloadsALoadedRunBeforeTouchingIdentityKeys() async throws {
+        let fake = BattSimFakeWire()
+        fake.actionReply = BattSimFakeWire.ok
+        fake.statusState = 4; fake.statusRun = 2
+        fake.onAction = { [unowned fake] in fake.statusState = 0; fake.statusRun = 0 }
+        let service = makeService(fake)
+        try await service.prepareForNewRun()
+        let ops = fake.requests.filter { $0.path == "/api/daq/config" }.map { $0.body?["op"] as? Int }
+        XCTAssertEqual(ops, [4], "unload (action 0x0b) is the only write")
+        XCTAssertEqual(fake.requests.last { $0.path == "/api/daq/config" }?.body?["args"] as? String, "0b")
+    }
+
+    @MainActor
+    func testNewRunLeavesAnUnloadedHatAlone() async throws {
+        let fake = BattSimFakeWire()
+        let service = makeService(fake)
+        try await service.prepareForNewRun()
+        XCTAssertTrue(fake.requests.filter { $0.path == "/api/daq/config" }.isEmpty)
+    }
+
+    @MainActor
+    func testNewRunNeverTouchesAnActiveRun() async {
+        let fake = BattSimFakeWire()
+        fake.statusState = 2; fake.statusRun = 2
+        let service = makeService(fake)
+        do {
+            try await service.prepareForNewRun()
+            XCTFail("an active run must block a new run")
+        } catch BattSimError.rejected(let m) { XCTAssertTrue(m.contains("active"), m) } catch { XCTFail("\(error)") }
+        XCTAssertTrue(fake.requests.filter { $0.path == "/api/daq/config" }.isEmpty)
+    }
 }

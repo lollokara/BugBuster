@@ -637,6 +637,15 @@ final class BattSimClient {
         throw BattSimError.transport("\(BattSim.actionName(a)) did not finish in \(Int(settleTimeout)) s")
     }
 
+    /// The identity keys (chemistry, cells, capacity) and the chemistry defaults are locked while a
+    /// run is loaded, so the DAQ HAT refuses a new run's parameters ("rejected by the DAQ HAT").
+    /// Unloading keeps the loaded run on flash. An active run is never touched.
+    func prepareForNewRun() async throws {
+        guard let s = try? await status() else { return }
+        if s.state == 2 { throw BattSimError.rejected("A run is active. Pause or stop it first.") }
+        if s.state != 0 { try await runAction(.unload) }
+    }
+
     func runIds() async throws -> [Int] {
         var ids: [Int] = []
         while true {

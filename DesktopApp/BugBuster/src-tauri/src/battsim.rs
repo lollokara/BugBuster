@@ -1011,6 +1011,30 @@ pub(crate) fn refusal_text(action: u8, last_error: u8) -> String {
     }
 }
 
+/// What a new run needs from the DAQ HAT: the identity keys and chemistry defaults are locked while
+/// a run is loaded, so it must be unloaded first (the run stays on flash). An active run blocks.
+#[derive(Debug, PartialEq)]
+pub(crate) enum NewRunPrep { Ready, Unload, Active }
+
+pub(crate) fn new_run_prep(state: u8) -> NewRunPrep {
+    match state {
+        0 => NewRunPrep::Ready,
+        2 => NewRunPrep::Active,
+        _ => NewRunPrep::Unload,
+    }
+}
+
+/// Call before writing a new run's parameters.
+#[tauri::command]
+pub async fn bs_prepare_new_run(mgr: State<'_, ConnectionManager>) -> CmdResult<()> {
+    let Ok(st) = bs_status(mgr.clone()).await else { return Ok(()) };
+    match new_run_prep(st.state) {
+        NewRunPrep::Ready => Ok(()),
+        NewRunPrep::Active => Err("A run is active. Pause or stop it first.".into()),
+        NewRunPrep::Unload => bs_action(ACT_UNLOAD, None, None, mgr).await,
+    }
+}
+
 async fn run_ids(mgr: &ConnectionManager) -> CmdResult<Vec<u16>> {
     let mut ids: Vec<u16> = Vec::new();
     loop {
@@ -1154,6 +1178,15 @@ mod tests {
         assert!(action_settled(ACT_NEW, None, Some(&status(1, 3)), None, 2));
         assert!(action_settled(ACT_REOPEN, None, Some(&status(1, 2)), None, 2));
         assert!(is_long_action(ACT_LOAD) && !is_long_action(8));
+    }
+
+    #[test]
+    fn new_run_needs_an_unloaded_hat() {
+        assert_eq!(new_run_prep(0), NewRunPrep::Ready);
+        assert_eq!(new_run_prep(1), NewRunPrep::Unload);
+        assert_eq!(new_run_prep(4), NewRunPrep::Unload);
+        assert_eq!(new_run_prep(3), NewRunPrep::Unload);
+        assert_eq!(new_run_prep(2), NewRunPrep::Active);
     }
 
     #[test]

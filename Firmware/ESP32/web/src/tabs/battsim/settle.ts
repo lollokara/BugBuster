@@ -74,3 +74,12 @@ export async function runLongAction(deps: SettleDeps, send: () => Promise<void>,
   } while (deps.now() < deadline);
   throw new Error(`${actionLabel(id).replace("...", "")} did not finish in ${Math.round(timeoutMs / 1000)} s`);
 }
+
+/** The identity keys and chemistry defaults are locked while a run is loaded, so the DAQ HAT
+ *  refuses a new run's parameters. Unloading keeps the loaded run on flash; an active run is never touched. */
+export async function prepareForNewRun(deps: SettleDeps, unload: () => Promise<void>): Promise<void> {
+  let st: BsStatus;
+  try { st = await deps.status(); } catch { return; }
+  if (st.state === 2) throw new Error("A run is active. Pause or stop it first.");
+  if (st.state !== 0) await runLongAction(deps, unload, ACT.unload);
+}

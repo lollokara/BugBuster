@@ -921,6 +921,9 @@ struct BatterySimTab: View {
     private func createRun(_ c: NewBatteryRunSheet.Config) async {
         let cl = client
         do {
+            busy = "Preparing new run..."
+            defer { busy = nil }
+            try await cl.prepareForNewRun()
             try await cl.cfgSet(0x0801, .enumV, c.chem)
             try await cl.cfgSet(0x0802, .u8, c.cells)
             try await cl.cfgSet(0x0803, .u32, c.capacityMah)
@@ -930,8 +933,16 @@ struct BatterySimTab: View {
             try await cl.cfgSet(0x080A, .bool, c.externalLoad ? 1 : 0)
             try await cl.cfgSet(0x080B, .u32, c.externalLoadUa)
             try await cl.cfgSetString(0x080F, c.name)
+            busy = nil
             await act(.newRun)
-        } catch { message = "New run: \(error.localizedDescription)" }
+        } catch {
+            if case BattSimError.rejected = error, let st = try? await cl.status(), st.lastError != 0 {
+                status = st
+                message = "New run: \(BattSim.refusalText(.newRun, lastError: st.lastError))"
+            } else {
+                message = "New run: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func preset(_ secs: Double) {
