@@ -84,3 +84,11 @@ def test_scripting_log_structure():
     assert 'sr_format_line(line, sizeof(line), ts, level, "mpy"' in body
     assert "ring_emit(NULL, line" in body
     assert "sr_line_set_level(&s_line_asm, 'I'" in body
+
+
+def test_lint_string_bounded_wait_and_refcount():
+    body = extract_function(SCRIPTING, r"^bool scripting_lint_string\(")
+    assert "portMAX_DELAY" not in body, "scripting_lint_string must not block indefinitely"
+    assert "pdMS_TO_TICKS(5000)" in body
+    assert "lint_job_release(" in body
+
