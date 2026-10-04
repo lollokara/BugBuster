@@ -1,1043 +1,141 @@
 import SwiftUI
-import Combine
+import UIKit
 
-struct ScriptFile: Identifiable {
-    var id: String { name }
-    let name: String
-}
-
-struct StorageInfo: Codable {
-    let totalBytes: Double
-    let usedBytes: Double
-    let freeBytes: Double
-    let scriptCount: Int
-    let maxScriptBytes: Int
-    let maxScripts: Int
-}
-
-struct ScriptListResponse: Codable {
-    let files: [String]
-}
-
+/// Scripts tab (spec §4): status header, stored scripts with Run / Run in background,
+/// the Runestone editor (docs, lint on save), the REPL (read-only while a file
+/// script runs) and the autorun panel. Run state and logs live in ScriptRunManager,
+/// so they survive leaving this tab.
 struct ScriptsTab: View {
-    @EnvironmentObject var connectionManager: ConnectionManager
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var files: [ScriptFile] = []
-    @State private var storageInfo: StorageInfo? = nil
-
-    // Editor States
-    @State private var editingFileName: String? = nil
-    @State private var editingContent: String = ""
-    @State private var isEditorDirty = false
-
-    // REPL States
-    @State private var replClient: WebSocketREPL? = nil
-    @State private var inputCommand: String = ""
-    @State private var isShowingREPL = false
-    @FocusState private var replInputFocused: Bool
-
-    // Keyboard height (manual observation since parent ignores keyboard safe area)
-    @State private var keyboardHeight: CGFloat = 0
-
-    // Alert / Prompt States
-    @State private var showingCreateAlert = false
-    @State private var newFileName = ""
-    @State private var errorMessage: String? = nil
-    @State private var runStatusMessage: String? = nil
-
-    // Lint States
-    @State private var lintErrorMessage: String? = nil
-    @State private var lintSuccess: Bool? = nil
-
-    // Script run status & autorun
-    @State private var autorunEnabled = false
-    @State private var isLoadingAutorun = false
-    @State private var isLoadingFiles = true
-    @State private var scriptRunStatus: String = "idle"
-    @State private var lastScriptOutput: String = ""
+    @EnvironmentObject var scripts: ScriptRunManager
 
     var body: some View {
-        ZStack {
-            // Background
-            LinearGradient(
-                colors: [Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.02, green: 0.03, blue: 0.06)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+        ScriptsTabContent(manager: scripts)
+    }
+}
 
-            VStack(spacing: 0) {
-                if sizeClass == .regular {
-                    // iPad: file browser stays visible in a left pane; editor/REPL
-                    // occupies the right pane instead of replacing the browser.
-                    HStack(spacing: 0) {
-                        browserView
-                            .frame(width: 320)
-                        Divider().background(Color.white.opacity(0.08))
-                        rightPane
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else if let editingName = editingFileName {
-                    editorView(name: editingName)
-                } else if isShowingREPL {
-                    replView
-                } else {
-                    browserView
+private struct ScriptsTabContent: View {
+    @ObservedObject var manager: ScriptRunManager
+    @StateObject private var model: ScriptsTabModel
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var showingREPL = false
+    @State private var showingCreate = false
+    @State private var newFileName = ""
+    @State private var keyboardHeight: CGFloat = 0
+
+    init(manager: ScriptRunManager) {
+        self.manager = manager
+        _model = StateObject(wrappedValue: ScriptsTabModel(manager: manager))
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                ScriptStatusHeader(
+                    status: manager.status,
+                    elapsed: manager.status.flatMap { ScriptElapsed.seconds($0, now: context.date, anchor: manager.uptimeAnchor) },
+                    logVisible: manager.consoleVisible,
+                    onToggleLog: { manager.consoleVisible.toggle() },
+                    onStop: { Task { await manager.stop() } })
+            }
+            .padding(.horizontal)
+            .padding(.top, 12)
+
+            if sizeClass == .regular {
+                HStack(spacing: 0) {
+                    browser.frame(width: 340)
+                    Divider().opacity(0.3)
+                    detail.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+            } else if model.openFile != nil || showingREPL {
+                detail
+            } else {
+                browser
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { n in
-            if let frame = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+        // The shells ignore the keyboard safe area; clear it by hand (minus ~66 pt of tab bar chrome).
+        .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 0)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            if let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = frame.height }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = 0 }
         }
-        .onAppear { loadFiles(); fetchAutorunStatus() }
-        .alert("New Script Name", isPresented: $showingCreateAlert) {
+        .onAppear { manager.scriptsTabVisible = true }
+        .onDisappear { manager.scriptsTabVisible = false }
+        .task(id: manager.isConnected) {
+            guard manager.isConnected else { return }
+            await model.loadFiles()
+            await manager.refreshAutorun()
+            #if DEBUG
+            if model.openFile == nil, let name = ProcessInfo.processInfo.environment["BB_SCRIPTS_OPEN"] {
+                await model.open(name)
+            }
+            #endif
+        }
+        .alert("New script", isPresented: $showingCreate) {
             TextField("script_name.py", text: $newFileName)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            Button("Cancel", role: .cancel) {}
-            Button("Create") { createNewScript() }
+            Button("Cancel", role: .cancel) { newFileName = "" }
+            Button("Create") {
+                let raw = newFileName
+                newFileName = ""
+                showingREPL = false
+                Task { _ = await model.create(rawName: raw) }
+            }
+        } message: {
+            Text("1–32 characters: letters, digits, _ . - (\".py\" is added)")
         }
+        .alert(manager.replacePrompt?.message ?? "",
+               isPresented: Binding(get: { manager.replacePrompt != nil }, set: { _ in }),
+               presenting: manager.replacePrompt) { _ in
+            Button("Stop and run", role: .destructive) { Task { await manager.confirmReplace() } }
+            Button("Cancel", role: .cancel) { manager.cancelReplace() }
+        } message: { _ in
+            Text("Only one script runs at a time. The running script is asked to stop (3 s), then the VM resets.")
+        }
+        .alert("Scripts", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    private var browser: some View {
+        ScriptsBrowserView(
+            model: model,
+            autorun: manager.autorun,
+            onOpen: { name in
+                showingREPL = false
+                Task { await model.open(name) }
+            },
+            onRun: { name, background in Task { await model.run(name, background: background) } },
+            onNew: { showingCreate = true },
+            onREPL: {
+                model.close()
+                showingREPL = true
+            },
+            onEnableAutorun: { name in Task { await manager.setAutorun(enabled: true, name: name) } },
+            onDisableAutorun: { Task { await manager.setAutorun(enabled: false, name: nil) } },
+            onRefreshAutorun: { Task { await manager.refreshAutorun() } })
     }
 
     @ViewBuilder
-    private var rightPane: some View {
-        if let editingName = editingFileName {
-            editorView(name: editingName)
-        } else if isShowingREPL {
-            replView
+    private var detail: some View {
+        if showingREPL {
+            ScriptREPLView(status: manager.status,
+                           onClose: { showingREPL = false },
+                           onStop: { Task { await manager.stop() } })
+        } else if let name = model.openFile {
+            ScriptEditorScreen(name: name, model: model,
+                               onBack: { model.close() },
+                               onRun: { background in Task { await model.run(name, background: background) } })
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 40))
-                    .foregroundColor(.secondary)
-                Text("Select a script to edit, or open the REPL.")
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    // MARK: - Stored Scripts Browser
-
-    var browserView: some View {
-        VStack(spacing: 16) {
-            // Header toolbar
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Stored Scripts")
-                        .font(.system(size: 24, weight: .bold))
-                    if let storage = storageInfo {
-                        Text(String(format: "Used %.1f KB / %.1f KB",
-                                    storage.usedBytes / 1024, storage.totalBytes / 1024))
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                Spacer()
-
-                Button(action: { showingCreateAlert = true }) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundColor(.blue)
-                }
-                .padding(8)
-                .glassEffect(.regular.tint(.blue), in: Circle())
-
-                Button(action: {
-                    isShowingREPL = true
-                    initializeREPL()
-                }) {
-                    Image(systemName: "terminal.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(.cyan)
-                        .padding(.leading, 8)
-                }
-                .padding(8)
-                .glassEffect(.regular.tint(.cyan), in: Circle())
-            }
-            .padding(.horizontal)
-            .padding(.top, 16)
-
-            if let error = errorMessage {
-                Text(error)
-                    .font(.system(size: 12))
-                    .foregroundColor(.red)
-                    .padding(.horizontal)
-            }
-
-            if let runMsg = runStatusMessage {
-                HStack {
-                    Image(systemName: runMsg.hasPrefix("Error") ? "xmark.circle.fill" : "checkmark.circle.fill")
-                    Text(runMsg)
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundColor(runMsg.hasPrefix("Error") ? .red : .green)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .glassEffect(
-                    runMsg.hasPrefix("Error")
-                        ? .regular.tint(.red)
-                        : .regular.tint(.green),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .padding(.horizontal)
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        withAnimation { runStatusMessage = nil }
-                    }
-                }
-            }
-
-            // Autorun card
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Autorun on Boot")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("Run a script automatically when the device powers on")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                if isLoadingAutorun {
-                    ProgressView().tint(.cyan)
-                } else {
-                    Toggle("", isOn: Binding(
-                        get: { autorunEnabled },
-                        set: { toggleAutorun($0) }
-                    ))
-                    .toggleStyle(SwitchToggleStyle(tint: .cyan))
-                    .labelsHidden()
-                }
-            }
-            .padding()
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .padding(.horizontal)
-
-            if isLoadingFiles {
-                VStack(spacing: 16) {
-                    Spacer()
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .tint(.cyan)
-                    Text("Loading scripts…")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-            } else if files.isEmpty {
-                VStack(spacing: 20) {
-                    Spacer()
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(.secondary)
-                    Text("No stored scripts found.")
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                    Button("Refresh List") { loadFiles() }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .buttonStyle(.plain)
-                    Spacer()
-                }
-            } else {
-                List {
-                    ForEach(files) { file in
-                        Button(action: { openEditor(for: file.name) }) {
-                            HStack {
-                                Image(systemName: "doc.text").foregroundColor(.cyan)
-                                Text(file.name)
-                                    .font(.system(size: 15, design: .monospaced))
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                Image(systemName: "pencil").foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 14)
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .listRowBackground(Color.clear)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) {
-                                deleteFile(file.name)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            Button {
-                                // Open REPL first so output is visible, then run
-                                openREPLAndRun(file.name)
-                            } label: {
-                                Label("Run", systemImage: "play.fill")
-                            }
-                            .tint(.green)
-                        }
-                    }
-                    
-                    // Spacer row to clear the floating custom tab bar
-                    Color.clear
-                        .frame(height: 90)
-                        .listRowBackground(Color.clear)
-                }
-                .listStyle(.plain)
-                .refreshable { loadFiles() }
-            }
-        }
-    }
-
-    // MARK: - Script Editor View
-
-    func editorView(name: String) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(action: { editingFileName = nil }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                }
-                Spacer()
-                Text(name)
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                Spacer()
-                HStack(spacing: 12) {
-                    Button(action: { lintScript() }) {
-                        Text("Check")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.orange)
-                    }
-                    Button(action: { saveScript() }) {
-                        Text("Save")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(isEditorDirty ? .cyan : .secondary)
-                    }
-                    Button(action: { saveAndRunScript() }) {
-                        Image(systemName: "play.fill").foregroundColor(.green)
-                    }
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(scriptRunStatus == "running" ? Color.green : (scriptRunStatus == "error" ? Color.red : Color.secondary))
-                            .frame(width: 8, height: 8)
-                        Text(scriptRunStatus.capitalized)
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(scriptRunStatus == "running" ? .green : .secondary)
-                    }
-                }
-            }
-            .padding()
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            if let success = lintSuccess {
-                HStack(alignment: .top) {
-                    Image(systemName: success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    Text(success ? "Syntax OK" : (lintErrorMessage ?? "Syntax Error"))
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(3)
-                }
-                .foregroundColor(success ? .green : .red)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .glassEffect(
-                    success ? .regular.tint(.green) : .regular.tint(.red),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-            }
-
-            SelectableCodeEditor(text: $editingContent)
-                .padding(.horizontal)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 10)
-                .onChange(of: editingContent) { _, newValue in
-                    let sanitized = newValue
-                        .replacingOccurrences(of: "\u{201C}", with: "\"")
-                        .replacingOccurrences(of: "\u{201D}", with: "\"")
-                        .replacingOccurrences(of: "\u{2018}", with: "'")
-                        .replacingOccurrences(of: "\u{2019}", with: "'")
-                        .replacingOccurrences(of: "\u{2014}", with: "--")
-                        .replacingOccurrences(of: "\u{2013}", with: "-")
-                    if sanitized != newValue {
-                        editingContent = sanitized
-                    }
-                    isEditorDirty = true
-                    lintSuccess = nil
-                }
-        }
-    }
-
-    // MARK: - Interactive REPL View
-
-    var replView: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            HStack {
-                Button(action: {
-                    replClient?.disconnect()
-                    replClient = nil
-                    isShowingREPL = false
-                    replInputFocused = false
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Exit REPL")
-                    }
-                }
-                Spacer()
-                Text("MicroPython Shell")
-                    .font(.system(size: 14, weight: .bold))
-                Spacer()
-                HStack(spacing: 16) {
-                    Button(action: {
-                        UIPasteboard.general.string = replClient?.consoleOutput ?? ""
-                    }) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 14))
-                            .foregroundColor(.cyan)
-                    }
-                    .padding(8)
-                    .glassEffect(.regular.tint(.cyan), in: Circle())
-                    Button("Ctrl-C") { replClient?.sendControlChar("C") }
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(.red)
-                    Button("Ctrl-D") { replClient?.sendControlChar("D") }
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(.cyan)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
-
-            // Terminal output — fills all remaining space
-            if connectionManager.transport == .ble {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "wifi.slash")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
-                    Text("The REPL needs WiFi")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("The terminal streams over a WebSocket, which isn't available on a Bluetooth connection.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 24)
-                Spacer()
-            } else if let client = replClient {
-                REPLTerminalConsole(client: client)
-            } else {
-                Spacer()
-                ProgressView().tint(.cyan)
-                Spacer()
-            }
-
-            // Input bar — sits above keyboard via padding
-            HStack(spacing: 10) {
-                Text(">>>")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundColor(.green)
-
-                TextField("Send command…", text: $inputCommand)
-                    .font(.system(size: 14, design: .monospaced))
-                    .keyboardType(.asciiCapable)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .submitLabel(.send)
-                    .focused($replInputFocused)
-                    .onSubmit { sendREPLCommand() }
-                    .onChange(of: inputCommand) { _, newValue in
-                        let sanitized = newValue
-                            .replacingOccurrences(of: "\u{201C}", with: "\"")
-                            .replacingOccurrences(of: "\u{201D}", with: "\"")
-                            .replacingOccurrences(of: "\u{2018}", with: "'")
-                            .replacingOccurrences(of: "\u{2019}", with: "'")
-                            .replacingOccurrences(of: "\u{2014}", with: "--")
-                            .replacingOccurrences(of: "\u{2013}", with: "-")
-                        if sanitized != newValue {
-                            inputCommand = sanitized
-                        }
-                    }
-
-                Button(action: { sendREPLCommand() }) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(inputCommand.isEmpty ? .secondary : .blue)
-                }
-                .disabled(inputCommand.isEmpty)
-                .padding(6)
-                .glassEffect(.regular.tint(.blue), in: Circle())
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            // Push above keyboard (keyboard height from notification; the shell
-            // ignores the keyboard safe area, so clearance is manual here.
-            // Subtract the ~66pt of tab bar chrome already below the content.)
-            .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 10)
-        }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    replKeyboardShortcutBar(
-                        onInsert: { inputCommand += $0 },
-                        onDone: { replInputFocused = false }
-                )
-            }
-        }
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                replInputFocused = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func replKeyboardShortcutBar(onInsert: @escaping (String) -> Void, onDone: @escaping () -> Void) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(["Tab", "#", ":", "_", "(", ")", "="], id: \.self) { key in
-                    Button(action: {
-                        onInsert(key == "Tab" ? "    " : key)
-                    }) {
-                        Text(key)
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundColor(.cyan)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color.white.opacity(0.06))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(Color.cyan.opacity(0.28), lineWidth: 1)
-                                    )
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Button(action: onDone) {
-                    Text("Done")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.blue.opacity(0.35))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color.blue.opacity(0.45), lineWidth: 1)
-                                )
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-        }
-    }
-
-    // MARK: - Helper Methods
-
-    private func initializeREPL() {
-        guard replClient == nil, connectionManager.transport == .wifi else { return }
-        let ip = connectionManager.activeDevice?.ip ?? ""
-        replClient = WebSocketREPL(host: ip, token: connectionManager.adminToken)
-        replClient?.connect()
-    }
-
-    /// Open REPL, connect it, then run the script so output is visible.
-    private func openREPLAndRun(_ name: String) {
-        isShowingREPL = true
-        initializeREPL()
-        // Brief delay to let WebSocket auth complete, then run
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            runScript(name)
-        }
-    }
-
-    private func sendREPLCommand() {
-        guard !inputCommand.isEmpty else { return }
-        replClient?.send(inputCommand + "\r")
-        inputCommand = ""
-    }
-
-    private func loadFiles() {
-        isLoadingFiles = true
-        Task {
-            do {
-                let res: ScriptListResponse = try await connectionManager.getRequest(path: "/api/scripts/files")
-                // Best effort: firmware that predates the shared storage route (BLE) must not hide the list.
-                let storage: StorageInfo? = try? await connectionManager.getRequest(path: "/api/scripts/storage")
-                DispatchQueue.main.async {
-                    self.files = res.files.map { ScriptFile(name: $0) }
-                    self.storageInfo = storage
-                    self.errorMessage = nil
-                    self.isLoadingFiles = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.errorMessage = "Failed loading scripts: \(error.localizedDescription)"
-                    self.isLoadingFiles = false
-                }
-            }
-        }
-    }
-
-    private func createNewScript() {
-        let name = newFileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        let normalizedName = name.hasSuffix(".py") ? name : "\(name).py"
-        Task {
-            do {
-                _ = try await connectionManager.rawRequest(
-                    method: "POST", path: "/api/scripts/files", query: ["name": normalizedName],
-                    body: "# \(normalizedName)\n# Write your MicroPython code here\n".data(using: .utf8),
-                    contentType: "text/plain")
-                DispatchQueue.main.async {
-                    newFileName = ""
-                    loadFiles()
-                    openEditor(for: normalizedName)
-                }
-            } catch {
-                DispatchQueue.main.async { errorMessage = "Create failed: \(error.localizedDescription)" }
-            }
-        }
-    }
-
-    private func openEditor(for name: String) {
-        Task {
-            do {
-                let data = try await connectionManager.rawRequest(
-                    method: "GET", path: "/api/scripts/files/get", query: ["name": name])
-                let content = String(data: data, encoding: .utf8) ?? ""
-                DispatchQueue.main.async {
-                    self.editingContent = content
-                    self.editingFileName = name
-                    self.isEditorDirty = false
-                }
-            } catch {
-                DispatchQueue.main.async { errorMessage = "Load file failed: \(error.localizedDescription)" }
-            }
-        }
-    }
-
-    private func saveScript() {
-        Task { await saveScriptCore() }
-    }
-
-    @discardableResult
-    private func saveScriptCore() async -> Bool {
-        guard let name = editingFileName else { return false }
-        do {
-            _ = try await connectionManager.rawRequest(
-                method: "POST", path: "/api/scripts/files", query: ["name": name],
-                body: editingContent.data(using: .utf8), contentType: "text/plain")
-            DispatchQueue.main.async { self.isEditorDirty = false }
-            return true
-        } catch {
-            DispatchQueue.main.async { self.errorMessage = "Save file failed: \(error.localizedDescription)" }
-            return false
-        }
-    }
-
-    private func runScript(_ name: String) {
-        Task {
-            guard connectionManager.activeDevice != nil else {
-                DispatchQueue.main.async { runStatusMessage = "Error: not connected" }
-                return
-            }
-            do {
-                _ = try await connectionManager.rawRequest(
-                    method: "POST", path: "/api/scripts/run-file", query: ["name": name])
-                DispatchQueue.main.async {
-                    withAnimation { runStatusMessage = "Running \(name)…" }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    withAnimation { runStatusMessage = "Error: \(error.localizedDescription)" }
-                }
-            }
-        }
-    }
-
-    private func saveAndRunScript() {
-        guard let name = editingFileName else { return }
-        Task {
-            let saved = await saveScriptCore()
-            if saved {
-                DispatchQueue.main.async {
-                    // Navigate to REPL to see output
-                    editingFileName = nil
-                    openREPLAndRun(name)
-                }
-            }
-        }
-    }
-
-    private func lintScript() {
-        guard connectionManager.activeDevice != nil else {
-            self.lintErrorMessage = "Not connected"
-            self.lintSuccess = false
-            return
-        }
-
-        Task {
-            struct LintResponse: Codable {
-                let ok: Bool
-                let err: String?
-            }
-
-            do {
-                let res = try await connectionManager.rawRequest(
-                    LintResponse.self, method: "POST", path: "/api/scripts/lint",
-                    body: editingContent.data(using: .utf8), contentType: "text/plain")
-                DispatchQueue.main.async {
-                    self.lintSuccess = res.ok
-                    self.lintErrorMessage = res.err
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.lintErrorMessage = "Network error: \(error.localizedDescription)"
-                    self.lintSuccess = false
-                }
-            }
-        }
-    }
-
-    private func deleteFile(_ name: String) {
-        Task {
-            do {
-                _ = try await connectionManager.rawRequest(
-                    method: "DELETE", path: "/api/scripts/files", query: ["name": name])
-                DispatchQueue.main.async { loadFiles() }
-            } catch {
-                DispatchQueue.main.async { errorMessage = "Delete failed: \(error.localizedDescription)" }
-            }
-        }
-    }
-
-    private func fetchAutorunStatus() {
-        Task {
-            struct AutorunStatus: Codable { let enabled: Bool }
-            if let status: AutorunStatus = try? await connectionManager.getRequest(path: "/api/scripts/autorun/status") {
-                DispatchQueue.main.async { self.autorunEnabled = status.enabled }
-            }
-        }
-    }
-
-    private func toggleAutorun(_ enabled: Bool) {
-        // The firmware needs the script to autorun: ?name=<file> (400 without it).
-        let path: String
-        if enabled {
-            guard let name = editingFileName,
-                  let q = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-                connectionManager.showToast("Open a script to set it as autorun", type: .error)
-                return
-            }
-            path = "/api/scripts/autorun/enable?name=\(q)"
-        } else {
-            path = "/api/scripts/autorun/disable"
-        }
-        isLoadingAutorun = true
-        Task {
-            let ok = try? await connectionManager.postAction(path: path, json: [:])
-            DispatchQueue.main.async {
-                if ok == true { self.autorunEnabled = enabled }
-                self.isLoadingAutorun = false
-                connectionManager.showToast(ok == true ? "Autorun \(enabled ? "enabled" : "disabled")" : "Failed to update autorun", type: ok == true ? .success : .error)
-            }
-        }
-    }
-
-    private func pythonHighlightedText(_ code: String) -> AttributedString {
-        var result = AttributedString(code)
-        let keywords = ["def", "class", "import", "from", "return", "if", "else", "elif", "for", "while", "try", "except", "finally", "with", "as", "yield", "lambda", "pass", "break", "continue", "raise", "True", "False", "None", "and", "or", "not", "in", "is", "async", "await"]
-        for keyword in keywords {
-            var searchRange = result.startIndex..<result.endIndex
-            while let range = result[searchRange].range(of: "\\b\(keyword)\\b", options: .regularExpression) {
-                result[range].foregroundColor = .cyan
-                result[range].font = .system(size: 14, weight: .bold, design: .monospaced)
-                if range.upperBound < result.endIndex {
-                    searchRange = range.upperBound..<result.endIndex
-                } else {
-                    break
-                }
-            }
-        }
-        return result
-    }
-}
-
-// MARK: - REPL Terminal Console
-
-struct REPLTerminalConsole: View {
-    @ObservedObject var client: WebSocketREPL
-    @State private var cursorVisible = true
-    let cursorTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SelectableConsoleView(text: client.consoleOutput)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Blinking block cursor
-            Text(cursorVisible ? "█" : " ")
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.55))
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
-        }
-        .padding()
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .onReceive(cursorTimer) { _ in
-            cursorVisible.toggle()
-        }
-    }
-}
-
-struct SelectableConsoleView: UIViewRepresentable {
-    let text: String
-
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
-        textView.backgroundColor = .clear
-        textView.textColor = UIColor(red: 0.78, green: 0.87, blue: 0.95, alpha: 1.0)
-        textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isScrollEnabled = true
-        textView.showsVerticalScrollIndicator = true
-        textView.showsHorizontalScrollIndicator = false
-        textView.smartQuotesType = .no
-        textView.smartDashesType = .no
-        textView.smartInsertDeleteType = .no
-        textView.autocorrectionType = .no
-        textView.autocapitalizationType = .none
-        return textView
-    }
-
-    func updateUIView(_ uiView: UITextView, context: Context) {
-        if uiView.text != text {
-            let isAtBottom = uiView.contentOffset.y >= (uiView.contentSize.height - uiView.frame.size.height - 10) || uiView.text.isEmpty
-            uiView.text = text
-            if isAtBottom {
-                let range = NSRange(location: text.utf16.count, length: 0)
-                uiView.scrollRangeToVisible(range)
-            }
-        }
-    }
-}
-
-struct SelectableCodeEditor: UIViewRepresentable {
-    @Binding var text: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
-        textView.backgroundColor = .clear
-        textView.textColor = .white
-        textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.isEditable = true
-        textView.isSelectable = true
-        textView.isScrollEnabled = true
-        textView.delegate = context.coordinator
-        context.coordinator.textView = textView
-
-        // Disable smart features
-        textView.smartQuotesType = .no
-        textView.smartDashesType = .no
-        textView.smartInsertDeleteType = .no
-        textView.autocorrectionType = .no
-        textView.autocapitalizationType = .none
-        textView.keyboardType = .asciiCapable
-
-        // Build horizontally scrollable accessory bar
-        let scrollView = UIScrollView()
-        scrollView.frame = CGRect(x: 0, y: 0, width: 1, height: 44)
-        scrollView.autoresizingMask = [.flexibleWidth]
-        scrollView.backgroundColor = .clear
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.alwaysBounceHorizontal = true
-
-        let stackView = UIStackView()
-        stackView.axis = .horizontal
-        stackView.spacing = 8
-        stackView.alignment = .fill
-        stackView.distribution = .fillProportionally
-
-        let keys = ["Tab", "#", ":", "_", "(", ")", "=", "Done"]
-        for key in keys {
-            let button = UIButton(type: .system)
-            button.configuration = UIButton.Configuration.plain()
-            button.setTitle(key, for: .normal)
-            button.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: key == "Done" || key == "Tab" ? .bold : .semibold)
-            button.setTitleColor(.cyan, for: .normal)
-            button.backgroundColor = UIColor(white: 1.0, alpha: 0.04)
-            button.layer.cornerRadius = 8
-            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-            
-            if key == "Done" {
-                button.addTarget(context.coordinator, action: #selector(Coordinator.donePressed), for: .touchUpInside)
-            } else {
-                button.addTarget(context.coordinator, action: #selector(Coordinator.accessoryButtonTapped(_:)), for: .touchUpInside)
-            }
-            stackView.addArrangedSubview(button)
-        }
-
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
-            stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -12),
-            stackView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 6),
-            stackView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -6),
-            stackView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor, constant: -12)
-        ])
-
-        textView.inputAccessoryView = scrollView
-
-        return textView
-    }
-
-    func updateUIView(_ uiView: UITextView, context: Context) {
-        if uiView.text != text {
-            let selectedRange = uiView.selectedRange
-            Self.applySyntaxHighlighting(to: uiView, text: text)
-            uiView.selectedRange = selectedRange
-        }
-    }
-
-    static func applySyntaxHighlighting(to textView: UITextView, text: String) {
-        let baseFont = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        let baseColor = UIColor.white
-        let attributed = NSMutableAttributedString(string: text, attributes: [
-            .font: baseFont,
-            .foregroundColor: baseColor
-        ])
-
-        let keywords = ["def", "class", "import", "from", "return", "if", "else", "elif",
-                         "for", "while", "try", "except", "finally", "with", "as", "yield",
-                         "lambda", "pass", "break", "continue", "raise", "async", "await",
-                         "and", "or", "not", "in", "is", "del", "global", "nonlocal"]
-        let builtins = ["True", "False", "None", "self", "print", "range", "len", "int",
-                        "float", "str", "list", "dict", "set", "tuple", "type", "isinstance"]
-
-        let keywordColor = UIColor.cyan
-        let builtinColor = UIColor(red: 0.6, green: 0.4, blue: 1.0, alpha: 1.0)
-        let stringColor = UIColor(red: 0.9, green: 0.6, blue: 0.3, alpha: 1.0)
-        let commentColor = UIColor(red: 0.45, green: 0.55, blue: 0.45, alpha: 1.0)
-        let numberColor = UIColor(red: 0.7, green: 0.9, blue: 0.5, alpha: 1.0)
-        let boldFont = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold)
-
-        let nsText = text as NSString
-
-        // Keywords
-        for kw in keywords {
-            let pattern = "\\b\(kw)\\b"
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-                for m in matches {
-                    attributed.addAttributes([.foregroundColor: keywordColor, .font: boldFont], range: m.range)
-                }
-            }
-        }
-
-        // Builtins
-        for bi in builtins {
-            let pattern = "\\b\(bi)\\b"
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-                for m in matches {
-                    attributed.addAttributes([.foregroundColor: builtinColor], range: m.range)
-                }
-            }
-        }
-
-        // Numbers
-        if let regex = try? NSRegularExpression(pattern: "\\b\\d+\\.?\\d*\\b") {
-            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-            for m in matches {
-                attributed.addAttributes([.foregroundColor: numberColor], range: m.range)
-            }
-        }
-
-        // Strings (single and double quoted)
-        if let regex = try? NSRegularExpression(pattern: "(\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''|\"[^\"\\n]*\"|'[^'\\n]*')") {
-            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-            for m in matches {
-                attributed.addAttributes([.foregroundColor: stringColor], range: m.range)
-            }
-        }
-
-        // Comments
-        if let regex = try? NSRegularExpression(pattern: "#[^\n]*") {
-            let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
-            for m in matches {
-                attributed.addAttributes([.foregroundColor: commentColor], range: m.range)
-            }
-        }
-
-        textView.attributedText = attributed
-    }
-
-    class Coordinator: NSObject, UITextViewDelegate {
-        var parent: SelectableCodeEditor
-        weak var textView: UITextView?
-
-        init(_ parent: SelectableCodeEditor) {
-            self.parent = parent
-        }
-
-        @objc func accessoryButtonTapped(_ sender: UIButton) {
-            guard textView != nil else { return }
-            let title = sender.currentTitle ?? ""
-            let toInsert = title == "Tab" ? "    " : title
-            insertText(toInsert)
-        }
-
-        @objc func donePressed() {
-            textView?.resignFirstResponder()
-        }
-
-        private func insertText(_ string: String) {
-            guard let textView = textView else { return }
-            let range = textView.selectedRange
-            if let textRange = Range(range, in: textView.text) {
-                let newText = textView.text.replacingCharacters(in: textRange, with: string)
-                textView.text = newText
-                parent.text = newText
-                textView.selectedRange = NSRange(location: range.location + string.count, length: 0)
-            }
-        }
-
-        func textViewDidChange(_ textView: UITextView) {
-            parent.text = textView.text
-            // Re-apply syntax highlighting, preserving cursor
-            let selectedRange = textView.selectedRange
-            SelectableCodeEditor.applySyntaxHighlighting(to: textView, text: textView.text)
-            textView.selectedRange = selectedRange
-        }
-
-        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            if text == "\t" {
-                insertText("    ")
-                return false
-            }
-            return true
+            ContentUnavailableView("Select a script", systemImage: "doc.text",
+                                   description: Text("Open a stored script to edit it, or start the REPL."))
         }
     }
 }
