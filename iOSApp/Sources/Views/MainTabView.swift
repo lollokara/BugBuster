@@ -84,6 +84,7 @@ struct CustomTabBar: View {
 
 struct MainTabView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @EnvironmentObject var scripts: ScriptRunManager
     @Environment(\.horizontalSizeClass) private var sizeClass
     @ObservedObject private var scopeOrientation = ScopeOrientationState.shared
     @State private var selectedTab = AppSections.initialSectionFromEnvironment
@@ -141,15 +142,21 @@ struct MainTabView: View {
                         // Scope tab (index 2) owns its own landscape mode; hide the shared
                         // tab bar while it's rotated so the scope can use the full screen.
                         if !(selectedTab == 2 && scopeOrientation.isLandscape) {
-                            CustomTabBar(
-                                selectedTab: $selectedTab,
-                                tabs: tabs
-                            )
-                            .padding(.horizontal, sizeClass == .regular ? 80 : 16)
-                            .padding(.top, 6)
-                            // Sit closer to the home indicator: shrink the measured
-                            // inset so the pill shifts down into the bottom safe area.
-                            .padding(.bottom, -10)
+                            VStack(spacing: 8) {
+                                // Running-script pill: outside the tab switch, on every tab.
+                                ScriptPillHost(onScriptsTab: selectedTab == 4)
+                                    .padding(.horizontal, 16)
+                                CustomTabBar(
+                                    selectedTab: $selectedTab,
+                                    tabs: tabs
+                                )
+                                .padding(.horizontal, sizeClass == .regular ? 80 : 16)
+                                .padding(.top, 6)
+                                // Sit closer to the home indicator: shrink the measured
+                                // inset so the pill shifts down into the bottom safe area.
+                                .padding(.bottom, -10)
+                            }
+                            .animation(.snappy, value: scripts.status?.isActive)
                         }
                     }
                 }
@@ -159,6 +166,13 @@ struct MainTabView: View {
                 .ignoresSafeArea(.keyboard)
                 .onChange(of: selectedTab) { _ in
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                .sheet(isPresented: $scripts.consoleVisible) {
+                    ScriptLogPanel()
+                        .environmentObject(scripts)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                        .presentationBackground(.ultraThinMaterial)
                 }
             } else {
                 ConnectionDashboardView()

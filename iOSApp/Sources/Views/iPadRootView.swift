@@ -5,6 +5,7 @@ import SwiftUI
 /// duplication of tab content, only the navigation chrome differs.
 struct iPadRootView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
+    @EnvironmentObject var scripts: ScriptRunManager
     @State private var selectedSection: Int? = AppSections.initialSectionFromEnvironment
 
     /// Collapse the sidebar after this long without interaction. The scope is
@@ -23,22 +24,45 @@ struct iPadRootView: View {
                     ZStack {
                         ConnectedBackgroundView()
 
-                        Group {
-                            switch selectedSection ?? 0 {
-                            case 0:  OverviewTab()
-                            case 1:  SignalPathTab()
-                            case 2:  ScopeTab()
-                            case 3:  DiagnosticsTab()
-                            case 4:  ScriptsTab()
-                            case 5:  BatterySimTab()
-                            default: OverviewTab()
+                        HStack(spacing: 0) {
+                            ZStack(alignment: .bottom) {
+                                Group {
+                                    switch selectedSection ?? 0 {
+                                    case 0:  OverviewTab()
+                                    case 1:  SignalPathTab()
+                                    case 2:  ScopeTab()
+                                    case 3:  DiagnosticsTab()
+                                    case 4:  ScriptsTab()
+                                    case 5:  BatterySimTab()
+                                    default: OverviewTab()
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                                // Outside the section switch, so it survives section changes (spec §4).
+                                ScriptPillHost(onScriptsTab: (selectedSection ?? 0) == 4)
+                                    .padding(.horizontal, 24)
+                                    .padding(.bottom, 16)
+                            }
+                            // A tab wider than what's left must not push the log column off screen.
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .clipped()
+
+                            if scripts.consoleVisible {
+                                Divider().opacity(0.3)
+                                ScriptLogPanel()
+                                    .frame(width: ScriptLogColumnLayout.width)
+                                    .transition(.move(edge: .trailing))
                             }
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .animation(.snappy, value: scripts.consoleVisible)
 
                         ToastOverlayView()
                     }
                     .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { ScriptLogToggleButton() }
+                    }
                     // ScriptsTab's REPL manages its own keyboard clearance
                     // (keyboardWillShow/Hide tracking); without this the
                     // system also squeezes content, double-avoiding the
