@@ -219,6 +219,11 @@ extern "C" {
 #define HATP_RSP_LOG_DATA        0x9Bu // payload: log ring pull reply (diag/log_ring.h)
 
 // Firmware version reported in GET_INFO.
+// Stack of the s3_link dispatcher task. It runs every S3 request synchronously, including
+// battery-sim LOAD / NEW / DELETE (LittleFS + two 368 B checkpoint structs + the settings
+// notify chain). 4096 B overflowed on LOAD of a real run: HW stack guard -> "Stack
+// protection fault" panic -> P4 reset -> the S3 saw only a timeout.
+#define S3LINK_TASK_STACK    12288u
 #define S3LINK_FW_MAJOR      1u
 #define S3LINK_FW_MINOR      0u
 

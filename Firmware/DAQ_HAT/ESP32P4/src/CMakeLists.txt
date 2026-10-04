@@ -35,6 +35,8 @@ idf_component_register(
         "diag/diagnostics.c"
         "diag/log_ring.c"
         "diag/log_forward.c"
+        "diag/boot_report.c"
+        "diag/boot_report_esp.c"
         "config/daq_settings.c"
         "config/daq_settings_glue.c"
         "battsim/battsim.c"
@@ -72,6 +74,7 @@ idf_component_register(
         esp_driver_gpio
         esp_adc
         esp_driver_tsens
+        espcoredump
         esp_psram
         esp_timer
         esp_hw_support

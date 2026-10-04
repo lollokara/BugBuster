@@ -52,6 +52,16 @@ void log_forward_important(const char *tag, const char *fmt, ...)
     push('I', tag, msg);
 }
 
+void log_forward_record(char level, const char *tag, const char *fmt, ...)
+{
+    char msg[LOG_MSG_MAX + 1];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    push(level, tag, msg);
+}
+
 size_t log_forward_pull(uint32_t after_seq, uint8_t *out, size_t cap)
 {
     if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(20)) != pdTRUE) return 0;

@@ -104,3 +104,12 @@ CONFIG_ESP_HOSTED_HOST_RESTART_NO_COMMUNICATION_WITH_SLAVE=y
 # Worst case 8 x DEFAULT_TIMEOUT (1 s) = 8 s per block, well under the host's
 # 35 s per-chunk ACK deadline in flash_via_p4.py.
 CONFIG_SERIAL_FLASHER_WRITE_BLOCK_RETRIES=8
+
+# Crash forensics: keep a core dump of the last panic / watchdog reset in the (existing)
+# `coredump` partition. diag/boot_report_esp.c reads its summary on the next boot and
+# ships it to the hub (tag p4crash) together with the reset reason (tag p4rst).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+# A hung task must end in a panic (-> core dump with the stuck PC), not just a console warning.
+CONFIG_ESP_TASK_WDT_PANIC=y
