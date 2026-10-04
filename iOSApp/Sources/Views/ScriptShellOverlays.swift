@@ -68,6 +68,7 @@ struct ScriptLogToggleButton: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel(scripts.consoleVisible ? "Hide script log" : "Show script log")
+        .accessibilityIdentifier("script_log_toggle_button")
     }
 }
 

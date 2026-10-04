@@ -78,6 +78,7 @@ struct SignalPathTab: View {
                         .padding(.bottom)
                 }
             }
+            .accessibilityIdentifier("signal_path_tab_view")
         }
         .preferredColorScheme(.dark)
     }

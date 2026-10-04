@@ -50,6 +50,7 @@ struct ScriptsBrowserView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
                     .accessibilityLabel("New script")
+                    .accessibilityIdentifier("scripts_new_button")
 
                     Button(action: onREPL) {
                         Image(systemName: "terminal.fill")
@@ -60,6 +61,7 @@ struct ScriptsBrowserView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.cyan)
                     .accessibilityLabel("Open REPL")
+                    .accessibilityIdentifier("scripts_repl_button")
                 }
             }
             .listRowBackground(Color.clear)
@@ -85,6 +87,8 @@ struct ScriptsBrowserView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("script_row_\(name)")
+
                         ScriptRunMenu(onRun: { onRun(name, $0) }) {
                             Image(systemName: "play.fill")
                                 .foregroundStyle(.green)
@@ -92,6 +96,7 @@ struct ScriptsBrowserView: View {
                                 .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Run \(name)")
+                        .accessibilityIdentifier("script_run_\(name)")
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
@@ -104,6 +109,7 @@ struct ScriptsBrowserView: View {
             }
             .listRowBackground(Color.clear)
         }
+        .accessibilityIdentifier("scripts_browser_list")
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await model.loadFiles() }

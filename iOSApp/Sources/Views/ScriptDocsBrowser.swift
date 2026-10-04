@@ -25,10 +25,12 @@ struct ScriptDocsBrowser: View {
                             Section(section.title) {
                                 ForEach(section.entries) { entry in
                                     NavigationLink(value: entry) { ScriptDocRow(entry: entry) }
+                                        .accessibilityIdentifier("doc_row_\(entry.title)")
                                 }
                             }
                         }
                     }
+                    .accessibilityIdentifier("docs_browser_list")
                     .listStyle(.insetGrouped)
                     .overlay {
                         if sections.isEmpty { ContentUnavailableView.search(text: query) }
@@ -45,7 +47,10 @@ struct ScriptDocsBrowser: View {
             .navigationTitle("Scripting API")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("docs_done_button")
+                }
             }
         }
         .onAppear { if entries.isEmpty, let catalogue { entries = FirmwareDocs.entries(catalogue) } }
@@ -115,6 +120,7 @@ struct ScriptDocDetail: View {
                             Label(entry.kind == .example ? "Insert example" : "Insert", systemImage: "text.insert")
                         }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("doc_insert_button")
                     }
                     Button {
                         UIPasteboard.general.string = entry.snippet
