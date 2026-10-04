@@ -83,7 +83,10 @@ struct ScriptLogConsoleView: View {
     private var header: some View {
         HStack(spacing: 2) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.headline)
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if let subtitle {
                     Text(subtitle).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -98,19 +101,19 @@ struct ScriptLogConsoleView: View {
             } label: {
                 Image(systemName: filter.levels.count == ScriptLogLevel.allCases.count
                       ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter levels")
             Button { showSearch.toggle(); if !showSearch { filter.query = "" } } label: {
                 Image(systemName: "magnifyingglass")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter text")
             Button { store.isPaused.toggle() } label: {
                 Image(systemName: store.isPaused ? "play.circle.fill" : "pause.circle")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(store.isPaused ? "Resume auto-scroll" : "Pause auto-scroll")
@@ -120,7 +123,7 @@ struct ScriptLogConsoleView: View {
                 Task { try? await Task.sleep(nanoseconds: 1_200_000_000); copied = false }
             } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Copy log")
@@ -130,20 +133,20 @@ struct ScriptLogConsoleView: View {
             ),
             preview: SharePreview(ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()))) {
                 Image(systemName: "square.and.arrow.up")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Share log")
             Button { store.clear() } label: {
                 Image(systemName: "trash")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Clear log")
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(width: 36, height: 44)
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Close log")
