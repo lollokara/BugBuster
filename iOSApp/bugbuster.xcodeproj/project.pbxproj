@@ -8,9 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		0066B8C4B046B64A6DEDE4D5 /* AdaptiveRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAD664EB15EC0D7AD4B958 /* AdaptiveRootView.swift */; };
+		05CAAFAD85C09311E6A9DC5D /* hub_devices.json in Resources */ = {isa = PBXBuildFile; fileRef = AD4DB8B1A199C06DFD7692DE /* hub_devices.json */; };
 		0612859A274C667B2908A00F /* ScopeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BE3A2BF72606706AD83539 /* ScopeTab.swift */; };
 		06C977866B9EAD63B4D40555 /* ScriptEditorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
+		0A9E44FD4FECDDEB3B36001D /* HubTile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65142609C4B4F2A086829BB7 /* HubTile.swift */; };
+		0E589BE16F6E00C609791B62 /* HubRunDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C525461BB9C4D459BB0D3AAD /* HubRunDetailView.swift */; };
 		0F075AD1D48B832C87FD655A /* ScriptEditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267A6D94128F504FD24E0C0B /* ScriptEditorScreen.swift */; };
 		101E8DF4E9024C1B9FAC14C4 /* ScriptKeyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
@@ -23,6 +26,7 @@
 		1AF5BD12134617E580995BFC /* ScriptPillRuleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF4ED92AAD30E06BA5B33E8 /* ScriptPillRuleTests.swift */; };
 		2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */; };
 		30B74CCD96DBAED8E1244669 /* MockScriptsWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A49CCFEA0D510B69C6D0CC8 /* MockScriptsWire.swift */; };
+		313BAC2EE6D1D61003E4DF81 /* hub_healthz.json in Resources */ = {isa = PBXBuildFile; fileRef = 3B576F05E45B52B69A588BB1 /* hub_healthz.json */; };
 		3209482B755A326EB20D34A3 /* DaqExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CE02C081BB4C8A5DE3486B /* DaqExport.swift */; };
 		324E0AAD0398928E61A68AF4 /* ScriptsBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA68770330B0B34D924F887C /* ScriptsBrowserView.swift */; };
 		349408AD2449363DB16C4A4F /* ScriptStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E5AFA649786560EAD651C44 /* ScriptStatusViews.swift */; };
@@ -42,9 +46,11 @@
 		53D01B214BFD3208AD323E9B /* TreeSitterPythonRunestone in Frameworks */ = {isa = PBXBuildFile; productRef = 32DE738B0E717F75901F93F7 /* TreeSitterPythonRunestone */; };
 		5690A725C04CE7DA1B9F9132 /* iPadRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FF21832F5299C18916D0CD1 /* iPadRootView.swift */; };
 		584A036717E53AC274B937C1 /* ScriptRuntimeModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E035DA6A65478EE55227B33C /* ScriptRuntimeModelsTests.swift */; };
+		5893782DCC3825A12505A5D6 /* hub_coverage.json in Resources */ = {isa = PBXBuildFile; fileRef = EE26D814ABFC90F1B6B87217 /* hub_coverage.json */; };
 		5BBA94C26CC6511A65185B8A /* ScopeRenderModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */; };
 		5C680C1ACF842D05F6301181 /* ScriptCompletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 862475FF859BED45401E66F2 /* ScriptCompletion.swift */; };
 		5C963AFE71E85A21482678E5 /* FirmwareAPICatalogueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1250447E893E6D417AF1F11 /* FirmwareAPICatalogueTests.swift */; };
+		609A860BAF60B9BC3104887B /* HubMockAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0287DD292D8DE190D3EA5D48 /* HubMockAPI.swift */; };
 		62A59DE33739C399B0920251 /* ScriptLogStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8128ED9539924D89784F5B3 /* ScriptLogStoreTests.swift */; };
 		6498C3E9408B6C044DB34ABC /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AE837278E0E0BE4E1CC860D /* UIKit.framework */; };
 		6ABE7E79B7B5AEC1D75CECBF /* ScriptChunkPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FEE15340112C3C2D4205788 /* ScriptChunkPlanner.swift */; };
@@ -65,9 +71,11 @@
 		837614BE309CB1AA256A1108 /* ScriptEditorModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D57D58E2AD904293CCB7766 /* ScriptEditorModelTests.swift */; };
 		90B3A5B31AE6D92B121BCF82 /* ScriptsWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = A251B0598A0E863D57FE5258 /* ScriptsWire.swift */; };
 		92405FDCF7010233990FA901 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = F5F9C31066BC5646250047A2 /* LaunchScreen.storyboard */; };
+		949F24232A808E7B22B21D02 /* hub_runs.json in Resources */ = {isa = PBXBuildFile; fileRef = 9786C9EAF201796CFAB7E80B /* hub_runs.json */; };
 		96AF4DB2EF0293D0892CD12A /* HubClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A90F29ECEFA8DC95282A638 /* HubClient.swift */; };
 		9711490F7E7357CA87C558C2 /* BattSimHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B81C0C885D47BD144FFEAD3 /* BattSimHub.swift */; };
 		99ECE567B4FF3B46A093C414 /* Combine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */; };
+		9BA15F5D0C7089AE4A2A13F9 /* HubStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB202A3DF5399731B3FAB31B /* HubStatusTests.swift */; };
 		9F0FA4D97CFEA9AED674B6E8 /* RunWallMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05B96A1EF260620D4F1D25F /* RunWallMap.swift */; };
 		9F336EAA499D46CB1A982E15 /* FakeScriptsWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1D2C61ADDCD0C91AE940A53 /* FakeScriptsWire.swift */; };
 		A06FA13F3FD92D941025F820 /* ScriptsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B96D14C67747C79124383B70 /* ScriptsUITests.swift */; };
@@ -78,6 +86,7 @@
 		AFCB0193B17FE3CF5F8B14EA /* firmware_api.json in Resources */ = {isa = PBXBuildFile; fileRef = 49F3A23FCB72F489DB3D3147 /* firmware_api.json */; };
 		B08212B904701C4769026071 /* DaqLinkState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A9988F8F3540297C3821CA /* DaqLinkState.swift */; };
 		B2B501FF86DE9B543A3665B6 /* ScriptShellOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EB5219FEBB16C204D822338 /* ScriptShellOverlays.swift */; };
+		B339DE01BE5221D361D298BF /* HubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40270FC04657C728A6A0F04 /* HubView.swift */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B582831021FE94A028278903 /* FirmwareDocsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D282E377C9F4401F925AD9 /* FirmwareDocsTests.swift */; };
 		B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */; };
@@ -88,6 +97,7 @@
 		BBF7DCA6E0320D4F9253356E /* ScriptsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E77D3E2DDCD8CB1D3E43D59 /* ScriptsClient.swift */; };
 		BC229C5ED389244B9431FAD1 /* ScriptBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3B18A7647C5178771752B0 /* ScriptBuiltins.swift */; };
 		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
+		BE0C0D3077AE62B6271FBD89 /* hub_run.json in Resources */ = {isa = PBXBuildFile; fileRef = 9E98629AEAB99781ABCAABB2 /* hub_run.json */; };
 		C1C85715CB67C321D1AE44BD /* ScriptLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C48E5087505DB38147CD178E /* ScriptLogStore.swift */; };
 		C962F963A12E3C257CCC3C4F /* ScriptCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 078C942FAA9D00253ECD84C0 /* ScriptCompletionTests.swift */; };
 		CDAFAA870E358140FA3DF18A /* DaqAcquisitionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27828AA9E4782D23046CFB6C /* DaqAcquisitionConfig.swift */; };
@@ -95,9 +105,11 @@
 		D1A8532D3D2B3D7A36FBD2B4 /* MockScriptsWireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4A0C998FE6748C99C1D39E /* MockScriptsWireTests.swift */; };
 		D4C0E9D2CEECCB7922A46E76 /* FirmwareDocs.swift in Sources */ = {isa = PBXBuildFile; fileRef = F65153D685239FC06000373F /* FirmwareDocs.swift */; };
 		D8023B2A266F8FD7FA3ADDB5 /* ScriptRunManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */; };
+		D99CBBB92F8D7AFFC688BD7C /* HubStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC81E679AEA743C96DF616BF /* HubStatus.swift */; };
 		E17221B858F9B293E3856104 /* BatterySimTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6683C8CA14E444FC60415F19 /* BatterySimTab.swift */; };
 		E2108D9A42760D2331D4A9B9 /* SmokeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE06D91AF8F500EF2160FB2 /* SmokeUITests.swift */; };
 		E5B0904D8188A6963B7845CE /* VdutErrorTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E287628DBBCD5197E23ACBC /* VdutErrorTextTests.swift */; };
+		E847F958B8BD2C922B3F413D /* hub_logs.json in Resources */ = {isa = PBXBuildFile; fileRef = D0EDF17EB0801CE3053A0CEE /* hub_logs.json */; };
 		E9DCBDCA6A17E7EAE1130B2E /* BLETransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */; };
 		EA90F1B42D748BD4027271AA /* DeviceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */; };
 		EB728E06F8D482391320DBED /* ScriptsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09B963A369295728D4B4FFF7 /* ScriptsTab.swift */; };
@@ -126,6 +138,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0287DD292D8DE190D3EA5D48 /* HubMockAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubMockAPI.swift; sourceTree = "<group>"; };
 		02A8FE5A22706E9D08B5F17A /* RotatePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatePromptView.swift; sourceTree = "<group>"; };
 		06BE52DDD7CD52DF87B06604 /* ScopeOrientationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeOrientationState.swift; sourceTree = "<group>"; };
 		078C942FAA9D00253ECD84C0 /* ScriptCompletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCompletionTests.swift; sourceTree = "<group>"; };
@@ -152,6 +165,7 @@
 		336152CB2D894F9065520535 /* ScriptsWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsWireTests.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
 		39328C7FDF3342CE44DC8B08 /* bugbuster_iOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = bugbuster_iOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		3B576F05E45B52B69A588BB1 /* hub_healthz.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_healthz.json; sourceTree = "<group>"; };
 		3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorModel.swift; sourceTree = "<group>"; };
 		3E36A75C2AB886192C02B5EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3EB5219FEBB16C204D822338 /* ScriptShellOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptShellOverlays.swift; sourceTree = "<group>"; };
@@ -171,6 +185,7 @@
 		5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqMeasurementsCard.swift; sourceTree = "<group>"; };
 		6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimSocMergeTests.swift; sourceTree = "<group>"; };
 		624D7AD1D8C99339636DBBFC /* ScriptRuntimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRuntimeModels.swift; sourceTree = "<group>"; };
+		65142609C4B4F2A086829BB7 /* HubTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubTile.swift; sourceTree = "<group>"; };
 		6683C8CA14E444FC60415F19 /* BatterySimTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatterySimTab.swift; sourceTree = "<group>"; };
 		67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManager.swift; sourceTree = "<group>"; };
 		70AF72BF497C078DB10623CF /* HubMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubMerge.swift; sourceTree = "<group>"; };
@@ -189,20 +204,25 @@
 		929B1BADA4CEAD523F6E8BC7 /* ScriptsTabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsTabModel.swift; sourceTree = "<group>"; };
 		93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTransportTests.swift; sourceTree = "<group>"; };
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		9786C9EAF201796CFAB7E80B /* hub_runs.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_runs.json; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
 		9D57D58E2AD904293CCB7766 /* ScriptEditorModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorModelTests.swift; sourceTree = "<group>"; };
+		9E98629AEAB99781ABCAABB2 /* hub_run.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_run.json; sourceTree = "<group>"; };
 		A016ED8CC7E030C9C5535415 /* NavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationUITests.swift; sourceTree = "<group>"; };
 		A1250447E893E6D417AF1F11 /* FirmwareAPICatalogueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirmwareAPICatalogueTests.swift; sourceTree = "<group>"; };
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		A251B0598A0E863D57FE5258 /* ScriptsWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsWire.swift; sourceTree = "<group>"; };
 		A5888B3A4C5430E79C66503A /* ScriptLogStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLogStyleTests.swift; sourceTree = "<group>"; };
 		AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptKeyBar.swift; sourceTree = "<group>"; };
+		AC81E679AEA743C96DF616BF /* HubStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubStatus.swift; sourceTree = "<group>"; };
+		AD4DB8B1A199C06DFD7692DE /* hub_devices.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_devices.json; sourceTree = "<group>"; };
 		B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
 		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
 		B96D14C67747C79124383B70 /* ScriptsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsUITests.swift; sourceTree = "<group>"; };
 		BB4A0C998FE6748C99C1D39E /* MockScriptsWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockScriptsWireTests.swift; sourceTree = "<group>"; };
 		BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		C48E5087505DB38147CD178E /* ScriptLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLogStore.swift; sourceTree = "<group>"; };
+		C525461BB9C4D459BB0D3AAD /* HubRunDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubRunDetailView.swift; sourceTree = "<group>"; };
 		C7BE3A2BF72606706AD83539 /* ScopeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeTab.swift; sourceTree = "<group>"; };
 		C7CFF6C7FEBF96894E2AABF0 /* ScriptsTabModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsTabModelTests.swift; sourceTree = "<group>"; };
 		CA892263E874BA32B9F9A9BB /* VDUTControlsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDUTControlsCard.swift; sourceTree = "<group>"; };
@@ -210,14 +230,18 @@
 		CD890ABE85D297F1465898CA /* UITestBase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestBase.swift; sourceTree = "<group>"; };
 		CF6A82D01D4126FF3A690CBE /* ScriptREPLView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptREPLView.swift; sourceTree = "<group>"; };
 		D05B96A1EF260620D4F1D25F /* RunWallMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunWallMap.swift; sourceTree = "<group>"; };
+		D0EDF17EB0801CE3053A0CEE /* hub_logs.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_logs.json; sourceTree = "<group>"; };
 		D1D2C61ADDCD0C91AE940A53 /* FakeScriptsWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeScriptsWire.swift; sourceTree = "<group>"; };
 		D3BF036F114A273A48F81D05 /* ScriptStatusTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptStatusTextTests.swift; sourceTree = "<group>"; };
+		D40270FC04657C728A6A0F04 /* HubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubView.swift; sourceTree = "<group>"; };
+		DB202A3DF5399731B3FAB31B /* HubStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubStatusTests.swift; sourceTree = "<group>"; };
 		E035DA6A65478EE55227B33C /* ScriptRuntimeModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRuntimeModelsTests.swift; sourceTree = "<group>"; };
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqScopeCanvasView.swift; sourceTree = "<group>"; };
 		E6F8A20F06AB74E3B38FD9AC /* ScriptRunManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManagerTests.swift; sourceTree = "<group>"; };
 		EA68770330B0B34D924F887C /* ScriptsBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsBrowserView.swift; sourceTree = "<group>"; };
 		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
+		EE26D814ABFC90F1B6B87217 /* hub_coverage.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_coverage.json; sourceTree = "<group>"; };
 		EF27ECE13B9C9D0D71E41EE5 /* Combine.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Combine.framework; path = System/Library/Frameworks/Combine.framework; sourceTree = SDKROOT; };
 		EF4B125C3B8569AA1E050B35 /* ScriptCodeEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCodeEditor.swift; sourceTree = "<group>"; };
 		F481E6F3CC98291FF849EAD8 /* BattSimService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimService.swift; sourceTree = "<group>"; };
@@ -275,6 +299,19 @@
 			path = Support;
 			sourceTree = "<group>";
 		};
+		31AD154A9FFB2EF10928AD2D /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				EE26D814ABFC90F1B6B87217 /* hub_coverage.json */,
+				AD4DB8B1A199C06DFD7692DE /* hub_devices.json */,
+				3B576F05E45B52B69A588BB1 /* hub_healthz.json */,
+				D0EDF17EB0801CE3053A0CEE /* hub_logs.json */,
+				9E98629AEAB99781ABCAABB2 /* hub_run.json */,
+				9786C9EAF201796CFAB7E80B /* hub_runs.json */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
 		412799167B2519E92B7E45C8 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
@@ -326,6 +363,7 @@
 				93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */,
 				A1250447E893E6D417AF1F11 /* FirmwareAPICatalogueTests.swift */,
 				45D282E377C9F4401F925AD9 /* FirmwareDocsTests.swift */,
+				DB202A3DF5399731B3FAB31B /* HubStatusTests.swift */,
 				BB4A0C998FE6748C99C1D39E /* MockScriptsWireTests.swift */,
 				078C942FAA9D00253ECD84C0 /* ScriptCompletionTests.swift */,
 				9D57D58E2AD904293CCB7766 /* ScriptEditorModelTests.swift */,
@@ -340,6 +378,7 @@
 				78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */,
 				336152CB2D894F9065520535 /* ScriptsWireTests.swift */,
 				1E287628DBBCD5197E23ACBC /* VdutErrorTextTests.swift */,
+				31AD154A9FFB2EF10928AD2D /* Fixtures */,
 				2E68221B24ED2475D6913400 /* Support */,
 			);
 			path = Tests;
@@ -390,7 +429,10 @@
 				5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */,
 				E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */,
 				8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */,
+				C525461BB9C4D459BB0D3AAD /* HubRunDetailView.swift */,
 				FBE597C0F3857B36B68C1F36 /* HubSettingsView.swift */,
+				65142609C4B4F2A086829BB7 /* HubTile.swift */,
+				D40270FC04657C728A6A0F04 /* HubView.swift */,
 				3FF21832F5299C18916D0CD1 /* iPadRootView.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
 				23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */,
@@ -429,6 +471,8 @@
 				F65153D685239FC06000373F /* FirmwareDocs.swift */,
 				5A90F29ECEFA8DC95282A638 /* HubClient.swift */,
 				70AF72BF497C078DB10623CF /* HubMerge.swift */,
+				0287DD292D8DE190D3EA5D48 /* HubMockAPI.swift */,
+				AC81E679AEA743C96DF616BF /* HubStatus.swift */,
 				BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */,
 				8A49CCFEA0D510B69C6D0CC8 /* MockScriptsWire.swift */,
 				D05B96A1EF260620D4F1D25F /* RunWallMap.swift */,
@@ -477,6 +521,7 @@
 			buildConfigurationList = A06A8CC62BBB8E5F17378B3C /* Build configuration list for PBXNativeTarget "bugbuster_iOSTests" */;
 			buildPhases = (
 				EE20B5ADF6311AFF3CDF2C27 /* Sources */,
+				A58BB471A6A7541EBF0F1EC8 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -562,6 +607,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A58BB471A6A7541EBF0F1EC8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5893782DCC3825A12505A5D6 /* hub_coverage.json in Resources */,
+				05CAAFAD85C09311E6A9DC5D /* hub_devices.json in Resources */,
+				313BAC2EE6D1D61003E4DF81 /* hub_healthz.json in Resources */,
+				E847F958B8BD2C922B3F413D /* hub_logs.json in Resources */,
+				BE0C0D3077AE62B6271FBD89 /* hub_run.json in Resources */,
+				949F24232A808E7B22B21D02 /* hub_runs.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -604,7 +662,12 @@
 				D4C0E9D2CEECCB7922A46E76 /* FirmwareDocs.swift in Sources */,
 				96AF4DB2EF0293D0892CD12A /* HubClient.swift in Sources */,
 				780AA82150E6FEC913B82C71 /* HubMerge.swift in Sources */,
+				609A860BAF60B9BC3104887B /* HubMockAPI.swift in Sources */,
+				0E589BE16F6E00C609791B62 /* HubRunDetailView.swift in Sources */,
 				7243FA194F755F88947052C4 /* HubSettingsView.swift in Sources */,
+				D99CBBB92F8D7AFFC688BD7C /* HubStatus.swift in Sources */,
+				0A9E44FD4FECDDEB3B36001D /* HubTile.swift in Sources */,
+				B339DE01BE5221D361D298BF /* HubView.swift in Sources */,
 				50B3C04B7B4811FB76BD3499 /* KeychainHelper.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
 				30B74CCD96DBAED8E1244669 /* MockScriptsWire.swift in Sources */,
@@ -658,6 +721,7 @@
 				9F336EAA499D46CB1A982E15 /* FakeScriptsWire.swift in Sources */,
 				5C963AFE71E85A21482678E5 /* FirmwareAPICatalogueTests.swift in Sources */,
 				B582831021FE94A028278903 /* FirmwareDocsTests.swift in Sources */,
+				9BA15F5D0C7089AE4A2A13F9 /* HubStatusTests.swift in Sources */,
 				D1A8532D3D2B3D7A36FBD2B4 /* MockScriptsWireTests.swift in Sources */,
 				C962F963A12E3C257CCC3C4F /* ScriptCompletionTests.swift in Sources */,
 				837614BE309CB1AA256A1108 /* ScriptEditorModelTests.swift in Sources */,
