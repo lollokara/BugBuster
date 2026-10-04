@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLRequest/URLSession outside Apple platforms (Linux/Windows CI)
+#endif
 
 private var failures = 0
 private func expect<T: Equatable>(_ got: T, _ want: T, _ what: String, line: UInt = #line) {

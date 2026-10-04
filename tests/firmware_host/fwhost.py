@@ -146,7 +146,9 @@ def compile_and_run(
         build = subprocess.run(cmd, capture_output=True, text=True)
         if build.returncode != 0:
             raise AssertionError(f"compile failed:\n{' '.join(cmd)}\n{build.stderr}")
-        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=30)
+        # Harness output is UTF-8; decode it explicitly (Windows defaults to cp1252).
+        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=30,
+                             encoding="utf-8", errors="replace")
         if run.returncode != 0:
             raise AssertionError(
                 f"program exited {run.returncode}\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}")
