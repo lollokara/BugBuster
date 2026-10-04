@@ -21,11 +21,12 @@ struct iPadRootView: View {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     SidebarView(selection: $selectedSection)
                 } detail: {
-                    ZStack {
-                        ConnectedBackgroundView()
+                    GeometryReader { geo in
+                        let logWidth = ScriptLogColumnLayout.columnWidth(for: geo.size.width)
+                        ZStack {
+                            ConnectedBackgroundView()
 
-                        HStack(spacing: 0) {
-                            ZStack(alignment: .bottom) {
+                            HStack(spacing: 0) {
                                 Group {
                                     switch selectedSection ?? 0 {
                                     case 0:  OverviewTab()
@@ -38,26 +39,33 @@ struct iPadRootView: View {
                                     }
                                 }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                // Outside the section switch so it survives section changes (spec §4).
+                                // Uses safeAreaInset so scroll views reserve space instead of being covered (Findings #22, #24).
+                                .safeAreaInset(edge: .bottom, spacing: 0) {
+                                    ScriptPillHost(onScriptsTab: (selectedSection ?? 0) == 4)
+                                        .padding(.horizontal, 24)
+                                        .padding(.bottom, 16)
+                                }
+                                .frame(minWidth: 0, maxWidth: .infinity)
+                                .clipped()
 
-                                // Outside the section switch, so it survives section changes (spec §4).
-                                ScriptPillHost(onScriptsTab: (selectedSection ?? 0) == 4)
-                                    .padding(.horizontal, 24)
-                                    .padding(.bottom, 16)
+                                if scripts.consoleVisible {
+                                    Divider().opacity(0.3)
+                                    ScriptLogPanel()
+                                        .frame(width: logWidth)
+                                        .transition(.move(edge: .trailing))
+                                }
                             }
-                            // A tab wider than what's left must not push the log column off screen.
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                            .clipped()
+                            .animation(.snappy, value: scripts.consoleVisible)
 
-                            if scripts.consoleVisible {
-                                Divider().opacity(0.3)
-                                ScriptLogPanel()
-                                    .frame(width: ScriptLogColumnLayout.width)
-                                    .transition(.move(edge: .trailing))
-                            }
+                            ToastOverlayView()
                         }
-                        .animation(.snappy, value: scripts.consoleVisible)
-
-                        ToastOverlayView()
+                        .onAppear {
+                            checkSidebarCollapseForConsole(detailWidth: geo.size.width)
+                        }
+                        .onChange(of: geo.size.width) { _, width in
+                            checkSidebarCollapseForConsole(detailWidth: width)
+                        }
                     }
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
@@ -80,12 +88,26 @@ struct iPadRootView: View {
                     // cancelled task can't re-collapse an already-collapsed pane.
                     if new == .all { noteInteraction() } else { idleTask?.cancel() }
                 }
+                .onChange(of: scripts.consoleVisible) { _, visible in
+                    if visible {
+                        withAnimation(.snappy) { columnVisibility = .detailOnly }
+                    }
+                }
                 .onDisappear { idleTask?.cancel() }
             } else {
                 ConnectionDashboardView()
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Collapse sidebar if detail pane width is constrained with the log console open (Finding #25).
+    private func checkSidebarCollapseForConsole(detailWidth: CGFloat) {
+        if scripts.consoleVisible && detailWidth < 750 && columnVisibility != .detailOnly {
+            withAnimation(.snappy) {
+                columnVisibility = .detailOnly
+            }
+        }
     }
 
     /// Restart the idle countdown. Called on any interaction that should keep

@@ -97,8 +97,6 @@ struct MainTabView: View {
         Group {
             if connectionManager.connectionState == .connected {
                 ZStack {
-                    connectedBackground
-
                     Group {
                         switch selectedTab {
                         case 0:  OverviewTab()
@@ -122,7 +120,7 @@ struct MainTabView: View {
                                 Image(systemName: toast.type == .success ? "checkmark.circle.fill" : toast.type == .error ? "xmark.circle.fill" : "info.circle.fill")
                                     .foregroundColor(toast.type == .success ? .green : toast.type == .error ? .red : .blue)
                                 Text(toast.text)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.subheadline.weight(.semibold))
                                     .foregroundColor(.white)
                             }
                             .padding(.horizontal, 16)
@@ -137,6 +135,7 @@ struct MainTabView: View {
                         .allowsHitTesting(false)
                     }
                 }
+                .background(connectedBackground)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     Group {
                         // Scope tab (index 2) owns its own landscape mode; hide the shared

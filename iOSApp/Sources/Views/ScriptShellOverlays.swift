@@ -11,6 +11,15 @@ enum ScriptPillRule {
 
 enum ScriptLogColumnLayout {
     static let width: CGFloat = 380
+
+    /// Responsive column width based on available detail pane width (Finding #25).
+    /// When space is tight (< 700 pt), column width shrinks down to 260-320 pt so the editor isn't crushed.
+    static func columnWidth(for availableWidth: CGFloat) -> CGFloat {
+        if availableWidth < 700 {
+            return max(260, min(320, availableWidth * 0.42))
+        }
+        return width
+    }
 }
 
 /// The pill bound to the shared manager. Elapsed time and the last log line refresh once a second.
@@ -55,7 +64,10 @@ struct ScriptLogToggleButton: View {
             withAnimation(.snappy) { scripts.consoleVisible.toggle() }
         } label: {
             Image(systemName: scripts.consoleVisible ? "sidebar.trailing" : "text.alignleft")
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel(scripts.consoleVisible ? "Hide script log" : "Show script log")
     }
 }
+

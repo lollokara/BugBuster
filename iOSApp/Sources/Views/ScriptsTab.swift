@@ -21,6 +21,7 @@ private struct ScriptsTabContent: View {
     @State private var showingCreate = false
     @State private var newFileName = ""
     @State private var keyboardHeight: CGFloat = 0
+    @State private var isWide = false
 
     init(manager: ScriptRunManager) {
         self.manager = manager
@@ -42,8 +43,9 @@ private struct ScriptsTabContent: View {
 
             // Side by side only when the pane really has room: an iPad in portrait with the sidebar
             // and the log column open leaves ~480 pt, so it falls back to browser-or-detail.
-            GeometryReader { geo in
-                if sizeClass == .regular && geo.size.width >= 760 {
+            // Measure width in background to avoid trapping ScrollViews in GeometryReader (preserves safeAreaInsets).
+            Group {
+                if sizeClass == .regular && isWide {
                     HStack(spacing: 0) {
                         browser.frame(width: 340)
                         Divider().opacity(0.3)
@@ -54,6 +56,15 @@ private struct ScriptsTabContent: View {
                 } else {
                     browser
                 }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: ScriptsTabWidthPreferenceKey.self, value: geo.size.width)
+                }
+            )
+            .onPreferenceChange(ScriptsTabWidthPreferenceKey.self) { width in
+                isWide = width >= 760
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -143,3 +154,11 @@ private struct ScriptsTabContent: View {
         }
     }
 }
+
+private struct ScriptsTabWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
