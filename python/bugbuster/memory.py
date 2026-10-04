@@ -156,7 +156,7 @@ def parse_mem_status(raw: bytes) -> MemoryStatus:
             f"unsupported MEM_STATUS schema {schema} (this client speaks "
             f"{MEM_STATUS_SCHEMA}) — update the bugbuster package to match the firmware")
 
-    tasks = []
+    tasks: list[TaskStack] = []
     off = _HEADER_LEN
     for _ in range(task_count):
         if len(raw) - off < _TASK_LEN:

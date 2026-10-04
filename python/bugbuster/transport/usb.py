@@ -109,9 +109,9 @@ class USBTransport:
         self.auto_reconnect = True
 
         # Firmware info filled in after connect()
-        self.proto_version = None
-        self.fw_version    = None   # (major, minor, patch)
-        self.mac           = None   # bytes of length 6, or None for legacy fw
+        self.proto_version: Optional[int] = None
+        self.fw_version:    Optional[tuple[int, int, int]] = None
+        self.mac:           Optional[bytes] = None
 
     # ------------------------------------------------------------------
     # Connection management
@@ -147,6 +147,9 @@ class USBTransport:
         import time as _time
 
         def _attempt_handshake(settle_timeout: float) -> bytes:
+            ser = self._serial
+            if ser is None:
+                raise ConnectionError("Serial port is not open")
             buf             = bytearray()
             magic_sent      = False
             last_rx         = _time.time()
@@ -165,7 +168,7 @@ class USBTransport:
                     raise TimeoutError(buf.hex() if buf else "nothing")
 
                 try:
-                    chunk = self._serial.read(64)
+                    chunk = ser.read(64)
                 except serial.SerialException:
                     _time.sleep(0.02)
                     continue
@@ -188,8 +191,8 @@ class USBTransport:
                 if not magic_sent:
                     quiet_for = now - last_rx
                     if quiet_for >= settle_quiet_s or now > settle_deadline:
-                        self._serial.write(HANDSHAKE_MAGIC)
-                        self._serial.flush()
+                        ser.write(HANDSHAKE_MAGIC)
+                        ser.flush()
                         magic_sent = True
                         deadline   = _time.time() + self._timeout
 
@@ -236,12 +239,15 @@ class USBTransport:
         if resp is None:
             raise ConnectionError("Handshake returned no response")
 
-        self.proto_version = resp[4]
-        self.fw_version    = (resp[5], resp[6], resp[7])
+        proto_version = resp[4]
+        fw_version    = (resp[5], resp[6], resp[7])
+        self.proto_version = proto_version
+        self.fw_version    = fw_version
         check_proto_version(resp[4])
         if len(resp) >= 14:
-            self.mac = bytes(resp[8:14])
-            mac_str  = ":".join(f"{b:02x}" for b in self.mac)
+            mac = bytes(resp[8:14])
+            self.mac = mac
+            mac_str  = ":".join(f"{b:02x}" for b in mac)
         else:
             self.mac = None
             mac_str  = "unknown"
@@ -251,7 +257,7 @@ class USBTransport:
             )
         log.info(
             "Connected to BugBuster fw=%d.%d.%d protocol=%d mac=%s via %s",
-            *self.fw_version, self.proto_version, mac_str, self._port,
+            *fw_version, proto_version, mac_str, self._port,
         )
 
         self._running = True
@@ -278,7 +284,7 @@ class USBTransport:
         import time as _time
         _time.sleep(0.15)
 
-        return self.proto_version, self.fw_version
+        return proto_version, fw_version
 
     def disconnect(self) -> None:
         """Gracefully exit binary mode and close the serial port."""
