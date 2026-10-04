@@ -103,6 +103,7 @@ struct ScriptStatusPill: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Script \(status.displayName) \(ScriptStatusText.stateLabel(status)). Show log")
+            .accessibilityIdentifier("script_pill_log_button")
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
@@ -115,7 +116,10 @@ struct ScriptStatusPill: View {
             .glassEffect(.regular.tint(.red), in: Circle())
             .disabled(status.state == .stopping)
             .accessibilityLabel("Stop \(status.displayName)")
+            .accessibilityIdentifier("script_pill_stop_button")
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("script_status_pill")
         .padding(.leading, 14)
         .padding(.trailing, 6)
         .padding(.vertical, 4)
@@ -171,6 +175,7 @@ struct ScriptStatusHeader: View {
             }
             .buttonStyle(.bordered)
             .accessibilityLabel(logVisible ? "Hide log" : "Show log")
+            .accessibilityIdentifier("script_header_log_button")
 
             if status?.isActive == true {
                 Button(role: .destructive, action: onStop) {
@@ -190,8 +195,11 @@ struct ScriptStatusHeader: View {
                 .tint(.red)
                 .disabled(status?.state == .stopping)
                 .accessibilityLabel("Stop \(status?.displayName ?? "script")")
+                .accessibilityIdentifier("script_header_stop_button")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("script_status_header")
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

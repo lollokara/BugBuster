@@ -73,10 +73,13 @@ struct ScriptLogConsoleView: View {
                     .textInputAutocapitalization(.never)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 6)
+                    .accessibilityIdentifier("console_filter_text_field")
             }
             Divider().opacity(0.3)
             lines
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("script_log_console")
         .background(Color.black.opacity(0.25))
     }
 
@@ -105,18 +108,21 @@ struct ScriptLogConsoleView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter levels")
+            .accessibilityIdentifier("console_filter_levels_menu")
             Button { showSearch.toggle(); if !showSearch { filter.query = "" } } label: {
                 Image(systemName: "magnifyingglass")
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter text")
+            .accessibilityIdentifier("console_filter_text_button")
             Button { store.isPaused.toggle() } label: {
                 Image(systemName: store.isPaused ? "play.circle.fill" : "pause.circle")
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(store.isPaused ? "Resume auto-scroll" : "Pause auto-scroll")
+            .accessibilityIdentifier("console_pause_button")
             Button {
                 UIPasteboard.general.string = store.plainText
                 copied = true
@@ -127,6 +133,7 @@ struct ScriptLogConsoleView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Copy log")
+            .accessibilityIdentifier("console_copy_button")
             ShareLink(item: ScriptLogExport(
                 fileName: ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()),
                 textProvider: { [weak store] in store?.plainText ?? "" }
@@ -137,12 +144,14 @@ struct ScriptLogConsoleView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Share log")
+            .accessibilityIdentifier("console_share_button")
             Button { store.clear() } label: {
                 Image(systemName: "trash")
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Clear log")
+            .accessibilityIdentifier("console_clear_button")
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -150,6 +159,7 @@ struct ScriptLogConsoleView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Close log")
+                .accessibilityIdentifier("console_close_button")
             }
         }
         .font(.body)

@@ -71,4 +71,34 @@ final class FirmwareAPICatalogueTests: XCTestCase {
     func testMissingResourceYieldsNil() {
         XCTAssertNil(FirmwareAPICatalogue.load(bundle: Bundle(for: FirmwareAPICatalogueTests.self)))
     }
+
+    func testRichDocFieldsDecode() throws {
+        let bb = try XCTUnwrap(FirmwareAPICatalogue.bundled?.module(named: "bugbuster"))
+        let sleep = try XCTUnwrap(bb.functions.first { $0.name == "sleep" })
+        XCTAssertFalse(sleep.summary.isEmpty)
+        XCTAssertEqual(sleep.params.first?.name, "ms")
+        XCTAssertFalse(try XCTUnwrap(sleep.params.first).doc.isEmpty)
+        XCTAssertTrue(sleep.detail.raises.contains { $0.type == "ValueError" })
+        XCTAssertFalse(sleep.detail.examples.isEmpty)
+        let rail = try XCTUnwrap(bb.functions.first { $0.name == "rail_power_up" })
+        XCTAssertEqual(rail.detail.returnKeys.map(\.name), ["pg", "fault"])
+        XCTAssertFalse(rail.detail.notes.isEmpty, "safety note")
+        let funcVout = try XCTUnwrap(bb.constants.first { $0.name == "FUNC_VOUT" })
+        XCTAssertEqual(funcVout.value, "1")
+        XCTAssertFalse(funcVout.doc.isEmpty)
+    }
+
+    func testEveryCallableIsDocumentedInTheBundledCatalogue() throws {
+        let cat = try XCTUnwrap(FirmwareAPICatalogue.bundled)
+        var missing: [String] = []
+        for m in cat.modules {
+            let callables = m.functions + m.classes.flatMap(\.methods)
+            for fn in callables where fn.summary.isEmpty || fn.detail.examples.isEmpty
+                || fn.params.contains(where: { $0.doc.isEmpty }) {
+                missing.append("\(m.name).\(fn.name)")
+            }
+        }
+        XCTAssertEqual(missing, [])
+        XCTAssertGreaterThanOrEqual(cat.examples.count, 20)
+    }
 }

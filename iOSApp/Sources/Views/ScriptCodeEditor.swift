@@ -19,6 +19,7 @@ struct ScriptEditorView: View {
                     ScriptCompletionPopover(items: model.completion.items) { model.accept($0) }
                         .frame(width: size.width, height: size.height)
                         .offset(x: origin.x, y: origin.y)
+                        .accessibilityIdentifier("completion_popover")
                         .transition(.opacity)
                 }
             }
@@ -55,10 +56,23 @@ struct ScriptCodeEditor: UIViewRepresentable {
         tv.keyboardType = .asciiCapable
         tv.keyboardAppearance = .dark
         tv.isEditable = isEditable
+        tv.accessibilityIdentifier = "script_editor_text_view"
         tv.inputAccessoryView = context.coordinator.makeAccessoryBar()
         tv.setState(TextViewState(text: model.text, theme: ScriptEditorTheme(), language: .python))
         context.coordinator.textView = tv
         model.textView = tv
+        #if DEBUG
+        // Layout checks: BB_EDITOR_FOCUS=1 raises the keyboard, BB_EDITOR_TYPE=<text> then types it.
+        let env = ProcessInfo.processInfo.environment
+        if env["BB_EDITOR_FOCUS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                tv.becomeFirstResponder()
+                if let text = env["BB_EDITOR_TYPE"] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { tv.insertText(text) }
+                }
+            }
+        }
+        #endif
         return tv
     }
 
@@ -78,6 +92,7 @@ struct ScriptCodeEditor: UIViewRepresentable {
     final class Coordinator: NSObject, TextViewDelegate {
         let model: ScriptEditorModel
         weak var textView: TextView?
+        private var keyBar: ScriptKeyBar?
 
         init(model: ScriptEditorModel) {
             self.model = model
@@ -87,13 +102,15 @@ struct ScriptCodeEditor: UIViewRepresentable {
             MainActor.assumeIsolated {
                 model.textDidChange(textView.text, caret: textView.selectedRange.location)
                 publishCaret(textView)
+                refreshBar()
             }
         }
 
         func textViewDidChangeSelection(_ textView: TextView) {
             MainActor.assumeIsolated {
-                model.selectionDidChange(caret: textView.selectedRange.location)
+                model.selectionDidChange(caret: textView.selectedRange.location, length: textView.selectedRange.length)
                 publishCaret(textView)
+                refreshBar()
             }
         }
 
@@ -103,11 +120,12 @@ struct ScriptCodeEditor: UIViewRepresentable {
 
         func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
             MainActor.assumeIsolated {
-                if text == "\t" {                                           // hardware Tab accepts a suggestion,
-                    if !model.acceptFirst() { textView.replace(range, withText: "    ") }   // else indents with spaces
+                if text == "\t" {                           // hardware Tab: suggestion, next placeholder, or indent
+                    pressTab()
                     return false
                 }
                 let clean = ScriptTextSanitizer.sanitize(text)
+                model.textWillChange(in: range, replacement: clean)
                 guard clean != text else { return true }
                 textView.replace(range, withText: clean)
                 return false
@@ -122,47 +140,33 @@ struct ScriptCodeEditor: UIViewRepresentable {
         }
 
         func makeAccessoryBar() -> UIView {
-            let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 1, height: 44))
-            scroll.autoresizingMask = [.flexibleWidth]
-            scroll.showsHorizontalScrollIndicator = false
-            scroll.alwaysBounceHorizontal = true
-            let stack = UIStackView()
-            stack.axis = .horizontal
-            stack.spacing = 8
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            for key in ["Tab", ".", "(", ")", ":", "=", "_", "#", "\"", "[", "]", "Done"] {
-                let button = UIButton(type: .system)
-                var config = UIButton.Configuration.plain()
-                config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
-                button.configuration = config
-                button.setTitle(key, for: .normal)
-                button.titleLabel?.font = .monospacedSystemFont(ofSize: 15, weight: key.count > 1 ? .bold : .semibold)
-                button.setTitleColor(.cyan, for: .normal)
-                button.backgroundColor = UIColor(white: 1, alpha: 0.05)
-                button.layer.cornerRadius = 8
-                button.addTarget(self, action: #selector(keyTapped(_:)), for: .touchUpInside)
-                stack.addArrangedSubview(button)
+            let bar = ScriptKeyBar()
+            bar.actions.tab = { [weak self] in self?.pressTab() }
+            bar.actions.indent = { [weak self] in self.map { m in MainActor.assumeIsolated { m.model.indent() } } }
+            bar.actions.outdent = { [weak self] in self.map { m in MainActor.assumeIsolated { m.model.outdent() } } }
+            bar.actions.insert = { [weak self] text in self?.textView?.insertText(text) }
+            bar.actions.undo = { [weak self] in self?.textView?.undoManager?.undo() }
+            bar.actions.redo = { [weak self] in self?.textView?.undoManager?.redo() }
+            bar.actions.nextPlaceholder = { [weak self] in
+                self.map { m in MainActor.assumeIsolated { _ = m.model.nextPlaceholder() } }
             }
-            scroll.addSubview(stack)
-            NSLayoutConstraint.activate([
-                stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 12),
-                stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -12),
-                stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 6),
-                stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -6),
-                stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -12)
-            ])
-            return scroll
+            bar.actions.dismiss = { [weak self] in self?.textView?.resignFirstResponder() }
+            keyBar = bar
+            return bar
         }
 
-        @objc private func keyTapped(_ sender: UIButton) {
-            guard let tv = textView, let key = sender.currentTitle else { return }
+        /// Tab: accept the top suggestion, else the next placeholder, else indent.
+        func pressTab() {
             MainActor.assumeIsolated {
-                switch key {
-                case "Done": tv.resignFirstResponder()
-                case "Tab": if !model.acceptFirst() { tv.insertText("    ") }
-                default: tv.insertText(key)
-                }
+                if model.handleTab() == .indent { model.indent() }
             }
+        }
+
+        @MainActor
+        func refreshBar() {
+            keyBar?.refresh(canUndo: textView?.undoManager?.canUndo ?? false,
+                            canRedo: textView?.undoManager?.canRedo ?? false,
+                            hasPlaceholder: model.placeholders != nil)
         }
     }
 }
@@ -285,10 +289,12 @@ struct ScriptCompletionPopover: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(item.label), \(item.detail)")
+                    .accessibilityIdentifier("completion_item_\(item.label)")
                 }
             }
             .padding(.vertical, 4)
         }
+        .accessibilityIdentifier("completion_popover")
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
@@ -303,6 +309,9 @@ struct ScriptCompletionPopover: View {
         case .namespace: return "N"
         case .constant: return "K"
         case .keyword: return "="
+        case .builtin: return "ƒ"
+        case .exception: return "E"
+        case .reserved: return "k"
         }
     }
 }

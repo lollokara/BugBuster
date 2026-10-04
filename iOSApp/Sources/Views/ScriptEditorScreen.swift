@@ -7,7 +7,11 @@ struct ScriptEditorScreen: View {
     let onBack: () -> Void
     let onRun: (_ background: Bool) -> Void
 
+    #if DEBUG
+    @State private var showingDocs = ProcessInfo.processInfo.environment["BB_DOCS_ENTRY"] != nil
+    #else
     @State private var showingDocs = false
+    #endif
 
     init(name: String, model: ScriptsTabModel, onBack: @escaping () -> Void, onRun: @escaping (_ background: Bool) -> Void) {
         self.name = name
@@ -25,6 +29,7 @@ struct ScriptEditorScreen: View {
                         .lineLimit(1).fixedSize()
                         .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                 }
+                .accessibilityIdentifier("editor_back_button")
                 Spacer()
                 Text(name)
                     .font(.subheadline.monospaced().weight(.bold))
@@ -40,12 +45,14 @@ struct ScriptEditorScreen: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Scripting API docs")
+                .accessibilityIdentifier("editor_docs_button")
 
                 Button("Save") { Task { await model.save() } }
                     .lineLimit(1).fixedSize()
                     .fontWeight(.bold)
                     .disabled(model.uploadProgress != nil)
                     .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                    .accessibilityIdentifier("editor_save_button")
 
                 ScriptRunMenu(onRun: onRun) {
                     Image(systemName: "play.fill")
@@ -54,6 +61,7 @@ struct ScriptEditorScreen: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Run \(name)")
+                .accessibilityIdentifier("editor_run_menu")
             }
             .padding(.horizontal)
             .padding(.vertical, 4)
@@ -64,8 +72,11 @@ struct ScriptEditorScreen: View {
             }
             if let lint = model.lint {
                 ScriptLintBannerView(lint: lint)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("script_lint_banner")
             }
             ScriptEditorView(model: editor)
+                .accessibilityIdentifier("script_editor_view")
                 .padding(4)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }

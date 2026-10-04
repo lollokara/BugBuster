@@ -37,6 +37,30 @@ enum BattSimHub {
         }
     }
 
+    /// Largest SOC disagreement (percentage points) between a hub point and the device record covering
+    /// the same run time before the hub point is treated as misplaced.
+    static let socTolerance = 0.5
+
+    /// Drops hub points whose SOC contradicts the device record at the run time they map to.
+    /// The wall map cannot anchor run time after a START without a wall epoch (reboot / no clock), so a
+    /// point from early in the run can land hours late, where it paints a spike back towards 100 %.
+    /// The device file is authoritative: it is complete and strictly ordered in run time.
+    static func consistent(_ hub: [SeriesPoint], device: [BsRec], map: RunWallMap) -> [SeriesPoint] {
+        guard !device.isEmpty else { return hub }
+        let sorted = device.sorted { $0.t < $1.t }
+        func deviceSoc(at t: Double) -> Double? {
+            var lo = 0, hi = sorted.count
+            while lo < hi { let m = (lo + hi) / 2; if sorted[m].t < t { lo = m + 1 } else { hi = m } }
+            guard lo < sorted.count, sorted[lo].t - sorted[lo].dt <= t else { return nil }
+            return sorted[lo].soc
+        }
+        return hub.filter { p in
+            let t = map.runTime(p.t - p.dt / 2)
+            guard let d = deviceSoc(at: t) else { return true }
+            return abs(d - p.soc) <= socTolerance
+        }
+    }
+
     /// `window` is in run time. Returns the (possibly merged) history and the source indicator.
     @MainActor
     static func merged(_ h: BsHistory, mac: String, window: ClosedRange<Double>, hub: HubClient) async -> (BsHistory, String) {
@@ -52,7 +76,7 @@ enum BattSimHub {
             guard to > from else { return deviceOnly }
             let bucket = max(1, Int(((to - from) / 1500).rounded(.up)))       // ~1500 points: what the chart can show
             let series = try await hub.series(uid: uid, from: from, to: to, bucket: bucket)
-            let merged = HubMerge.merge(hub: series.points, device: device)
+            let merged = HubMerge.merge(hub: consistent(series.points, device: h.recs, map: map), device: device)
             var out = h
             out.recs = recs(merged, device: h.recs, map: map)
             return (out, HubMerge.indicator(merged))

@@ -49,6 +49,7 @@ struct ScriptREPLView: View {
                     Label("Exit REPL", systemImage: "chevron.left")
                         .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                 }
+                .accessibilityIdentifier("repl_exit_button")
                 Spacer()
                 Text("MicroPython shell").font(.subheadline.weight(.bold))
                 Spacer()
@@ -58,12 +59,15 @@ struct ScriptREPLView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Copy REPL output")
+                .accessibilityIdentifier("repl_copy_button")
                 Button("Ctrl-C") { client?.sendControlChar("C") }
                     .disabled(!inputEnabled)
                     .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                    .accessibilityIdentifier("repl_ctrl_c_button")
                 Button("Ctrl-D") { client?.sendControlChar("D") }
                     .disabled(!inputEnabled)
                     .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                    .accessibilityIdentifier("repl_ctrl_d_button")
             }
             .font(.subheadline.monospaced().weight(.semibold))
             .padding(.horizontal)
@@ -79,8 +83,11 @@ struct ScriptREPLView: View {
                         Button("Stop", role: .destructive, action: onStop)
                             .font(.caption.weight(.bold))
                             .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                            .accessibilityIdentifier("repl_stop_button")
                     }
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("repl_banner")
                 .padding(10)
                 .glassEffect(.regular.tint(.orange), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.horizontal)
@@ -89,6 +96,7 @@ struct ScriptREPLView: View {
             if let client {
                 REPLTerminalConsole(client: client)
                     .padding(.horizontal)
+                    .accessibilityIdentifier("repl_terminal_console")
             } else {
                 Spacer()
                 ProgressView().tint(.cyan)
@@ -108,6 +116,7 @@ struct ScriptREPLView: View {
                     .focused($focused)
                     .disabled(!inputEnabled)
                     .onSubmit(send)
+                    .accessibilityIdentifier("repl_input_field")
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
@@ -116,6 +125,7 @@ struct ScriptREPLView: View {
                 }
                 .disabled(!inputEnabled || input.isEmpty)
                 .accessibilityLabel("Send")
+                .accessibilityIdentifier("repl_send_button")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -123,6 +133,8 @@ struct ScriptREPLView: View {
             .padding(.horizontal)
             .padding(.bottom, 10)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("repl_view")
         .onAppear(perform: connect)
         .onDisappear {
             client?.disconnect()

@@ -274,6 +274,7 @@ struct ScopeTab: View {
                 }
             )
         }
+        .accessibilityIdentifier("scope_tab_view")
         .sheet(isPresented: $showingMeasurements) {
             NavigationStack {
                 ZStack {

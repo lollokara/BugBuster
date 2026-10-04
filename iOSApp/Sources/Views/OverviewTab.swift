@@ -103,6 +103,7 @@ struct OverviewTab: View {
             }
             .padding()
         }
+        .accessibilityIdentifier("overview_tab_view")
         .background(
             LinearGradient(
                 colors: [Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.02, green: 0.03, blue: 0.06)],

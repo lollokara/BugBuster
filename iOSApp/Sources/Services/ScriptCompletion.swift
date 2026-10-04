@@ -1,19 +1,40 @@
 import Foundation
 
 enum ScriptCompletionKind: String, Equatable {
-    case module, function, method, type, namespace, constant, keyword
+    case module, function, method, type, namespace, constant
+    /// A `name=` keyword-argument suggestion inside a call.
+    case keyword
+    /// A Python built-in function or type (`print`, `len`, `int`).
+    case builtin
+    case exception
+    /// A Python keyword (`for`, `import`, `def`).
+    case reserved
 }
 
 struct ScriptCompletion: Equatable, Identifiable {
     let label: String
     let insertText: String
-    /// Caret position inside `insertText` after acceptance (UTF-16 units).
+    /// Caret position inside `insertText` after acceptance (UTF-16 units). With
+    /// `placeholders` it is the start of the first one.
     let caretOffset: Int
     let detail: String
     let doc: String
     let kind: ScriptCompletionKind
+    /// Argument placeholders inside `insertText` (UTF-16 ranges relative to it, in call
+    /// order): the first is selected on acceptance, Tab moves to the next.
+    var placeholders: [NSRange] = []
+    /// `insertText` is a call (`name(...)`), so it is cut back to the bare name when `(` follows.
+    var isCall = false
 
     var id: String { "\(kind.rawValue):\(label)" }
+
+    /// The same item inserting only its name (the call parentheses already exist, or the name
+    /// is used as a class, as in `isinstance(x, int)` or `except OSError`).
+    var nameOnly: ScriptCompletion {
+        guard isCall else { return self }
+        return ScriptCompletion(label: label, insertText: label, caretOffset: label.utf16.count,
+                                detail: detail, doc: doc, kind: kind)
+    }
 }
 
 struct ScriptCompletionResult: Equatable {
@@ -169,13 +190,26 @@ struct FirmwareAPIIndex {
         }
     }
 
-    /// `name()` with the caret inside the parens when the callable takes arguments.
+    /// The call to insert. Required arguments become placeholders (`sleep(ms)`, keyword-only
+    /// ones as `name=name` with the value selected); optional ones are left to the keyword
+    /// completion. With no required argument it is `name()`: the caret goes inside the parens
+    /// when the callable takes optional arguments, after them when it takes none.
     static func callItem(label: String, function: FirmwareFunction?, detail: String, doc: String,
                          kind: ScriptCompletionKind) -> ScriptCompletion {
-        let takesArgs = function?.params.contains { $0.name != "self" } ?? false
-        return ScriptCompletion(label: label, insertText: label + "()",
-                                caretOffset: label.utf16.count + (takesArgs ? 1 : 2),
-                                detail: detail, doc: doc, kind: kind)
+        let params = (function?.params ?? []).filter { $0.name != "self" }
+        let required = params.filter(\.isRequired)
+        var text = label + "("
+        var placeholders: [NSRange] = []
+        for (i, param) in required.enumerated() {
+            if i > 0 { text += ", " }
+            if param.kind == .keywordOnly { text += param.name + "=" }
+            placeholders.append(NSRange(location: text.utf16.count, length: param.name.utf16.count))
+            text += param.name
+        }
+        text += ")"
+        let caret = placeholders.first?.location ?? label.utf16.count + (params.isEmpty ? 2 : 1)
+        return ScriptCompletion(label: label, insertText: text, caretOffset: caret, detail: detail, doc: doc,
+                                kind: kind, placeholders: placeholders, isCall: true)
     }
 
     static func constantItem(_ constant: FirmwareConstant) -> ScriptCompletion {
@@ -478,9 +512,27 @@ struct ScriptCompletionEngine {
             partial = p
             candidates = identifierCandidates(bindings)
         }
-        let items = ScriptCompletionRanker.rank(candidates, partial: partial, limit: limit)
+        var items = ScriptCompletionRanker.rank(candidates, partial: partial, limit: limit)
+        if Self.keepsBareName(text: text, range: range, context: context)
+            || Self.nextIsOpenParen(in: text, at: range.location + range.length) {
+            items = items.map(\.nameOnly)               // `(` already typed, or a class position
+        }
         if items.isEmpty || (items.count == 1 && items[0].insertText == partial) { return .empty }
         return ScriptCompletionResult(replaceRange: range, items: items)
+    }
+
+    private static func nextIsOpenParen(in text: String, at utf16Offset: Int) -> Bool {
+        let ns = text as NSString
+        return utf16Offset < ns.length && ns.character(at: utf16Offset) == 0x28      // "("
+    }
+
+    /// Class positions take the bare name: `isinstance(x, int)`, `except OSError:`.
+    private static func keepsBareName(text: String, range: NSRange, context: ScriptCompletionContext) -> Bool {
+        if case .argument(let callee, _, _, _) = context, callee == "isinstance" || callee == "issubclass" { return true }
+        let ns = text as NSString
+        let before = ns.substring(to: range.location)
+        let line = before.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        return line.range(of: #"^\s*except\s+[\w.,\s(]*$"#, options: .regularExpression) != nil
     }
 
     /// `name=` items for the parameters still open in a call.
@@ -541,6 +593,32 @@ struct ScriptCompletionEngine {
         for module in index.moduleNames where bindings.aliases[module] == nil {
             out.append(.init(item: moduleItem(module, label: module), order: 3000))
         }
+        // Python built-ins rank below everything the catalogue offers for the same score.
+        for builtin in ScriptBuiltins.all where bindings.aliases[builtin.name] == nil {
+            out.append(.init(item: Self.builtinItem(builtin), order: Self.builtinOrder(builtin.kind)))
+        }
         return out
+    }
+
+    static func builtinOrder(_ kind: ScriptBuiltins.Kind) -> Int {
+        switch kind {
+        case .function, .type: return 4000
+        case .exception: return 4500
+        case .keyword: return 5000
+        }
+    }
+
+    static func builtinItem(_ builtin: ScriptBuiltins.Entry) -> ScriptCompletion {
+        switch builtin.kind {
+        case .function, .type:
+            return FirmwareAPIIndex.callItem(label: builtin.name, function: builtin.function, detail: builtin.signature,
+                                             doc: builtin.doc, kind: .builtin)
+        case .exception:
+            return ScriptCompletion(label: builtin.name, insertText: builtin.name, caretOffset: builtin.name.utf16.count,
+                                    detail: "exception", doc: builtin.doc, kind: .exception)
+        case .keyword:
+            return ScriptCompletion(label: builtin.name, insertText: builtin.name, caretOffset: builtin.name.utf16.count,
+                                    detail: "keyword", doc: builtin.doc, kind: .reserved)
+        }
     }
 }
