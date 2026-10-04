@@ -4,6 +4,22 @@
 
 ### Added
 
+- **iOS Scripts rework: background runs, live logs and a real editor.** One script
+  slot with Run / Run in background; starting a second asks "Stop 'x' and run 'y'?"
+  and replaces it. A status pill on every tab, including Scripts, and a live log
+  console (iPad: a trailing column that stays across tabs; iPhone: a sheet) with
+  level colours, filter, pause, copy and share, polling every 1 s while open and 5 s
+  for the pill. New Runestone + tree-sitter Python editor with autocomplete from the
+  firmware API catalogue (members, kwargs), a searchable docs browser with snippet
+  insertion, lint on save, an autorun panel (configured script, ran this boot, state),
+  and a REPL that is read-only while a file script runs. Everything works over Wi-Fi
+  and over the BLE tunnel (≤ 512-byte chunked uploads, paged downloads, resumable log
+  cursor); over BLE, lint runs by stored file name (needs firmware with the new route,
+  otherwise "Syntax check needs Wi-Fi") and the REPL is a limited one that evaluates
+  through `eval` and shows its output in the log.
+- **Firmware: `POST /api/scripts/lint` over the BLE tunnel.** Accepts `{"name":"x.py"}`
+  (stored file) or `{"src":"..."}` and answers `{"ok":true}` or `{"ok":false,"err":"..."}`,
+  matching the HTTP route.
 - **Device streams logs and battery runs to the ESPFleet hub; hub-first battery view.**
   The ESP32-S3 automatically discovers the local ESPFleet hub via mDNS (`_espfleet._tcp`),
   registers via agent heartbeat, sets its system clock from hub time, ships S3,
