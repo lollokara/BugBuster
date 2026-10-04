@@ -40,16 +40,20 @@ private struct ScriptsTabContent: View {
             .padding(.horizontal)
             .padding(.top, 12)
 
-            if sizeClass == .regular {
-                HStack(spacing: 0) {
-                    browser.frame(width: 340)
-                    Divider().opacity(0.3)
-                    detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Side by side only when the pane really has room: an iPad in portrait with the sidebar
+            // and the log column open leaves ~480 pt, so it falls back to browser-or-detail.
+            GeometryReader { geo in
+                if sizeClass == .regular && geo.size.width >= 760 {
+                    HStack(spacing: 0) {
+                        browser.frame(width: 340)
+                        Divider().opacity(0.3)
+                        detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else if model.openFile != nil || showingREPL {
+                    detail
+                } else {
+                    browser
                 }
-            } else if model.openFile != nil || showingREPL {
-                detail
-            } else {
-                browser
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

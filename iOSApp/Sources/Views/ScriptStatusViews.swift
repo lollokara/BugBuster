@@ -142,17 +142,18 @@ struct ScriptStatusHeader: View {
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             Spacer()
             Button(action: onToggleLog) {
-                Label(logVisible ? "Hide log" : "Log", systemImage: "text.alignleft")
+                Label(logVisible ? "Hide log" : "Log", systemImage: "text.alignleft").lineLimit(1).fixedSize()
                     .font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(.bordered)
             if status?.isActive == true {
                 Button(role: .destructive, action: onStop) {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label("Stop", systemImage: "stop.fill").lineLimit(1).fixedSize()
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)

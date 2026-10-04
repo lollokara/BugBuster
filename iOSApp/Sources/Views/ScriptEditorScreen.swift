@@ -20,7 +20,7 @@ struct ScriptEditorScreen: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 14) {
-                Button(action: onBack) { Label("Back", systemImage: "chevron.left") }
+                Button(action: onBack) { Label("Back", systemImage: "chevron.left").lineLimit(1).fixedSize() }
                 Spacer()
                 Text(name)
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
@@ -31,7 +31,7 @@ struct ScriptEditorScreen: View {
                 Spacer()
                 Button { showingDocs = true } label: { Image(systemName: "book") }
                     .accessibilityLabel("Scripting API docs")
-                Button("Save") { Task { await model.save() } }
+                Button("Save") { Task { await model.save() } }.lineLimit(1).fixedSize()
                     .fontWeight(.bold)
                     .disabled(model.uploadProgress != nil)
                 ScriptRunMenu(onRun: onRun) {
