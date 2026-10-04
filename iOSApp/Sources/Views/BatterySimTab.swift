@@ -24,6 +24,8 @@ struct BatterySimTab: View {
     @State private var pollTask: Task<Void, Never>?
     @State private var liveTail: [BsRec] = []
     @State private var syncing = false
+    @State private var downloading = false
+    @State private var errorClear: Task<Void, Never>?
     @State private var scrubbing = false
     @State private var deviceHistory: BsHistory?
     @State private var hubLabel = ""
@@ -277,11 +279,12 @@ struct BatterySimTab: View {
             ScrollView {
                 VStack(spacing: 14) {
                     liveCard(controls: false)
-                    VStack(alignment: .leading, spacing: 10) { toolbar }.bsCard()
-                    statsCard
-                    runsCard
+                    VStack(alignment: .leading, spacing: 10) { toolbar }.bsCard().frame(maxWidth: .infinity)
+                    statsCard.frame(maxWidth: .infinity)
+                    runsCard.frame(maxWidth: .infinity)
                 }
-                .padding(12)
+                .containerRelativeFrame(.horizontal) { w, _ in w - 32 }
+                .padding(16)
             }
             .scrollDisabled(scrubbing)
             .navigationTitle("Run parameters")
@@ -325,29 +328,50 @@ struct BatterySimTab: View {
         .bsCard()
     }
 
+    /// Controls share one 44 pt row height; the info line below is always present so opening a run
+    /// (point count, hub label appearing) never shifts anything.
     @ViewBuilder private var toolbar: some View {
-        if wide {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
+            if wide {
                 HStack(spacing: 10) {
                     runPicker.frame(maxWidth: 380)
-                    pointsInfo
-                    Spacer()
-                    zoomButtons
+                    Spacer(minLength: 8)
                     exportMenu
                 }
-                HStack(spacing: 10) {
-                    presetBar
-                    Spacer()
-                    toggles
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
+                presetBar
+                HStack(spacing: 10) { toggles; zoomButtons }
+            } else {
                 HStack(spacing: 8) { runPicker; exportMenu }
                 presetBar
-                HStack(spacing: 6) { toggles; Spacer(minLength: 4); zoomButtons }
+                HStack(spacing: 8) { toggles; zoomButtons }
+            }
+            infoLine
+        }
+    }
+
+    private var infoLine: some View {
+        HStack(spacing: 8) {
+            if let message {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11)).foregroundColor(.orange).lineLimit(1)
+            } else if let busy {
+                ProgressView().controlSize(.mini)
+                Text(busy).font(.system(size: 11, weight: .medium)).foregroundColor(.secondary).lineLimit(1)
+            } else if history == nil {
+                Text("Open a run to enable range, zoom and export.")
+                    .font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+            } else {
+                pointsInfo
+            }
+            Spacer(minLength: 4)
+            if !hubLabel.isEmpty {
+                Text(hubLabel)
+                    .font(.system(size: 10, weight: .semibold)).lineLimit(1)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
     }
 
     private var runPicker: some View {
@@ -379,7 +403,7 @@ struct BatterySimTab: View {
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
             }
             .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: wide ? 38 : 34)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 1))
         }
@@ -399,9 +423,9 @@ struct BatterySimTab: View {
                 let usable = history != nil && (p.1 <= 0 || p.1 < fullSpan)
                 Button { preset(p.1) } label: {
                     Text(p.0).font(.system(size: 12, weight: .semibold))
-                        .frame(minWidth: 40, maxWidth: wide ? nil : .infinity, minHeight: wide ? 32 : 30)
+                        .frame(minWidth: 40, maxWidth: wide ? nil : .infinity, minHeight: 38)
                         .padding(.horizontal, wide ? 6 : 0)
-                        .foregroundColor(sel ? .black : usable ? .primary : Color.white.opacity(0.3))
+                        .foregroundColor(sel ? .black : usable ? .primary : Color.secondary.opacity(0.6))
                         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(sel ? Color.cyan : .clear))
                         .contentShape(Rectangle())
                 }
@@ -410,6 +434,8 @@ struct BatterySimTab: View {
             }
         }
         .padding(3)
+        .frame(maxWidth: .infinity)
+        .opacity(history == nil ? 0.6 : 1)
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: window)
@@ -420,28 +446,34 @@ struct BatterySimTab: View {
 
     private var toggles: some View {
         HStack(spacing: 6) {
-            chip("Log I", "waveform.path.ecg", $logCurrent)
-            chip("Clock", "clock", $wallClock)
-            chip("Follow", "arrow.right.to.line", $follow)
-            if !hubLabel.isEmpty {
-                Text(hubLabel)
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.white.opacity(0.12)))
-            }
-            Button { showHub = true } label: { Image(systemName: "network") }
-                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide))
+            chip("Log I", "Log scale", "waveform.path.ecg", $logCurrent, hint: "Plot current on a logarithmic axis")
+            chip("Clock", "Wall clock", "clock", $wallClock, hint: "Label the time axis with the wall-clock time")
+            chip("Follow", "Follow live", "arrow.right.to.line", $follow, hint: "Keep the window on the newest data while the run is active")
+            Button { showHub = true } label: { controlLabel("Hub", "network", on: false) }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Hub settings")
         }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func controlLabel(_ caption: String, _ icon: String, on: Bool) -> some View {
+        VStack(spacing: 2) {
+            Image(systemName: icon).font(.system(size: 15, weight: .semibold))
+            Text(caption).font(.system(size: 10, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .foregroundStyle(on ? Color.black.opacity(0.85) : Color.cyan)
+        .frame(minWidth: 56, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? Color.cyan.opacity(0.9) : Color.cyan.opacity(0.14)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(on ? Color.clear : Color.cyan.opacity(0.5), lineWidth: 1))
+        .contentShape(Rectangle())
     }
 
     private var zoomButtons: some View {
         HStack(spacing: 6) {
             Button { zoom(2) } label: { Image(systemName: "minus.magnifyingglass") }
-                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide)).accessibilityLabel("Zoom out")
+                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide)).frame(minWidth: 44, minHeight: 44).accessibilityLabel("Zoom out")
             Button { zoom(0.5) } label: { Image(systemName: "plus.magnifyingglass") }
-                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide)).accessibilityLabel("Zoom in")
+                .buttonStyle(BsButtonStyle(tint: .white, compact: !wide)).frame(minWidth: 44, minHeight: 44).accessibilityLabel("Zoom in")
         }
         .disabled(history == nil)
     }
@@ -464,7 +496,7 @@ struct BatterySimTab: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(history == nil ? Color.white.opacity(0.3) : .cyan)
                 .padding(.horizontal, 12)
-                .frame(minHeight: wide ? 38 : 34)
+                .frame(minHeight: 44)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.cyan.opacity(history == nil ? 0.03 : 0.14)))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.cyan.opacity(history == nil ? 0.1 : 0.55), lineWidth: 1))
         }
@@ -628,12 +660,13 @@ struct BatterySimTab: View {
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(color.opacity(0.25), lineWidth: 1))
     }
 
-    private func chip(_ title: String, _ icon: String, _ on: Binding<Bool>) -> some View {
-        Button { on.wrappedValue.toggle() } label: {
-            Label(title, systemImage: on.wrappedValue ? "checkmark" : icon)
-        }
-        .buttonStyle(BsButtonStyle(tint: .cyan, on: on.wrappedValue, compact: !wide))
-        .accessibilityAddTraits(on.wrappedValue ? .isSelected : [])
+    private func chip(_ name: String, _ caption: String, _ icon: String, _ on: Binding<Bool>, hint: String) -> some View {
+        Button { on.wrappedValue.toggle() } label: { controlLabel(caption, icon, on: on.wrappedValue) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(caption)
+            .accessibilityValue(on.wrappedValue ? "On" : "Off")
+            .accessibilityHint(hint)
+            .accessibilityAddTraits(on.wrappedValue ? .isSelected : [])
     }
 
     private func confirmReopen(_ id: Int) {
@@ -735,37 +768,54 @@ struct BatterySimTab: View {
             return BsRec(t: t, dt: 60, vAvg: v, vMin: v - 0.02, vMax: v + 0.02, soc: soc,
                          iAvg: i, iMin: i * 0.6, iMax: i * 1.5, flags: 0, qDut: nil, qUsed: 0, eDut: nil, tier: 1)
         }
-        history = BsHistory(meta: meta, events: [], recs: recs)
-        window = history!.bounds
+        let env = ProcessInfo.processInfo.environment
+        if env["BB_MOCK_NO_RUN"] != "1" {
+            history = BsHistory(meta: meta, events: [BsEvent(t: 0, code: 1, a: 0, b: 0), BsEvent(t: 3600, code: 3, a: 0, b: 0)], recs: recs)
+            window = history!.bounds
+        }
+        showParams = env["BB_BS_PARAMS"] == "1"
         openFromDevice = false
         let mockState = ProcessInfo.processInfo.environment["BB_MOCK_STATE"].flatMap(Int.init) ?? 4
         status = BsStatus(state: mockState, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,
                           remainingS: 36_000, vMeas: 7.96, iMeas: 0.214, vTarget: 7.96, fsTotal: 4 << 20, fsUsed: 1 << 20)
         runs = [
-            BsRunSummary(runId: 7, active: true, meta: meta, bytes: 48 * 240 + 68)
+            BsRunSummary(runId: 7, active: true, meta: meta, bytes: 48 * 240 + 68),
+            BsRunSummary(runId: 6, active: false, meta: BsMeta(runId: 6, version: 2, createdEpoch: 1_759_000_000, name: "Older run"), bytes: 48 * 90 + 68)
         ]
     }
     #endif
 
     private func refreshRuns() async {
-        do { runs = try await client.listRuns() } catch { message = error.localizedDescription }
+        do { runs = try await client.listRuns() } catch { flash(error.localizedDescription) }
     }
 
     private func open(_ id: Int, quiet: Bool = false) async {
         let prev = displayed, prevWindow = window
-        if quiet { syncing = true } else { busy = "Opening run #\(id)..."; message = nil }
+        if quiet { syncing = true } else { busy = "Opening run #\(id)..."; message = nil; downloading = true }
         do {
             let files = try await client.syncRun(id) { name, done, total in
-                if !quiet { Task { @MainActor in busy = "Downloading \(name) \(Int(Double(done) / Double(max(total, 1)) * 100)) %" } }
+                // Progress arrives as separate main-actor hops; once the run is open they must not resurrect the tile.
+                if !quiet { Task { @MainActor in if downloading { busy = BsProgress.text(name, done, total) } } }
             }
             apply(try BattSim.buildHistory(files), previous: openFromDevice ? prev : nil, previousWindow: prevWindow)
             openFromDevice = true
             deviceHistory = history
             refreshHub()
             if !quiet { cached = BattSim.cachedRuns() }
-        } catch { if !quiet { message = error.localizedDescription } }
+        } catch { if !quiet { flash(error.localizedDescription) } }
+        downloading = false
         busy = nil
         syncing = false
+    }
+
+    /// Shows an error, then clears it after a few seconds.
+    private func flash(_ text: String) {
+        message = text
+        errorClear?.cancel()
+        errorClear = Task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if !Task.isCancelled { message = nil }
+        }
     }
 
     /// Debounced: merge the hub into the open device history for the visible window. Silent on failure.
@@ -807,7 +857,7 @@ struct BatterySimTab: View {
         do {
             apply(try BattSim.buildHistory(BattSim.loadCached(c.dir)), previous: nil, previousWindow: window)
             openFromDevice = false
-        } catch { message = error.localizedDescription }
+        } catch { flash(error.localizedDescription) }
     }
 
     /// Keeps the window when the same run is re-synced; slides it to the new end when Follow is on and it was pinned there.
@@ -908,6 +958,12 @@ private extension View {
 }
 
 /// Filled when `on`, tinted outline otherwise, greyed when disabled.
+enum BsProgress {
+    static func text(_ name: String, _ done: Int, _ total: Int) -> String {
+        "Downloading \(name) \(min(100, Int(Double(done) / Double(max(total, 1)) * 100))) %"
+    }
+}
+
 struct BsButtonStyle: ButtonStyle {
     var tint: Color = .cyan
     var on = false
@@ -1105,7 +1161,7 @@ struct BatteryHistoryChart: View {
             ctx.stroke(p, with: .color(.pink.opacity(0.6)), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
             if ex - lastLabel > (compact ? 48 : 64) && ex < left + plotW - 30 {
                 ctx.draw(Text(e.name).font(.system(size: 9, weight: .semibold)).foregroundColor(.pink),
-                         at: CGPoint(x: ex + 3, y: laneH + 2), anchor: .bottomLeading)
+                         at: CGPoint(x: max(ex, left) + 4, y: laneH - 4), anchor: .bottomLeading)   // inside the lane: clear of the axis labels
                 lastLabel = ex
             }
         }

@@ -78,3 +78,11 @@ final class BattSimSocMergeTests: XCTestCase {
 private extension Array where Element == Double {
     var isMonotoneDown: Bool { indices.dropFirst().allSatisfy { self[$0] <= self[$0 - 1] + 1e-9 } }
 }
+
+final class BsProgressTests: XCTestCase {
+    func testProgressTextClampsAt100() {
+        XCTAssertEqual(BsProgress.text("m0000.bin", 50, 100), "Downloading m0000.bin 50 %")
+        XCTAssertEqual(BsProgress.text("m0000.bin", 120, 100), "Downloading m0000.bin 100 %")
+        XCTAssertEqual(BsProgress.text("m0000.bin", 5, 0), "Downloading m0000.bin 100 %")
+    }
+}
