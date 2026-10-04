@@ -7,7 +7,11 @@ struct ScriptEditorScreen: View {
     let onBack: () -> Void
     let onRun: (_ background: Bool) -> Void
 
+    #if DEBUG
+    @State private var showingDocs = ProcessInfo.processInfo.environment["BB_DOCS_ENTRY"] != nil
+    #else
     @State private var showingDocs = false
+    #endif
 
     init(name: String, model: ScriptsTabModel, onBack: @escaping () -> Void, onRun: @escaping (_ background: Bool) -> Void) {
         self.name = name

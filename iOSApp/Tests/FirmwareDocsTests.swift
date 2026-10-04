@@ -113,4 +113,9 @@ final class FirmwareDocsTests: XCTestCase {
         XCTAssertEqual(ScriptDocDetail.parameterName(rest), "**params")
         XCTAssertEqual(ScriptDocDetail.requirement(rest), "optional")
     }
+
+    func testDocstringMarkupIsShownAsPlainText() {
+        XCTAssertEqual(ScriptDocDetail.plain("so ``vdut(True)`` runs, see :func:`status` and :class:`Pin`."),
+                       "so vdut(True) runs, see status and Pin.")
+    }
 }

@@ -11,9 +11,10 @@ struct ScriptDocsBrowser: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var entries: [FirmwareDocEntry] = []
+    @State private var path: [FirmwareDocEntry] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if catalogue == nil {
                     ContentUnavailableView("API docs unavailable", systemImage: "book.closed",
@@ -48,7 +49,14 @@ struct ScriptDocsBrowser: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
-        .onAppear { if entries.isEmpty, let catalogue { entries = FirmwareDocs.entries(catalogue) } }
+        .onAppear {
+            if entries.isEmpty, let catalogue { entries = FirmwareDocs.entries(catalogue) }
+            #if DEBUG
+            // Layout checks: BB_DOCS_ENTRY=<catalogue path> opens that entry's detail page.
+            if path.isEmpty, let id = ProcessInfo.processInfo.environment["BB_DOCS_ENTRY"],
+               let entry = entries.first(where: { $0.id == id }) { path = [entry] }
+            #endif
+        }
     }
 }
 
@@ -102,16 +110,16 @@ struct ScriptDocDetail: View {
                     codeBlock(entry.signature)
                 }
                 if !entry.detail.summary.isEmpty {
-                    Text(entry.detail.summary)
+                    Text(Self.plain(entry.detail.summary))
                         .font(.headline)
                         .textSelection(.enabled)
                 }
                 if !entry.detail.description.isEmpty {
-                    Text(entry.detail.description)
+                    Text(Self.plain(entry.detail.description))
                         .font(.callout)
                         .textSelection(.enabled)
                 } else if entry.detail.summary.isEmpty && !entry.doc.isEmpty {
-                    Text(entry.doc).font(.callout).textSelection(.enabled)
+                    Text(Self.plain(entry.doc)).font(.callout).textSelection(.enabled)
                 }
                 if let value = entry.value, entry.kind == .constant {
                     labeled("Value") { codeBlock(value) }
@@ -177,7 +185,7 @@ struct ScriptDocDetail: View {
                             .foregroundStyle(param.isRequired ? .orange : .secondary)
                     }
                     if !param.doc.isEmpty {
-                        Text(param.doc).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(Self.plain(param.doc)).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
                 .padding(.vertical, 8)
@@ -196,7 +204,7 @@ struct ScriptDocDetail: View {
                     .foregroundStyle(.cyan)
             }
             if !entry.detail.returnsDoc.isEmpty {
-                Text(entry.detail.returnsDoc).font(.callout).textSelection(.enabled)
+                Text(Self.plain(entry.detail.returnsDoc)).font(.callout).textSelection(.enabled)
             }
             if !entry.detail.returnKeys.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -205,7 +213,7 @@ struct ScriptDocDetail: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\"\(key.name)\"")
                                 .font(.system(.footnote, design: .monospaced).weight(.semibold))
-                            Text(key.doc).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(Self.plain(key.doc)).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         .padding(.vertical, 6)
                         .accessibilityElement(children: .combine)
@@ -222,7 +230,7 @@ struct ScriptDocDetail: View {
             ForEach(Array(entry.detail.raises.enumerated()), id: \.offset) { _, item in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.type).font(.system(.footnote, design: .monospaced).weight(.semibold))
-                    Text(item.doc).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(Self.plain(item.doc)).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -236,7 +244,7 @@ struct ScriptDocDetail: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Safety").font(.caption.weight(.bold)).foregroundStyle(.orange)
-                Text(text).font(.footnote).textSelection(.enabled)
+                Text(Self.plain(text)).font(.footnote).textSelection(.enabled)
             }
         }
         .padding(10)
@@ -274,6 +282,13 @@ struct ScriptDocDetail: View {
     }
 
     // MARK: formatting (internal for tests)
+
+    /// Docstring markup shown as plain text: ``code`` and :func:`name` lose their markers.
+    static func plain(_ text: String) -> String {
+        var out = text.replacingOccurrences(of: "``", with: "")
+        out = out.replacingOccurrences(of: #":(?:func|class|meth|attr):`([^`]*)`"#, with: "$1", options: .regularExpression)
+        return out.replacingOccurrences(of: "`", with: "")
+    }
 
     /// `name`, `*name`, `**name`, keyword-only marked with a trailing `=`.
     static func parameterName(_ p: FirmwareParam) -> String {
