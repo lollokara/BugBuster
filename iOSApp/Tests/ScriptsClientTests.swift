@@ -359,6 +359,25 @@ final class ScriptsClientTests: XCTestCase {
         XCTAssertEqual(wire.calls.count, 1)
     }
 
+    func testEvalBLEPayloadAt511BytesFitsAnd512BytesIsRejected() async throws {
+        let wire = FakeScriptsWire(kind: .ble) { _ in .json(200, ["ok": true, "id": 1]) }
+        // 441 slashes yields a payload of exactly 511 bytes; 442 yields 512 bytes.
+        let atLimit = String(repeating: "/", count: 441)
+        let atLimitBytes = try XCTUnwrap(BLETransport.tunnelPayload(
+            path: "/api/scripts/eval", body: ["src": atLimit, "persist": true],
+            id: ScriptChunkPlanner.worstCaseRequestId)?.count)
+        XCTAssertEqual(atLimitBytes, 511)
+        _ = try await ScriptsClient(wire: wire).eval(atLimit)
+        XCTAssertEqual(wire.calls.count, 1)
+
+        let overLimit = String(repeating: "/", count: 442)
+        let overLimitBytes = try XCTUnwrap(BLETransport.tunnelPayload(
+            path: "/api/scripts/eval", body: ["src": overLimit, "persist": true],
+            id: ScriptChunkPlanner.worstCaseRequestId)?.count)
+        XCTAssertEqual(overLimitBytes, 512)
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).eval(overLimit), .tooLarge(bytes: 512))
+    }
+
     func testEvalEmptyIsRejected() async {
         let wire = FakeScriptsWire()
         await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).eval(""), .empty)

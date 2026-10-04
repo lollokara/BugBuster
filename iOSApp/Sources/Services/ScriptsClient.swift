@@ -38,9 +38,9 @@ struct ScriptLintResult: Equatable {
 /// the firmware plan's "Shared JSON contract":
 /// - logs: HTTP `text/plain` + `X-BugBuster-Log-Next`; BLE `{next, n, dropped, data: base64}`
 /// - files/get: HTTP the whole file as text; BLE base64 pages of 3072 bytes
-/// - upload: HTTP raw body to `/api/scripts/files`; BLE `files/chunk` requests ≤ 512 bytes
-/// - lint: HTTP raw text; BLE `{"name"}` (stored file) or `{"src"}` when it fits 512 bytes
-/// - eval: HTTP raw text + `?persist=1`; BLE `{"src", "persist"}` ≤ 512 bytes
+/// - upload: HTTP raw body to `/api/scripts/files`; BLE `files/chunk` requests ≤ 511 bytes
+/// - lint: HTTP raw text; BLE `{"name"}` (stored file) or `{"src"}` when it fits 511 bytes
+/// - eval: HTTP raw text + `?persist=1`; BLE `{"src", "persist"}` ≤ 511 bytes
 final class ScriptsClient {
     static let logPageBytes = 4096      // MP_LOG_RESP_MAX (config.h)
     static let filePageBytes = 3072     // SCRIPTS_FILE_PAGE (api_scripts.cpp)
@@ -144,7 +144,7 @@ final class ScriptsClient {
 
     /// Syntax check. Over BLE the stored file `name` is linted on the device (its
     /// source never crosses the tunnel); without a name the source goes inline when
-    /// the request fits 512 bytes. Firmware without BLE lint, or a source too large
+    /// the request fits 511 bytes. Firmware without BLE lint, or a source too large
     /// for the tunnel, throws `.needsWiFi("Checking syntax")`.
     func lint(_ source: String, name: String? = nil) async throws -> ScriptLintResult {
         let path = "/api/scripts/lint"

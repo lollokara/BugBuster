@@ -126,6 +126,10 @@ final class ScriptsWireTests: XCTestCase {
         XCTAssertFalse(s.contains("body"))
     }
 
+    func testMaxTunnelRequestBytesIs511() {
+        XCTAssertEqual(BLETransport.maxTunnelRequestBytes, 511)
+    }
+
     // MARK: chunk planner
 
     func testEveryChunkFitsTheTunnel() throws {

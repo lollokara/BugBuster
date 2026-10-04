@@ -9,7 +9,7 @@ struct ScriptChunk: Equatable {
 
 /// Splits a script so every tunnel request
 /// `{"path":…,"body":{"name","off","b64","final"},"id":…}` fits the firmware's
-/// 512-byte request buffer. The overhead is measured with the real serializer.
+/// 511-byte request limit (512-byte buffer incl. NUL). The overhead is measured with the real serializer.
 enum ScriptChunkPlanner {
     static let path = "/api/scripts/files/chunk"
     /// `BLETransport.reqIdCounter` is a UInt8.
