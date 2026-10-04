@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import socket
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 @dataclass(frozen=True)
@@ -142,7 +142,7 @@ def discover_mdns(
         def remove_service(self, zc, type_, name) -> None:  # noqa: D401
             return
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if iface:
         kwargs["interfaces"] = [iface]
     zc = Zeroconf(**kwargs)

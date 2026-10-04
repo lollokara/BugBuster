@@ -54,11 +54,8 @@ jobs:
       - name: ruff check
         run: ruff check --config python/pyproject.toml python tests
 
-      # Advisory for now: the library predates type checking and a hard gate
-      # would block every unrelated PR. Flip continue-on-error off once the
-      # backlog under python/bugbuster is clear.
+      # Hard gate. The type backlog under python/bugbuster is clear.
       - name: mypy
-        continue-on-error: true
         run: mypy --config-file python/pyproject.toml python/bugbuster
 
   test:
