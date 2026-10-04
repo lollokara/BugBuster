@@ -99,6 +99,8 @@ bool hub_run_uid(char *out, size_t cap, uint16_t run_id, uint32_t created_epoch)
     return snprintf(out, cap, "%s-%u-%u", hub_device_id(), (unsigned)run_id, (unsigned)created_epoch) < (int)cap;
 }
 
+static uint32_t s_http_fail;
+
 bool hub_http(const char *method, const char *base, const char *path, const char *device_id,
               const char *body, size_t body_len, char *resp, size_t resp_cap, int *status)
 {
@@ -143,8 +145,11 @@ bool hub_http(const char *method, const char *base, const char *path, const char
     }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
+    if (!ok || *status >= 500) s_http_fail++;
     return ok;
 }
+
+uint32_t hub_http_fail_count(void) { return s_http_fail; }
 
 bool hub_discover(char *url_out, size_t cap)
 {

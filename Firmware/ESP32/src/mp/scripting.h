@@ -139,6 +139,8 @@ void scripting_log_push(const char *str, size_t len);
  *  script log mutex held: it must never block. NULL removes it. */
 typedef void (*scripting_log_tee_fn)(const char *line, size_t len);
 void scripting_set_log_tee(scripting_log_tee_fn fn);
+/** Script log lines dropped (busy) since boot, including ones not yet reported (health record). */
+uint32_t scripting_log_dropped_total(void);
 
 
 // ---------------------------------------------------------------------------

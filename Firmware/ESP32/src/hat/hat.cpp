@@ -80,8 +80,12 @@ static void hat_note_uart_success(void)
     s_state.degraded = false;
 }
 
+static uint32_t s_timeout_total;
+uint32_t hat_timeout_total(void) { return s_timeout_total; }
+
 static void hat_note_uart_timeout(void)
 {
+    s_timeout_total++;
     s_state.last_timeout_ms = hat_now_ms();
     if (s_state.consecutive_timeouts < UINT8_MAX) {
         s_state.consecutive_timeouts++;
