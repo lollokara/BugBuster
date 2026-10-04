@@ -84,7 +84,9 @@ def _entries(lines: list[str]) -> list[tuple[str, str]]:
 
 
 def _paragraphs(lines: list[str]) -> str:
-    return "\n".join(_trim(_dedent(lines))).strip()
+    """Dedented text with each hard-wrapped paragraph joined into one line (blank line = break)."""
+    text = "\n".join(_trim(_dedent(lines))).strip()
+    return "\n\n".join(" ".join(p.split()) for p in re.split(r"\n\s*\n", text) if p.strip())
 
 
 def parse_doc(doc: str) -> dict:
@@ -104,7 +106,7 @@ def parse_doc(doc: str) -> dict:
             head.append(raw)
     head = _trim(head)
     summary = head[0].strip() if head else ""
-    description = "\n".join(_trim(head[1:])).strip()
+    description = _paragraphs(head[1:])
     out: dict = {"summary": summary, "description": description, "param_docs": {},
                  "returns_doc": "", "return_keys": [], "raises": [], "notes": "", "examples": []}
     for kind, body in sections:

@@ -83,4 +83,34 @@ final class FirmwareDocsTests: XCTestCase {
         XCTAssertTrue(FirmwareDocs.needsImport("daq", in: "import daqx\n"))
         XCTAssertTrue(FirmwareDocs.needsImport("daq", in: "# import daq\n"))
     }
+
+    func testDetailEntriesCarryParametersReturnsAndExamples() throws {
+        let cat = try XCTUnwrap(FirmwareAPICatalogue.bundled)
+        let entries = FirmwareDocs.entries(cat)
+        let vdut = try XCTUnwrap(entries.first { $0.id == "daq.vdut" })
+        XCTAssertEqual(vdut.params.map(\.name), ["enable", "volts", "amps_limit"])
+        XCTAssertTrue(vdut.params.allSatisfy { !$0.doc.isEmpty })
+        XCTAssertEqual(vdut.returnType, "dict")
+        XCTAssertEqual(vdut.detail.returnKeys.first?.name, "present")
+        XCTAssertFalse(vdut.detail.notes.isEmpty)
+        XCTAssertFalse(vdut.detail.examples.isEmpty)
+        XCTAssertFalse(vdut.summary.isEmpty)
+        let channel = try XCTUnwrap(entries.first { $0.id == "bugbuster.Channel" })
+        XCTAssertEqual(channel.params.map(\.name), ["channel"], "a class shows its constructor parameters")
+        XCTAssertFalse(channel.detail.examples.isEmpty)
+        let constant = try XCTUnwrap(entries.first { $0.id == "bugbuster.FUNC_VOUT" })
+        XCTAssertEqual(constant.value, "1")
+        XCTAssertFalse(constant.summary.isEmpty)
+    }
+
+    func testDocDetailFormatting() {
+        let p = FirmwareParam(name: "freq", kind: .keywordOnly, annotation: "int", defaultValue: "400000")
+        XCTAssertEqual(ScriptDocDetail.parameterName(p), "freq=")
+        XCTAssertEqual(ScriptDocDetail.requirement(p), "default 400000")
+        let required = FirmwareParam(name: "ms", kind: .positional, annotation: nil, defaultValue: nil)
+        XCTAssertEqual(ScriptDocDetail.requirement(required), "required")
+        let rest = FirmwareParam(name: "params", kind: .varKeyword, annotation: nil, defaultValue: nil)
+        XCTAssertEqual(ScriptDocDetail.parameterName(rest), "**params")
+        XCTAssertEqual(ScriptDocDetail.requirement(rest), "optional")
+    }
 }

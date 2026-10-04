@@ -5,7 +5,7 @@
    "name": "bugbuster",
    "doc": "BugBuster board control from on-device MicroPython scripts.\n\nAnalog/digital channels (``Channel``), the external I2C/SPI buses on the IO\nterminals, HTTP/MQTT, IO ownership (``claim``), the VADJ rails and e-fuses, and\nthe SWD/LA HAT.\n\nIO terminals are numbered 1-12 (never raw ESP32 GPIO numbers). IO1-IO6 are\npowered from VADJ1, IO7-IO12 from VADJ2. The analog channels CH0-CH3 sit on\nIO3, IO6, IO9 and IO12. Ownership slots number 0-11 for IO1-IO12 and 12-15 for\nCH0-CH3.\n\nEvery blocking call (``sleep``, bus transfers, HTTP, ``rail_power_up``) can be\ninterrupted by the Stop button: a pending stop raises ``KeyboardInterrupt``.\n\nExample:\n    import bugbuster\n    ch = bugbuster.Channel(0)\n    ch.set_function(bugbuster.FUNC_VOUT)\n    ch.set_voltage(2.5)\n    bugbuster.sleep(500)\n    ch.set_function(bugbuster.FUNC_HIGH_IMP)",
    "summary": "BugBuster board control from on-device MicroPython scripts.",
-   "description": "Analog/digital channels (``Channel``), the external I2C/SPI buses on the IO\nterminals, HTTP/MQTT, IO ownership (``claim``), the VADJ rails and e-fuses, and\nthe SWD/LA HAT.\n\nIO terminals are numbered 1-12 (never raw ESP32 GPIO numbers). IO1-IO6 are\npowered from VADJ1, IO7-IO12 from VADJ2. The analog channels CH0-CH3 sit on\nIO3, IO6, IO9 and IO12. Ownership slots number 0-11 for IO1-IO12 and 12-15 for\nCH0-CH3.\n\nEvery blocking call (``sleep``, bus transfers, HTTP, ``rail_power_up``) can be\ninterrupted by the Stop button: a pending stop raises ``KeyboardInterrupt``.",
+   "description": "Analog/digital channels (``Channel``), the external I2C/SPI buses on the IO terminals, HTTP/MQTT, IO ownership (``claim``), the VADJ rails and e-fuses, and the SWD/LA HAT.\n\nIO terminals are numbered 1-12 (never raw ESP32 GPIO numbers). IO1-IO6 are powered from VADJ1, IO7-IO12 from VADJ2. The analog channels CH0-CH3 sit on IO3, IO6, IO9 and IO12. Ownership slots number 0-11 for IO1-IO12 and 12-15 for CH0-CH3.\n\nEvery blocking call (``sleep``, bus transfers, HTTP, ``rail_power_up``) can be interrupted by the Stop button: a pending stop raises ``KeyboardInterrupt``.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],
@@ -30,7 +30,7 @@
      "returns": "None",
      "doc": "Pause the script for ``ms`` milliseconds; a Stop request interrupts it.\n\nUse this instead of ``time.sleep`` so the Stop button can end the script\nwhile it waits.\n\nArgs:\n    ms: Delay in milliseconds, 0 or more.\n\nRaises:\n    ValueError: ``ms`` is negative.\n    KeyboardInterrupt: the script was stopped during the wait.\n\nExample:\n    import bugbuster\n    bugbuster.sleep(250)",
      "summary": "Pause the script for ``ms`` milliseconds; a Stop request interrupts it.",
-     "description": "Use this instead of ``time.sleep`` so the Stop button can end the script\nwhile it waits.",
+     "description": "Use this instead of ``time.sleep`` so the Stop button can end the script while it waits.",
      "param_docs": {
       "ms": "Delay in milliseconds, 0 or more."
      },
@@ -73,7 +73,7 @@
      "returns": "None",
      "doc": "Write a line to the script log (source ``mpy``) and the console.\n\nA message containing line breaks is split into one log line per non-empty\nsegment. ``bb_logging`` wraps this with timestamps.\n\nArgs:\n    level: One character: 'E' error, 'W' warning, 'I' info, 'D' debug.\n    msg: Message text.\n\nRaises:\n    ValueError: ``level`` is not one of 'E', 'W', 'I', 'D'.\n\nExample:\n    bugbuster.log(\"W\", \"supply sagging\")",
      "summary": "Write a line to the script log (source ``mpy``) and the console.",
-     "description": "A message containing line breaks is split into one log line per non-empty\nsegment. ``bb_logging`` wraps this with timestamps.",
+     "description": "A message containing line breaks is split into one log line per non-empty segment. ``bb_logging`` wraps this with timestamps.",
      "param_docs": {
       "level": "One character: 'E' error, 'W' warning, 'I' info, 'D' debug.",
       "msg": "Message text."
@@ -98,7 +98,7 @@
      "returns": "int",
      "doc": "Return the millisecond tick counter (time since boot).\n\nThe counter is unsigned 32-bit and wraps after about 49.7 days, so compare\ntimestamps by subtracting. It is the same time base as the script log.\n\nReturns:\n    Milliseconds since boot.\n\nExample:\n    t0 = bugbuster.ticks_ms()\n    bugbuster.sleep(100)\n    print(\"elapsed\", bugbuster.ticks_ms() - t0, \"ms\")",
      "summary": "Return the millisecond tick counter (time since boot).",
-     "description": "The counter is unsigned 32-bit and wraps after about 49.7 days, so compare\ntimestamps by subtracting. It is the same time base as the script log.",
+     "description": "The counter is unsigned 32-bit and wraps after about 49.7 days, so compare timestamps by subtracting. It is the same time base as the script log.",
      "param_docs": {},
      "returns_doc": "Milliseconds since boot.",
      "return_keys": [],
@@ -130,12 +130,12 @@
      "returns": "str | None",
      "doc": "Check whether the USB-C input can supply a VADJ rail voltage.\n\nVADJ1/VADJ2 are buck rails: they cannot regulate above the active USB-C\ninput voltage (about 5 V from data USB or a 5 V source). Only requests above\n5 V are checked against the negotiated PD contract. Reads the PD controller;\nchanges nothing.\n\nArgs:\n    rail: VADJ rail, 1 or 2.\n    voltage: Requested rail voltage in volts.\n\nReturns:\n    A warning sentence explaining why the voltage is not available, or\n    ``None`` when the request is fine.\n\nRaises:\n    ValueError: ``rail`` is not 1 or 2.\n\nExample:\n    warning = bugbuster.vadj_pd_warning(1, 9.0)\n    if warning:\n        print(warning)",
      "summary": "Check whether the USB-C input can supply a VADJ rail voltage.",
-     "description": "VADJ1/VADJ2 are buck rails: they cannot regulate above the active USB-C\ninput voltage (about 5 V from data USB or a 5 V source). Only requests above\n5 V are checked against the negotiated PD contract. Reads the PD controller;\nchanges nothing.",
+     "description": "VADJ1/VADJ2 are buck rails: they cannot regulate above the active USB-C input voltage (about 5 V from data USB or a 5 V source). Only requests above 5 V are checked against the negotiated PD contract. Reads the PD controller; changes nothing.",
      "param_docs": {
       "rail": "VADJ rail, 1 or 2.",
       "voltage": "Requested rail voltage in volts."
      },
-     "returns_doc": "A warning sentence explaining why the voltage is not available, or\n``None`` when the request is fine.",
+     "returns_doc": "A warning sentence explaining why the voltage is not available, or ``None`` when the request is fine.",
      "return_keys": [],
      "raises": [
       {
@@ -177,7 +177,7 @@
      "returns": "dict",
      "doc": "Bring a VADJ rail up to ``volts`` and arm its e-fuses.\n\nSequence: switch the selected e-fuses off, program the voltage, enable the\nrail, wait 500 ms to settle, arm the e-fuses, wait the 120 ms e-fuse blackout,\nthen sample power-good and fault. Blocks for roughly 0.7 s.\n\nArgs:\n    rail: VADJ rail, 1 (IO1-IO6) or 2 (IO7-IO12).\n    volts: Target voltage, 3-12 V. The rail quantises to about 0.1 V steps.\n    efuse_mask: E-fuses to arm, 1-3 (bit 0 = first e-fuse of the rail:\n        EFUSE1 for rail 1, EFUSE3 for rail 2; bit 1 = second: EFUSE2 / EFUSE4;\n        3 = both).\n\nReturns:\n    A dict reporting the result.\n\nKeys:\n    pg: True when the rail reports power-good.\n    fault: True when any selected e-fuse has tripped.\n\nRaises:\n    ValueError: ``rail`` is not 1-2, ``efuse_mask`` is not 1-3, or ``volts`` is\n        outside 3-12 V.\n    OSError: EIO when a hardware step fails.\n\nSafety:\n    Powers the IO terminals of that rail (and anything wired to them). Check\n    the voltage against your target first; ``vadj_pd_warning`` tells you when\n    the USB-C input cannot deliver it.\n\nExample:\n    result = bugbuster.rail_power_up(1, 3.3, 3)\n    if not result[\"pg\"] or result[\"fault\"]:\n        raise OSError(\"VADJ1 did not come up cleanly\")",
      "summary": "Bring a VADJ rail up to ``volts`` and arm its e-fuses.",
-     "description": "Sequence: switch the selected e-fuses off, program the voltage, enable the\nrail, wait 500 ms to settle, arm the e-fuses, wait the 120 ms e-fuse blackout,\nthen sample power-good and fault. Blocks for roughly 0.7 s.",
+     "description": "Sequence: switch the selected e-fuses off, program the voltage, enable the rail, wait 500 ms to settle, arm the e-fuses, wait the 120 ms e-fuse blackout, then sample power-good and fault. Blocks for roughly 0.7 s.",
      "param_docs": {
       "rail": "VADJ rail, 1 (IO1-IO6) or 2 (IO7-IO12).",
       "volts": "Target voltage, 3-12 V. The rail quantises to about 0.1 V steps.",
@@ -204,7 +204,7 @@
        "doc": "EIO when a hardware step fails."
       }
      ],
-     "notes": "Powers the IO terminals of that rail (and anything wired to them). Check\nthe voltage against your target first; ``vadj_pd_warning`` tells you when\nthe USB-C input cannot deliver it.",
+     "notes": "Powers the IO terminals of that rail (and anything wired to them). Check the voltage against your target first; ``vadj_pd_warning`` tells you when the USB-C input cannot deliver it.",
      "examples": [
       "result = bugbuster.rail_power_up(1, 3.3, 3)\nif not result[\"pg\"] or result[\"fault\"]:\n    raise OSError(\"VADJ1 did not come up cleanly\")"
      ]
@@ -231,7 +231,7 @@
      "returns": "None",
      "doc": "Switch one e-fuse on or off.\n\nThe e-fuses gate the VADJ supply to groups of IO terminals: EFUSE1 IO1-IO3,\nEFUSE2 IO4-IO6, EFUSE3 IO7-IO9, EFUSE4 IO10-IO12. This does not program the\nrail voltage; use ``rail_power_up`` for the full sequence. A freshly enabled\ne-fuse has a 100 ms blackout during which a short is not reported.\n\nArgs:\n    efuse: E-fuse number, 1-4.\n    on: True to supply the terminals, False to cut power.\n\nRaises:\n    ValueError: ``efuse`` is not 1-4.\n    OSError: EIO when the expander write fails (for example no mainboard I/O expander).\n\nSafety:\n    ``on=True`` powers the terminals of that group from the current VADJ voltage.\n\nExample:\n    bugbuster.efuse_set(1, False)",
      "summary": "Switch one e-fuse on or off.",
-     "description": "The e-fuses gate the VADJ supply to groups of IO terminals: EFUSE1 IO1-IO3,\nEFUSE2 IO4-IO6, EFUSE3 IO7-IO9, EFUSE4 IO10-IO12. This does not program the\nrail voltage; use ``rail_power_up`` for the full sequence. A freshly enabled\ne-fuse has a 100 ms blackout during which a short is not reported.",
+     "description": "The e-fuses gate the VADJ supply to groups of IO terminals: EFUSE1 IO1-IO3, EFUSE2 IO4-IO6, EFUSE3 IO7-IO9, EFUSE4 IO10-IO12. This does not program the rail voltage; use ``rail_power_up`` for the full sequence. A freshly enabled e-fuse has a 100 ms blackout during which a short is not reported.",
      "param_docs": {
       "efuse": "E-fuse number, 1-4.",
       "on": "True to supply the terminals, False to cut power."
@@ -282,7 +282,7 @@
      "returns": "Response",
      "doc": "HTTP or HTTPS GET.\n\nHTTPS validates against the built-in CA bundle. Blocks until the response is\ncomplete or the timeout expires (a Stop request is honoured on return).\n\nArgs:\n    url: Full URL, ``http://`` or ``https://``.\n    headers: Extra request headers as a dict of str to str, at most 16.\n    timeout_ms: Timeout in milliseconds, greater than 0. Default 10000.\n\nReturns:\n    A :class:`Response` ``(status, body)``.\n\nRaises:\n    ValueError: ``timeout_ms`` is not positive or there are more than 16 headers.\n    TypeError: ``headers`` is not a dict or None.\n    OSError: ECONNABORTED when the request fails (no Wi-Fi, DNS, TLS, timeout).\n    KeyboardInterrupt: the script was stopped.\n\nExample:\n    r = bugbuster.http_get(\"http://192.168.1.10/status\", timeout_ms=3000)\n    print(r.status, r.body.decode())",
      "summary": "HTTP or HTTPS GET.",
-     "description": "HTTPS validates against the built-in CA bundle. Blocks until the response is\ncomplete or the timeout expires (a Stop request is honoured on return).",
+     "description": "HTTPS validates against the built-in CA bundle. Blocks until the response is complete or the timeout expires (a Stop request is honoured on return).",
      "param_docs": {
       "url": "Full URL, ``http://`` or ``https://``.",
       "headers": "Extra request headers as a dict of str to str, at most 16.",
@@ -431,7 +431,7 @@
      "returns": "None",
      "doc": "Publish one MQTT message (QoS 0, not retained) and disconnect.\n\nOpens a plain TCP connection (no TLS) to the broker for each call and waits up\nto 5 s for it to come up, so use it for occasional messages, not high-rate\nstreaming.\n\nArgs:\n    topic: Topic string.\n    payload: Message bytes or text.\n    host: Broker host name or IP address.\n    port: Broker TCP port, 1-65535. Default 1883.\n    username: Optional user name.\n    password: Optional password.\n\nRaises:\n    ValueError: ``port`` is outside 1-65535.\n    OSError: ECONNABORTED when the broker could not be reached.\n    KeyboardInterrupt: the script was stopped.\n\nExample:\n    bugbuster.mqtt_publish(\"bench/ch0\", \"%.3f\" % ch.read_voltage(), \"192.168.1.10\")",
      "summary": "Publish one MQTT message (QoS 0, not retained) and disconnect.",
-     "description": "Opens a plain TCP connection (no TLS) to the broker for each call and waits up\nto 5 s for it to come up, so use it for occasional messages, not high-rate\nstreaming.",
+     "description": "Opens a plain TCP connection (no TLS) to the broker for each call and waits up to 5 s for it to come up, so use it for occasional messages, not high-rate streaming.",
      "param_docs": {
       "topic": "Topic string.",
       "payload": "Message bytes or text.",
@@ -490,7 +490,7 @@
      "returns": "Claim",
      "doc": "Create a claim on IO slots; use it as ``with claim([...]):``.\n\nNothing is acquired until the ``with`` block is entered. While held, other\nowners (app, HTTP, CLI) cannot write those slots, and ``Channel`` calls\ninside the block do not take their own one-shot claim.\n\nArgs:\n    slots: 1-16 slot numbers: 0-11 for IO1-IO12, 12-15 for CH0-CH3.\n    purpose: Free-text label recorded with the claim.\n    lease_ms: Lease in milliseconds; 0 (default) holds until released.\n\nReturns:\n    A :class:`Claim` context manager.\n\nRaises:\n    ValueError: ``slots`` is empty, longer than 16 or holds a number outside 0-15.\n\nExample:\n    with bugbuster.claim([12, 13], purpose=\"sweep\"):\n        ...",
      "summary": "Create a claim on IO slots; use it as ``with claim([...]):``.",
-     "description": "Nothing is acquired until the ``with`` block is entered. While held, other\nowners (app, HTTP, CLI) cannot write those slots, and ``Channel`` calls\ninside the block do not take their own one-shot claim.",
+     "description": "Nothing is acquired until the ``with`` block is entered. While held, other owners (app, HTTP, CLI) cannot write those slots, and ``Channel`` calls inside the block do not take their own one-shot claim.",
      "param_docs": {
       "slots": "1-16 slot numbers: 0-11 for IO1-IO12, 12-15 for CH0-CH3.",
       "purpose": "Free-text label recorded with the claim.",
@@ -591,7 +591,7 @@
      "returns": "dict",
      "doc": "Return the HAT detection, link and firmware state. Works without a HAT.\n\nThe ``hat_*`` calls below drive the SWD/GPIO HAT; they raise ``OSError`` EIO\nwhen no such HAT is connected (the DAQ HAT uses the ``daq`` module instead).\n\nReturns:\n    A dict describing the HAT.\n\nKeys:\n    detected: HAT strap detected on the connector.\n    connected: Link to the HAT established.\n    type: 0 none, 1 SWD/GPIO HAT, 16 DAQ HAT, 255 unknown.\n    detect_voltage: Raw detect-pin voltage in volts.\n    fw_major: HAT firmware major version.\n    fw_minor: HAT firmware minor version.\n    config_confirmed: HAT acknowledged the last pin configuration.\n    io_voltage_mv: HAT I/O voltage in millivolts.\n    caps_valid: ``hat_caps()`` data is valid.\n    la_route: Logic-analyser route: 0 low speed, 1 high speed.\n    dap_connected: A USB CMSIS-DAP host is connected.\n    target_detected: An SWD target answers.\n    target_dpidr: DPIDR of the SWD target.\n    last_ok_ms: Time of the last good HAT reply, ms.\n    last_timeout_ms: Time of the last HAT timeout, ms.\n    consecutive_timeouts: Timeouts in a row.\n    degraded: Link is flagged degraded.\n    pin_config: List of 4 function codes for the HAT expansion pins.\n\nExample:\n    st = bugbuster.hat_status()\n    print(st[\"connected\"], st[\"type\"])",
      "summary": "Return the HAT detection, link and firmware state. Works without a HAT.",
-     "description": "The ``hat_*`` calls below drive the SWD/GPIO HAT; they raise ``OSError`` EIO\nwhen no such HAT is connected (the DAQ HAT uses the ``daq`` module instead).",
+     "description": "The ``hat_*`` calls below drive the SWD/GPIO HAT; they raise ``OSError`` EIO when no such HAT is connected (the DAQ HAT uses the ``daq`` module instead).",
      "param_docs": {},
      "returns_doc": "A dict describing the HAT.",
      "return_keys": [
@@ -838,7 +838,7 @@
      "returns": "None",
      "doc": "Set a HAT rail voltage.\n\nFor ``HAT_RAIL_3V3_ADJ`` this sets the HAT I/O voltage; for VADJ3/VADJ4 it\nsets the regulator target.\n\nArgs:\n    rail: A ``HAT_RAIL_*`` value, 0-2.\n    mv: Voltage in millivolts, 0-36000.\n\nRaises:\n    ValueError: ``rail`` is outside 0-2 or ``mv`` outside 0-36000.\n    OSError: EIO when the HAT refuses or is absent.\n\nSafety:\n    Changes the voltage on a live rail. Disable the rail first when the target\n    is connected.\n\nExample:\n    bugbuster.hat_set_rail_voltage(bugbuster.HAT_RAIL_VADJ3, 3300)",
      "summary": "Set a HAT rail voltage.",
-     "description": "For ``HAT_RAIL_3V3_ADJ`` this sets the HAT I/O voltage; for VADJ3/VADJ4 it\nsets the regulator target.",
+     "description": "For ``HAT_RAIL_3V3_ADJ`` this sets the HAT I/O voltage; for VADJ3/VADJ4 it sets the regulator target.",
      "param_docs": {
       "rail": "A ``HAT_RAIL_*`` value, 0-2.",
       "mv": "Voltage in millivolts, 0-36000."
@@ -855,7 +855,7 @@
        "doc": "EIO when the HAT refuses or is absent."
       }
      ],
-     "notes": "Changes the voltage on a live rail. Disable the rail first when the target\nis connected.",
+     "notes": "Changes the voltage on a live rail. Disable the rail first when the target is connected.",
      "examples": [
       "bugbuster.hat_set_rail_voltage(bugbuster.HAT_RAIL_VADJ3, 3300)"
      ]
@@ -1194,7 +1194,7 @@
      "returns": "None",
      "doc": "Power the SWD target connector and set the HAT I/O voltage.\n\nSets the HAT I/O voltage, then enables power on the connector. Blocks about\n250 ms. The SWD pins themselves are wired directly to the debug probe; connect\nyour debug tool over USB CMSIS-DAP afterwards and check ``hat_status()``.\n\nArgs:\n    target_voltage_mv: Target voltage in millivolts, 1200-5500. Default 3300.\n    connector: 0 for connector A (VADJ1), 1 for connector B (VADJ2). Default 0.\n\nRaises:\n    ValueError: ``target_voltage_mv`` is outside 1200-5500 or ``connector`` is not 0/1.\n    OSError: EIO when the HAT refuses, is absent or the connector cannot be powered.\n\nSafety:\n    Powers the target connector at the given voltage.\n\nExample:\n    bugbuster.hat_setup_swd(3300, connector=0)",
      "summary": "Power the SWD target connector and set the HAT I/O voltage.",
-     "description": "Sets the HAT I/O voltage, then enables power on the connector. Blocks about\n250 ms. The SWD pins themselves are wired directly to the debug probe; connect\nyour debug tool over USB CMSIS-DAP afterwards and check ``hat_status()``.",
+     "description": "Sets the HAT I/O voltage, then enables power on the connector. Blocks about 250 ms. The SWD pins themselves are wired directly to the debug probe; connect your debug tool over USB CMSIS-DAP afterwards and check ``hat_status()``.",
      "param_docs": {
       "target_voltage_mv": "Target voltage in millivolts, 1200-5500. Default 3300.",
       "connector": "0 for connector A (VADJ1), 1 for connector B (VADJ2). Default 0."
@@ -1223,7 +1223,7 @@
      "kind": "class",
      "doc": "One analog channel of the AD74416H front-end (CH0-CH3).\n\nCH0-CH3 map to IO3, IO6, IO9 and IO12 and to ownership slots 12-15. The\nstate-changing methods (``set_function``, ``set_voltage``, ``set_do``) take a\none-shot 5 s claim on the channel unless the script already holds one with\n``claim()``, and raise ``OSError`` EEXIST when another owner (app, HTTP, CLI)\nholds it.\n\nExample:\n    ch = bugbuster.Channel(2)\n    ch.set_function(bugbuster.FUNC_VIN)\n    print(ch.read_voltage())",
      "summary": "One analog channel of the AD74416H front-end (CH0-CH3).",
-     "description": "CH0-CH3 map to IO3, IO6, IO9 and IO12 and to ownership slots 12-15. The\nstate-changing methods (``set_function``, ``set_voltage``, ``set_do``) take a\none-shot 5 s claim on the channel unless the script already holds one with\n``claim()``, and raise ``OSError`` EEXIST when another owner (app, HTTP, CLI)\nholds it.",
+     "description": "CH0-CH3 map to IO3, IO6, IO9 and IO12 and to ownership slots 12-15. The state-changing methods (``set_function``, ``set_voltage``, ``set_do``) take a one-shot 5 s claim on the channel unless the script already holds one with ``claim()``, and raise ``OSError`` EEXIST when another owner (app, HTTP, CLI) holds it.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -1280,7 +1280,7 @@
        "returns": "None",
        "doc": "Select the channel function (one of the ``FUNC_*`` constants).\n\nReconfigures the analog front-end for that channel. Switch to\n``FUNC_HIGH_IMP`` when you are done driving it.\n\nArgs:\n    func: A ``FUNC_*`` constant (0-5 or 7-12).\n\nRaises:\n    ValueError: ``func`` is not a valid function code.\n    OSError: EEXIST when another owner holds the channel; EIO when the\n        hardware refuses.\n\nSafety:\n    ``FUNC_VOUT``, ``FUNC_IOUT`` and the HART variants drive the terminal.\n\nExample:\n    ch.set_function(bugbuster.FUNC_VIN)",
        "summary": "Select the channel function (one of the ``FUNC_*`` constants).",
-       "description": "Reconfigures the analog front-end for that channel. Switch to\n``FUNC_HIGH_IMP`` when you are done driving it.",
+       "description": "Reconfigures the analog front-end for that channel. Switch to ``FUNC_HIGH_IMP`` when you are done driving it.",
        "param_docs": {
         "func": "A ``FUNC_*`` constant (0-5 or 7-12)."
        },
@@ -1323,7 +1323,7 @@
        "returns": "None",
        "doc": "Set the DAC output voltage (the channel must be in ``FUNC_VOUT``).\n\nOut-of-range values are clamped, not rejected. Changing ``bipolar``\nbetween calls re-parks the output while the range switches.\n\nArgs:\n    voltage: Output in volts. Unipolar 0 to 12 V; bipolar -12 to +12 V.\n    bipolar: True selects the bipolar range. Default False.\n\nRaises:\n    OSError: EEXIST when another owner holds the channel; EIO when the\n        DAC write fails.\n\nSafety:\n    Drives the IO terminal immediately.\n\nExample:\n    ch.set_function(bugbuster.FUNC_VOUT)\n    ch.set_voltage(3.3)",
        "summary": "Set the DAC output voltage (the channel must be in ``FUNC_VOUT``).",
-       "description": "Out-of-range values are clamped, not rejected. Changing ``bipolar``\nbetween calls re-parks the output while the range switches.",
+       "description": "Out-of-range values are clamped, not rejected. Changing ``bipolar`` between calls re-parks the output while the range switches.",
        "param_docs": {
         "voltage": "Output in volts. Unipolar 0 to 12 V; bipolar -12 to +12 V.",
         "bipolar": "True selects the bipolar range. Default False."
@@ -1348,7 +1348,7 @@
        "returns": "float",
        "doc": "Return the latest ADC reading of the channel in volts.\n\nThe value comes from the firmware's continuous ADC poll, so it is the\nmost recent sample, not a fresh conversion. Use it with ``FUNC_VIN`` (or\nto read back a ``FUNC_VOUT`` output).\n\nReturns:\n    Voltage in volts.\n\nRaises:\n    OSError: ETIMEDOUT when the measurement state could not be read within 50 ms.\n\nExample:\n    volts = ch.read_voltage()",
        "summary": "Return the latest ADC reading of the channel in volts.",
-       "description": "The value comes from the firmware's continuous ADC poll, so it is the\nmost recent sample, not a fresh conversion. Use it with ``FUNC_VIN`` (or\nto read back a ``FUNC_VOUT`` output).",
+       "description": "The value comes from the firmware's continuous ADC poll, so it is the most recent sample, not a fresh conversion. Use it with ``FUNC_VIN`` (or to read back a ``FUNC_VOUT`` output).",
        "param_docs": {},
        "returns_doc": "Voltage in volts.",
        "return_keys": [],
@@ -1403,7 +1403,7 @@
      "kind": "class",
      "doc": "External I2C master on two IO terminals (not raw ESP32 GPIOs).\n\nCreating the bus routes the pins, programs the VADJ supply and enables the\ne-fuse of the IO block, so the target is powered once the constructor\nreturns. Only one external bus is active at a time; call ``close()`` before\nwiring a different pin group. For bit-banged GPIO buses use ``machine.SoftI2C``.\n\nExample:\n    bus = bugbuster.I2C(1, 2, freq=100000, supply=3.3, vlogic=3.3)\n    try:\n        print(bus.scan())\n    finally:\n        bus.close()",
      "summary": "External I2C master on two IO terminals (not raw ESP32 GPIOs).",
-     "description": "Creating the bus routes the pins, programs the VADJ supply and enables the\ne-fuse of the IO block, so the target is powered once the constructor\nreturns. Only one external bus is active at a time; call ``close()`` before\nwiring a different pin group. For bit-banged GPIO buses use ``machine.SoftI2C``.",
+     "description": "Creating the bus routes the pins, programs the VADJ supply and enables the e-fuse of the IO block, so the target is powered once the constructor returns. Only one external bus is active at a time; call ``close()`` before wiring a different pin group. For bit-banged GPIO buses use ``machine.SoftI2C``.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -1488,7 +1488,7 @@
          "doc": "a pin is outside 1-12 or SDA equals SCL, ``pullups`` is unknown, ``supply`` is outside 3.0-15.0 V, or the bus planner rejects the route (the message says why)."
         }
        ],
-       "notes": "Powers the target at ``supply``. A \"Warning:\" line is printed when the\nUSB-C input cannot deliver that voltage.",
+       "notes": "Powers the target at ``supply``. A \"Warning:\" line is printed when the USB-C input cannot deliver that voltage.",
        "examples": [
         "bus = bugbuster.I2C(1, 2, freq=100000, supply=3.3, vlogic=3.3)"
        ]
@@ -1739,7 +1739,7 @@
      "kind": "class",
      "doc": "External SPI master on IO terminals (not raw ESP32 GPIOs).\n\nLike ``I2C``, creating the bus routes the pins and powers the IO block from a\nVADJ rail. Use ``close()`` to release it. For bit-banged GPIO buses use\n``machine.SoftSPI``.\n\nExample:\n    spi = bugbuster.SPI(1, mosi_io=2, miso_io=3, cs_io=4, freq=1000000, supply=3.3)\n    try:\n        print(spi.transfer(bytes([0x9F, 0, 0, 0])))\n    finally:\n        spi.close()",
      "summary": "External SPI master on IO terminals (not raw ESP32 GPIOs).",
-     "description": "Like ``I2C``, creating the bus routes the pins and powers the IO block from a\nVADJ rail. Use ``close()`` to release it. For bit-banged GPIO buses use\n``machine.SoftSPI``.",
+     "description": "Like ``I2C``, creating the bus routes the pins and powers the IO block from a VADJ rail. Use ``close()`` to release it. For bit-banged GPIO buses use ``machine.SoftSPI``.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -1840,7 +1840,7 @@
          "doc": "a pin is outside 1-12, ``mode`` is outside 0-3, ``supply`` is outside 3.0-15.0 V, or the bus planner rejects the route."
         }
        ],
-       "notes": "Powers the target at ``supply``. A \"Warning:\" line is printed when the\nUSB-C input cannot deliver that voltage.",
+       "notes": "Powers the target at ``supply``. A \"Warning:\" line is printed when the USB-C input cannot deliver that voltage.",
        "examples": [
         "spi = bugbuster.SPI(1, mosi_io=2, miso_io=3, cs_io=4, supply=3.3)"
        ]
@@ -1911,7 +1911,7 @@
      "kind": "class",
      "doc": "HTTP result returned by :func:`http_get` and :func:`http_post`.\n\nA named tuple: unpack it as ``status, body = r`` or read the attributes.\nA non-2xx status is returned, not raised.\n\nExample:\n    r = bugbuster.http_get(\"http://192.168.1.10/status\")\n    status, body = r\n    print(r.status, len(r.body))",
      "summary": "HTTP result returned by :func:`http_get` and :func:`http_post`.",
-     "description": "A named tuple: unpack it as ``status, body = r`` or read the attributes.\nA non-2xx status is returned, not raised.",
+     "description": "A named tuple: unpack it as ``status, body = r`` or read the attributes. A non-2xx status is returned, not raised.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -2165,7 +2165,7 @@
    "name": "daq",
    "doc": "DAQ HAT control from on-device scripts: the VDUT programmable supply and the\nbattery simulator.\n\nEvery call raises ``OSError(ENODEV)`` when no DAQ HAT is connected (check with\n``present()`` first); HAT link failures raise ``OSError(EIO)``; battery-simulator\nrefusals raise ``RuntimeError`` naming the simulator's reason (for example\n``\"busy\"``). A loaded battery-simulator run owns the VDUT output: ``vdut()``\nrefuses to change it until the run is unloaded.\n\nExample:\n    import daq\n    if daq.present():\n        daq.vdut(True, volts=3.3, amps_limit=0.5)\n        print(daq.read())\n        daq.vdut(False)",
    "summary": "DAQ HAT control from on-device scripts: the VDUT programmable supply and the",
-   "description": "battery simulator.\n\nEvery call raises ``OSError(ENODEV)`` when no DAQ HAT is connected (check with\n``present()`` first); HAT link failures raise ``OSError(EIO)``; battery-simulator\nrefusals raise ``RuntimeError`` naming the simulator's reason (for example\n``\"busy\"``). A loaded battery-simulator run owns the VDUT output: ``vdut()``\nrefuses to change it until the run is unloaded.",
+   "description": "battery simulator.\n\nEvery call raises ``OSError(ENODEV)`` when no DAQ HAT is connected (check with ``present()`` first); HAT link failures raise ``OSError(EIO)``; battery-simulator refusals raise ``RuntimeError`` naming the simulator's reason (for example ``\"busy\"``). A loaded battery-simulator run owns the VDUT output: ``vdut()`` refuses to change it until the run is unloaded.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],
@@ -2221,7 +2221,7 @@
      "returns": "dict",
      "doc": "Set the VDUT supply (setpoint, current limit, output) and return its state.\n\nPass any of the arguments; with none it only reports. The setpoint is\napplied before ``enable``, so ``vdut(True, volts=3.3)`` never switches on at\nthe old voltage. Values outside the range are rejected, never clamped.\n\nArgs:\n    enable: True switches the output on, False off, None leaves it as it is.\n    volts: Output setpoint in volts, 1.76-19.94.\n    amps_limit: Current limit in amps, 0.05-2.636.\n\nReturns:\n    A dict with the supply state after the change.\n\nKeys:\n    present: DAQ HAT present.\n    enabled: Output is on.\n    fault: Supply reports a fault (for example current limit).\n    volts: Programmed setpoint in volts.\n    amps_limit: Programmed current limit in amps.\n    v: Measured output voltage in volts.\n    i: Measured output current in amps.\n\nRaises:\n    ValueError: ``volts`` or ``amps_limit`` is outside its range.\n    RuntimeError: a battery-simulator run is loaded and owns VDUT (\"unload it first\").\n    OSError: ENODEV without a DAQ HAT; EIO when the HAT does not answer.\n\nSafety:\n    ``enable=True`` powers the DUT output at the setpoint. Check the setpoint\n    and limit first, and switch it off in a ``finally`` block.\n\nExample:\n    state = daq.vdut(True, volts=3.3, amps_limit=0.2)\n    print(state[\"v\"], state[\"i\"])\n    daq.vdut(False)",
      "summary": "Set the VDUT supply (setpoint, current limit, output) and return its state.",
-     "description": "Pass any of the arguments; with none it only reports. The setpoint is\napplied before ``enable``, so ``vdut(True, volts=3.3)`` never switches on at\nthe old voltage. Values outside the range are rejected, never clamped.",
+     "description": "Pass any of the arguments; with none it only reports. The setpoint is applied before ``enable``, so ``vdut(True, volts=3.3)`` never switches on at the old voltage. Values outside the range are rejected, never clamped.",
      "param_docs": {
       "enable": "True switches the output on, False off, None leaves it as it is.",
       "volts": "Output setpoint in volts, 1.76-19.94.",
@@ -2272,7 +2272,7 @@
        "doc": "ENODEV without a DAQ HAT; EIO when the HAT does not answer."
       }
      ],
-     "notes": "``enable=True`` powers the DUT output at the setpoint. Check the setpoint\nand limit first, and switch it off in a ``finally`` block.",
+     "notes": "``enable=True`` powers the DUT output at the setpoint. Check the setpoint and limit first, and switch it off in a ``finally`` block.",
      "examples": [
       "state = daq.vdut(True, volts=3.3, amps_limit=0.2)\nprint(state[\"v\"], state[\"i\"])\ndaq.vdut(False)"
      ]
@@ -2345,13 +2345,13 @@
      "returns": "list[tuple[int, float, float, float, int]]",
      "doc": "Fetch the live 1 s samples of the loaded battery-simulator run.\n\nOnly the loaded run's last hour is available. The call pages through the HAT\nuntil ``max`` samples are returned or no more are available, and honours the\nStop button.\n\nArgs:\n    run_id: Run id, 1-65535; must be the loaded run.\n    since_s: Return samples with a time newer than this many simulated seconds. Default 0.\n    max: Maximum number of samples, 1-3600. Default 600.\n\nReturns:\n    A list of ``(t_s, v, i, soc, flags)`` tuples: interval end in simulated\n    seconds, mean voltage in volts, mean current in amps, state of charge in\n    percent, and history flags (bit mask: 1 gap, 2 current clamp, 4 resume,\n    8 output off, 16 below cutoff).\n\nRaises:\n    ValueError: ``run_id`` is outside 1-65535 or ``max`` outside 1-3600.\n    OSError: ENOENT when ``run_id`` is not the loaded run; ENODEV; EIO.\n    KeyboardInterrupt: the script was stopped.\n\nExample:\n    for t_s, v, i, soc, flags in daq.samples(rid, since_s=0, max=60):\n        print(t_s, v, soc)",
      "summary": "Fetch the live 1 s samples of the loaded battery-simulator run.",
-     "description": "Only the loaded run's last hour is available. The call pages through the HAT\nuntil ``max`` samples are returned or no more are available, and honours the\nStop button.",
+     "description": "Only the loaded run's last hour is available. The call pages through the HAT until ``max`` samples are returned or no more are available, and honours the Stop button.",
      "param_docs": {
       "run_id": "Run id, 1-65535; must be the loaded run.",
       "since_s": "Return samples with a time newer than this many simulated seconds. Default 0.",
       "max": "Maximum number of samples, 1-3600. Default 600."
      },
-     "returns_doc": "A list of ``(t_s, v, i, soc, flags)`` tuples: interval end in simulated\nseconds, mean voltage in volts, mean current in amps, state of charge in\npercent, and history flags (bit mask: 1 gap, 2 current clamp, 4 resume,\n8 output off, 16 below cutoff).",
+     "returns_doc": "A list of ``(t_s, v, i, soc, flags)`` tuples: interval end in simulated seconds, mean voltage in volts, mean current in amps, state of charge in percent, and history flags (bit mask: 1 gap, 2 current clamp, 4 resume, 8 output off, 16 below cutoff).",
      "return_keys": [],
      "raises": [
       {
@@ -2379,7 +2379,7 @@
      "kind": "namespace",
      "doc": "Battery-simulator runs. A namespace: call as ``daq.run.status()``.\n\nA run models a battery (chemistry, cells, capacity, state of charge) behind\nthe VDUT output. The typical flow is ``new`` (creates and loads a paused run),\n``start``, poll ``status``/``samples``, then ``stop``. Runs are stored on the\nHAT; ``stop`` keeps the data, ``delete`` removes it.\n\nExample:\n    rid = daq.run.new(\"demo\", \"lipo\", 1, 500)\n    daq.run.start(rid)\n    print(daq.run.status()[\"state\"])\n    daq.run.stop()",
      "summary": "Battery-simulator runs. A namespace: call as ``daq.run.status()``.",
-     "description": "A run models a battery (chemistry, cells, capacity, state of charge) behind\nthe VDUT output. The typical flow is ``new`` (creates and loads a paused run),\n``start``, poll ``status``/``samples``, then ``stop``. Runs are stored on the\nHAT; ``stop`` keeps the data, ``delete`` removes it.",
+     "description": "A run models a battery (chemistry, cells, capacity, state of charge) behind the VDUT output. The typical flow is ``new`` (creates and loads a paused run), ``start``, poll ``status``/``samples``, then ``stop``. Runs are stored on the HAT; ``stop`` keeps the data, ``delete`` removes it.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -2878,7 +2878,7 @@
    "name": "machine",
    "doc": "MicroPython ``machine`` on BugBuster: ESP32-S3 GPIO pins, bit-banged I2C/SPI,\nwatchdog and chip control.\n\nThis is a trimmed port: there is no hardware I2C/SPI/UART/PWM/ADC/Timer/RTC.\nPin numbers are raw ESP32-S3 GPIO numbers, NOT the 1-12 IO terminals used by\n``bugbuster``. Many GPIOs are wired to the board's own chips, so driving an\narbitrary pin can disturb the instrument. Prefer ``bugbuster.I2C`` and\n``bugbuster.SPI`` for the front-panel IO terminals.\n\nExample:\n    import machine\n    print(machine.unique_id().hex(), machine.freq() // 1000000, \"MHz\")",
    "summary": "MicroPython ``machine`` on BugBuster: ESP32-S3 GPIO pins, bit-banged I2C/SPI,",
-   "description": "watchdog and chip control.\n\nThis is a trimmed port: there is no hardware I2C/SPI/UART/PWM/ADC/Timer/RTC.\nPin numbers are raw ESP32-S3 GPIO numbers, NOT the 1-12 IO terminals used by\n``bugbuster``. Many GPIOs are wired to the board's own chips, so driving an\narbitrary pin can disturb the instrument. Prefer ``bugbuster.I2C`` and\n``bugbuster.SPI`` for the front-panel IO terminals.",
+   "description": "watchdog and chip control.\n\nThis is a trimmed port: there is no hardware I2C/SPI/UART/PWM/ADC/Timer/RTC. Pin numbers are raw ESP32-S3 GPIO numbers, NOT the 1-12 IO terminals used by ``bugbuster``. Many GPIOs are wired to the board's own chips, so driving an arbitrary pin can disturb the instrument. Prefer ``bugbuster.I2C`` and ``bugbuster.SPI`` for the front-panel IO terminals.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],
@@ -2900,7 +2900,7 @@
      "returns_doc": "",
      "return_keys": [],
      "raises": [],
-     "notes": "Stops everything, including the script and open connections. Outputs\nreturn to their power-on state.",
+     "notes": "Stops everything, including the script and open connections. Outputs return to their power-on state.",
      "examples": [
       "machine.reset()"
      ]
@@ -2931,7 +2931,7 @@
      "summary": "Return why the chip last reset (the ESP-IDF ``esp_reset_reason()`` code).",
      "description": "",
      "param_docs": {},
-     "returns_doc": "1 power-on, 2 external pin, 3 software, 4 panic, 5 interrupt watchdog,\n6 task watchdog, 7 other watchdog, 8 deep sleep wake, 9 brown-out,\n10 SDIO; 0 when unknown.",
+     "returns_doc": "1 power-on, 2 external pin, 3 software, 4 panic, 5 interrupt watchdog, 6 task watchdog, 7 other watchdog, 8 deep sleep wake, 9 brown-out, 10 SDIO; 0 when unknown.",
      "return_keys": [],
      "raises": [],
      "notes": "",
@@ -3039,7 +3039,7 @@
      "returns_doc": "",
      "return_keys": [],
      "raises": [],
-     "notes": "Does not return. Powers down the CPU and drops all connections; the board\nreboots when it wakes.",
+     "notes": "Does not return. Powers down the CPU and drops all connections; the board reboots when it wakes.",
      "examples": [
       "machine.deepsleep(60000)  # reboots after 60 s"
      ]
@@ -3051,7 +3051,7 @@
      "kind": "class",
      "doc": "One ESP32-S3 GPIO (raw GPIO number, 0-48).\n\nCalling the object reads or sets the level: ``pin()`` and ``pin(1)``. There is\nno interrupt, toggle or alternate-function support in this port.\n\nExample:\n    button = machine.Pin(39, machine.Pin.IN, machine.Pin.PULL_UP)\n    print(button.value())",
      "summary": "One ESP32-S3 GPIO (raw GPIO number, 0-48).",
-     "description": "Calling the object reads or sets the level: ``pin()`` and ``pin(1)``. There is\nno interrupt, toggle or alternate-function support in this port.",
+     "description": "Calling the object reads or sets the level: ``pin()`` and ``pin(1)``. There is no interrupt, toggle or alternate-function support in this port.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -3112,7 +3112,7 @@
          "doc": "``id`` is outside 0-48."
         }
        ],
-       "notes": "Configuring a pin as an output drives it. GPIOs used by the board's own\nperipherals must not be reconfigured.",
+       "notes": "Configuring a pin as an output drives it. GPIOs used by the board's own peripherals must not be reconfigured.",
        "examples": [
         "pin = machine.Pin(39, machine.Pin.IN, machine.Pin.PULL_UP)"
        ]
@@ -3893,7 +3893,7 @@
    "name": "bb_helpers",
    "doc": "Small helpers for channel ramps and sweeps (``bb_helpers.py`` on the device).\n\nFrozen into the firmware: ``import bb_helpers``. The ramp and sweep helpers\nswitch the channel to voltage output and return it to high impedance when done.\n\nExample:\n    import bb_helpers\n    for volts, readback in bb_helpers.dac_ramp(0, 0.0, 3.0, 1.0):\n        print(volts, readback)",
    "summary": "Small helpers for channel ramps and sweeps (``bb_helpers.py`` on the device).",
-   "description": "Frozen into the firmware: ``import bb_helpers``. The ramp and sweep helpers\nswitch the channel to voltage output and return it to high impedance when done.",
+   "description": "Frozen into the firmware: ``import bb_helpers``. The ramp and sweep helpers switch the channel to voltage output and return it to high impedance when done.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],
@@ -3982,7 +3982,7 @@
      "returns": "list[tuple[float, float]]",
      "doc": "Ramp a channel's DAC from ``lo`` to ``hi`` volts and read each step back.\n\nSets the channel to ``FUNC_VOUT``, then for each voltage drives it, waits\n``settle_ms`` and reads the ADC. Finishes by returning the channel to\n``FUNC_HIGH_IMP``.\n\nArgs:\n    channel: Channel index, 0-3.\n    lo: Start voltage in volts (0 to 12 V unipolar).\n    hi: End voltage in volts, included.\n    step: Increment in volts; must be greater than 0 (a zero or negative step never ends).\n    settle_ms: Wait after each step in milliseconds. Default 50.\n\nReturns:\n    A list of ``(set_volts, readback_volts)`` tuples, one per step.\n\nRaises:\n    ValueError: ``channel`` is outside 0-3.\n    OSError: the channel is owned by another client, or the hardware refuses.\n\nSafety:\n    Drives the IO terminal of the channel across the whole range.\n\nExample:\n    results = bb_helpers.dac_ramp(0, 0.0, 5.0, 1.0)\n    for v, rb in results:\n        print(\"set=%.2f  read=%.5f\" % (v, rb))",
      "summary": "Ramp a channel's DAC from ``lo`` to ``hi`` volts and read each step back.",
-     "description": "Sets the channel to ``FUNC_VOUT``, then for each voltage drives it, waits\n``settle_ms`` and reads the ADC. Finishes by returning the channel to\n``FUNC_HIGH_IMP``.",
+     "description": "Sets the channel to ``FUNC_VOUT``, then for each voltage drives it, waits ``settle_ms`` and reads the ADC. Finishes by returning the channel to ``FUNC_HIGH_IMP``.",
      "param_docs": {
       "channel": "Channel index, 0-3.",
       "lo": "Start voltage in volts (0 to 12 V unipolar).",
@@ -4043,14 +4043,14 @@
      "returns": "list",
      "doc": "Drive a channel through an explicit list of voltages.\n\nSets the channel to ``FUNC_VOUT``, steps through ``voltages`` and returns the\nchannel to ``FUNC_HIGH_IMP`` at the end.\n\nArgs:\n    channel: Channel index, 0-3.\n    voltages: Iterable of voltages in volts.\n    settle_ms: Wait after each step in milliseconds. Default 100.\n    readback: True (default) reads the ADC after each step.\n\nReturns:\n    With ``readback=True`` a list of ``(target_volts, readback_volts)``\n    tuples; otherwise a list of the target voltages.\n\nRaises:\n    ValueError: ``channel`` is outside 0-3.\n    OSError: the channel is owned by another client, or the hardware refuses.\n\nSafety:\n    Drives the IO terminal of the channel.\n\nExample:\n    points = bb_helpers.channel_sweep(0, [0.0, 2.5, 5.0], settle_ms=200)",
      "summary": "Drive a channel through an explicit list of voltages.",
-     "description": "Sets the channel to ``FUNC_VOUT``, steps through ``voltages`` and returns the\nchannel to ``FUNC_HIGH_IMP`` at the end.",
+     "description": "Sets the channel to ``FUNC_VOUT``, steps through ``voltages`` and returns the channel to ``FUNC_HIGH_IMP`` at the end.",
      "param_docs": {
       "channel": "Channel index, 0-3.",
       "voltages": "Iterable of voltages in volts.",
       "settle_ms": "Wait after each step in milliseconds. Default 100.",
       "readback": "True (default) reads the ADC after each step."
      },
-     "returns_doc": "With ``readback=True`` a list of ``(target_volts, readback_volts)``\ntuples; otherwise a list of the target voltages.",
+     "returns_doc": "With ``readback=True`` a list of ``(target_volts, readback_volts)`` tuples; otherwise a list of the target voltages.",
      "return_keys": [],
      "raises": [
       {
@@ -4075,7 +4075,7 @@
    "name": "bb_devices",
    "doc": "Drivers for common I2C/SPI/1-Wire/display parts (``bb_devices.py`` on the device).\n\nFrozen into the firmware: ``import bb_devices``. Pass a ``bugbuster.I2C`` or\n``bugbuster.SPI`` bus object; the I2C drivers talk to the part through\n``writeto``, ``readfrom`` and ``writeto_then_readfrom``. Addresses are 7-bit.\nDrivers read the part directly; none of them power it, so create the bus with a\n``supply`` that matches the part first. Errors from the bus surface as\n``OSError``; a wrong chip id on construction raises ``OSError`` too.\n\nExample:\n    import bugbuster\n    import bb_devices\n    bus = bugbuster.I2C(1, 2, freq=100000, supply=3.3, vlogic=3.3)\n    try:\n        sensor = bb_devices.BME280(bus)\n        temp_c, press_pa, rh = sensor.read()\n    finally:\n        bus.close()",
    "summary": "Drivers for common I2C/SPI/1-Wire/display parts (``bb_devices.py`` on the device).",
-   "description": "Frozen into the firmware: ``import bb_devices``. Pass a ``bugbuster.I2C`` or\n``bugbuster.SPI`` bus object; the I2C drivers talk to the part through\n``writeto``, ``readfrom`` and ``writeto_then_readfrom``. Addresses are 7-bit.\nDrivers read the part directly; none of them power it, so create the bus with a\n``supply`` that matches the part first. Errors from the bus surface as\n``OSError``; a wrong chip id on construction raises ``OSError`` too.",
+   "description": "Frozen into the firmware: ``import bb_devices``. Pass a ``bugbuster.I2C`` or ``bugbuster.SPI`` bus object; the I2C drivers talk to the part through ``writeto``, ``readfrom`` and ``writeto_then_readfrom``. Addresses are 7-bit. Drivers read the part directly; none of them power it, so create the bus with a ``supply`` that matches the part first. Errors from the bus surface as ``OSError``; a wrong chip id on construction raises ``OSError`` too.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],
@@ -4166,7 +4166,7 @@
      "kind": "class",
      "doc": "Bosch BMP280 pressure/temperature sensor (raw values only).\n\nStarts the part in normal mode. For compensated pressure, temperature and\nhumidity use :class:`BME280`.\n\nExample:\n    temp_raw, press_raw = bb_devices.BMP280(bus).read()",
      "summary": "Bosch BMP280 pressure/temperature sensor (raw values only).",
-     "description": "Starts the part in normal mode. For compensated pressure, temperature and\nhumidity use :class:`BME280`.",
+     "description": "Starts the part in normal mode. For compensated pressure, temperature and humidity use :class:`BME280`.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -4348,7 +4348,7 @@
      "kind": "class",
      "doc": "Dallas/Maxim DS18B20 1-Wire temperature sensor.\n\nNeeds ``machine.Pin`` on a free GPIO with a 4.7 kOhm pull-up to the sensor\nsupply.\n\nExample:\n    ds = bb_devices.DS18B20(machine.Pin(4))\n    print(ds.read_celsius())",
      "summary": "Dallas/Maxim DS18B20 1-Wire temperature sensor.",
-     "description": "Needs ``machine.Pin`` on a free GPIO with a 4.7 kOhm pull-up to the sensor\nsupply.",
+     "description": "Needs ``machine.Pin`` on a free GPIO with a 4.7 kOhm pull-up to the sensor supply.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -7093,7 +7093,7 @@
      "kind": "class",
      "doc": "SSD1306 OLED display over I2C (the MicroPython ``ssd1306`` driver, frozen into the firmware).\n\nA ``framebuf`` display: draw with ``fill``, ``text``, ``pixel``, ``hline`` and\nfriends, then call ``show()``. Without the ``ssd1306`` module the constructor raises ``OSError``.\n\nExample:\n    oled = bb_devices.SSD1306_I2C(128, 64, bus)\n    oled.fill(0)\n    oled.text(\"BugBuster\", 0, 0)\n    oled.show()",
      "summary": "SSD1306 OLED display over I2C (the MicroPython ``ssd1306`` driver, frozen into the firmware).",
-     "description": "A ``framebuf`` display: draw with ``fill``, ``text``, ``pixel``, ``hline`` and\nfriends, then call ``show()``. Without the ``ssd1306`` module the constructor raises ``OSError``.",
+     "description": "A ``framebuf`` display: draw with ``fill``, ``text``, ``pixel``, ``hline`` and friends, then call ``show()``. Without the ``ssd1306`` module the constructor raises ``OSError``.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -7308,7 +7308,7 @@
      "kind": "class",
      "doc": "SSD1306 OLED display over SPI (the MicroPython ``ssd1306`` driver).\n\nTakes ``(width, height, spi, dc, res, cs)``; the pin arguments are\n``machine.Pin`` objects. It has the same drawing methods as :class:`SSD1306_I2C`.\nWithout the ``ssd1306`` module the constructor raises ``OSError``.\n\nExample:\n    oled = bb_devices.SSD1306_SPI(128, 64, spi, dc, res, cs)\n    oled.text(\"Hello\", 0, 0)\n    oled.show()",
      "summary": "SSD1306 OLED display over SPI (the MicroPython ``ssd1306`` driver).",
-     "description": "Takes ``(width, height, spi, dc, res, cs)``; the pin arguments are\n``machine.Pin`` objects. It has the same drawing methods as :class:`SSD1306_I2C`.\nWithout the ``ssd1306`` module the constructor raises ``OSError``.",
+     "description": "Takes ``(width, height, spi, dc, res, cs)``; the pin arguments are ``machine.Pin`` objects. It has the same drawing methods as :class:`SSD1306_I2C`. Without the ``ssd1306`` module the constructor raises ``OSError``.",
      "param_docs": {},
      "returns_doc": "",
      "return_keys": [],
@@ -7515,7 +7515,7 @@
    "name": "bb_logging",
    "doc": "Timestamped log helpers (``bb_logging.py`` on the device).\n\nEach call writes one line to the script log and console through\n``bugbuster.log``, prefixed with the tick timestamp and level, for example\n``[     12345] INFO  starting``. Frozen into the firmware: ``import bb_logging``.\n\nExample:\n    import bb_logging\n    bb_logging.info(\"starting sweep\")\n    bb_logging.warn(\"supply sagging\")",
    "summary": "Timestamped log helpers (``bb_logging.py`` on the device).",
-   "description": "Each call writes one line to the script log and console through\n``bugbuster.log``, prefixed with the tick timestamp and level, for example\n``[     12345] INFO  starting``. Frozen into the firmware: ``import bb_logging``.",
+   "description": "Each call writes one line to the script log and console through ``bugbuster.log``, prefixed with the tick timestamp and level, for example ``[ 12345] INFO starting``. Frozen into the firmware: ``import bb_logging``.",
    "param_docs": {},
    "returns_doc": "",
    "return_keys": [],

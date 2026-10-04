@@ -48,13 +48,81 @@ struct FirmwareAPICatalogue: Decodable, Equatable {
     private static let log = Logger(subsystem: "com.lorenzo.bugbuster", category: "scripts")
 }
 
-struct FirmwareModule: Decodable, Equatable, Identifiable {
+/// One documented key of a returned dict (`Keys:` section of a docstring).
+struct FirmwareKeyDoc: Decodable, Hashable {
+    let name: String
+    let doc: String
+}
+
+/// One documented exception (`Raises:` section).
+struct FirmwareRaise: Decodable, Hashable {
+    let type: String
+    let doc: String
+}
+
+/// Structured docstring fields built by `stubs_to_json.py`. Every field is optional in
+/// the JSON, so a catalogue written before they existed still decodes (all empty).
+struct FirmwareDocDetail: Hashable {
+    var summary = ""
+    var description = ""
+    var returnsDoc = ""
+    var returnKeys: [FirmwareKeyDoc] = []
+    var raises: [FirmwareRaise] = []
+    /// Safety / side-effect notes.
+    var notes = ""
+    var examples: [String] = []
+
+    static let empty = FirmwareDocDetail()
+}
+
+extension FirmwareDocDetail: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case summary, description, raises, notes, examples
+        case returnsDoc = "returns_doc"
+        case returnKeys = "return_keys"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        returnsDoc = try c.decodeIfPresent(String.self, forKey: .returnsDoc) ?? ""
+        returnKeys = try c.decodeIfPresent([FirmwareKeyDoc].self, forKey: .returnKeys) ?? []
+        raises = try c.decodeIfPresent([FirmwareRaise].self, forKey: .raises) ?? []
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        examples = try c.decodeIfPresent([String].self, forKey: .examples) ?? []
+    }
+}
+
+/// First line of a raw docstring: the fallback summary for an older catalogue.
+private func firstLine(_ doc: String) -> String {
+    doc.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+}
+
+struct FirmwareModule: Equatable, Identifiable {
     var id: String { name }
     let name: String
     let doc: String
     let functions: [FirmwareFunction]
     let classes: [FirmwareClass]
     let constants: [FirmwareConstant]
+    var detail: FirmwareDocDetail = .empty
+
+    var summary: String { detail.summary.isEmpty ? firstLine(doc) : detail.summary }
+}
+
+extension FirmwareModule: Decodable {
+    private enum CodingKeys: String, CodingKey { case name, doc, functions, classes, constants }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        doc = try c.decodeIfPresent(String.self, forKey: .doc) ?? ""
+        functions = try c.decodeIfPresent([FirmwareFunction].self, forKey: .functions) ?? []
+        classes = try c.decodeIfPresent([FirmwareClass].self, forKey: .classes) ?? []
+        constants = try c.decodeIfPresent([FirmwareConstant].self, forKey: .constants) ?? []
+        detail = try FirmwareDocDetail(from: decoder)
+    }
 }
 
 struct FirmwareClass: Equatable, Identifiable {
@@ -70,6 +138,9 @@ struct FirmwareClass: Equatable, Identifiable {
     let doc: String
     let methods: [FirmwareFunction]
     let constants: [FirmwareConstant]
+    var detail: FirmwareDocDetail = .empty
+
+    var summary: String { detail.summary.isEmpty ? firstLine(doc) : detail.summary }
 }
 
 extension FirmwareClass: Decodable {
@@ -83,6 +154,7 @@ extension FirmwareClass: Decodable {
         doc = try c.decodeIfPresent(String.self, forKey: .doc) ?? ""
         methods = try c.decodeIfPresent([FirmwareFunction].self, forKey: .methods) ?? []
         constants = try c.decodeIfPresent([FirmwareConstant].self, forKey: .constants) ?? []
+        detail = try FirmwareDocDetail(from: decoder)
     }
 }
 
@@ -102,17 +174,34 @@ extension FirmwareClass {
     }
 }
 
-struct FirmwareFunction: Decodable, Equatable, Identifiable {
+struct FirmwareFunction: Equatable, Identifiable {
     var id: String { name }
     let name: String
     let signature: String
     let params: [FirmwareParam]
     let returns: String?
     let doc: String
+    var detail: FirmwareDocDetail = .empty
+
+    var summary: String { detail.summary.isEmpty ? firstLine(doc) : detail.summary }
 }
 
-struct FirmwareParam: Equatable {
-    enum Kind: String, Equatable {
+extension FirmwareFunction: Decodable {
+    private enum CodingKeys: String, CodingKey { case name, signature, params, returns, doc }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        signature = try c.decode(String.self, forKey: .signature)
+        params = try c.decodeIfPresent([FirmwareParam].self, forKey: .params) ?? []
+        returns = try c.decodeIfPresent(String.self, forKey: .returns)
+        doc = try c.decodeIfPresent(String.self, forKey: .doc) ?? ""
+        detail = try FirmwareDocDetail(from: decoder)
+    }
+}
+
+struct FirmwareParam: Hashable {
+    enum Kind: String, Hashable {
         case positional
         case keywordOnly = "keyword_only"
         case varPositional = "var_positional"
@@ -123,6 +212,8 @@ struct FirmwareParam: Equatable {
     let kind: Kind
     let annotation: String?
     let defaultValue: String?
+    /// The `Args:` entry for this parameter ("" when undocumented).
+    var doc: String = ""
 
     var acceptsKeyword: Bool { kind == .positional || kind == .keywordOnly }
     var isRequired: Bool { defaultValue == nil && acceptsKeyword }
@@ -130,7 +221,7 @@ struct FirmwareParam: Equatable {
 
 extension FirmwareParam: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case name, kind, annotation
+        case name, kind, annotation, doc
         case defaultValue = "default"
     }
 
@@ -140,14 +231,28 @@ extension FirmwareParam: Decodable {
         kind = Kind(rawValue: try c.decode(String.self, forKey: .kind)) ?? .positional
         annotation = try c.decodeIfPresent(String.self, forKey: .annotation)
         defaultValue = try c.decodeIfPresent(String.self, forKey: .defaultValue)
+        doc = try c.decodeIfPresent(String.self, forKey: .doc) ?? ""
     }
 }
 
-struct FirmwareConstant: Decodable, Equatable, Identifiable {
+struct FirmwareConstant: Equatable, Identifiable {
     var id: String { name }
     let name: String
     let annotation: String?
     let value: String?
+    var doc: String = ""
+}
+
+extension FirmwareConstant: Decodable {
+    private enum CodingKeys: String, CodingKey { case name, annotation, value, doc }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        annotation = try c.decodeIfPresent(String.self, forKey: .annotation)
+        value = try c.decodeIfPresent(String.self, forKey: .value)
+        doc = try c.decodeIfPresent(String.self, forKey: .doc) ?? ""
+    }
 }
 
 struct FirmwareExample: Decodable, Equatable, Identifiable {

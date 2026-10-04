@@ -174,4 +174,125 @@ final class ScriptCompletionTests: XCTestCase {
         XCTAssertEqual(b.aliases["vdut"], "daq.vdut")
         XCTAssertEqual(b.aliases["run"], "daq.run")
     }
+
+    // MARK: call insertion with placeholders
+
+    private func item(_ marked: String, _ label: String, file: StaticString = #filePath, line: UInt = #line) throws -> ScriptCompletion {
+        try XCTUnwrap(complete(marked).items.first { $0.label == label }, "no \(label) item", file: file, line: line)
+    }
+
+    func testRequiredArgumentBecomesAPlaceholder() throws {
+        let sleep = try item("import bugbuster\nbugbuster.sle|", "sleep")
+        XCTAssertEqual(sleep.insertText, "sleep(ms)")
+        XCTAssertEqual(sleep.placeholders, [NSRange(location: 6, length: 2)])
+        XCTAssertEqual(sleep.caretOffset, 6)
+        XCTAssertTrue(sleep.isCall)
+    }
+
+    func testConstructorPlaceholders() throws {
+        let channel = try item("import bugbuster\nbugbuster.Chan|", "Channel")
+        XCTAssertEqual(channel.insertText, "Channel(channel)")
+        XCTAssertEqual(channel.placeholders, [NSRange(location: 8, length: 7)])
+    }
+
+    func testSeveralRequiredArgumentsGetOnePlaceholderEach() throws {
+        let new = try item("import daq\ndaq.run.ne|", "new")
+        XCTAssertEqual(new.insertText, "new(name, chem, cells, capacity_mah)")
+        XCTAssertEqual(new.placeholders.map(\.location), [4, 10, 16, 23])
+        XCTAssertEqual(new.placeholders.map(\.length), [4, 4, 5, 12])
+    }
+
+    func testOptionalAndKeywordArgumentsAreNotInserted() throws {
+        let vdut = try item("import daq\ndaq.vd|", "vdut")
+        XCTAssertEqual(vdut.insertText, "vdut()")
+        XCTAssertEqual(vdut.caretOffset, 5)                 // inside the parens, where the kwargs are offered
+        XCTAssertTrue(vdut.placeholders.isEmpty)
+    }
+
+    func testNoArgumentFunctionPutsTheCaretAfterTheParens() throws {
+        let ticks = try item("import bugbuster\nbugbuster.tick|", "ticks_ms")
+        XCTAssertEqual(ticks.insertText, "ticks_ms()")
+        XCTAssertEqual(ticks.caretOffset, 10)
+        XCTAssertTrue(ticks.placeholders.isEmpty)
+    }
+
+    func testRequiredKeywordOnlyArgumentSelectsItsValue() {
+        let fn = FirmwareFunction(name: "f", signature: "f(x, *, y, z=1)", params: [
+            FirmwareParam(name: "x", kind: .positional, annotation: nil, defaultValue: nil),
+            FirmwareParam(name: "y", kind: .keywordOnly, annotation: nil, defaultValue: nil),
+            FirmwareParam(name: "z", kind: .keywordOnly, annotation: nil, defaultValue: "1")
+        ], returns: nil, doc: "")
+        let call = FirmwareAPIIndex.callItem(label: "f", function: fn, detail: "", doc: "", kind: .function)
+        XCTAssertEqual(call.insertText, "f(x, y=y)")
+        XCTAssertEqual(call.placeholders, [NSRange(location: 2, length: 1), NSRange(location: 7, length: 1)])
+    }
+
+    func testTypedParenthesisIsNotDoubled() throws {
+        let sleep = try item("import bugbuster\nbugbuster.sle|(10)", "sleep")
+        XCTAssertEqual(sleep.insertText, "sleep")
+        XCTAssertEqual(sleep.caretOffset, 5)
+        XCTAssertTrue(sleep.placeholders.isEmpty)
+        let builtin = try item("pri|(1)", "print")
+        XCTAssertEqual(builtin.insertText, "print")
+    }
+
+    // MARK: Python built-ins and keywords
+
+    func testBuiltinFunctionsInsertACall() throws {
+        let print = try item("pri|", "print")
+        XCTAssertEqual(print.insertText, "print()")
+        XCTAssertEqual(print.caretOffset, 6)
+        XCTAssertEqual(print.kind, .builtin)
+        let len = try item("x = le|", "len")
+        XCTAssertEqual(len.insertText, "len(obj)")
+        XCTAssertEqual(len.placeholders, [NSRange(location: 4, length: 3)])
+        let range = try item("for i in ran|", "range")
+        XCTAssertEqual(range.insertText, "range(stop)")
+    }
+
+    func testBuiltinTypesExceptionsAndKeywordsComplete() throws {
+        XCTAssertEqual(try item("n = flo|", "float").insertText, "float(x)")
+        XCTAssertEqual(try item("s = byt|", "bytes").insertText, "bytes()")
+        XCTAssertEqual(try item("raise Val|", "ValueError").kind, .exception)
+        XCTAssertEqual(try item("whi|", "while").kind, .reserved)
+        XCTAssertEqual(try item("imp|", "import").insertText, "import")
+        XCTAssertEqual(try item("de|", "def").kind, .reserved)
+        XCTAssertEqual(try item("tr|", "try").kind, .reserved)
+    }
+
+    func testBuiltinListCoversTheCommonNames() {
+        let names = Set(ScriptBuiltins.all.map(\.name))
+        XCTAssertTrue(names.isSuperset(of: ["print", "len", "range", "int", "float", "str", "list", "dict", "enumerate",
+                                            "zip", "min", "max", "abs", "round", "sorted", "isinstance", "hex", "bytes",
+                                            "bytearray", "Exception", "ValueError", "OSError", "KeyboardInterrupt",
+                                            "for", "while", "import", "def", "try", "except", "with", "return"]))
+        XCTAssertEqual(names.count, ScriptBuiltins.all.count, "duplicate built-in names")
+        XCTAssertTrue(ScriptBuiltins.all.allSatisfy { !$0.doc.isEmpty })
+    }
+
+    func testClassPositionsTakeTheBareName() throws {
+        XCTAssertEqual(try item("isinstance(x, in|", "int").insertText, "int")
+        XCTAssertEqual(try item("try:\n    pass\nexcept Val|", "ValueError").insertText, "ValueError")
+        XCTAssertEqual(try item("try:\n    pass\nexcept (OSE|", "OSError").insertText, "OSError")
+    }
+
+    func testCatalogueMatchesRankAboveBuiltins() {
+        let found = labels("from bugbuster import log\nlo|")
+        XCTAssertEqual(found.first, "log")
+        XCTAssertTrue(found.contains("locals"))
+        XCTAssertEqual(complete("from bugbuster import log\nlo|").items.first?.kind, .function)
+    }
+
+    func testBuiltinsStayQuietInStringsAndComments() {
+        XCTAssertTrue(complete("x = 'pri|").isEmpty)
+        XCTAssertTrue(complete("# pri|").isEmpty)
+    }
+
+    func testBuiltinParameterSpecParsing() {
+        let params = ScriptBuiltins.parseParams("iterable, *, key=None, reverse=False")
+        XCTAssertEqual(params.map(\.name), ["iterable", "key", "reverse"])
+        XCTAssertEqual(params.map(\.kind), [.positional, .keywordOnly, .keywordOnly])
+        XCTAssertEqual(params.map(\.isRequired), [true, false, false])
+        XCTAssertEqual(ScriptBuiltins.parseParams("*objects, sep=' '").map(\.kind), [.varPositional, .keywordOnly])
+    }
 }
