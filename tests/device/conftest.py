@@ -13,9 +13,28 @@ import pytest
 
 # Registered here (not imported per module) so the test files can take ``scripts`` as a
 # parameter without ruff reading it as a redefinition of an imported name (F811).
+
 from tests.device._hw_scripts import hw_scripts_session, scripts  # noqa: F401
 
 RUN_PREFIX = "bbt_"
+
+
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--hub-url",
+            metavar="URL",
+            default="http://192.168.3.87:8080",
+            help="Base URL for the ESPFleet hub (default: http://192.168.3.87:8080)",
+        )
+    except ValueError:
+        # Option may already be added if conftest is loaded multiple times
+        pass
+
+
+@pytest.fixture(scope="session")
+def hub_url(request):
+    return request.config.getoption("--hub-url", default="http://192.168.3.87:8080")
 
 
 def loaded_run_name(session, base):
