@@ -50,6 +50,17 @@
                ReferencedContainer = "container:bugbuster.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "D49E0D68DD65D1F420C2E87A"
+               BuildableName = "bugbuster_iOSUITests.xctest"
+               BlueprintName = "bugbuster_iOSUITests"
+               ReferencedContainer = "container:bugbuster.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

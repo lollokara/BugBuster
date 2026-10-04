@@ -103,6 +103,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.lorenzo.bugbuster.tests
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/BugBuster.app/BugBuster
         BUNDLE_LOADER: $(TEST_HOST)
+  bugbuster_iOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: bugbuster_iOS
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.lorenzo.bugbuster.uitests
+        TEST_TARGET_NAME: bugbuster_iOS
 schemes:
   bugbuster_iOS:
     build:
@@ -111,3 +124,5 @@ schemes:
     test:
       targets:
         - bugbuster_iOSTests
+        - bugbuster_iOSUITests
+
