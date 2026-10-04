@@ -54,6 +54,7 @@
 		770BF59F2A4BA350EC2E4A35 /* ScriptsViewsAuditFixesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */; };
 		780AA82150E6FEC913B82C71 /* HubMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AF72BF497C078DB10623CF /* HubMerge.swift */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
+		7B786CC8F81E4D8E96F21D4B /* BattSimSocMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */; };
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
 		826AE629852D559C3BC11B55 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 875AACD9B934157EF7C7FCFC /* assets */; };
 		82EA8EEA9C12A9C8DFCF5497 /* ScriptCodeEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF4B125C3B8569AA1E050B35 /* ScriptCodeEditor.swift */; };
@@ -150,6 +151,7 @@
 		5A90F29ECEFA8DC95282A638 /* HubClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubClient.swift; sourceTree = "<group>"; };
 		5B81C0C885D47BD144FFEAD3 /* BattSimHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimHub.swift; sourceTree = "<group>"; };
 		5E1885757D93966E72328F5C /* DaqMeasurementsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqMeasurementsCard.swift; sourceTree = "<group>"; };
+		6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimSocMergeTests.swift; sourceTree = "<group>"; };
 		624D7AD1D8C99339636DBBFC /* ScriptRuntimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRuntimeModels.swift; sourceTree = "<group>"; };
 		6683C8CA14E444FC60415F19 /* BatterySimTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatterySimTab.swift; sourceTree = "<group>"; };
 		67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManager.swift; sourceTree = "<group>"; };
@@ -275,6 +277,7 @@
 			isa = PBXGroup;
 			children = (
 				2E9D9F1C0FB95AFA74E4C220 /* BattSimReopenTests.swift */,
+				6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */,
 				93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */,
 				A1250447E893E6D417AF1F11 /* FirmwareAPICatalogueTests.swift */,
 				45D282E377C9F4401F925AD9 /* FirmwareDocsTests.swift */,
@@ -564,6 +567,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B83E96224066571AB2B30F9B /* BattSimReopenTests.swift in Sources */,
+				7B786CC8F81E4D8E96F21D4B /* BattSimSocMergeTests.swift in Sources */,
 				B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */,
 				9F336EAA499D46CB1A982E15 /* FakeScriptsWire.swift in Sources */,
 				5C963AFE71E85A21482678E5 /* FirmwareAPICatalogueTests.swift in Sources */,
