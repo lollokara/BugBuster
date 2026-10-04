@@ -92,5 +92,5 @@ void hub_health_emit(bool first)
         if (!ll) return;
         hub_logs_push_health(line, ll);
     }
-    ESP_LOGI(TAG, "health #%u queued (%u B, %u parts)", (unsigned)h.seq, (unsigned)jl, (unsigned)parts);
+    ESP_LOGD(TAG, "health #%u queued (%u B, %u parts)", (unsigned)h.seq, (unsigned)jl, (unsigned)parts);
 }

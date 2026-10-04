@@ -31,13 +31,10 @@ record becomes 1..n log entries:
 ## JSON document
 
 ```json
-{"kind":"health","v":1,"seq":1,"trig":"boot","ts":1790000000,"up_ms":61234,
- "dev":"7c9ebd123456","fw":"2.4.1","elf":"a1b2c3d4e5f60718","idf":"v5.4.1","boot":7,
- "reset":{"reason":"POWERON","code":1,"abnormal":false},
- "heap":{"int":{"free":112000,"min":98000,"big":65536},"psram":{"free":7000000,"min":6900000,"big":6500000}},
- "stacks":{"adcPoll":1800,"faultMon":900,"cmdProc":1200,"wavegen":1400,"mainLoop":2100,"bbpCli":2300,"uPython":9000,"hub":2500},
- "cnt":{"coredump":0,"hat_to":0,"hat_streak":0,"hat_degraded":0,"hub_fail":0,"log_drop":0,"script_drop":0,"wifi_reconn":0}}
+{"kind":"health","v":1,"seq":1,"trig":"boot","ts":1791145265,"up_ms":102322,"dev":"441bf6c47884","fw":"nightly-build86-165-g13af62c4-d","elf":"1fdd0dfca","idf":"5.3.1","boot":16,"reset":{"reason":"SW","code":3,"abnormal":false},"heap":{"int":{"free":41151,"min":31551,"big":23552},"psram":{"free":6641092,"min":6609532,"big":6553600}},"stacks":{"adcPoll":1276,"faultMon":1240,"cmdProc":2244,"wavegen":2264,"mainLoop":2820,"bbpCli":3368,"uPython":4832,"hub":2748},"cnt":{"coredump":1,"hat_to":0,"hat_streak":0,"hat_degraded":0,"hub_fail":0,"log_drop":1,"script_drop":0,"wifi_reconn":0}}
 ```
+
+Example captured from the real board (2 log entries, 585 B of JSON).
 
 | Key | Meaning |
 | :--- | :--- |
@@ -47,7 +44,7 @@ record becomes 1..n log entries:
 | `ts` | Unix seconds when the record was built, `0` if the wall clock was not set yet. |
 | `up_ms` | S3 uptime in ms when built (monotonic within a boot; resets on reboot). |
 | `dev` | Device id: 12 lowercase hex, the STA MAC (same as `X-Device-Id`). |
-| `fw`, `elf`, `idf` | Same as boot report `sys`: firmware version, ELF sha256 prefix (build id: compare firmware builds with this), ESP-IDF version. |
+| `fw`, `elf`, `idf` | Same as boot report `sys`: firmware version, ELF sha256 prefix, 9 hex chars (build id: compare firmware builds with this), ESP-IDF version. |
 | `boot` | Boot counter (RTC breadcrumb, cleared on power-on). |
 | `reset` | Last reset: `reason` name, raw `code`, `abnormal` (panic/WDT/brownout). |
 | `heap.int` / `heap.psram` | Bytes: `free` now, `min` lowest ever, `big` largest free block. Internal = 8-bit-capable internal RAM. |
