@@ -59,15 +59,31 @@ static const char *TAG = "scripting";
 // ---------------------------------------------------------------------------
 
 typedef struct {
+    uint32_t          refcount;
+    SemaphoreHandle_t sem;
+    char             *payload;
+    size_t            len;
+    bool              lint_ok;
+    char              err[128];
+} ScriptLintJob;
+
+static void lint_job_release(ScriptLintJob *job)
+{
+    if (!job) return;
+    if (__atomic_sub_fetch(&job->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        if (job->payload) free(job->payload);
+        if (job->sem) vSemaphoreDelete(job->sem);
+        free(job);
+    }
+}
+
+typedef struct {
     uint32_t          id;
     char             *payload;   // heap-allocated copy; freed by task after run
     size_t            len;
     bool              persist;   // V2-A: true = switch to / stay in PERSISTENT mode
     bool              is_lint;
-    SemaphoreHandle_t lint_sem;
-    char             *lint_err_out;
-    size_t            lint_err_max;
-    bool             *lint_ok_out;
+    ScriptLintJob    *lint_job;
     char              name[SCRIPT_NAME_MAX + 1];
     ScriptSource      source;
     bool              is_file;   // holds the file-script slot
@@ -711,27 +727,29 @@ static void taskMicroPython(void *pvParam)
         }
 
         if (cmd.is_lint) {
-            bool lint_ok = false;
-            nlr_buf_t nlr;
-            if (nlr_push(&nlr) == 0) {
-                mp_lexer_t *lex = mp_lexer_new_from_str_len(
-                    MP_QSTR__lt_string_gt_, cmd.payload, cmd.len, 0);
-                qstr source_name = lex->source_name;
-                mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
-                mp_compile(&pt, source_name, false);
-                nlr_pop();
-                lint_ok = true;
-            } else {
-                lint_ok = false;
-                mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
-                if (cmd.lint_err_out && cmd.lint_err_max > 0) {
-                    string_printer_t sp_data = { cmd.lint_err_out, 0, cmd.lint_err_max };
+            ScriptLintJob *job = cmd.lint_job;
+            if (job) {
+                bool lint_ok = false;
+                nlr_buf_t nlr;
+                if (nlr_push(&nlr) == 0) {
+                    mp_lexer_t *lex = mp_lexer_new_from_str_len(
+                        MP_QSTR__lt_string_gt_, job->payload, job->len, 0);
+                    qstr source_name = lex->source_name;
+                    mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
+                    mp_compile(&pt, source_name, false);
+                    nlr_pop();
+                    lint_ok = true;
+                } else {
+                    lint_ok = false;
+                    mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+                    string_printer_t sp_data = { job->err, 0, sizeof(job->err) };
                     mp_print_t custom_print = { &sp_data, string_printer_strn };
                     mp_obj_print_exception(&custom_print, exc);
                 }
+                job->lint_ok = lint_ok;
+                if (job->sem) xSemaphoreGive(job->sem);
+                lint_job_release(job);
             }
-            if (cmd.lint_ok_out) *cmd.lint_ok_out = lint_ok;
-            if (cmd.lint_sem) xSemaphoreGive(cmd.lint_sem);
         } else {
             // In EPHEMERAL mode with persist=true: switch to persistent mode.
             // In PERSISTENT mode: persist flag is sticky (ignored if false).
@@ -807,8 +825,10 @@ static void taskMicroPython(void *pvParam)
             }
         }
 
-        // Free the payload copy
-        free(cmd.payload);
+        // Free the payload copy (lint payload is owned by ScriptLintJob and freed by lint_job_release)
+        if (!cmd.is_lint) {
+            free(cmd.payload);
+        }
 
         if (!cmd.is_lint) {
             log_flush();
@@ -1050,43 +1070,68 @@ bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t ma
         return false;
     }
 
+    ScriptLintJob *job = (ScriptLintJob *)calloc(1, sizeof(ScriptLintJob));
+    if (!job) {
+        free(payload);
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Out of memory");
+        }
+        return false;
+    }
+
     SemaphoreHandle_t sem = xSemaphoreCreateBinary();
     if (!sem) {
         free(payload);
+        free(job);
         if (out_err && max_err > 0) {
             snprintf(out_err, max_err, "Failed to create semaphore");
         }
         return false;
     }
 
-    bool lint_ok = false;
+    job->refcount = 2; // 1 for caller, 1 for taskMicroPython
+    job->sem      = sem;
+    job->payload  = payload;
+    job->len      = len;
+    job->lint_ok  = false;
+
     if (out_err && max_err > 0) {
         out_err[0] = '\0';
     }
 
     ScriptCmd cmd = {};
-    cmd.id = 0;
-    cmd.payload = payload;
-    cmd.len = len;
-    cmd.persist = false;
-    cmd.is_lint = true;
-    cmd.lint_sem = sem;
-    cmd.lint_err_out = out_err;
-    cmd.lint_err_max = max_err;
-    cmd.lint_ok_out = &lint_ok;
+    cmd.id        = 0;
+    cmd.payload   = payload;
+    cmd.len       = len;
+    cmd.persist   = false;
+    cmd.is_lint   = true;
+    cmd.lint_job  = job;
 
     if (xQueueSend(s_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+        job->payload = NULL; // prevent double-free
         free(payload);
         vSemaphoreDelete(sem);
+        free(job);
         if (out_err && max_err > 0) {
             snprintf(out_err, max_err, "Scripting queue is full");
         }
         return false;
     }
 
-    xSemaphoreTake(sem, portMAX_DELAY);
-    vSemaphoreDelete(sem);
+    bool taken = (xSemaphoreTake(sem, pdMS_TO_TICKS(5000)) == pdTRUE);
+    bool lint_ok = false;
+    if (taken) {
+        lint_ok = job->lint_ok;
+        if (!lint_ok && out_err && max_err > 0) {
+            snprintf(out_err, max_err, "%s", job->err);
+        }
+    } else {
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Interpreter timed out (5s)");
+        }
+    }
 
+    lint_job_release(job);
     return lint_ok;
 }
 
