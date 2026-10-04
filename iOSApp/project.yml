@@ -23,6 +23,11 @@ targets:
       - path: assets
         buildPhase: resources
         type: folder
+      # API catalogue for the Scripts editor (autocomplete + docs). Built from
+      # the .pyi stubs by python/tools/stubs_to_json.py; referenced in place so
+      # the app can never ship a stale copy.
+      - path: ../python/firmware_modules/stubs/firmware_api.json
+        buildPhase: resources
     entitlements:
       path: bugbuster.entitlements
       # MUST be declared here, not only in the .entitlements file on disk.
