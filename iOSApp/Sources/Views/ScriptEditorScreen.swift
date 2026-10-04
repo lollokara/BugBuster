@@ -20,26 +20,43 @@ struct ScriptEditorScreen: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 14) {
-                Button(action: onBack) { Label("Back", systemImage: "chevron.left").lineLimit(1).fixedSize() }
+                Button(action: onBack) {
+                    Label("Back", systemImage: "chevron.left")
+                        .lineLimit(1).fixedSize()
+                        .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                }
                 Spacer()
                 Text(name)
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.subheadline.monospaced().weight(.bold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if editor.isDirty {
                     Circle().fill(.orange).frame(width: 6, height: 6).accessibilityLabel("Unsaved changes")
                 }
                 Spacer()
-                Button { showingDocs = true } label: { Image(systemName: "book") }
-                    .accessibilityLabel("Scripting API docs")
-                Button("Save") { Task { await model.save() } }.lineLimit(1).fixedSize()
+                Button { showingDocs = true } label: {
+                    Image(systemName: "book")
+                        .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Scripting API docs")
+
+                Button("Save") { Task { await model.save() } }
+                    .lineLimit(1).fixedSize()
                     .fontWeight(.bold)
                     .disabled(model.uploadProgress != nil)
+                    .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+
                 ScriptRunMenu(onRun: onRun) {
-                    Image(systemName: "play.fill").foregroundStyle(.green)
+                    Image(systemName: "play.fill")
+                        .foregroundStyle(.green)
+                        .frame(width: ScriptViewMetrics.minTouchTarget, height: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Run \(name)")
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.vertical, 4)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             if let progress = model.uploadProgress {
@@ -91,7 +108,8 @@ private struct ScriptLintBannerView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
-            Text(text).font(.system(size: 12, weight: .semibold)).lineLimit(3)
+                .accessibilityHidden(true)
+            Text(text).font(.caption.weight(.semibold)).lineLimit(3)
             Spacer(minLength: 0)
         }
         .foregroundStyle(tint)
@@ -100,3 +118,4 @@ private struct ScriptLintBannerView: View {
         .glassEffect(.regular.tint(tint), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
+

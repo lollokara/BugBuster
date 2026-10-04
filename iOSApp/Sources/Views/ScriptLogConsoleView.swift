@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import CoreTransferable
+import UniformTypeIdentifiers
 
 enum ScriptLogStyle {
     static func color(for level: ScriptLogLevel) -> Color {
@@ -26,6 +28,25 @@ enum ScriptLogStyle {
     }
 }
 
+/// Transferable model for lazy log export, avoiding string materialization on render (Finding #17).
+struct ScriptLogExport: Transferable, Equatable {
+    let fileName: String
+    let textProvider: @Sendable () -> String
+
+    static func == (lhs: ScriptLogExport, rhs: ScriptLogExport) -> Bool {
+        lhs.fileName == rhs.fileName
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .plainText) { export in
+            Data(export.textProvider().utf8)
+        }
+        .suggestedFileName { export in
+            export.fileName
+        }
+    }
+}
+
 /// Live device log (spec §4): level colouring, filter, pause-scroll, copy/share.
 /// Hosted by the iPad trailing column and the iPhone sheet (Task 14). Polling is
 /// the manager's job; this view only renders `store`.
@@ -47,7 +68,7 @@ struct ScriptLogConsoleView: View {
             if showSearch {
                 TextField("Filter text", text: $filter.query)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.subheadline.monospaced())
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .padding(.horizontal, 10)
@@ -60,14 +81,17 @@ struct ScriptLogConsoleView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 2) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 14, weight: .bold))
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if let subtitle {
-                    Text(subtitle).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(subtitle).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 4)
             Menu {
                 ForEach(ScriptLogLevel.allCases) { level in
                     Toggle(level.label, isOn: Binding(
@@ -77,14 +101,20 @@ struct ScriptLogConsoleView: View {
             } label: {
                 Image(systemName: filter.levels.count == ScriptLogLevel.allCases.count
                       ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter levels")
             Button { showSearch.toggle(); if !showSearch { filter.query = "" } } label: {
                 Image(systemName: "magnifyingglass")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Filter text")
             Button { store.isPaused.toggle() } label: {
                 Image(systemName: store.isPaused ? "play.circle.fill" : "pause.circle")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(store.isPaused ? "Resume auto-scroll" : "Pause auto-scroll")
             Button {
@@ -93,24 +123,39 @@ struct ScriptLogConsoleView: View {
                 Task { try? await Task.sleep(nanoseconds: 1_200_000_000); copied = false }
             } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Copy log")
-            ShareLink(item: store.plainText,
-                      preview: SharePreview(ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()))) {
+            ShareLink(item: ScriptLogExport(
+                fileName: ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()),
+                textProvider: { [weak store] in store?.plainText ?? "" }
+            ),
+            preview: SharePreview(ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()))) {
                 Image(systemName: "square.and.arrow.up")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Share log")
-            Button { store.clear() } label: { Image(systemName: "trash") }
-                .accessibilityLabel("Clear log")
+            Button { store.clear() } label: {
+                Image(systemName: "trash")
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Clear log")
             if let onClose {
-                Button(action: onClose) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .accessibilityLabel("Close log")
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(width: 36, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Close log")
             }
         }
-        .font(.system(size: 16))
+        .font(.body)
         .foregroundStyle(.cyan)
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
     }
 
     private var lines: some View {
@@ -134,8 +179,9 @@ struct ScriptLogConsoleView: View {
                         proxy.scrollTo(Self.bottomID, anchor: .bottom)
                     } label: {
                         Label("Latest", systemImage: "arrow.down.to.line")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .padding(.horizontal, 10).padding(.vertical, 6)
+                            .frame(minHeight: 44)
                     }
                     .glassEffect(.regular.tint(.cyan), in: Capsule())
                     .padding(10)
@@ -144,7 +190,7 @@ struct ScriptLogConsoleView: View {
             .overlay {
                 if visible.isEmpty {
                     Text(store.lines.isEmpty ? "No output yet" : "No lines match the filter")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -163,7 +209,7 @@ private struct ScriptLogLineRow: View {
     var body: some View {
         if line.isMarker {
             Text("— \(line.text) —")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(.caption2.monospaced().weight(.semibold))
                 .foregroundStyle(.cyan.opacity(0.8))
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 3)
@@ -180,7 +226,8 @@ private struct ScriptLogLineRow: View {
                     .foregroundStyle(ScriptLogStyle.color(for: line.level))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.system(size: 12, design: .monospaced))
+            .font(.caption.monospaced())
         }
     }
 }
+

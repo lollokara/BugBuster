@@ -47,26 +47,38 @@ struct ScriptREPLView: View {
                     onClose()
                 } label: {
                     Label("Exit REPL", systemImage: "chevron.left")
+                        .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                 }
                 Spacer()
-                Text("MicroPython shell").font(.system(size: 14, weight: .bold))
+                Text("MicroPython shell").font(.subheadline.weight(.bold))
                 Spacer()
-                Button { UIPasteboard.general.string = client?.consoleOutput ?? "" } label: { Image(systemName: "doc.on.doc") }
-                    .accessibilityLabel("Copy REPL output")
-                Button("Ctrl-C") { client?.sendControlChar("C") }.disabled(!inputEnabled)
-                Button("Ctrl-D") { client?.sendControlChar("D") }.disabled(!inputEnabled)
+                Button { UIPasteboard.general.string = client?.consoleOutput ?? "" } label: {
+                    Image(systemName: "doc.on.doc")
+                        .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Copy REPL output")
+                Button("Ctrl-C") { client?.sendControlChar("C") }
+                    .disabled(!inputEnabled)
+                    .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                Button("Ctrl-D") { client?.sendControlChar("D") }
+                    .disabled(!inputEnabled)
+                    .frame(minHeight: ScriptViewMetrics.minTouchTarget)
             }
-            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .font(.subheadline.monospaced().weight(.semibold))
             .padding(.horizontal)
             .padding(.top, 8)
 
             if let banner = ScriptREPLGate.banner(status: status, transport: connectionManager.transport) {
                 HStack(spacing: 8) {
                     Image(systemName: "lock.fill")
-                    Text(banner).font(.system(size: 12, weight: .semibold))
+                        .accessibilityHidden(true)
+                    Text(banner).font(.caption.weight(.semibold))
                     Spacer()
                     if status?.holdsFileSlot == true {
-                        Button("Stop", role: .destructive, action: onStop).font(.system(size: 12, weight: .bold))
+                        Button("Stop", role: .destructive, action: onStop)
+                            .font(.caption.weight(.bold))
+                            .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                     }
                 }
                 .padding(10)
@@ -85,10 +97,10 @@ struct ScriptREPLView: View {
 
             HStack(spacing: 10) {
                 Text(">>>")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.subheadline.monospaced().weight(.bold))
                     .foregroundColor(.green)
                 TextField(inputEnabled ? "Send command…" : "Read-only", text: $input)
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.subheadline.monospaced())
                     .keyboardType(.asciiCapable)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -97,12 +109,16 @@ struct ScriptREPLView: View {
                     .disabled(!inputEnabled)
                     .onSubmit(send)
                 Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 22))
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                        .frame(width: ScriptViewMetrics.minTouchTarget, height: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .disabled(!inputEnabled || input.isEmpty)
+                .accessibilityLabel("Send")
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .padding(.horizontal)
             .padding(.bottom, 10)
@@ -156,24 +172,34 @@ private struct ScriptBLEREPLView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 14) {
-                Button(action: onClose) { Label("Exit REPL", systemImage: "chevron.left") }
+                Button(action: onClose) {
+                    Label("Exit REPL", systemImage: "chevron.left")
+                        .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                }
                 Spacer()
-                Text("MicroPython (Bluetooth)").font(.system(size: 14, weight: .bold))
+                Text("MicroPython (Bluetooth)").font(.subheadline.weight(.bold))
                 Spacer()
-                Button { UIPasteboard.general.string = repl.transcript() } label: { Image(systemName: "doc.on.doc") }
-                    .accessibilityLabel("Copy REPL output")
+                Button { UIPasteboard.general.string = repl.transcript() } label: {
+                    Image(systemName: "doc.on.doc")
+                        .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Copy REPL output")
             }
-            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .font(.subheadline.monospaced().weight(.semibold))
             .padding(.horizontal)
             .padding(.top, 8)
 
             if let banner = ScriptREPLGate.banner(status: status, transport: .ble) {
                 HStack(spacing: 8) {
                     Image(systemName: status?.holdsFileSlot == true ? "lock.fill" : "info.circle.fill")
-                    Text(banner).font(.system(size: 12, weight: .semibold))
+                        .accessibilityHidden(true)
+                    Text(banner).font(.caption.weight(.semibold))
                     Spacer()
                     if status?.holdsFileSlot == true {
-                        Button("Stop", role: .destructive, action: onStop).font(.system(size: 12, weight: .bold))
+                        Button("Stop", role: .destructive, action: onStop)
+                            .font(.caption.weight(.bold))
+                            .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                     }
                 }
                 .padding(10)
@@ -181,7 +207,7 @@ private struct ScriptBLEREPLView: View {
                 .padding(.horizontal)
             }
             if let error = repl.error {
-                Text(error).font(.system(size: 12, weight: .semibold)).foregroundStyle(.red).padding(.horizontal)
+                Text(error).font(.caption.weight(.semibold)).foregroundStyle(.red).padding(.horizontal)
             }
 
             SelectableConsoleView(text: repl.transcript())
@@ -192,21 +218,27 @@ private struct ScriptBLEREPLView: View {
 
             HStack(spacing: 10) {
                 Text(">>>")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.subheadline.monospaced().weight(.bold))
                     .foregroundColor(.green)
                 TextField(inputEnabled ? "Send command…" : "Read-only", text: $input)
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.subheadline.monospaced())
                     .keyboardType(.asciiCapable)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.send)
                     .disabled(!inputEnabled)
                     .onSubmit(send)
-                Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)) }
-                    .disabled(!inputEnabled || input.isEmpty)
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                        .frame(width: ScriptViewMetrics.minTouchTarget, height: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .disabled(!inputEnabled || input.isEmpty)
+                .accessibilityLabel("Send")
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .padding(.horizontal)
             .padding(.bottom, 10)
@@ -241,7 +273,7 @@ struct REPLTerminalConsole: View {
 
             // Blinking block cursor
             Text(cursorVisible ? "█" : " ")
-                .font(.system(size: 13, design: .monospaced))
+                .font(.caption.monospaced())
                 .foregroundColor(Color(red: 0.25, green: 0.85, blue: 0.55))
                 .padding(.horizontal, 12)
                 .padding(.bottom, 6)
@@ -261,7 +293,9 @@ struct SelectableConsoleView: UIViewRepresentable {
         let textView = UITextView()
         textView.backgroundColor = .clear
         textView.textColor = UIColor(red: 0.78, green: 0.87, blue: 0.95, alpha: 1.0)
-        textView.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: font)
+        textView.adjustsFontForContentSizeCategory = true
         textView.isEditable = false
         textView.isSelectable = true
         textView.isScrollEnabled = true

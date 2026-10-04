@@ -136,7 +136,7 @@ final class ScriptLogStoreTests: XCTestCase {
 
     // MARK: filter
 
-    func testFilterByLevelAndQueryKeepsMarkers() {
+    func testFilterByLevelKeepsMarkers() {
         let lines = [ScriptLogLine.parse("1 E mpy Boom", id: 1),
                      ScriptLogLine.parse("2 I mpy fine", id: 2),
                      ScriptLogLine.marker("Started", id: 3)]
@@ -144,10 +144,21 @@ final class ScriptLogStoreTests: XCTestCase {
         XCTAssertEqual(f.apply(lines).count, 3)
         f.levels = [.error]
         XCTAssertEqual(f.apply(lines).map(\.id), [1, 3])
-        f.levels = Set(ScriptLogLevel.allCases)
+    }
+
+    func testFilterByQueryFiltersMarkersUnlessMatching() {
+        let lines = [ScriptLogLine.parse("1 E mpy Boom", id: 1),
+                     ScriptLogLine.parse("2 I mpy fine", id: 2),
+                     ScriptLogLine.marker("Started 'x.py'", id: 3),
+                     ScriptLogLine.marker("Device rebooted", id: 4)]
+        var f = ScriptLogFilter()
         f.query = "boom"
-        XCTAssertEqual(f.apply(lines).map(\.id), [1, 3])
+        XCTAssertEqual(f.apply(lines).map(\.id), [1])
+
+        f.query = "started"
+        XCTAssertEqual(f.apply(lines).map(\.id), [3])
+
         f.query = "   "
-        XCTAssertEqual(f.apply(lines).count, 3)
+        XCTAssertEqual(f.apply(lines).count, 4)
     }
 }

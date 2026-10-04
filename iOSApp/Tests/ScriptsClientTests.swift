@@ -27,6 +27,57 @@ final class ScriptsClientTests: XCTestCase {
         XCTAssertEqual(files, ["b.py", "a.py"])
     }
 
+    func testStorageDecodes() async throws {
+        let wire = FakeScriptsWire { _ in
+            .json(200, [
+                "totalBytes": 1048576.0,
+                "usedBytes": 2048.0,
+                "freeBytes": 1046528.0,
+                "scriptCount": 2,
+                "maxScriptBytes": 32768,
+                "maxScripts": 32
+            ])
+        }
+        let storage = try await ScriptsClient(wire: wire).storage()
+        XCTAssertEqual(storage.totalBytes, 1048576)
+        XCTAssertEqual(storage.usedBytes, 2048)
+        XCTAssertEqual(storage.freeBytes, 1046528)
+        XCTAssertEqual(storage.scriptCount, 2)
+        XCTAssertEqual(storage.maxScriptBytes, 32768)
+        XCTAssertEqual(storage.maxScripts, 32)
+        XCTAssertEqual(wire.calls.first?.method, "GET")
+        XCTAssertEqual(wire.paths(), ["/api/scripts/storage"])
+    }
+
+    func testStorageMissingFieldThrowsMalformed() async {
+        let wire = FakeScriptsWire { _ in
+            .json(200, [
+                "totalBytes": 1048576.0,
+                "usedBytes": 2048.0
+            ])
+        }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).storage(), .malformed("storage"))
+    }
+
+    func testStorageInvalidTypeThrowsMalformed() async {
+        let wire = FakeScriptsWire { _ in
+            .json(200, [
+                "totalBytes": "not_a_number",
+                "usedBytes": 2048.0,
+                "freeBytes": 1046528.0,
+                "scriptCount": 2,
+                "maxScriptBytes": 32768,
+                "maxScripts": 32
+            ])
+        }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).storage(), .malformed("storage"))
+    }
+
+    func testStorageFirmwareErrorThrows() async {
+        let wire = FakeScriptsWire { _ in .json(500, ["error": "SPIFFS info unavailable"]) }
+        await XCTAssertThrowsAsync(try await ScriptsClient(wire: wire).storage(), .firmware("SPIFFS info unavailable"))
+    }
+
     // MARK: run-file
 
     func testRunFileStartedSendsFlags() async throws {

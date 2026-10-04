@@ -51,6 +51,7 @@
 		711149B552CEC16D9C807396 /* ScriptsTabModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CFF6C7FEBF96894E2AABF0 /* ScriptsTabModelTests.swift */; };
 		72205E65D91FFED897042A95 /* AppSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119CBEAE1BC796A98E90F29D /* AppSections.swift */; };
 		7243FA194F755F88947052C4 /* HubSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE597C0F3857B36B68C1F36 /* HubSettingsView.swift */; };
+		770BF59F2A4BA350EC2E4A35 /* ScriptsViewsAuditFixesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */; };
 		780AA82150E6FEC913B82C71 /* HubMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AF72BF497C078DB10623CF /* HubMerge.swift */; };
 		781E507B0BC31FF2B4349B4E /* OverviewTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C328B9C24BDE2A98AEAC2A /* OverviewTab.swift */; };
 		7F895FF72617E65743B8406A /* DaqWifiStreamManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */; };
@@ -154,6 +155,7 @@
 		67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManager.swift; sourceTree = "<group>"; };
 		70AF72BF497C078DB10623CF /* HubMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubMerge.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsViewsAuditFixesTests.swift; sourceTree = "<group>"; };
 		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		862475FF859BED45401E66F2 /* ScriptCompletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCompletion.swift; sourceTree = "<group>"; };
@@ -287,6 +289,7 @@
 				113BC1904D2A24DBBB1AA61F /* ScriptsClientTests.swift */,
 				C7CFF6C7FEBF96894E2AABF0 /* ScriptsTabModelTests.swift */,
 				D3BF036F114A273A48F81D05 /* ScriptStatusTextTests.swift */,
+				78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */,
 				336152CB2D894F9065520535 /* ScriptsWireTests.swift */,
 				1E287628DBBCD5197E23ACBC /* VdutErrorTextTests.swift */,
 				2E68221B24ED2475D6913400 /* Support */,
@@ -576,6 +579,7 @@
 				509B997A1A8486087DFE830E /* ScriptStatusTextTests.swift in Sources */,
 				4F0F76F59E9E044BCE28F990 /* ScriptsClientTests.swift in Sources */,
 				711149B552CEC16D9C807396 /* ScriptsTabModelTests.swift in Sources */,
+				770BF59F2A4BA350EC2E4A35 /* ScriptsViewsAuditFixesTests.swift in Sources */,
 				6D615E2BB870EBF5BE039EC5 /* ScriptsWireTests.swift in Sources */,
 				E5B0904D8188A6963B7845CE /* VdutErrorTextTests.swift in Sources */,
 			);

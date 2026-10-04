@@ -232,6 +232,44 @@ final class ScriptsTabModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBLEReplPreservesHistoryAcrossLogReset() async {
+        let (m, _, manager) = make(Device(), kind: .ble)
+        let repl = ScriptBLERepl(manager: manager)
+        await repl.submit("print(1)")
+        manager.log.ingest(ScriptLogPage(data: Data("5 I mpy 1\n".utf8), since: 0, next: 10, dropped: 0))
+        XCTAssertEqual(repl.transcript(), ">>> print(1)\n1")
+
+        // Reset device log mid-session
+        manager.log.reset()
+        XCTAssertTrue(manager.log.lines.isEmpty)
+        XCTAssertEqual(repl.transcript(), ">>> print(1)\n1")
+
+        // Next command works and captures its output
+        await repl.submit("print(2)")
+        manager.log.ingest(ScriptLogPage(data: Data("10 I mpy 2\n".utf8), since: 0, next: 10, dropped: 0))
+        XCTAssertEqual(repl.transcript(), ">>> print(1)\n1\n>>> print(2)\n2")
+        _ = m
+    }
+
+    @MainActor
+    func testBLEReplPreservesHistoryAcrossLogTrimming() async {
+        let (m, _, manager) = make(Device(), kind: .ble)
+        let repl = ScriptBLERepl(manager: manager)
+        await repl.submit("print(1)")
+        manager.log.ingest(ScriptLogPage(data: Data("5 I mpy 1\n".utf8), since: 0, next: 10, dropped: 0))
+        XCTAssertEqual(repl.transcript(), ">>> print(1)\n1")
+
+        // Trim the log by exceeding capacity (5000 lines)
+        let bulk = (2...5005).map { "\($0) I sys filler\n" }.joined()
+        manager.log.ingest(ScriptLogPage(data: Data(bulk.utf8), since: 10, next: UInt64(10 + bulk.utf8.count), dropped: 0))
+        XCTAssertFalse(manager.log.lines.contains { $0.text == "1" })
+
+        // REPL output is preserved in the entry itself
+        XCTAssertEqual(repl.transcript(), ">>> print(1)\n1")
+        _ = m
+    }
+
+    @MainActor
     func testReplVisibleFollowsTheBLEReplView() {
         let (_, _, manager) = make(Device(), kind: .ble)
         XCTAssertFalse(manager.replVisible)
