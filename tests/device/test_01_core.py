@@ -7,6 +7,8 @@ Tests run over both USB and HTTP transports (parametrized via the 'device' fixtu
 
 import secrets
 import time
+import re
+
 import pytest
 from bugbuster import ChannelFunction
 from conftest import assert_no_faults
@@ -225,6 +227,9 @@ def test_large_response_intact(usb_device, request):
             if not part:
                 break
             text += part
-        lines = [ln for ln in text.splitlines() if ln.startswith("y")]
+        # Script logs are structured ("<ts_ms> <L> <src> <text>", spec 2026-10-03 §2);
+        # strip that prefix so the payload check works on old and new firmware.
+        payload = [re.sub(r"^\d+ [EWID] (?:mpy|sys) ", "", ln) for ln in text.splitlines()]
+        lines = [ln for ln in payload if ln.startswith("y")]
         assert len(lines) >= 30, text[-200:]
         assert all(ln.split()[0] == "y" * 60 for ln in lines)
