@@ -11,6 +11,7 @@
 
 #include "ad74416h_regs.h"
 #include "modbugbuster_bridge.h"
+#include "scripting.h"
 
 extern const mp_obj_type_t bugbuster_channel_type;
 extern const mp_obj_type_t bugbuster_i2c_type;
@@ -51,6 +52,27 @@ static mp_obj_t bugbuster_sleep(mp_obj_t ms_in)
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(bugbuster_sleep_obj, bugbuster_sleep);
+
+static mp_obj_t bugbuster_log(mp_obj_t level_in, mp_obj_t msg_in)
+{
+    size_t lvl_len = 0;
+    const char *lvl_str = mp_obj_str_get_data(level_in, &lvl_len);
+    if (lvl_len != 1 ||
+        (lvl_str[0] != 'E' && lvl_str[0] != 'W' && lvl_str[0] != 'I' && lvl_str[0] != 'D')) {
+        mp_raise_ValueError(MP_ERROR_TEXT("level must be one of 'E', 'W', 'I', 'D'"));
+    }
+    size_t msg_len = 0;
+    const char *msg_str = mp_obj_str_get_data(msg_in, &msg_len);
+    scripting_log(lvl_str[0], msg_str, msg_len);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_log_obj, bugbuster_log);
+
+static mp_obj_t bugbuster_ticks_ms(void)
+{
+    return mp_obj_new_int_from_uint(mp_hal_ticks_ms());
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(bugbuster_ticks_ms_obj, bugbuster_ticks_ms);
 
 static mp_obj_t bugbuster_vadj_pd_warning(mp_obj_t rail_in, mp_obj_t voltage_in)
 {
@@ -101,6 +123,8 @@ static MP_DEFINE_CONST_FUN_OBJ_2(bugbuster_efuse_set_obj, bugbuster_efuse_set);
 static const mp_rom_map_elem_t bugbuster_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_bugbuster) },
     { MP_ROM_QSTR(MP_QSTR_sleep), MP_ROM_PTR(&bugbuster_sleep_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log), MP_ROM_PTR(&bugbuster_log_obj) },
+    { MP_ROM_QSTR(MP_QSTR_ticks_ms), MP_ROM_PTR(&bugbuster_ticks_ms_obj) },
     { MP_ROM_QSTR(MP_QSTR_vadj_pd_warning), MP_ROM_PTR(&bugbuster_vadj_pd_warning_obj) },
     { MP_ROM_QSTR(MP_QSTR_rail_power_up), MP_ROM_PTR(&bugbuster_rail_power_up_obj) },
     { MP_ROM_QSTR(MP_QSTR_efuse_set), MP_ROM_PTR(&bugbuster_efuse_set_obj) },

@@ -94,6 +94,13 @@ bool scripting_wait_slot_free(uint32_t timeout_ms);
 /** Write one `<ts> <level> sys <text>` line to the log ring (and ESP_LOGI). */
 void scripting_log_event(char level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+/**
+ * Write ONE complete line to the log ring at level ('E','W','I','D') with src "mpy".
+ * Flushes any pending partial stdout line first, emits the line, and restores stdout level to 'I'.
+ * Also echoes to console (stderr / REPL WS) consistent with stdout print().
+ */
+void scripting_log(char level, const char *msg, size_t len);
+
 
 // ---------------------------------------------------------------------------
 // Control
