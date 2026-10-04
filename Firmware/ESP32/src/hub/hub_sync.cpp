@@ -33,6 +33,7 @@ typedef struct {
     uint32_t created;           // 0 = the P4 clock was not set when the run was created
     uint32_t sig;               // directory signature the last completed pass saw
     bool     meta_sent, done;
+    bool     reanchor_refused_warned;
 } run_t;
 
 typedef struct { uint16_t id; uint32_t size; int rank; uint16_t res; } file_t;
@@ -251,7 +252,7 @@ static hub_step_t phase_list(void)
     bool unset_clock = false;
     for (int k = 0; k < n; k++) {
         hub_meta_t m;
-        run_t r = { ids[k], 0, 0, false, false };
+        run_t r = { ids[k], 0, 0, false, false, false };
         if (hub_p4_meta(ids[k], &m)) r.created = m.created_epoch;
         if (r.created == 0) unset_clock = true;
         for (int j = 0; j < nkeep; j++) {                   // same run (id AND creation time): keep its progress
@@ -313,6 +314,86 @@ static hub_step_t phase_meta(const char *base)
     return HUB_STEP_MORE;
 }
 
+static hub_step_t reanchor_run(const char *base, run_t *r, const char *uid)
+{
+    hub_clk_src_t cur_src = HUB_CLK_EST;
+    uint32_t cur_unc = 3600000u;
+    hub_clock_source(&cur_src, &cur_unc);
+    if (cur_src > HUB_CLK_P4_EPOCH && cur_unc >= 3600000u) return HUB_STEP_IDLE;
+
+    uint32_t run_time_s = 0;
+    if (r->id == S.active_id) {
+        uint8_t st[96];
+        int n = hub_bs(0 /* BS_HOP_STATUS */, NULL, 0, st, sizeof st);
+        if (n == HAT_ERR_LOCK_BUSY) {
+            S.hat_backoff = hub_hat_backoff_next(S.hat_backoff);
+            S.retry_until = hub_uptime_ms() + S.hat_backoff;
+            return HUB_STEP_RETRY;
+        }
+        if (n >= 20) {
+            run_time_s = rd32(st + 16);
+        }
+    } else {
+        p4_final_state(r->id, &run_time_s);
+    }
+    if (run_time_s == 0 && S.n_files > 0) {
+        run_time_s = S.files[0].size / 48u;
+    }
+
+    uint32_t now_wall = (uint32_t)(hub_wall_ms() / 1000);
+    hub_reanchor_req_t reqs[4];
+    int n_reqs = hub_wallmap_compute_reanchor(&S.wm, run_time_s, now_wall, cur_src, cur_unc, reqs, 4);
+    if (n_reqs <= 0) return HUB_STEP_IDLE;
+
+    bool any_reanchored = false;
+    for (int i = 0; i < n_reqs; i++) {
+        // Derive from hub coverage's clk_src: if hub already has clk_src <= cur_src, skip
+        if (hub_covered_src(S.cov, (size_t)S.n_cov, (uint32_t)reqs[i].to_ts, 1, cur_src) ||
+            hub_covered_src(S.cov, (size_t)S.n_cov, (uint32_t)reqs[i].to_ts, 60, cur_src)) {
+            continue;
+        }
+
+        char path[128];
+        snprintf(path, sizeof path, "/api/v1/ingest/runs/%s/reanchor", uid);
+        char *body = hub_net_body();
+        hub_jw_t w;
+        hub_jw_init(&w, body, HUB_BODY_CAP);
+        hub_reanchor_json(&w, &reqs[i]);
+
+        size_t rcap;
+        char *resp = hub_net_resp(&rcap);
+        int st = 0;
+        bool got = hub_http("POST", base, path, hub_device_id(), body, w.len, resp, rcap, &st);
+        if (!got || st == 408 || st == 429 || st >= 500) {
+            S.hat_backoff = hub_backoff_next(S.hat_backoff);
+            S.retry_until = hub_uptime_ms() + S.hat_backoff;
+            return HUB_STEP_RETRY;
+        }
+
+        if (st == 200) {
+            if (strstr(resp, "\"status\":\"ok\"")) {
+                hub_wallmap_apply_reanchor(&S.wm, &reqs[i]);
+                any_reanchored = true;
+                ESP_LOGI(TAG, "run %s reanchored ok (delta %ld s)", uid, (long)reqs[i].delta_s);
+            } else if (strstr(resp, "\"status\":\"no_op\"")) {
+                hub_wallmap_apply_reanchor(&S.wm, &reqs[i]);
+            } else if (strstr(resp, "\"status\":\"not_found\"")) {
+                // Not on hub yet; will be ingested in stream phase
+            }
+        } else if (st == 409) {
+            if (!r->reanchor_refused_warned) {
+                ESP_LOGW(TAG, "run %s reanchor refused: overlaps better clock", uid);
+                r->reanchor_refused_warned = true;
+            }
+        }
+    }
+
+    if (any_reanchored) {
+        fetch_coverage(base, uid);
+    }
+    return HUB_STEP_IDLE;
+}
+
 static hub_step_t phase_pick(const char *base)
 {
     for (; S.cur < S.n_runs; S.cur++) {
@@ -352,6 +433,8 @@ static hub_step_t phase_pick(const char *base)
         char uid[48];
         hub_run_uid(uid, sizeof uid, r->id, r->created);
         fetch_coverage(base, uid);
+        hub_step_t re = reanchor_run(base, r, uid);
+        if (re == HUB_STEP_RETRY) return HUB_STEP_RETRY;
         S.phase = PH_STREAM;
         return HUB_STEP_MORE;
     }

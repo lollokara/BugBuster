@@ -224,3 +224,71 @@ def test_clock_source_hierarchy_in_c():
     assert out[2] == "custom_src=HUB unc=45"
     assert out[3] == "seg_src=P4_EPOCH unc=205"  # 200 + 100 * 50 / 1000 = 205
     assert out[4] == "cov_cmp 0 1 1"
+
+
+MAIN_REANCHOR = r"""
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include "hub_runs.h"
+
+int main(void) {
+    // 1. Unsegmented run (n = 0) with created = 1000, EST
+    hub_wallmap_t wm;
+    hub_wallmap_init(&wm, 1000);
+    wm.created_src = HUB_CLK_EST;
+    wm.created_unc_ms = 3600000;
+
+    hub_reanchor_req_t reqs[4];
+    int n = hub_wallmap_compute_reanchor(&wm, 600, 1791000600u, HUB_CLK_HUB, 50, reqs, 4);
+    printf("unseg n=%d from=%.0f to=%.0f delta=%.0f src=%s unc=%u\n",
+           n, reqs[0].from_ts, reqs[0].to_ts, reqs[0].delta_s,
+           hub_clk_src_name(reqs[0].clk_src), reqs[0].clk_unc_ms);
+
+    char buf[256];
+    hub_jw_t w;
+    hub_jw_init(&w, buf, sizeof buf);
+    hub_reanchor_json(&w, &reqs[0]);
+    printf("json %s\n", buf);
+
+    // Apply reanchor
+    hub_wallmap_apply_reanchor(&wm, &reqs[0]);
+    printf("applied created=%u src=%s unc=%u\n", wm.created, hub_clk_src_name(wm.created_src), wm.created_unc_ms);
+
+    // After applying, recomputing should yield 0 requests (not worse)
+    n = hub_wallmap_compute_reanchor(&wm, 600, 1791000600u, HUB_CLK_HUB, 50, reqs, 4);
+    printf("noop n=%d\n", n);
+
+    // 2. Multi-segment run:
+    // seg[0]: t_s = 0, wall = 1000000, P4_EPOCH, unc = 200
+    // seg[1]: t_s = 300, wall = 1000300, P4_EPOCH, unc = 215
+    hub_wallmap_init(&wm, 1000000);
+    wm.n = 2;
+    wm.seg[0].t_s = 0; wm.seg[0].wall = 1000000; wm.seg[0].src = HUB_CLK_P4_EPOCH; wm.seg[0].unc_ms = 200;
+    wm.seg[1].t_s = 300; wm.seg[1].wall = 1000300; wm.seg[1].src = HUB_CLK_P4_EPOCH; wm.seg[1].unc_ms = 215;
+
+    // At run_time_s = 500, ref_wall = 1791000500:
+    // dur in seg 1 is 500 - 300 = 200.
+    // true_wall_start of seg 1 = 1791000500 - 200 = 1791000300.
+    // delta_s = 1791000300 - 1000300 = 1790000000.
+    n = hub_wallmap_compute_reanchor(&wm, 500, 1791000500u, HUB_CLK_HUB, 40, reqs, 4);
+    printf("multiseg n=%d delta0=%.0f delta1=%.0f\n", n, reqs[0].delta_s, reqs[1].delta_s);
+
+    hub_wallmap_apply_reanchor(&wm, &reqs[0]);
+    hub_wallmap_apply_reanchor(&wm, &reqs[1]);
+    printf("applied_multi seg0=%u seg1=%u\n", wm.seg[0].wall, wm.seg[1].wall);
+
+    return 0;
+}
+"""
+
+
+def test_reanchor_computation_and_json():
+    out = compile_and_run(MAIN_REANCHOR, sources=SRC, include_dirs=[HUB]).splitlines()
+    assert out[0] == "unseg n=1 from=1000 to=1600 delta=1790999000 src=HUB unc=50"
+    assert out[1] == 'json {"from_ts":1000,"to_ts":1600,"delta_s":1790999000,"clk_src":"HUB","clk_unc_ms":50}'
+    assert out[2] == "applied created=1791000000 src=HUB unc=50"
+    assert out[3] == "noop n=0"
+    assert out[4] == "multiseg n=2 delta0=1790000000 delta1=1790000000"
+    assert out[5] == "applied_multi seg0=1791000000 seg1=1791000300"
+

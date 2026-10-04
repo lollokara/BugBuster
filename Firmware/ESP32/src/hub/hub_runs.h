@@ -93,6 +93,42 @@ bool   hub_covered(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t re
 /** True iff some range has range.res <= res, range.clk_src <= clk_src, and range.from < ts <= range.to. */
 bool   hub_covered_src(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t res, hub_clk_src_t src);
 
+/** Re-anchor request parameters for POST /api/v1/ingest/runs/{uid}/reanchor. */
+typedef struct {
+    double        from_ts;
+    double        to_ts;
+    double        delta_s;
+    hub_clk_src_t clk_src;
+    uint32_t      clk_unc_ms;
+} hub_reanchor_req_t;
+
+/**
+ * Format a re-anchor JSON payload for POST /api/v1/ingest/runs/{uid}/reanchor.
+ * Payload keys: {"from_ts": ..., "to_ts": ..., "delta_s": ..., "clk_src": "...", "clk_unc_ms": ...}
+ */
+bool hub_reanchor_json(hub_jw_t *w, const hub_reanchor_req_t *req);
+
+/**
+ * Compute re-anchor requests for segments in the wallmap anchored on a worse clock source than new_src.
+ * Uses the P4 run-time mapping: at current run time run_time_s, the true wall clock is ref_wall_s.
+ *
+ * Limitation note: Segments separated by uncalibrated pauses (where no wall clock was stamped)
+ * cannot have their pause duration determined, so only segments with a known wall-clock reference
+ * (such as the active segment anchored to the current hub time, or segments with known P4_EPOCH offsets)
+ * can be mapped and re-anchored.
+ *
+ * Returns the number of requests written to out (at most max_reqs).
+ */
+int  hub_wallmap_compute_reanchor(const hub_wallmap_t *m, uint32_t run_time_s,
+                                  uint32_t ref_wall_s, hub_clk_src_t new_src, uint32_t new_unc_ms,
+                                  hub_reanchor_req_t *out, size_t max_reqs);
+
+/**
+ * Apply an acknowledged re-anchor to the local wallmap m, updating matched segment wall timestamps,
+ * clk_src, and clk_unc_ms so subsequent sample decodes match the hub's new timestamps.
+ */
+void hub_wallmap_apply_reanchor(hub_wallmap_t *m, const hub_reanchor_req_t *req);
+
 #ifdef __cplusplus
 }
 #endif

@@ -224,3 +224,94 @@ uint32_t hub_wallmap_run_time(const hub_wallmap_t *m, uint32_t unix_s)
     if (pick < 0) return unix_s > m->created ? unix_s - m->created : 0;
     return m->seg[pick].t_s + (unix_s - m->seg[pick].wall);
 }
+
+bool hub_reanchor_json(hub_jw_t *w, const hub_reanchor_req_t *req)
+{
+    hub_jw_fmt(w, "{\"from_ts\":%.0f,\"to_ts\":%.0f,\"delta_s\":%.0f,\"clk_src\":",
+               req->from_ts, req->to_ts, req->delta_s);
+    const char *src_name = hub_clk_src_name(req->clk_src);
+    hub_jw_str(w, src_name, strlen(src_name));
+    hub_jw_fmt(w, ",\"clk_unc_ms\":%u}", (unsigned)req->clk_unc_ms);
+    return hub_jw_ok(w);
+}
+
+int hub_wallmap_compute_reanchor(const hub_wallmap_t *m, uint32_t run_time_s,
+                                 uint32_t ref_wall_s, hub_clk_src_t new_src, uint32_t new_unc_ms,
+                                 hub_reanchor_req_t *out, size_t max_reqs)
+{
+    if (!m || !out || max_reqs == 0) return 0;
+    int count = 0;
+
+    // Case 1: no START segments with wall clock in wallmap; whole run is anchored at m->created
+    if (m->n == 0) {
+        bool is_worse = (new_src < m->created_src) || (new_src == m->created_src && new_unc_ms < m->created_unc_ms);
+        if (is_worse && m->created > 0 && ref_wall_s >= run_time_s) {
+            uint32_t true_created = ref_wall_s - run_time_s;
+            out[0].from_ts = (double)m->created;
+            out[0].to_ts = (double)(m->created + run_time_s);
+            out[0].delta_s = (double)((int64_t)true_created - (int64_t)m->created);
+            out[0].clk_src = new_src;
+            out[0].clk_unc_ms = new_unc_ms;
+            return 1;
+        }
+        return 0;
+    }
+
+    // Case 2: segments exist. The latest/active segment (index m->n - 1) is calibrated against ref_wall_s
+    int last = m->n - 1;
+    uint32_t t_start = m->seg[last].t_s;
+    if (run_time_s < t_start) run_time_s = t_start;
+    uint32_t dur = run_time_s - t_start;
+    if (ref_wall_s < dur) return 0;
+    uint32_t true_wall_start = ref_wall_s - dur;
+    double delta_s = (double)((int64_t)true_wall_start - (int64_t)m->seg[last].wall);
+
+    // Re-anchor latest segment if worse
+    bool last_worse = (new_src < m->seg[last].src) || (new_src == m->seg[last].src && new_unc_ms < m->seg[last].unc_ms);
+    if (last_worse && (size_t)count < max_reqs) {
+        out[count].from_ts = (double)m->seg[last].wall;
+        out[count].to_ts = (double)(m->seg[last].wall + dur);
+        out[count].delta_s = delta_s;
+        out[count].clk_src = new_src;
+        out[count].clk_unc_ms = new_unc_ms;
+        count++;
+    }
+
+    // For prior segments stamped with P4_EPOCH, the same clock adjustment delta_s applies
+    for (int k = 0; k < last && (size_t)count < max_reqs; k++) {
+        bool is_worse = (new_src < m->seg[k].src) || (new_src == m->seg[k].src && new_unc_ms < m->seg[k].unc_ms);
+        if (is_worse && m->seg[k].src == HUB_CLK_P4_EPOCH) {
+            uint32_t seg_dur = (m->seg[k + 1].t_s > m->seg[k].t_s) ? (m->seg[k + 1].t_s - m->seg[k].t_s) : 0;
+            out[count].from_ts = (double)m->seg[k].wall;
+            out[count].to_ts = (double)(m->seg[k].wall + seg_dur);
+            out[count].delta_s = delta_s;
+            out[count].clk_src = new_src;
+            out[count].clk_unc_ms = new_unc_ms;
+            count++;
+        }
+    }
+
+    return count;
+}
+
+void hub_wallmap_apply_reanchor(hub_wallmap_t *m, const hub_reanchor_req_t *req)
+{
+    if (!m || !req) return;
+    int32_t d = (int32_t)req->delta_s;
+    if (m->n == 0) {
+        if ((double)m->created >= req->from_ts - 1.0 && (double)m->created <= req->to_ts + 1.0) {
+            m->created = (uint32_t)((int64_t)m->created + d);
+            m->created_src = req->clk_src;
+            m->created_unc_ms = req->clk_unc_ms;
+        }
+        return;
+    }
+    for (uint16_t k = 0; k < m->n; k++) {
+        if ((double)m->seg[k].wall >= req->from_ts - 1.0 && (double)m->seg[k].wall <= req->to_ts + 1.0) {
+            m->seg[k].wall = (uint32_t)((int64_t)m->seg[k].wall + d);
+            m->seg[k].src = req->clk_src;
+            m->seg[k].unc_ms = req->clk_unc_ms;
+        }
+    }
+}
+

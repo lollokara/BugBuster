@@ -25,3 +25,12 @@ def test_undated_runs_wait_for_the_clock_and_are_never_sent():
 def test_old_hub_without_coverage_means_send_everything():
     src = read_source(SRC)
     assert "S.n_cov = 0;" in src and "st != 200" in src
+
+
+def test_reanchor_wiring_and_endpoint():
+    src = read_source(SRC)
+    assert '"/api/v1/ingest/runs/%s/reanchor"' in src
+    assert "hub_wallmap_compute_reanchor(&S.wm" in src
+    assert "hub_wallmap_apply_reanchor(&S.wm" in src
+    assert "reanchor_run(base, r, uid)" in src
+
