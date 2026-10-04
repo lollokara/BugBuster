@@ -96,6 +96,10 @@ def test_python_module_stubs_keep_the_real_signatures():
         real = _public_defs(ast.parse((REPO_ROOT / "python" / "firmware_modules" / f"{mod}.py")
                                       .read_text(encoding="utf-8")))
         stub = _public_defs(_stub(mod))
+        # The SSD1306 classes subclass the frozen MicroPython ssd1306 driver (defined
+        # under `if _ssd1306`), so the real module has no methods of its own to compare;
+        # the stub documents the driver's constructor and drawing calls.
+        stub = {k: v for k, v in stub.items() if not k.startswith("SSD1306")}
         assert set(real) == set(stub), f"{mod}: {sorted(set(real) ^ set(stub))}"
         for name, fn in real.items():
             assert _params(fn) == _params(stub[name]), f"{mod}.{name}"
@@ -113,7 +117,7 @@ def test_daq_stub_matches_spec_surface():
 
 def test_examples_compile_and_are_documented():
     ex = sorted((STUBS / "examples").glob("*.py"))
-    assert len(ex) >= 4
+    assert len(ex) >= 20
     for p in ex:
         src = p.read_text(encoding="utf-8")
         compile(src, str(p), "exec")

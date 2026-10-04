@@ -19,6 +19,19 @@ struct FirmwareDocEntry: Identifiable, Hashable {
     let snippet: String
     /// Module the snippet references, added as `import <module>` when the script lacks it.
     let requiredImport: String?
+    /// Structured docstring (summary, returns, raises, safety notes, examples).
+    var detail: FirmwareDocDetail = .empty
+    /// Parameters with their `Args:` docs (functions, methods, constructors).
+    var params: [FirmwareParam] = []
+    /// Return annotation (`dict`, `list[int]`) of a function or method.
+    var returnType: String?
+    /// Value of a constant (`1`).
+    var value: String?
+
+    /// One-line description for list rows.
+    var summary: String {
+        detail.summary.isEmpty ? (doc.split(separator: "\n").first.map(String.init) ?? "") : detail.summary
+    }
 }
 
 struct FirmwareDocSection: Identifiable, Equatable {
@@ -34,23 +47,32 @@ enum FirmwareDocs {
         for m in catalogue.modules {
             out.append(FirmwareDocEntry(id: m.name, kind: .module, module: m.name, title: m.name,
                                         signature: "import \(m.name)", doc: m.doc,
-                                        snippet: "import \(m.name)\n", requiredImport: nil))
+                                        snippet: "import \(m.name)\n", requiredImport: nil, detail: m.detail))
             for fn in m.functions {
                 let path = "\(m.name).\(fn.name)"
                 out.append(FirmwareDocEntry(id: path, kind: .function, module: m.name, title: path,
                                             signature: "\(m.name).\(fn.signature)", doc: fn.doc,
-                                            snippet: callSnippet(path, fn), requiredImport: m.name))
+                                            snippet: callSnippet(path, fn), requiredImport: m.name,
+                                            detail: fn.detail, params: fn.params, returnType: fn.returns))
             }
             for cls in m.classes {
                 let path = "\(m.name).\(cls.name)"
                 let isNamespace = cls.kind == .namespace
                 if isNamespace {
                     out.append(FirmwareDocEntry(id: path, kind: .namespace, module: m.name, title: path,
-                                                signature: path, doc: cls.doc, snippet: path, requiredImport: m.name))
+                                                signature: path, doc: cls.doc, snippet: path, requiredImport: m.name,
+                                                detail: cls.detail))
                 } else {
+                    // The class docstring carries the summary and example; the constructor's the parameters.
+                    var detail = cls.detail
+                    if let ctor = cls.constructor?.detail {
+                        detail.raises = ctor.raises
+                        detail.notes = [detail.notes, ctor.notes].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                    }
                     out.append(FirmwareDocEntry(id: path, kind: .type, module: m.name, title: path,
                                                 signature: "\(m.name).\(cls.constructorSignature)", doc: cls.doc,
-                                                snippet: callSnippet(path, cls.constructor), requiredImport: m.name))
+                                                snippet: callSnippet(path, cls.constructor), requiredImport: m.name,
+                                                detail: detail, params: cls.constructor?.params ?? []))
                 }
                 // Instance methods read naturally on a lower-cased receiver: `channel.set_voltage(voltage)`.
                 let receiver = isNamespace ? path : cls.name.lowercased()
@@ -59,7 +81,8 @@ enum FirmwareDocs {
                                                 title: isNamespace ? "\(path).\(fn.name)" : "\(cls.name).\(fn.name)",
                                                 signature: "\(receiver).\(fn.signature)", doc: fn.doc,
                                                 snippet: callSnippet("\(receiver).\(fn.name)", fn),
-                                                requiredImport: isNamespace ? m.name : nil))
+                                                requiredImport: isNamespace ? m.name : nil,
+                                                detail: fn.detail, params: fn.params, returnType: fn.returns))
                 }
                 for constant in cls.constants {
                     out.append(constantEntry(constant, owner: path, module: m.name))
@@ -70,8 +93,11 @@ enum FirmwareDocs {
             }
         }
         for ex in catalogue.examples {
+            var detail = FirmwareDocDetail.empty
+            detail.summary = ex.title
             out.append(FirmwareDocEntry(id: "example:\(ex.name)", kind: .example, module: "", title: ex.title,
-                                        signature: ex.name, doc: ex.doc, snippet: ex.source, requiredImport: nil))
+                                        signature: ex.name, doc: ex.doc, snippet: ex.source, requiredImport: nil,
+                                        detail: detail))
         }
         return out
     }
@@ -131,8 +157,11 @@ enum FirmwareDocs {
 
     private static func constantEntry(_ constant: FirmwareConstant, owner: String, module: String) -> FirmwareDocEntry {
         let path = "\(owner).\(constant.name)"
+        var detail = FirmwareDocDetail.empty
+        detail.summary = constant.doc
         return FirmwareDocEntry(id: path, kind: .constant, module: module, title: path,
                                 signature: constant.annotation.map { "\(path): \($0)" } ?? path,
-                                doc: "", snippet: path, requiredImport: module)
+                                doc: constant.doc, snippet: path, requiredImport: module,
+                                detail: detail, value: constant.value)
     }
 }

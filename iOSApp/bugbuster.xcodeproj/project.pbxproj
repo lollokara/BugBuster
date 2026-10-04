@@ -12,6 +12,7 @@
 		06C977866B9EAD63B4D40555 /* ScriptEditorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
 		0F075AD1D48B832C87FD655A /* ScriptEditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267A6D94128F504FD24E0C0B /* ScriptEditorScreen.swift */; };
+		101E8DF4E9024C1B9FAC14C4 /* ScriptKeyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */; };
 		115511A3F1F68F1D856CE02B /* SignalPathTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */; };
 		13059480F9B0D1EA524DC2A4 /* ScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */; };
 		161A773C2C0A3B9F851F620F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E36A75C2AB886192C02B5EB /* Assets.xcassets */; };
@@ -80,6 +81,7 @@
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
 		B9E196576AF43607A7B29E69 /* DiagnosticsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EAEA8B20D6FD9F1AF7503E4 /* DiagnosticsTab.swift */; };
 		BBF7DCA6E0320D4F9253356E /* ScriptsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E77D3E2DDCD8CB1D3E43D59 /* ScriptsClient.swift */; };
+		BC229C5ED389244B9431FAD1 /* ScriptBuiltins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3B18A7647C5178771752B0 /* ScriptBuiltins.swift */; };
 		BDC837C0FF555152C61A046B /* OrientationLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */; };
 		C1C85715CB67C321D1AE44BD /* ScriptLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C48E5087505DB38147CD178E /* ScriptLogStore.swift */; };
 		C962F963A12E3C257CCC3C4F /* ScriptCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 078C942FAA9D00253ECD84C0 /* ScriptCompletionTests.swift */; };
@@ -158,6 +160,7 @@
 		70AF72BF497C078DB10623CF /* HubMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubMerge.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsViewsAuditFixesTests.swift; sourceTree = "<group>"; };
+		7B3B18A7647C5178771752B0 /* ScriptBuiltins.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptBuiltins.swift; sourceTree = "<group>"; };
 		81614A373E97A1155EE8CE59 /* ScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeCanvasView.swift; sourceTree = "<group>"; };
 		81B5CEEEDFCE75E3C70F2C66 /* DaqWifiStreamManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqWifiStreamManager.swift; sourceTree = "<group>"; };
 		862475FF859BED45401E66F2 /* ScriptCompletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCompletion.swift; sourceTree = "<group>"; };
@@ -175,6 +178,7 @@
 		A1D10D2AABBA1F1203838B26 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		A251B0598A0E863D57FE5258 /* ScriptsWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsWire.swift; sourceTree = "<group>"; };
 		A5888B3A4C5430E79C66503A /* ScriptLogStyleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptLogStyleTests.swift; sourceTree = "<group>"; };
+		AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptKeyBar.swift; sourceTree = "<group>"; };
 		B4C971FC2F610CD82620FEEF /* ScopeSampleSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeSampleSeries.swift; sourceTree = "<group>"; };
 		B55F7F0F72B861EE790D3EC3 /* BLETransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETransport.swift; sourceTree = "<group>"; };
 		BB4A0C998FE6748C99C1D39E /* MockScriptsWireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockScriptsWireTests.swift; sourceTree = "<group>"; };
@@ -353,6 +357,7 @@
 				EF4B125C3B8569AA1E050B35 /* ScriptCodeEditor.swift */,
 				F8A69C388515E86C40E4E9C4 /* ScriptDocsBrowser.swift */,
 				267A6D94128F504FD24E0C0B /* ScriptEditorScreen.swift */,
+				AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */,
 				40A8AD63C86193A19982C2E7 /* ScriptLogConsoleView.swift */,
 				CF6A82D01D4126FF3A690CBE /* ScriptREPLView.swift */,
 				EA68770330B0B34D924F887C /* ScriptsBrowserView.swift */,
@@ -386,6 +391,7 @@
 				D05B96A1EF260620D4F1D25F /* RunWallMap.swift */,
 				282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */,
 				52BDDE3A379BE57AFDDC078B /* ScopeRenderModel.swift */,
+				7B3B18A7647C5178771752B0 /* ScriptBuiltins.swift */,
 				1FEE15340112C3C2D4205788 /* ScriptChunkPlanner.swift */,
 				862475FF859BED45401E66F2 /* ScriptCompletion.swift */,
 				3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */,
@@ -534,12 +540,14 @@
 				5BBA94C26CC6511A65185B8A /* ScopeRenderModel.swift in Sources */,
 				D1093AAAA48AE31E32FB24FD /* ScopeSampleSeries.swift in Sources */,
 				0612859A274C667B2908A00F /* ScopeTab.swift in Sources */,
+				BC229C5ED389244B9431FAD1 /* ScriptBuiltins.swift in Sources */,
 				6ABE7E79B7B5AEC1D75CECBF /* ScriptChunkPlanner.swift in Sources */,
 				82EA8EEA9C12A9C8DFCF5497 /* ScriptCodeEditor.swift in Sources */,
 				5C680C1ACF842D05F6301181 /* ScriptCompletion.swift in Sources */,
 				45546BEE7CC80E0DA4E1EC5B /* ScriptDocsBrowser.swift in Sources */,
 				06C977866B9EAD63B4D40555 /* ScriptEditorModel.swift in Sources */,
 				0F075AD1D48B832C87FD655A /* ScriptEditorScreen.swift in Sources */,
+				101E8DF4E9024C1B9FAC14C4 /* ScriptKeyBar.swift in Sources */,
 				FFD75C6D3D20BDD9AFEE0033 /* ScriptLogConsoleView.swift in Sources */,
 				C1C85715CB67C321D1AE44BD /* ScriptLogStore.swift in Sources */,
 				AC6FF5177C1666DBFBF0C2DD /* ScriptREPLView.swift in Sources */,

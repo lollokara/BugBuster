@@ -20,7 +20,8 @@ private struct ScriptsTabContent: View {
     @State private var showingREPL = false
     @State private var showingCreate = false
     @State private var newFileName = ""
-    @State private var keyboardHeight: CGFloat = 0
+    @State private var keyboardOverlap: CGFloat = 0
+    @State private var keyboardTop: CGFloat?
     @State private var isWide = false
 
     init(manager: ScriptRunManager) {
@@ -68,15 +69,22 @@ private struct ScriptsTabContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // The shells ignore the keyboard safe area; clear it by hand (minus ~66 pt of tab bar chrome).
-        .padding(.bottom, keyboardHeight > 0 ? max(0, keyboardHeight - 66) : 0)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-            if let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = frame.height }
+        // The shells ignore the keyboard safe area, so lift the content by hand until its bottom
+        // edge sits exactly on the keyboard's top (the key bar is part of that frame). Closed
+        // loop on the measured bottom, so it holds whatever else the system adds (safe areas,
+        // tab-bar chrome, iPad sidebar, orientation) and settles without a dead gap.
+        .padding(.bottom, keyboardOverlap)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let hidden = frame.minY >= UIScreen.main.bounds.height - 0.5
+            // No animation: measuring a half-animated layout would feed wrong numbers back in.
+            keyboardTop = hidden ? nil : ScriptsKeyboard.topEdge(of: frame)
+            if hidden {
+                keyboardOverlap = 0
+            } else {
+                // Start unlifted; the editor measures itself and the lift grows to fit (never past it).
+                settleAboveKeyboard(pass: 0)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.22)) { keyboardHeight = 0 }
         }
         .onAppear { manager.scriptsTabVisible = true }
         .onDisappear { manager.scriptsTabVisible = false }
@@ -138,6 +146,24 @@ private struct ScriptsTabContent: View {
             onRefreshAutorun: { Task { await manager.refreshAutorun() } })
     }
 
+    /// Trim the lift so the editor's bottom edge ends flush above the keyboard / key bar. The
+    /// editor view is measured live after the keyboard animation (no animation on the padding, so
+    /// a half-animated layout is never measured). The editor moves a different distance per point
+    /// of lift depending on the shell (about two on iPhone), so the step size is learned from the
+    /// previous measurement (secant method) and the loop stops after a few corrections.
+    private func settleAboveKeyboard(pass: Int, previous: (overlap: CGFloat, bottom: CGFloat)? = nil) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (pass == 0 ? 0.3 : 0.15)) {
+            guard let top = keyboardTop, let textView = model.editor.textView, textView.window != nil else { return }
+            let bottom = textView.convert(textView.bounds, to: nil).maxY
+            let delta = ScriptsKeyboard.editorGap(editorBottom: bottom, keyboardTop: top)
+            guard abs(delta) > 1.5, pass < 7 else { return }
+            let slope = ScriptsKeyboard.slope(previous: previous, overlap: keyboardOverlap, bottom: bottom)
+            let before = keyboardOverlap
+            keyboardOverlap = max(0, before - delta / slope)
+            settleAboveKeyboard(pass: pass + 1, previous: (before, bottom))
+        }
+    }
+
     @ViewBuilder
     private var detail: some View {
         if showingREPL {
@@ -162,3 +188,28 @@ private struct ScriptsTabWidthPreferenceKey: PreferenceKey {
     }
 }
 
+
+enum ScriptsKeyboard {
+    /// Space left between the editor text view and the keyboard top beyond the chrome around it
+    /// (4 pt glass inset + 8 pt screen padding); negative when it overlaps.
+    static let editorChrome: CGFloat = 12
+
+    /// How many points the editor bottom moves per point of lift: measured between two samples,
+    /// else 2 (what the iPhone shells do). Clamped so a noisy sample cannot blow the step up.
+    static func slope(previous: (overlap: CGFloat, bottom: CGFloat)?, overlap: CGFloat, bottom: CGFloat) -> CGFloat {
+        guard let previous, abs(overlap - previous.overlap) > 1 else { return 2 }
+        return min(4, max(0.5, abs((bottom - previous.bottom) / (overlap - previous.overlap))))
+    }
+
+    static func editorGap(editorBottom: CGFloat, keyboardTop: CGFloat) -> CGFloat {
+        keyboardTop - (editorBottom + editorChrome)
+    }
+
+    /// Top edge of a keyboard frame (screen coordinates) in the key window's coordinates.
+    @MainActor static func topEdge(of screenFrame: CGRect) -> CGFloat {
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first { $0.isKeyWindow }
+        guard let window else { return screenFrame.minY }
+        return window.convert(screenFrame, from: window.screen.coordinateSpace).minY
+    }
+}

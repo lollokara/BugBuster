@@ -1,13 +1,51 @@
-"""Timestamped log helpers (``bb_logging.py`` on the device)."""
+"""Timestamped log helpers (``bb_logging.py`` on the device).
 
-def debug(msg) -> None:
-    """Log a DEBUG-level message with timestamp."""
+Each call writes one line to the script log and console through
+``bugbuster.log``, prefixed with the tick timestamp and level, for example
+``[     12345] INFO  starting``. Frozen into the firmware: ``import bb_logging``.
 
-def info(msg) -> None:
-    """Log an INFO-level message with timestamp."""
+Example:
+    import bb_logging
+    bb_logging.info("starting sweep")
+    bb_logging.warn("supply sagging")
+"""
 
-def warn(msg) -> None:
-    """Log a WARN-level message with timestamp."""
+def debug(msg: object) -> None:
+    """Log a DEBUG-level line (level 'D') with a timestamp.
 
-def error(msg) -> None:
-    """Log an ERROR-level message with timestamp."""
+    Args:
+        msg: Text to log.
+
+    Example:
+        bb_logging.debug("raw=%d" % raw)
+    """
+
+def info(msg: object) -> None:
+    """Log an INFO-level line (level 'I') with a timestamp.
+
+    Args:
+        msg: Text to log.
+
+    Example:
+        bb_logging.info("ch0 = %.3f V" % volts)
+    """
+
+def warn(msg: object) -> None:
+    """Log a WARN-level line (level 'W') with a timestamp.
+
+    Args:
+        msg: Text to log.
+
+    Example:
+        bb_logging.warn("voltage above threshold")
+    """
+
+def error(msg: object) -> None:
+    """Log an ERROR-level line (level 'E') with a timestamp.
+
+    Args:
+        msg: Text to log.
+
+    Example:
+        bb_logging.error("sensor not responding")
+    """
