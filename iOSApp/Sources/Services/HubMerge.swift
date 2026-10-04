@@ -18,6 +18,8 @@ struct SeriesPoint: Equatable {
     var soc: Double
     var res: Int                 // source resolution in seconds (1, 60, 900)
     var source: DataSource
+    var clkSrc: String? = nil
+    var clkUncMs: Int? = nil
 }
 
 enum HubError: Error, Equatable {
@@ -64,9 +66,11 @@ struct HubSeries: Equatable {
         func col(_ key: String) -> [Double?] {
             (o[key] as? [Any] ?? []).map { ($0 as? NSNumber)?.doubleValue }
         }
-        func at(_ a: [Double?], _ i: Int) -> Double? { i < a.count ? a[i] : nil }
+        func at<T>(_ a: [T?], _ i: Int) -> T? { i < a.count ? a[i] : nil }
         let vMin = col("v_min"), vAvg = col("v_avg"), vMax = col("v_max")
         let iMin = col("i_min"), iAvg = col("i_avg"), iMax = col("i_max"), soc = col("soc"), res = col("res")
+        let clkSrc: [String?] = (o["clk_src"] as? [Any] ?? []).map { $0 as? String }
+        let clkUnc: [Int?] = (o["clk_unc_ms"] as? [Any] ?? []).map { ($0 as? NSNumber)?.intValue }
         var pts: [SeriesPoint] = []
         for (k, raw) in t.enumerated() {
             guard let start = (raw as? NSNumber)?.doubleValue, let v = at(vAvg, k) else { continue }
@@ -76,7 +80,8 @@ struct HubSeries: Equatable {
                 t: start + span, dt: span,
                 vAvg: v, vMin: at(vMin, k) ?? v, vMax: at(vMax, k) ?? v,
                 iAvg: at(iAvg, k) ?? 0, iMin: at(iMin, k) ?? at(iAvg, k) ?? 0, iMax: at(iMax, k) ?? at(iAvg, k) ?? 0,
-                soc: at(soc, k) ?? 0, res: r, source: .hub))
+                soc: at(soc, k) ?? 0, res: r, source: .hub,
+                clkSrc: at(clkSrc, k), clkUncMs: at(clkUnc, k)))
         }
         return HubSeries(bucket: bucket, points: pts)
     }
@@ -84,7 +89,13 @@ struct HubSeries: Equatable {
 
 /// `GET /api/v1/runs/{uid}/coverage`.
 struct HubCoverage: Equatable {
-    struct Range: Equatable { var from: Double; var to: Double; var res: Int }
+    struct Range: Equatable {
+        var from: Double
+        var to: Double
+        var res: Int
+        var clkSrc: String? = nil
+        var clkUncMs: Int? = nil
+    }
     var ranges: [Range]
 
     static func decode(_ data: Data) throws -> HubCoverage {
@@ -93,7 +104,9 @@ struct HubCoverage: Equatable {
         return HubCoverage(ranges: rs.compactMap {
             guard let f = ($0["from"] as? NSNumber)?.doubleValue, let t = ($0["to"] as? NSNumber)?.doubleValue,
                   let r = ($0["res"] as? NSNumber)?.intValue else { return nil }
-            return Range(from: f, to: t, res: r)
+            let cs = $0["clk_src"] as? String
+            let unc = ($0["clk_unc_ms"] as? NSNumber)?.intValue
+            return Range(from: f, to: t, res: r, clkSrc: cs, clkUncMs: unc)
         })
     }
 }
@@ -152,13 +165,44 @@ enum HubMerge {
         seconds < 60 ? "\(seconds) s" : (seconds < 3600 ? "\(seconds / 60) min" : "\(seconds / 3600) h")
     }
 
-    /// "Hub 1 s", "Device 1 min" or "Hub 1 s + Device 15 min": each source with its dominant resolution.
+    static func formatUncertainty(_ ms: Int) -> String {
+        if ms < 1000 {
+            return "±\(ms)ms"
+        } else if ms < 60_000 {
+            let s = Double(ms) / 1000.0
+            return s == Double(Int(s)) ? "±\(Int(s))s" : String(format: "±%.1fs", s)
+        } else if ms < 3_600_000 {
+            return "±\(ms / 60_000)m"
+        } else {
+            return "±\(ms / 3_600_000)h"
+        }
+    }
+
+    /// "Hub 1 s", "Device 1 min" or "Hub 1 s + Device 15 min": each source with its dominant resolution
+    /// and clock source/uncertainty if known.
     static func indicator(_ pts: [SeriesPoint]) -> String {
         var parts: [String] = []
         for src in [DataSource.hub, DataSource.device] {
-            var weight: [Int: Double] = [:]
-            for p in pts where p.source == src { weight[p.res, default: 0] += p.dt }
-            if let best = weight.max(by: { $0.value < $1.value }) { parts.append("\(src.rawValue) \(resLabel(best.key))") }
+            var resWeight: [Int: Double] = [:]
+            var clkWeight: [String: Double] = [:]
+            var clkUnc: [String: Int] = [:]
+            for p in pts where p.source == src {
+                resWeight[p.res, default: 0] += p.dt
+                if let cs = p.clkSrc {
+                    clkWeight[cs, default: 0] += p.dt
+                    if let unc = p.clkUncMs {
+                        clkUnc[cs] = min(clkUnc[cs] ?? Int.max, unc)
+                    }
+                }
+            }
+            if let bestRes = resWeight.max(by: { $0.value < $1.value }) {
+                var label = "\(src.rawValue) \(resLabel(bestRes.key))"
+                if let bestClk = clkWeight.max(by: { $0.value < $1.value })?.key {
+                    let uncStr = clkUnc[bestClk].map { " " + formatUncertainty($0) } ?? ""
+                    label += " (\(bestClk)\(uncStr))"
+                }
+                parts.append(label)
+            }
         }
         return parts.joined(separator: " + ")
     }

@@ -26,6 +26,7 @@ char       *hub_net_resp(size_t *cap);           /* HUB_RESP_CAP bytes */
 
 const char *hub_device_id(void);                 /* 12 lowercase hex: the STA MAC */
 bool        hub_clock_valid(void);               /* wall clock >= 2020-01-01 */
+void        hub_clock_source(hub_clk_src_t *src, uint32_t *unc_ms);
 uint64_t    hub_wall_ms(void);
 uint32_t    hub_uptime_ms(void);
 /** "<device_id>-<run_id>-<created_epoch>" (the hub's run_uid). */

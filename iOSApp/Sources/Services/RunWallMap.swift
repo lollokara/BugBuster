@@ -27,4 +27,15 @@ struct RunWallMap: Equatable {
         guard let s = segs.last(where: { $0.wall <= unix }) else { return max(unix - created, 0) }
         return s.t + (unix - s.wall)
     }
+
+    /// Clock source and uncertainty in milliseconds for an interval ending at run time t.
+    func source(_ t: Double) -> (src: String, uncMs: Int) {
+        if let s = segs.last(where: { $0.t < t }) {
+            return ("P4_EPOCH", 200 + Int((t - s.t) * 0.05))
+        }
+        if created > 0 {
+            return ("P4_EPOCH", 200 + Int(t * 0.05))
+        }
+        return ("EST", 3_600_000)
+    }
 }

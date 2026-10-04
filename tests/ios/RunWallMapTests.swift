@@ -17,6 +17,11 @@ struct RunWallMapTestMain {
         expect(m.runTime(1_791_003_601), 601, "inverse, second stretch")
         let none = RunWallMap(created: 1000, events: [(0, 2, 0)])
         expect(none.unix(50), 1050, "a START without a wall clock falls back to created + t")
+        expect(m.source(300).src, "P4_EPOCH", "first stretch clock source")
+        expect(m.source(300).uncMs, 215, "first stretch uncertainty")
+        let est = RunWallMap(created: 0, events: [(0, 2, 0)])
+        expect(est.source(50).src, "EST", "no wall clock falls back to EST")
+        expect(est.source(50).uncMs, 3_600_000, "EST uncertainty is 1h")
         exit(failures == 0 ? 0 : 1)
     }
 }

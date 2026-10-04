@@ -167,3 +167,60 @@ def test_wall_clock_mapping_survives_pauses():
 def test_unix_time_maps_back_to_run_time():
     out = _run()
     assert out[20] == "rt 300 601 500"        # inside segment 1, inside segment 2, before any START (created_epoch + t)
+
+
+MAIN_CLK = r"""
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include "hub_runs.h"
+
+static void w16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void w32(uint8_t *p, uint32_t v) { w16(p, (uint16_t)v); w16(p + 2, (uint16_t)(v >> 16)); }
+
+int main(void) {
+    hub_wallmap_t wm;
+    hub_wallmap_init(&wm, 1790999000u);
+    uint32_t unc = 0;
+    hub_clk_src_t src = hub_wallmap_src(&wm, 50, &unc);
+    printf("init_src=%s unc=%u\n", hub_clk_src_name(src), unc);
+
+    hub_wallmap_init(&wm, 0);
+    src = hub_wallmap_src(&wm, 50, &unc);
+    printf("zero_src=%s unc=%u\n", hub_clk_src_name(src), unc);
+
+    hub_wallmap_set_created_clock(&wm, HUB_CLK_HUB, 45);
+    src = hub_wallmap_src(&wm, 50, &unc);
+    printf("custom_src=%s unc=%u\n", hub_clk_src_name(src), unc);
+
+    uint8_t wev[32]; memset(wev, 0, sizeof wev);
+    w32(wev, 100); w16(wev + 4, 2); w32(wev + 12, 1791000100u);
+    hub_wallmap_add_events(&wm, wev, 16);
+    src = hub_wallmap_src(&wm, 200, &unc);
+    printf("seg_src=%s unc=%u\n", hub_clk_src_name(src), unc);
+
+    hub_range_t rg[2] = {
+        { 100, 200, 1, HUB_CLK_P4_EPOCH, 200 },
+        { 200, 800, 60, HUB_CLK_HUB, 50 },
+    };
+    // At ts=150, range has P4_EPOCH:
+    // Better clock (HUB): not covered
+    int cov_hub = hub_covered_src(rg, 2, 150, 1, HUB_CLK_HUB);
+    // Same clock (P4_EPOCH): covered
+    int cov_p4 = hub_covered_src(rg, 2, 150, 1, HUB_CLK_P4_EPOCH);
+    // Worse clock (EST): covered
+    int cov_est = hub_covered_src(rg, 2, 150, 1, HUB_CLK_EST);
+    printf("cov_cmp %d %d %d\n", cov_hub, cov_p4, cov_est);
+
+    return 0;
+}
+"""
+
+
+def test_clock_source_hierarchy_in_c():
+    out = compile_and_run(MAIN_CLK, sources=SRC, include_dirs=[HUB]).splitlines()
+    assert out[0] == "init_src=P4_EPOCH unc=200"
+    assert out[1] == "zero_src=EST unc=3600000"
+    assert out[2] == "custom_src=HUB unc=45"
+    assert out[3] == "seg_src=P4_EPOCH unc=205"  # 200 + 100 * 50 / 1000 = 205
+    assert out[4] == "cov_cmp 0 1 1"

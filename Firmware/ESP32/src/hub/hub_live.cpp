@@ -115,6 +115,7 @@ static void drain_s1(void)
             s.soc = rd16(p + 6) / 100.0f;
             s.i = (float)((int32_t)rd32(p + 8) * 1e-6);
             s.state = L.state;
+            s.clk_src = hub_wallmap_src(&L.wm, t, &s.clk_unc_ms);
             queue(&s);
             L.cursor = t;
         }
@@ -136,8 +137,12 @@ static hub_step_t flush(const char *base)
         if (!hub_json_sample(&w, &s_q[(s_head + n) % BACKLOG_ROWS])) { w.len = mark; w.p[mark] = '\0'; w.over = false; break; }
     }
     hub_jw_raw(&w, "]");
-    char path[96];
-    snprintf(path, sizeof path, "/api/v1/ingest/runs/%s/samples", L.uid);
+    char path[160];
+    hub_clk_src_t cur_src = HUB_CLK_EST;
+    uint32_t cur_unc = 3600000u;
+    hub_clock_source(&cur_src, &cur_unc);
+    snprintf(path, sizeof path, "/api/v1/ingest/runs/%s/samples?res=1&clk_src=%s&clk_unc_ms=%u",
+             L.uid, hub_clk_src_name(cur_src), (unsigned)cur_unc);
     size_t rcap;
     char *resp = hub_net_resp(&rcap);
     int st = 0;

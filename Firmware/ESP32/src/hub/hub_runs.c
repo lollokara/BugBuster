@@ -150,10 +150,31 @@ bool hub_covered(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t res)
     return false;
 }
 
+bool hub_covered_src(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t res, hub_clk_src_t src)
+{
+    for (size_t k = 0; k < n; k++) {
+        if (ranges[k].res <= res && ranges[k].clk_src <= src && ranges[k].from < (double)ts && (double)ts <= ranges[k].to) return true;
+    }
+    return false;
+}
+
 void hub_wallmap_init(hub_wallmap_t *m, uint32_t created_epoch)
 {
     m->n = 0;
     m->created = created_epoch;
+    if (created_epoch > 0) {
+        m->created_src = HUB_CLK_P4_EPOCH;
+        m->created_unc_ms = 200u;
+    } else {
+        m->created_src = HUB_CLK_EST;
+        m->created_unc_ms = 3600000u;
+    }
+}
+
+void hub_wallmap_set_created_clock(hub_wallmap_t *m, hub_clk_src_t src, uint32_t unc_ms)
+{
+    m->created_src = src;
+    m->created_unc_ms = unc_ms;
 }
 
 void hub_wallmap_add_events(hub_wallmap_t *m, const uint8_t *ev, size_t n)
@@ -163,6 +184,8 @@ void hub_wallmap_add_events(hub_wallmap_t *m, const uint8_t *ev, size_t n)
         if (rd16(ev + off + 4) == 2 && wall != 0) {            /* BS_EV_START with a known wall clock */
             m->seg[m->n].t_s = rd32(ev + off);
             m->seg[m->n].wall = wall;
+            m->seg[m->n].src = HUB_CLK_P4_EPOCH;
+            m->seg[m->n].unc_ms = 200u + (uint32_t)(((uint64_t)rd32(ev + off) * 50u) / 1000u);
             m->n++;
         }
     }
@@ -176,6 +199,20 @@ uint32_t hub_wallmap_unix(const hub_wallmap_t *m, uint32_t t_s)
     }
     if (pick < 0) return m->created + t_s;                  /* before any START with a wall clock: the run's own epoch */
     return (uint32_t)((int64_t)m->seg[pick].wall + ((int64_t)t_s - (int64_t)m->seg[pick].t_s));
+}
+
+hub_clk_src_t hub_wallmap_src(const hub_wallmap_t *m, uint32_t t_s, uint32_t *unc_ms)
+{
+    int pick = -1;
+    for (uint16_t k = 0; k < m->n; k++) {
+        if (m->seg[k].t_s < t_s) pick = k;
+    }
+    if (pick < 0) {
+        if (unc_ms) *unc_ms = m->created_unc_ms;
+        return m->created_src;
+    }
+    if (unc_ms) *unc_ms = m->seg[pick].unc_ms;
+    return m->seg[pick].src;
 }
 
 uint32_t hub_wallmap_run_time(const hub_wallmap_t *m, uint32_t unix_s)

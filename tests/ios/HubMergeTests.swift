@@ -66,6 +66,24 @@ func runHubMergeTests() {
     expect(HubMerge.indicator([]), "", "indicator empty")
     expect(HubMerge.resLabel(900), "15 min", "15 min label")
 
+    // clock source and uncertainty in indicator
+    let hubWithClock = (100...200).map {
+        var p = pt(Double($0), 1, .hub)
+        p.clkSrc = "HUB"
+        p.clkUncMs = 50
+        return p
+    }
+    let devWithClock = [60, 120, 180, 240, 300].map {
+        var p = pt(Double($0), 60, .device)
+        p.clkSrc = "P4_EPOCH"
+        p.clkUncMs = 1200
+        return p
+    }
+    expect(HubMerge.indicator(hubWithClock), "Hub 1 s (HUB ±50ms)", "indicator with HUB clock")
+    expect(HubMerge.indicator(devWithClock), "Device 1 min (P4_EPOCH ±1.2s)", "indicator with P4_EPOCH clock")
+    let mergedWithClock = HubMerge.merge(hub: hubWithClock, device: devWithClock)
+    expect(HubMerge.indicator(mergedWithClock), "Hub 1 s (HUB ±50ms) + Device 1 min (P4_EPOCH ±1.2s)", "indicator mixed with clocks")
+
     if failures > 0 { print("\(failures) failure(s)") }
 }
 

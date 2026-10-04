@@ -62,7 +62,27 @@ const char *hub_device_id(void)
     return id;
 }
 
+static hub_clk_src_t s_clk_src = HUB_CLK_EST;
+static uint32_t      s_clk_unc_ms = 3600000u;
+static uint32_t      s_clk_sync_uptime_s = 0;
+
 bool hub_clock_valid(void) { return time(NULL) >= 1577836800; }
+
+void hub_clock_source(hub_clk_src_t *src, uint32_t *unc_ms)
+{
+    hub_clk_src_t s = HUB_CLK_EST;
+    uint32_t u = 3600000u;
+    if (s_clk_src == HUB_CLK_HUB) {
+        uint32_t age_s = (uint32_t)(esp_timer_get_time() / 1000000) - s_clk_sync_uptime_s;
+        s = HUB_CLK_HUB;
+        u = s_clk_unc_ms + (uint32_t)(((uint64_t)age_s * 20u) / 1000u);
+    } else if (hub_clock_valid()) {
+        s = HUB_CLK_P4_EPOCH;
+        u = 200u;
+    }
+    if (src) *src = s;
+    if (unc_ms) *unc_ms = u;
+}
 
 uint64_t hub_wall_ms(void)
 {
@@ -195,19 +215,27 @@ bool hub_register(const char *base, bool *clock_was_set)
     size_t rcap;
     char *resp = hub_net_resp(&rcap);
     int st = 0;
+    uint32_t t_start = hub_uptime_ms();
     if (!hub_http("POST", base, "/api/v1/agent/heartbeat", id, body, w.len, resp, rcap, &st)) return false;
+    uint32_t rtt_ms = hub_uptime_ms() - t_start;
     if (hub_classify_status(1, st) != HUB_RES_OK) return false;
 
     // {"ok":1,"hb":30,"t":1791000000,"cmd":"none"}
     const char *t = strstr(resp, "\"t\":");
-    if (t && !hub_clock_valid()) {
+    if (t) {
         unsigned long v = strtoul(t + 4, NULL, 10);
         if (v >= 1577836800UL) {
-            struct timeval tv = {};
-            tv.tv_sec = (time_t)v;
-            settimeofday(&tv, NULL);
-            *clock_was_set = true;
-            ESP_LOGI(TAG, "clock set from the hub: %lu", v);
+            bool was_valid = hub_clock_valid();
+            if (!was_valid || s_clk_src != HUB_CLK_HUB) {
+                struct timeval tv = {};
+                tv.tv_sec = (time_t)v;
+                settimeofday(&tv, NULL);
+                if (!was_valid || s_clk_src != HUB_CLK_HUB) *clock_was_set = true;
+                ESP_LOGI(TAG, "clock set from the hub: %lu", v);
+            }
+            s_clk_src = HUB_CLK_HUB;
+            s_clk_unc_ms = (rtt_ms / 2u < 10u) ? 10u : (rtt_ms / 2u);
+            s_clk_sync_uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
         }
     }
     if (strstr(resp, "\"cmd\":\"") && !strstr(resp, "\"cmd\":\"none\"")) post_command_result(base, resp);

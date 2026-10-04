@@ -63,20 +63,35 @@ void   hub_rec_to_sample(const hub_rec_t *r, const hub_rec_t *prev, uint16_t ver
  * the wall clock (battsim.c), so created_epoch + t drifts after each pause. START events carry the wall
  * epoch in `b`; the map turns a run time into unix time segment by segment. */
 #define HUB_WALL_SEGS 128u
-typedef struct { uint32_t t_s, wall; } hub_wall_seg_t;
-typedef struct { hub_wall_seg_t seg[HUB_WALL_SEGS]; uint16_t n; uint32_t created; } hub_wallmap_t;
+typedef struct {
+    uint32_t      t_s, wall;
+    hub_clk_src_t src;
+    uint32_t      unc_ms;
+} hub_wall_seg_t;
 
-void     hub_wallmap_init(hub_wallmap_t *m, uint32_t created_epoch);
+typedef struct {
+    hub_wall_seg_t seg[HUB_WALL_SEGS];
+    uint16_t       n;
+    uint32_t       created;
+    hub_clk_src_t  created_src;
+    uint32_t       created_unc_ms;
+} hub_wallmap_t;
+
+void          hub_wallmap_init(hub_wallmap_t *m, uint32_t created_epoch);
+void          hub_wallmap_set_created_clock(hub_wallmap_t *m, hub_clk_src_t src, uint32_t unc_ms);
 /** Feed whole 16 B events of ev.bin in order (any chunking). START events with a wall epoch add a segment. */
-void     hub_wallmap_add_events(hub_wallmap_t *m, const uint8_t *ev, size_t n);
+void          hub_wallmap_add_events(hub_wallmap_t *m, const uint8_t *ev, size_t n);
 /** Unix time of run time t_s (an interval END: the last segment that started strictly before it applies;
  *  before the first one, created_epoch + t_s). */
-uint32_t hub_wallmap_unix(const hub_wallmap_t *m, uint32_t t_s);
+uint32_t      hub_wallmap_unix(const hub_wallmap_t *m, uint32_t t_s);
+hub_clk_src_t hub_wallmap_src(const hub_wallmap_t *m, uint32_t t_s, uint32_t *unc_ms);
 /** Inverse: run time of a unix time that falls inside an ACTIVE segment (the S1 cursor for a resumed stream). */
-uint32_t hub_wallmap_run_time(const hub_wallmap_t *m, uint32_t unix_s);
+uint32_t      hub_wallmap_run_time(const hub_wallmap_t *m, uint32_t unix_s);
 
 /** True iff some range has range.res <= res and range.from < ts <= range.to. */
 bool   hub_covered(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t res);
+/** True iff some range has range.res <= res, range.clk_src <= clk_src, and range.from < ts <= range.to. */
+bool   hub_covered_src(const hub_range_t *ranges, size_t n, uint32_t ts, uint16_t res, hub_clk_src_t src);
 
 #ifdef __cplusplus
 }

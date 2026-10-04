@@ -209,7 +209,17 @@ static void fetch_coverage(const char *base, const char *uid)
     cJSON_ArrayForEach(it, cJSON_GetObjectItem(root, "ranges")) {
         cJSON *f = cJSON_GetObjectItem(it, "from"), *t = cJSON_GetObjectItem(it, "to"), *r = cJSON_GetObjectItem(it, "res");
         if (S.n_cov >= MAX_RANGES || !cJSON_IsNumber(f) || !cJSON_IsNumber(t) || !cJSON_IsNumber(r)) continue;
-        S.cov[S.n_cov++] = { f->valuedouble, t->valuedouble, (uint16_t)r->valueint };
+        cJSON *cs = cJSON_GetObjectItem(it, "clk_src");
+        cJSON *cu = cJSON_GetObjectItem(it, "clk_unc_ms");
+        hub_clk_src_t csrc = HUB_CLK_EST;
+        if (cJSON_IsString(cs)) {
+            if (!strcmp(cs->valuestring, "HUB")) csrc = HUB_CLK_HUB;
+            else if (!strcmp(cs->valuestring, "SNTP")) csrc = HUB_CLK_SNTP;
+            else if (!strcmp(cs->valuestring, "P4_EPOCH")) csrc = HUB_CLK_P4_EPOCH;
+            else csrc = HUB_CLK_EST;
+        }
+        uint32_t cunc = cJSON_IsNumber(cu) ? (uint32_t)cu->valuedouble : 3600000u;
+        S.cov[S.n_cov++] = { f->valuedouble, t->valuedouble, (uint16_t)r->valueint, csrc, cunc };
     }
     cJSON_Delete(root);
 }
@@ -408,13 +418,18 @@ static hub_step_t phase_stream(const char *base)
     hub_rec_t cur, prev = S.prev;
     bool has_prev = S.has_prev;
     uint32_t rows = 0;
+    hub_clk_src_t batch_src = HUB_CLK_EST;
+    uint32_t batch_unc = 3600000u;
     for (size_t k = 0; k < recs; k++) {
         hub_rec_decode(S.version, s_raw + k * rs, &cur);
         hub_sample_t s;
         hub_rec_to_sample(&cur, has_prev ? &prev : NULL, S.version, hub_wallmap_unix(&S.wm, cur.t), f->res, &s);
         prev = cur;
         has_prev = true;
-        if (hub_covered(S.cov, (size_t)S.n_cov, s.ts, f->res)) continue;
+        s.clk_src = hub_wallmap_src(&S.wm, cur.t, &s.clk_unc_ms);
+        batch_src = s.clk_src;
+        batch_unc = s.clk_unc_ms;
+        if (hub_covered(S.cov, (size_t)S.n_cov, s.ts, f->res) && hub_covered_src(S.cov, (size_t)S.n_cov, s.ts, f->res, s.clk_src)) continue;
         size_t mark = w.len;
         if (rows) hub_jw_raw(&w, ",");
         if (!hub_json_sample(&w, &s)) { w.len = mark; w.p[mark] = '\0'; w.over = false; break; }
@@ -422,9 +437,10 @@ static hub_step_t phase_stream(const char *base)
     }
     hub_jw_raw(&w, "]");
     if (rows) {
-        char uid[48], path[112];
+        char uid[48], path[160];
         hub_run_uid(uid, sizeof uid, r->id, r->created);
-        snprintf(path, sizeof path, "/api/v1/ingest/runs/%s/samples?res=%u", uid, (unsigned)f->res);
+        snprintf(path, sizeof path, "/api/v1/ingest/runs/%s/samples?res=%u" "&clk_src=%s&clk_unc_ms=%u",
+                 uid, (unsigned)f->res, hub_clk_src_name(batch_src), (unsigned)batch_unc);
         if (post(base, path, body, w.len) == HUB_RES_RETRY) return HUB_STEP_RETRY;   // same batch next time
     }
     S.off += (uint32_t)(recs * rs);

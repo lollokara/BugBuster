@@ -13,9 +13,11 @@ enum BattSimHub {
 
     static func points(_ recs: [BsRec], map: RunWallMap) -> [SeriesPoint] {
         recs.map {
-            SeriesPoint(t: map.unix($0.t), dt: $0.dt, vAvg: $0.vAvg, vMin: $0.vMin, vMax: $0.vMax,
-                        iAvg: $0.iAvg, iMin: $0.iMin, iMax: $0.iMax, soc: $0.soc,
-                        res: res(forTier: $0.tier), source: .device)
+            let (src, unc) = map.source($0.t)
+            return SeriesPoint(t: map.unix($0.t), dt: $0.dt, vAvg: $0.vAvg, vMin: $0.vMin, vMax: $0.vMax,
+                               iAvg: $0.iAvg, iMin: $0.iMin, iMax: $0.iMax, soc: $0.soc,
+                               res: res(forTier: $0.tier), source: .device,
+                               clkSrc: src, clkUncMs: unc)
         }
     }
 
