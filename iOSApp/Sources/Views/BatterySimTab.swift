@@ -891,9 +891,12 @@ struct BatterySimTab: View {
             return
         }
         #endif
+        let long = BattSim.isLongAction(a)
+        if long { busy = "\(BattSim.actionName(a))\(run.map { " #\($0)" } ?? "")..." }
+        defer { if long { busy = nil } }
         do {
-            if a == .reopen {
-                try await client.reopen(run: run)
+            if long {
+                try await client.runAction(a, run: run)
             } else {
                 try await client.action(a, run: run)
             }
@@ -904,12 +907,14 @@ struct BatterySimTab: View {
             }
             if [.newRun, .delete, .stop, .unload, .load, .reopen].contains(a) { await refreshRuns() }
         } catch {
-            if let s = try? await client.status(), s.lastError != 0 {
+            if let s = try? await client.status() {
                 status = s
-                message = BattSim.errorText[safe: s.lastError] ?? "error \(s.lastError)"
-            } else {
-                message = error.localizedDescription
+                if case BattSimError.rejected = error, s.lastError != 0 {
+                    message = BattSim.refusalText(a, lastError: s.lastError)
+                    return
+                }
             }
+            message = error.localizedDescription
         }
     }
 

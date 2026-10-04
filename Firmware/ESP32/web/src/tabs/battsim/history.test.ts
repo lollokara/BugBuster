@@ -1,6 +1,6 @@
 // Battery-sim history decoder: v2 exact current/energy, v1 estimate, tier merge, decimation.
 import { describe, expect, it } from "vitest";
-import { buildHistory, fmtElapsedTick, parseStatus, stats, timeStep, view } from "./history";
+import { buildHistory, ERROR_TEXT, fmtElapsedTick, parseStatus, stats, timeStep, view } from "./history";
 
 function meta(version: number): Uint8Array {
   const b = new Uint8Array(68);
@@ -77,5 +77,9 @@ describe("battsim history", () => {
     expect(fmtElapsedTick(3 * 86400, 86400)).toBe("3d");
     expect(fmtElapsedTick(90061, 3600)).toBe("1d 01h");
     expect(fmtElapsedTick(330, 60)).toBe("00:05");
+  });
+
+  it("defines descriptive error text for busy status", () => {
+    expect(ERROR_TEXT[3]).toBe("busy (run loaded or active)");
   });
 });

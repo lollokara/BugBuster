@@ -965,7 +965,74 @@ pub async fn bs_configure(cfg: BsConfig, mgr: State<'_, ConnectionManager>) -> C
     Ok(())
 }
 
+// DAQ_ACT_BS_* that finish on the P4 before it replies.
+const ACT_NEW: u8 = 7;
+const ACT_UNLOAD: u8 = 11;
+const ACT_LOAD: u8 = 12;
+const ACT_DELETE: u8 = 13;
+const ACT_REOPEN: u8 = 15;
+const SETTLE_TIMEOUT_MS: u64 = 60_000;
+const SETTLE_POLL_MS: u64 = 1_000;
+
+/// Actions that walk many flash files on the P4 (a big run is hundreds of ms to seconds), so
+/// the reply can outlast the transport timeout or be lost.
+pub(crate) fn is_long_action(action: u8) -> bool {
+    matches!(action, ACT_NEW | ACT_UNLOAD | ACT_LOAD | ACT_DELETE | ACT_REOPEN)
+}
+
+/// Has the device finished `action`? Pure, so the polling is testable without a device.
+/// `ids` is only needed for delete; `prev_run` is the run loaded before the action.
+pub(crate) fn action_settled(action: u8, run: Option<u16>, st: Option<&BsStatus>, ids: Option<&[u16]>, prev_run: u16) -> bool {
+    match action {
+        ACT_DELETE => matches!((run, ids), (Some(r), Some(ids)) if !ids.contains(&r)),
+        ACT_LOAD => matches!((run, st), (Some(r), Some(s)) if s.state != 0 && s.run_id == r),
+        ACT_UNLOAD => st.is_some_and(|s| s.state == 0),
+        ACT_NEW => st.is_some_and(|s| s.state != 0 && s.run_id != prev_run),
+        ACT_REOPEN => st.is_some_and(|s| s.state == 1),
+        _ => true,
+    }
+}
+
+/// The P4 answered and refused (not an S3-side timeout / busy / dropped reply).
+pub(crate) fn is_refusal(e: &str) -> bool {
+    e.contains("rejected by the DAQ HAT") || e.starts_with("HTTP 4")
+}
+
+/// Why the P4 refused, in terms of what the user can do about it.
+pub(crate) fn refusal_text(action: u8, last_error: u8) -> String {
+    const ERRORS: [&str; 11] = ["", "battlog partition missing", "no run loaded", "busy", "invalid parameters",
+        "not allowed in this state", "USB-PD contract below 9 V / 3 A", "acquisition not running",
+        "flash I/O error", "run not found", "run depleted"];
+    match (last_error, action) {
+        (3, ACT_DELETE) => "This run is loaded on the DAQ HAT. Unload it first, then delete it.".into(),
+        (3, ACT_NEW | ACT_LOAD) => "A run is active. Pause or stop it first.".into(),
+        _ => ERRORS.get(last_error as usize).filter(|s| !s.is_empty()).map(|s| s.to_string())
+            .unwrap_or_else(|| format!("error {last_error}")),
+    }
+}
+
+async fn run_ids(mgr: &ConnectionManager) -> CmdResult<Vec<u16>> {
+    let mut ids: Vec<u16> = Vec::new();
+    loop {
+        let raw = bs_req(mgr, OP_LIST_RUNS, &(ids.len() as u16).to_le_bytes()).await?;
+        if raw.len() < 4 {
+            return Err("short run list".into());
+        }
+        let total = u16le(&raw, 0) as usize;
+        let page: Vec<u16> = (0..(raw.len() - 4) / 2).map(|i| u16le(&raw, 4 + 2 * i)).collect();
+        let empty = page.is_empty();
+        ids.extend(page);
+        if empty || ids.len() >= total {
+            return Ok(ids);
+        }
+    }
+}
+
 /// Run / profile action (DAQ_ACT_BS_*, 4..14). `run_id` / `slot` select the target first.
+///
+/// Long actions (load / new / unload / delete / reopen) finish on the P4 before it replies. When the
+/// reply is lost or times out the P4 is still working, so poll until the device shows the result
+/// instead of reporting an error. A refusal from the P4 itself is final and is explained.
 #[tauri::command]
 pub async fn bs_action(
     action: u8,
@@ -976,13 +1043,37 @@ pub async fn bs_action(
     if !(4..=14).contains(&action) {
         return Err(format!("not a battery-sim action: {action}"));
     }
+    let long = is_long_action(action);
+    let prev_run = if long { bs_status(mgr.clone()).await.map(|s| s.run_id).unwrap_or(0) } else { 0 };
     if let Some(r) = run_id {
         cfg_set(&mgr, 0x080E, 4, &r.to_le_bytes()).await?;
     }
     if let Some(s) = slot {
         cfg_set(&mgr, 0x080D, 2, &[s]).await?;
     }
-    cfg_raw(&mgr, CFG_ACTION, &[action]).await.map(|_| ())
+    let sent = cfg_raw(&mgr, CFG_ACTION, &[action]).await.map(|_| ());
+    let err = match sent {
+        Ok(()) => return Ok(()),
+        Err(e) if !long => return Err(e),
+        Err(e) => e,
+    };
+    if is_refusal(&err) {
+        return match bs_status(mgr.clone()).await {
+            Ok(s) if s.last_error != 0 => Err(refusal_text(action, s.last_error)),
+            _ => Err(err),
+        };
+    }
+    let mut waited = 0;
+    while waited < SETTLE_TIMEOUT_MS {
+        tokio::time::sleep(std::time::Duration::from_millis(SETTLE_POLL_MS)).await;
+        waited += SETTLE_POLL_MS;
+        let st = bs_status(mgr.clone()).await.ok();
+        let ids = if action == ACT_DELETE { run_ids(&mgr).await.ok() } else { None };
+        if action_settled(action, run_id, st.as_ref(), ids.as_deref(), prev_run) {
+            return Ok(());
+        }
+    }
+    Err(format!("{err} (the DAQ HAT did not finish within {} s)", SETTLE_TIMEOUT_MS / 1000))
 }
 
 #[cfg(test)]
@@ -1045,5 +1136,35 @@ mod tests {
         assert_eq!(s.state, 2);
         assert_eq!(s.remaining_s, Some(7200));
         assert!((s.soc_pct - 81.23).abs() < 1e-9);
+    }
+
+    fn status(state: u8, run_id: u16) -> BsStatus {
+        BsStatus { state, run_id, ..Default::default() }
+    }
+
+    #[test]
+    fn settled_per_action() {
+        assert!(!action_settled(ACT_DELETE, Some(5), None, None, 0));
+        assert!(!action_settled(ACT_DELETE, Some(5), None, Some(&[1, 5]), 0));
+        assert!(action_settled(ACT_DELETE, Some(5), None, Some(&[1]), 0));
+        assert!(!action_settled(ACT_LOAD, Some(2), Some(&status(0, 0)), None, 0));
+        assert!(action_settled(ACT_LOAD, Some(2), Some(&status(4, 2)), None, 0));
+        assert!(action_settled(ACT_UNLOAD, None, Some(&status(0, 0)), None, 2));
+        assert!(!action_settled(ACT_NEW, None, Some(&status(1, 2)), None, 2));
+        assert!(action_settled(ACT_NEW, None, Some(&status(1, 3)), None, 2));
+        assert!(action_settled(ACT_REOPEN, None, Some(&status(1, 2)), None, 2));
+        assert!(is_long_action(ACT_LOAD) && !is_long_action(8));
+    }
+
+    #[test]
+    fn refusals_are_final_and_explained() {
+        assert!(is_refusal("rejected by the DAQ HAT"));
+        assert!(is_refusal("HTTP 400 Bad Request from /api/daq/config"));
+        assert!(!is_refusal("HAT timeout"));
+        assert!(!is_refusal("HAT busy: a run action is in progress"));
+        assert!(refusal_text(ACT_DELETE, 3).contains("Unload it first"));
+        assert!(refusal_text(ACT_LOAD, 3).contains("Pause or stop"));
+        assert_eq!(refusal_text(ACT_DELETE, 9), "run not found");
+        assert_eq!(refusal_text(ACT_DELETE, 77), "error 77");
     }
 }

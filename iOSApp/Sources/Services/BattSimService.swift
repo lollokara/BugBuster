@@ -70,9 +70,13 @@ struct BsStats {
 }
 
 enum BattSimError: LocalizedError {
-    case transport(String), decode(String)
+    /// No answer, or an S3-side failure (HAT timeout / busy): the P4 may still be working.
+    case transport(String)
+    /// The P4 answered and refused; `BsStatus.lastError` says why.
+    case rejected(String)
+    case decode(String)
     var errorDescription: String? {
-        switch self { case .transport(let s), .decode(let s): return s }
+        switch self { case .transport(let s), .rejected(let s), .decode(let s): return s }
     }
 }
 
@@ -97,13 +101,51 @@ private struct LE {
 enum BattSim {
     static let stateNames = ["No run", "Paused", "Active", "Depleted", "Stopped"]
     static let chemNames = ["LiPo", "LiFePO4", "NiMH", "Lead-acid"]
-    static let errorText = ["", "battlog partition missing", "no run loaded", "busy", "invalid parameters",
+    static let errorText = ["", "battlog partition missing", "no run loaded", "busy (run loaded or active)", "invalid parameters",
                             "not allowed in this state", "USB-PD contract below 9 V / 3 A",
                             "acquisition not running", "flash I/O error", "run not found", "run depleted"]
     static let eventNames: [Int: String] = [1: "created", 2: "start", 3: "pause", 4: "stop", 5: "depleted",
                                             6: "reboot", 7: "param", 8: "stall", 9: "output off",
                                             10: "PD lost", 11: "store error", 12: "reopen"]
     enum Action: Int { case defaults = 14, newRun = 7, start = 8, pause = 9, stop = 10, unload = 11, load = 12, delete = 13, reopen = 15 }
+
+    static func actionName(_ a: Action) -> String {
+        switch a {
+        case .newRun: return "Creating the run"
+        case .load: return "Loading the run"
+        case .unload: return "Unloading the run"
+        case .delete: return "Deleting the run"
+        case .reopen: return "Reopening the run"
+        default: return "The action"
+        }
+    }
+
+    /// Actions that finish on the P4 before it replies and can outlast a request timeout.
+    static func isLongAction(_ a: Action) -> Bool { [.newRun, .load, .unload, .delete, .reopen].contains(a) }
+
+    /// Has the device finished `a`? Pure, so the polling loop is testable without a device.
+    static func actionSettled(_ a: Action, run: Int?, status: BsStatus?, runIds: [Int]?, prevRunId: Int?) -> Bool {
+        switch a {
+        case .delete: guard let run, let runIds else { return false }; return !runIds.contains(run)
+        case .load: guard let run, let status else { return false }; return status.state != 0 && status.runId == run
+        case .unload: return status?.state == 0
+        case .newRun: guard let status else { return false }; return status.state != 0 && status.runId != (prevRunId ?? 0)
+        case .reopen: return status?.state == 1
+        default: return true
+        }
+    }
+
+    /// Why the P4 refused, in terms of what the user can do about it.
+    static func refusalText(_ a: Action, lastError: Int) -> String {
+        if lastError == 3 {
+            switch a {
+            case .delete: return "This run is loaded on the DAQ HAT. Unload it first, then delete it."
+            case .newRun, .load: return "A run is active. Pause or stop it first."
+            default: break
+            }
+        }
+        return errorText.indices.contains(lastError) ? errorText[lastError] : "error \(lastError)"
+    }
 
     static func canReopen(state: Int) -> Bool { state == 4 }
     static func isReopenVisible(state: Int) -> Bool { canReopen(state: state) }
@@ -446,7 +488,10 @@ final class BattSimClient {
         guard let r: B64Reply = await cm.postJSON(B64Reply.self, path: path, json: json) else {
             throw BattSimError.transport("no reply from \(path)")
         }
-        if r.ok == false || r.error != nil { throw BattSimError.transport(r.error ?? "\(path) failed") }
+        if r.ok == false || r.error != nil {
+            let msg = r.error ?? "\(path) failed"
+            throw msg.hasPrefix("rejected by the DAQ HAT") ? BattSimError.rejected(msg) : BattSimError.transport(msg)
+        }
         return Data(base64Encoded: r.data ?? "") ?? Data()
     }
 
@@ -567,6 +612,41 @@ final class BattSimClient {
 
     func reopen(_ run: Int) async throws {
         try await action(.reopen, run: run)
+    }
+
+    /// Long run actions (load / new / unload / delete / reopen) finish on the P4 before it
+    /// replies, which for a big run takes longer than the 5 s HTTP / 6 s BLE request timeout.
+    /// The P4 keeps going when the reply is lost, so on a transport failure poll until the
+    /// device shows the result instead of reporting an error. A P4 refusal is final.
+    func runAction(_ a: BattSim.Action, run: Int? = nil, settleTimeout: TimeInterval = 60,
+                   pollNanos: UInt64 = 1_000_000_000) async throws {
+        let before = try? await status()
+        do {
+            try await action(a, run: run)
+            return
+        } catch let e as BattSimError {
+            if case .rejected = e { throw e }
+        }
+        let deadline = Date().addingTimeInterval(settleTimeout)
+        repeat {
+            try? await Task.sleep(nanoseconds: pollNanos)
+            let s = try? await status()
+            let ids = a == .delete ? (try? await runIds()) : nil
+            if BattSim.actionSettled(a, run: run, status: s, runIds: ids, prevRunId: before?.runId) { return }
+        } while Date() < deadline
+        throw BattSimError.transport("\(BattSim.actionName(a)) did not finish in \(Int(settleTimeout)) s")
+    }
+
+    func runIds() async throws -> [Int] {
+        var ids: [Int] = []
+        while true {
+            let raw = LE(try await bs(1, Self.le16(ids.count)))
+            guard raw.count >= 4 else { throw BattSimError.decode("short run list") }
+            let page = (raw.count - 4) / 2
+            for i in 0..<page { ids.append(raw.u16(4 + 2 * i)) }
+            if page == 0 || ids.count >= raw.u16(0) { break }
+        }
+        return ids
     }
 }
 

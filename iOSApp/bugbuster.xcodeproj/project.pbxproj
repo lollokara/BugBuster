@@ -21,6 +21,7 @@
 		181681F2955495F3399D11BD /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */; };
 		1842946A4E6147C93A3D6A36 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 462B823D90AF3666C2F3D27F /* CoreBluetooth.framework */; };
 		1AF5BD12134617E580995BFC /* ScriptPillRuleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF4ED92AAD30E06BA5B33E8 /* ScriptPillRuleTests.swift */; };
+		1CD83630B0A88F2340C054D6 /* BattSimDeleteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B6229EC6E291EC9F10CD66F /* BattSimDeleteTests.swift */; };
 		2AD86AB0D7A4F6D72F755B38 /* DaqScopeCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */; };
 		30B74CCD96DBAED8E1244669 /* MockScriptsWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A49CCFEA0D510B69C6D0CC8 /* MockScriptsWire.swift */; };
 		3209482B755A326EB20D34A3 /* DaqExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30CE02C081BB4C8A5DE3486B /* DaqExport.swift */; };
@@ -190,6 +191,7 @@
 		93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTransportTests.swift; sourceTree = "<group>"; };
 		96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		9A0E4C5E7692CDC7927A9F58 /* SignalPathTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalPathTab.swift; sourceTree = "<group>"; };
+		9B6229EC6E291EC9F10CD66F /* BattSimDeleteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimDeleteTests.swift; sourceTree = "<group>"; };
 		9D57D58E2AD904293CCB7766 /* ScriptEditorModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptEditorModelTests.swift; sourceTree = "<group>"; };
 		A016ED8CC7E030C9C5535415 /* NavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationUITests.swift; sourceTree = "<group>"; };
 		A1250447E893E6D417AF1F11 /* FirmwareAPICatalogueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirmwareAPICatalogueTests.swift; sourceTree = "<group>"; };
@@ -321,6 +323,7 @@
 		8F0958850B44D524385BD559 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				9B6229EC6E291EC9F10CD66F /* BattSimDeleteTests.swift */,
 				2E9D9F1C0FB95AFA74E4C220 /* BattSimReopenTests.swift */,
 				6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */,
 				93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */,
@@ -652,6 +655,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1CD83630B0A88F2340C054D6 /* BattSimDeleteTests.swift in Sources */,
 				B83E96224066571AB2B30F9B /* BattSimReopenTests.swift in Sources */,
 				7B786CC8F81E4D8E96F21D4B /* BattSimSocMergeTests.swift in Sources */,
 				B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */,
