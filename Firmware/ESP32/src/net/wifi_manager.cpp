@@ -32,6 +32,7 @@ static EventGroupHandle_t s_wifi_event_group = NULL;
 
 static portMUX_TYPE s_wifi_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_sta_connected = false;
+static volatile uint32_t s_disconnects = 0;   // STA disconnect events since boot
 static bool s_connecting    = false;   // true while wifi_connect() is in progress
 static char s_sta_ip[20]    = "0.0.0.0";
 static char s_ap_ip[20]     = "192.168.4.1";
@@ -172,6 +173,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             portENTER_CRITICAL(&s_wifi_state_mux);
             s_sta_connected = false;
+            s_disconnects++;
             strncpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
             portEXIT_CRITICAL(&s_wifi_state_mux);
             // Don't auto-retry if wifi_connect() is driving the sequence
@@ -444,6 +446,8 @@ bool wifi_forget_credentials(void)
     ESP_LOGI(TAG, "STA credentials erased from NVS");
     return err == ESP_OK;
 }
+
+uint32_t wifi_get_disconnect_count(void) { return s_disconnects; }
 
 int wifi_get_rssi(void) {
     wifi_ap_record_t info;

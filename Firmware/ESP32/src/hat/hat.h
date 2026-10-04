@@ -707,6 +707,8 @@ bool hat_detected(void);
  * @brief Get current HAT state snapshot.
  */
 const HatState* hat_get_state(void);
+/** UART command timeouts since boot (health record). */
+uint32_t hat_timeout_total(void);
 
 /**
  * @brief Read the detect pin ADC and identify the HAT type.

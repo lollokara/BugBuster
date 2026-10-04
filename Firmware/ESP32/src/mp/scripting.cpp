@@ -106,6 +106,7 @@ static size_t   s_log_used = 0;   // bytes in ring
 static uint64_t s_log_total = 0;  // absolute bytes accepted into the ring
 static bool     s_log_truncated = false;
 static uint32_t s_log_dropped = 0;
+static uint32_t s_log_dropped_total = 0;   // cumulative, for the hub health record
 
 // Structured-line assembler for MicroPython output (guarded by s_log_mutex).
 static sr_line_asm_t s_line_asm;
@@ -207,9 +208,15 @@ static void ring_emit(void *ctx, const char *line, size_t len)
 }
 
 
+uint32_t scripting_log_dropped_total(void)
+{
+    return __atomic_load_n(&s_log_dropped_total, __ATOMIC_RELAXED) + __atomic_load_n(&s_log_dropped, __ATOMIC_RELAXED);
+}
+
 static void emit_drop_warning_locked(uint32_t ts)
 {
     uint32_t dropped = __atomic_exchange_n(&s_log_dropped, 0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_log_dropped_total, dropped, __ATOMIC_RELAXED);
     if (dropped > 0) {
         char drop_msg[64];
         int dn = snprintf(drop_msg, sizeof(drop_msg), "%lu log lines dropped (busy)", (unsigned long)dropped);

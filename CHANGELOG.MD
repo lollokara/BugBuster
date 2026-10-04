@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Hourly HEALTH record to the ESPFleet hub.** Heap/PSRAM, per-task stack headroom, reset reason
+  and cheap counters (HAT timeouts, hub failures, log/script drops, Wi-Fi reconnects) are queued as
+  chunked `HEALTH` log lines 60 s after the hub link comes up and every hour after, buffered while the
+  hub is offline (`Docs/hub-health-record.md`). The `esp_log` hook scratch grew from 192 to 512 B, so
+  `BOOTRPT` lines are no longer cut at ~165 characters.
 - **Scripting API deep documentation, smarter autocomplete, flush key bar.** Every
   module, class, function, method and constant in the `.pyi` stubs now has a summary,
   per-parameter docs (type, units, range, default), return shape, raised exceptions,
