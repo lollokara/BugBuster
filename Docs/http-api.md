@@ -180,6 +180,7 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 | Endpoint | Method | Body / Query |
 | :--- | :--- | :--- |
 | `/api/scripts/eval` | POST | Body: Raw Python code. Query: `?persist=true`. |
+| `/api/scripts/lint` | POST | HTTP: raw Python text body. BLE tunnel (JSON, request <= 512 B): `{"name":"x.py"}` lints the stored file or `{"src":"..."}` lints inline source. Reply `{ok:true}` or `{ok:false,err}`. |
 | `/api/scripts/run-file` | POST | Query: `?name=myscript.py`. |
 | `/api/scripts/status` | GET | Memory usage, script ID, and VM state. |
 | `/api/scripts/stop` | POST | Terminates running script. |

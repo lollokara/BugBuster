@@ -23,7 +23,7 @@
 //   CRASH  : GET /api/system/crash[?report=1|?offset=N&len=M] (summary, boot bundle,
 //            base64 coredump slice), POST /api/system/crash/clear — crash_report.cpp.
 //   SCRIPTS: /api/scripts/{status,logs,stop,files,storage,files/get,files/delete,
-//            files/chunk,run-file,eval,autorun/status,autorun/enable,
+//            files/chunk,run-file,eval,lint,autorun/status,autorun/enable,
 //            autorun/disable} — bodies in api_scripts.cpp (the REPL WebSocket
 //            stays HTTP-only).
 //
@@ -2143,6 +2143,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
         if (strcmp(sfx, "files/chunk") == 0)     return api_scripts_file_chunk(path, body);
         if (strcmp(sfx, "run-file") == 0)        return api_scripts_run_file(path, body);
         if (strcmp(sfx, "eval") == 0)            return api_scripts_eval(path, body);
+        if (strcmp(sfx, "lint") == 0)            return api_scripts_lint(path, body);
         if (strcmp(sfx, "autorun/status") == 0)  return api_scripts_autorun_status(path, body);
         if (strcmp(sfx, "autorun/enable") == 0)  return api_scripts_autorun_enable(path, body);
         if (strcmp(sfx, "autorun/disable") == 0) return api_scripts_autorun_disable(path, body);

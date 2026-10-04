@@ -347,6 +347,46 @@ char *api_scripts_eval(const char *path, const cJSON *body)
     return take(root);
 }
 
+// Body {"name":"x.py"} lints the stored file, {"src":"..."} lints inline
+// source (over BLE the whole request must stay <= 512 bytes). Reply is the
+// HTTP shape: {"ok":true} or {"ok":false,"err":"..."}. Like the HTTP route
+// this blocks the caller until the MicroPython task has compiled the source
+// (a compile only, no execution; refused with an err while a script runs).
+char *api_scripts_lint(const char *path, const cJSON *body)
+{
+    char err[512] = {0};
+    bool ok;
+    const cJSON *jn = body ? cJSON_GetObjectItem(body, "name") : NULL;
+    const cJSON *js = body ? cJSON_GetObjectItem(body, "src") : NULL;
+    if (cJSON_IsString(jn)) {
+        char name[SCRIPT_NAME_MAX + 1];
+        if (!arg_name(body, path, name)) return err_json("valid name required");
+        char *buf = (char *)heap_caps_malloc(SCRIPT_BODY_MAX + 1, MALLOC_CAP_SPIRAM);
+        if (!buf) return err_json("out of memory");
+        size_t size = SCRIPT_BODY_MAX;
+        char rerr[80] = {0};
+        if (!script_storage_read(name, (uint8_t *)buf, &size, rerr, sizeof(rerr))) {
+            heap_caps_free(buf);
+            return err_json("script not found");
+        }
+        buf[size] = '\0';
+        ok = scripting_lint_string(buf, size, err, sizeof(err));
+        heap_caps_free(buf);
+    } else if (cJSON_IsString(js)) {
+        size_t len = strlen(js->valuestring);
+        if (len > SCRIPTS_EVAL_MAX) return err_json("src too long (max 32768 bytes)");
+        ok = scripting_lint_string(js->valuestring, len, err, sizeof(err));
+    } else {
+        return err_json("name or src required");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+    cJSON_AddBoolToObject(root, "ok", ok);
+    if (!ok) cJSON_AddStringToObject(root, "err", err);
+    return take(root);
+}
+
 char *api_scripts_autorun_status(const char *path, const cJSON *body)
 {
     (void)path; (void)body;

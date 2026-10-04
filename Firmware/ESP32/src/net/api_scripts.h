@@ -25,6 +25,7 @@ char *api_scripts_file_delete(const char *path, const cJSON *body);   // name
 char *api_scripts_file_chunk(const char *path, const cJSON *body);    // name, off, b64, final
 char *api_scripts_run_file(const char *path, const cJSON *body);      // name, background, replace
 char *api_scripts_eval(const char *path, const cJSON *body);          // src, persist
+char *api_scripts_lint(const char *path, const cJSON *body);          // name | src -> {ok[,err]}
 char *api_scripts_autorun_status(const char *path, const cJSON *body);
 char *api_scripts_autorun_enable(const char *path, const cJSON *body);  // name
 char *api_scripts_autorun_disable(const char *path, const cJSON *body);
