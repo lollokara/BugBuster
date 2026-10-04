@@ -45,8 +45,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # mypy needs the runtime deps installed: requests ships inline types, and
+      # without it HTTPLogicalError's base resolves to RuntimeError alone.
       - name: Install lint tooling
-        run: python -m pip install --upgrade pip ruff mypy
+        run: python -m pip install --upgrade pip ruff mypy -r python/requirements.txt
 
       # Hard gate. The selected rules (F/B/E9) are real-defect rules and the
       # tree is clean against them -- see [tool.ruff.lint] in
