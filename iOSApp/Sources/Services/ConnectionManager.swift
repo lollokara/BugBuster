@@ -1533,7 +1533,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return data
     }
 
-    private static func bleTunnelPath(_ path: String, query: [String: String]) -> String {
+    static func bleTunnelPath(_ path: String, query: [String: String]) -> String {
         guard !query.isEmpty else { return path }
         var c = URLComponents()
         c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -1567,7 +1567,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// body), so uploads throw `.needsWiFi`.
     public func rawRequest(method: String, path: String, query: [String: String] = [:],
                            body: Data? = nil, contentType: String? = nil) async throws -> Data {
-        guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
+        guard activeDevice != nil else { throw URLError(.notConnectedToInternet) }
         if transport == .ble {
             guard body == nil else { throw ConnectionAPIError.needsWiFi("Uploading script text") }
             // The tunnel carries a path only, never the HTTP verb: DELETE has its own spelling.
@@ -1578,6 +1578,19 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             if path == "/api/scripts/files/get" { return try await bleScriptFileData(query: query) }
             return try await bleRawData(path: Self.bleTunnelPath(path, query: query))
         }
+        let reply = try await httpExchange(method: method, path: path, query: query, body: body, contentType: contentType)
+        guard (200...299).contains(reply.status) else { throw ConnectionAPIError.httpStatus(reply.status) }
+        return reply.body
+    }
+
+    /// One HTTP exchange that keeps the status code and headers. The scripts API
+    /// answers busy with `409` + a JSON body and pages logs with
+    /// `X-BugBuster-Log-Next`, so unlike `rawRequest` a non-2xx is returned, not thrown.
+    /// Header names are lower-cased.
+    public func httpExchange(method: String, path: String, query: [String: String] = [:],
+                             body: Data? = nil, contentType: String? = nil,
+                             timeout: TimeInterval? = nil) async throws -> (status: Int, headers: [String: String], body: Data) {
+        guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
         let trimmed = device.ip.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw URLError(.badURL) }
         var base = trimmed
@@ -1587,13 +1600,17 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         guard let url = comps.url else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         request.httpMethod = method
+        if let timeout { request.timeoutInterval = timeout }
         if let contentType = contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         if !adminToken.isEmpty { request.setValue(adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token") }
         request.httpBody = body
         let (data, response) = try await gatedData(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        guard (200...299).contains(http.statusCode) else { throw ConnectionAPIError.httpStatus(http.statusCode) }
-        return data
+        var headers: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let key = key as? String, let value = value as? String { headers[key.lowercased()] = value }
+        }
+        return (http.statusCode, headers, data)
     }
 
     /// Decode a JSON reply from `rawRequest` (POST/DELETE with no JSON model of its own).
