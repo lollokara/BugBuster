@@ -43,7 +43,9 @@ struct ScriptTextEdit: Equatable {
 /// iOS keyboards and pasted text bring typographic punctuation that MicroPython rejects.
 enum ScriptTextSanitizer {
     static func sanitize(_ text: String) -> String {
-        text.replacingOccurrences(of: "\u{201C}", with: "\"")
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{201C}", with: "\"")
             .replacingOccurrences(of: "\u{201D}", with: "\"")
             .replacingOccurrences(of: "\u{2018}", with: "'")
             .replacingOccurrences(of: "\u{2019}", with: "'")

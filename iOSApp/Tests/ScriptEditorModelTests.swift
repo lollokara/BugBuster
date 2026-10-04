@@ -99,6 +99,12 @@ final class ScriptEditorModelTests: XCTestCase {
         XCTAssertEqual(ScriptTextSanitizer.sanitize("plain"), "plain")
     }
 
+    func testSanitizerNormalizesCRLFAndLoneCRToLF() {
+        XCTAssertEqual(ScriptTextSanitizer.sanitize("line1\r\nline2\r\nline3"), "line1\nline2\nline3")
+        XCTAssertEqual(ScriptTextSanitizer.sanitize("line1\rline2\rline3"), "line1\nline2\nline3")
+        XCTAssertEqual(ScriptTextSanitizer.sanitize("line1\r\nline2\rline3\nline4"), "line1\nline2\nline3\nline4")
+    }
+
     func testThemeColours() {
         XCTAssertEqual(ScriptEditorTheme.color(for: "keyword"), ScriptEditorTheme.Palette.keyword)
         XCTAssertEqual(ScriptEditorTheme.color(for: "function.builtin"), ScriptEditorTheme.Palette.function)
