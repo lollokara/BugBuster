@@ -26,10 +26,12 @@ struct ScriptDocsBrowser: View {
                             Section(section.title) {
                                 ForEach(section.entries) { entry in
                                     NavigationLink(value: entry) { ScriptDocRow(entry: entry) }
+                                        .accessibilityIdentifier("doc_row_\(entry.title)")
                                 }
                             }
                         }
                     }
+                    .accessibilityIdentifier("docs_browser_list")
                     .listStyle(.insetGrouped)
                     .overlay {
                         if sections.isEmpty { ContentUnavailableView.search(text: query) }
@@ -46,7 +48,10 @@ struct ScriptDocsBrowser: View {
             .navigationTitle("Scripting API")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("docs_done_button")
+                }
             }
         }
         .onAppear {
@@ -137,14 +142,14 @@ struct ScriptDocDetail: View {
                     safetyNote(entry.detail.notes)
                 }
                 if entry.kind == .example {
-                    labeled("Example") { codeCard(entry.snippet, insertLabel: "Insert example") }
+                    labeled("Example") { codeCard(entry.snippet, insertLabel: "Insert example", insertID: "doc_insert_button") }
                 } else {
                     ForEach(Array(entry.detail.examples.enumerated()), id: \.offset) { index, code in
                         labeled(entry.detail.examples.count > 1 ? "Example \(index + 1)" : "Example") {
-                            codeCard(code, insertLabel: "Insert")
+                            codeCard(code, insertLabel: "Insert", insertID: "doc_insert_example_\(index + 1)")
                         }
                     }
-                    labeled("Call") { codeCard(entry.snippet, insertLabel: "Insert") }
+                    labeled("Call") { codeCard(entry.snippet, insertLabel: "Insert", insertID: "doc_insert_button") }
                 }
             }
             .padding()
@@ -254,13 +259,14 @@ struct ScriptDocDetail: View {
     }
 
     /// Code with its own Insert and Copy buttons.
-    private func codeCard(_ code: String, insertLabel: String) -> some View {
+    private func codeCard(_ code: String, insertLabel: String, insertID: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             codeBlock(code)
             HStack(spacing: 12) {
                 if let onInsert {
                     Button { onInsert(code) } label: { Label(insertLabel, systemImage: "text.insert") }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier(insertID)
                 }
                 Button { UIPasteboard.general.string = code } label: { Label("Copy", systemImage: "doc.on.doc") }
                     .buttonStyle(.bordered)

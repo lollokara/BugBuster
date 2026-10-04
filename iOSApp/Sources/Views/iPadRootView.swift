@@ -54,6 +54,7 @@ struct iPadRootView: View {
                                     ScriptLogPanel()
                                         .frame(width: logWidth)
                                         .transition(.move(edge: .trailing))
+                                        .accessibilityIdentifier("script_log_column")
                                 }
                             }
                             .animation(.snappy, value: scripts.consoleVisible)

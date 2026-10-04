@@ -16,6 +16,7 @@ struct SidebarView: View {
             ForEach(AppSections.visible(daqHat: connectionManager.lastHatStatus?.isDaqHat ?? false)) { section in
                 Label(section.name, systemImage: section.icon)
                     .tag(section.id)
+                    .accessibilityIdentifier("sidebar_\(section.name.lowercased().replacingOccurrences(of: " ", with: "_"))")
             }
         }
         .listStyle(.sidebar)

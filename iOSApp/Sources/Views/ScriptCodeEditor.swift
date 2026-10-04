@@ -19,6 +19,7 @@ struct ScriptEditorView: View {
                     ScriptCompletionPopover(items: model.completion.items) { model.accept($0) }
                         .frame(width: size.width, height: size.height)
                         .offset(x: origin.x, y: origin.y)
+                        .accessibilityIdentifier("completion_popover")
                         .transition(.opacity)
                 }
             }
@@ -55,6 +56,7 @@ struct ScriptCodeEditor: UIViewRepresentable {
         tv.keyboardType = .asciiCapable
         tv.keyboardAppearance = .dark
         tv.isEditable = isEditable
+        tv.accessibilityIdentifier = "script_editor_text_view"
         tv.inputAccessoryView = context.coordinator.makeAccessoryBar()
         tv.setState(TextViewState(text: model.text, theme: ScriptEditorTheme(), language: .python))
         context.coordinator.textView = tv
@@ -287,10 +289,12 @@ struct ScriptCompletionPopover: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(item.label), \(item.detail)")
+                    .accessibilityIdentifier("completion_item_\(item.label)")
                 }
             }
             .padding(.vertical, 4)
         }
+        .accessibilityIdentifier("completion_popover")
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)

@@ -51,6 +51,7 @@ struct CustomTabBar: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("tab_\(tabs[index].name.lowercased().replacingOccurrences(of: " ", with: "_"))")
             }
         }
         .padding(10)
