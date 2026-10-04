@@ -4,6 +4,8 @@
 // wifi_manager.h - WiFi AP+STA management (ESP-IDF native)
 // =============================================================================
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -43,6 +45,9 @@ const char* wifi_get_sta_ssid(void);
 
 /** @brief Get STA RSSI in dBm. */
 int wifi_get_rssi(void);
+
+/** STA disconnect events since boot (health record). */
+uint32_t wifi_get_disconnect_count(void);
 
 /** Scan result entry. */
 typedef struct {

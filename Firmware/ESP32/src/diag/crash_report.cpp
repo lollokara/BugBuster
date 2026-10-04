@@ -252,6 +252,14 @@ static void dump_info_load(void)
     free(old);
 }
 
+void crash_report_boot_info(uint32_t *boot, const char **reason, int *code, bool *abnormal)
+{
+    *boot = s_boot_count;
+    *reason = crash_reset_reason_name(s_reset_reason);
+    *code = s_reset_reason;
+    *abnormal = crash_reset_is_abnormal(s_reset_reason);
+}
+
 size_t crash_report_dump_size(void)
 {
     size_t n = 0;
