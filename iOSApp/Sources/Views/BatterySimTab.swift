@@ -32,6 +32,8 @@ struct BatterySimTab: View {
     @State private var hubTask: Task<Void, Never>?
     @State private var hubClient = HubClient()
     @State private var showHub = false
+    @StateObject private var hubStatus = HubStatusModel.live()
+    @Environment(\.scenePhase) private var scenePhase
 
     private var wide: Bool { sizeClass == .regular }
     /// iPad / landscape: full-height chart with a header bar, stat strip and navigator;
@@ -54,11 +56,13 @@ struct BatterySimTab: View {
         }
         .onAppear { startPolling() }
         .onDisappear { pollTask?.cancel() }
+        // Light hub probe every 30 s while the tab is on screen and the app is active; cancelled otherwise.
+        .task(id: scenePhase == .active) { if scenePhase == .active { hubStatus.reloadFromSettings(); await hubStatus.poll() } }
         .sheet(isPresented: $showNew) {
             NewBatteryRunSheet { cfg in await createRun(cfg) }
         }
         .sheet(isPresented: $showParams) { paramsSheet }
-        .sheet(isPresented: $showHub) { HubSettingsView().environmentObject(connectionManager) }
+        .sheet(isPresented: $showHub, onDismiss: { hubStatus.reloadFromSettings() }) { hubSheet }
         .confirmationDialog("Delete run from the device?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
             Button("Delete run #\(pendingDelete ?? 0)", role: .destructive) {
@@ -449,11 +453,20 @@ struct BatterySimTab: View {
             chip("Log I", "Log scale", "waveform.path.ecg", $logCurrent, hint: "Plot current on a logarithmic axis")
             chip("Clock", "Wall clock", "clock", $wallClock, hint: "Label the time axis with the wall-clock time")
             chip("Follow", "Follow live", "arrow.right.to.line", $follow, hint: "Keep the window on the newest data while the run is active")
-            Button { showHub = true } label: { controlLabel("Hub", "network", on: false) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Hub settings")
+            HubTile(model: hubStatus) { showHub = true }
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var hubSheet: some View {
+        let local = runs.compactMap { r in
+            r.meta.map { HubLocalRun(runId: r.runId, createdEpoch: $0.createdEpoch, bytes: r.bytes, name: $0.name) }
+        }
+        return HubView(model: hubStatus, mac: HubIdentity.mac(), localRuns: local, onOpenRun: { id in
+            showParams = false
+            Task { await open(id) }
+        })
+        .environmentObject(connectionManager)
     }
 
     private func controlLabel(_ caption: String, _ icon: String, on: Bool) -> some View {
@@ -774,6 +787,7 @@ struct BatterySimTab: View {
             window = history!.bounds
         }
         showParams = env["BB_BS_PARAMS"] == "1"
+        showHub = env["BB_BS_HUB"] != nil
         openFromDevice = false
         let mockState = ProcessInfo.processInfo.environment["BB_MOCK_STATE"].flatMap(Int.init) ?? 4
         status = BsStatus(state: mockState, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,

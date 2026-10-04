@@ -13,6 +13,8 @@ import FoundationNetworking  // URLSession lives here outside Apple platforms (L
 enum HubSettings {
     static let urlKey = "espfleet_hub_url"
     static let defaultURL = "http://192.168.3.87:8080"
+    /// Off = the phone never talks to the hub (tile shows "No hub"). On by default.
+    static let enabledKey = "espfleet_hub_enabled"
 
     /// http://host[:port] only (the hub is plain HTTP on the LAN). Trailing "/" is dropped.
     static func normalize(_ raw: String) -> URL? {
@@ -23,9 +25,10 @@ enum HubSettings {
         return u
     }
 
-    /// The saved URL, or the default when none is saved or the saved one is invalid.
+    /// The saved URL, or the default when none is saved or the saved one is invalid. nil when the hub is switched off.
     static func current(_ defaults: UserDefaults = .standard) -> URL? {
-        normalize(defaults.string(forKey: urlKey) ?? "") ?? normalize(defaultURL)
+        if defaults.object(forKey: enabledKey) != nil, !defaults.bool(forKey: enabledKey) { return nil }
+        return normalize(defaults.string(forKey: urlKey) ?? "") ?? normalize(defaultURL)
     }
 }
 
@@ -74,7 +77,10 @@ final class HubClient {
         }
     }
 
-    private func get(_ path: String, _ query: [URLQueryItem]) async throws -> Data {
+    /// Forgets a remembered failure so an explicit refresh really asks the hub.
+    func forgetUnreachable() { unreachableUntil = nil }
+
+    func get(_ path: String, _ query: [URLQueryItem]) async throws -> Data {
         guard let base = baseURL else { throw HubError.unreachable }
         if isKnownUnreachable { throw HubError.unreachable }
         var c = URLComponents(url: base, resolvingAgainstBaseURL: false)
