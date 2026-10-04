@@ -27,6 +27,12 @@ def pytest_addoption(parser):
             default="http://192.168.3.87:8080",
             help="Base URL for the ESPFleet hub (default: http://192.168.3.87:8080)",
         )
+        parser.addoption(
+            "--allow-reboot",
+            action="store_true",
+            default=False,
+            help="Allow device tests that reboot the S3 (autorun-after-reboot)",
+        )
     except ValueError:
         # Option may already be added if conftest is loaded multiple times
         pass
