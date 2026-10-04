@@ -3,6 +3,13 @@ options:
   bundleIdPrefix: com.lorenzo.bugbuster
   deploymentTarget:
     iOS: 26.0
+packages:
+  Runestone:
+    url: https://github.com/simonbs/Runestone
+    exactVersion: 0.5.2
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages
+    exactVersion: 0.1.10
 fileGroups: []
 configs:
   debug: debug
@@ -79,6 +86,9 @@ targets:
       - sdk: SwiftUI.framework
       - sdk: Combine.framework
       - sdk: CoreBluetooth.framework
+      - package: Runestone
+      - package: TreeSitterLanguages
+        product: TreeSitterPythonRunestone
   bugbuster_iOSTests:
     type: bundle.unit-test
     platform: iOS
