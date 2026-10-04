@@ -161,3 +161,43 @@ int main(void) {
 
 def test_query_helpers():
     assert _run(QUERY_MAIN).strip() == "1 0 0 1|1:a+b.py 1:10 1:x y 0 0 0 1 1 0"
+
+
+INTERLEAVED_MAIN = r"""
+#include <stdio.h>
+#include <string.h>
+#include "script_runtime.h"
+static char g_out[8192];
+static size_t g_n;
+static void emit(void *ctx, const char *line, size_t n) {
+    (void)ctx; memcpy(g_out + g_n, line, n); g_n += n;
+}
+int main(void) {
+    sr_line_asm_t a;
+    sr_line_init(&a, "mpy", 'I');
+    sr_line_feed(&a, 10, "partial", 7, emit, NULL);
+
+    /* Emulating bugbuster.log("W", "warn msg"):
+     * 1. Flush pending partial stdout line at current level ('I')
+     * 2. Format and emit one complete line at 'W'
+     * 3. Restore level to 'I'
+     */
+    sr_line_flush(&a, 12, emit, NULL);
+    char line[SR_LINE_MAX + 40];
+    size_t n = sr_format_line(line, sizeof line, 12, 'W', "mpy", "warn msg", 8);
+    emit(NULL, line, n);
+    sr_line_set_level(&a, 'I', 12, emit, NULL);
+
+    /* Followed by normal stdout print("done\n") at 'I' */
+    sr_line_feed(&a, 15, "done\n", 5, emit, NULL);
+    fwrite(g_out, 1, g_n, stdout);
+    return 0;
+}
+"""
+
+
+def test_line_assembler_interleaved_log_level_preserves_ordering():
+    assert _run(INTERLEAVED_MAIN) == (
+        "12 I mpy partial\n"
+        "12 W mpy warn msg\n"
+        "15 I mpy done\n")

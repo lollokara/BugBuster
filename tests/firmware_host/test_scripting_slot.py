@@ -75,3 +75,12 @@ def test_status_carries_spec_fields():
                   "ScriptState  state;", "ScriptExit   last_exit;", "uint32_t     started_at;",
                   "uint32_t     file_slot_id;"):
         assert field in src, field
+
+
+def test_scripting_log_structure():
+    body = extract_function(SCRIPTING, r"^void scripting_log\(")
+    assert "bbpCdcClaimed()" in body
+    assert "sr_line_flush(&s_line_asm" in body
+    assert 'sr_format_line(line, sizeof(line), ts, level, "mpy"' in body
+    assert "ring_emit(NULL, line" in body
+    assert "sr_line_set_level(&s_line_asm, 'I'" in body
