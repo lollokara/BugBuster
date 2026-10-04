@@ -31,6 +31,11 @@ bool daq_mp_vdut_enable(bool enable)
     return hat_daq_vdut_enable(enable);
 }
 
+int daq_mp_vdut_owner_run(void)
+{
+    return hat_daq_vdut_owner_run();
+}
+
 int daq_mp_vdut_setpoint(float volts, float amps_limit)
 {
     // Same bounds as api_daq_vdut_setpoint(): reject, never clamp.

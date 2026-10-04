@@ -54,3 +54,17 @@ def test_samples_maps_missing_run_to_enoent_and_honours_stop():
 def test_name_length_checked():
     body = extract_function(MOD, r"^static void apply_param\(")
     assert "DAQC_NAME_MAX" in body and "mp_raise_ValueError" in body
+
+
+def test_vdut_failure_names_the_owning_battsim_run():
+    """A loaded run makes the P4 refuse VDUT writes: raise RuntimeError with the
+    same text as the S3 409 (api_core.cpp), not a bare EIO."""
+    body = extract_function(MOD, r"^static MP_NORETURN void raise_vdut_failure\(")
+    assert "daq_mp_vdut_owner_run()" in body
+    assert "mp_type_RuntimeError" in body
+    text = re.search(r'MP_ERROR_TEXT\("(battery simulator run [^"]+)"\)', body).group(1)
+    api = read_source("Firmware/ESP32/src/net/api_core.cpp")
+    assert text.replace("%d", "%d") in api, "moddaq text must match api_core.cpp"
+    vdut = extract_function(MOD, r"^static mp_obj_t daq_vdut\(")
+    assert vdut.count("raise_vdut_failure()") == 2
+    assert "mp_raise_OSError(MP_EIO)" in body  # still EIO when nothing owns VDUT

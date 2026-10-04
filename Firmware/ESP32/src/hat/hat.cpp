@@ -2099,6 +2099,17 @@ bool hat_daq_vdut_enable(bool enable)
     return code == HAT_RSP_OK;
 }
 
+int hat_daq_vdut_owner_run(void)
+{
+    // BsStatus wire layout: u8 version, u8 state, u8 flags, u8 last_error, u16 run_id LE.
+    const uint8_t req[1] = { 0 /* BsOp.STATUS */ };
+    uint8_t rsp[96] = {};
+    int got = hat_bs_request(req, sizeof(req), rsp, sizeof(rsp), 300);
+    if (got < 6) return -1;
+    if (rsp[1] == 0 /* BS_ST_NONE */) return -1;
+    return (int)(rsp[4] | (rsp[5] << 8));
+}
+
 bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
 {
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return false;

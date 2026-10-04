@@ -2608,7 +2608,9 @@ static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *
     if (!resp) return send_error(req, 500, fail_msg);
     cJSON *parsed = cJSON_Parse(resp);
     bool is_error = parsed && cJSON_GetObjectItem(parsed, "error") != NULL;
-    esp_err_t rc = send_raw_json(req, resp, is_error ? 400 : 200);
+    // A battery-sim run owning VDUT is a state conflict, not a bad request.
+    bool owned = is_error && cJSON_GetObjectItem(parsed, "runId") != NULL;
+    esp_err_t rc = send_raw_json(req, resp, owned ? 409 : is_error ? 400 : 200);
     if (parsed) cJSON_Delete(parsed);
     cJSON_free(resp);
     return rc;

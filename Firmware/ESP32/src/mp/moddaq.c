@@ -182,6 +182,18 @@ static mp_obj_t vdut_dict(const daq_mp_vdut_t *st)
     return d;
 }
 
+// A loaded battery-sim run owns VDUT and the P4 refuses writes; say so rather
+// than a bare EIO. Same text as the S3 HTTP/BLE 409 (api_core.cpp).
+static MP_NORETURN void raise_vdut_failure(void)
+{
+    int run = daq_mp_vdut_owner_run();
+    if (run >= 0) {
+        mp_raise_msg_varg(&mp_type_RuntimeError,
+            MP_ERROR_TEXT("battery simulator run %d is loaded and owns VDUT; unload it first"), run);
+    }
+    mp_raise_OSError(MP_EIO);
+}
+
 static mp_obj_t daq_vdut(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args)
 {
     enum { ARG_enable, ARG_volts, ARG_amps_limit };
@@ -201,10 +213,10 @@ static mp_obj_t daq_vdut(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_a
         float il = a[ARG_amps_limit].u_obj != mp_const_none ? (float)mp_obj_get_float(a[ARG_amps_limit].u_obj) : st.ilimit_a;
         int rc = daq_mp_vdut_setpoint(v, il);
         if (rc == 1) mp_raise_ValueError(MP_ERROR_TEXT("volts must be 1.76-19.94 and amps_limit 0.05-2.636"));
-        if (rc != 0) mp_raise_OSError(MP_EIO);
+        if (rc != 0) raise_vdut_failure();
     }
     if (a[ARG_enable].u_obj != mp_const_none) {
-        if (!daq_mp_vdut_enable(mp_obj_is_true(a[ARG_enable].u_obj))) mp_raise_OSError(MP_EIO);
+        if (!daq_mp_vdut_enable(mp_obj_is_true(a[ARG_enable].u_obj))) raise_vdut_failure();
     }
     if (!daq_mp_vdut_status(&st)) mp_raise_OSError(MP_EIO);
     return vdut_dict(&st);

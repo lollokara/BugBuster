@@ -1036,22 +1036,30 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         vdutPrefetchTask = nil
     }
 
+    /// Firmware error text from the last failed `setVdut*` call (nil on success or when
+    /// the firmware gave none), e.g. "battery simulator run 3 is loaded and owns VDUT; ...".
+    @Published public private(set) var vdutLastError: String?
+
     public func setVdutEnable(_ enabled: Bool) async -> Bool {
         do {
-            let ok = try await postAction(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
-            if ok { updateOnMain { self.vdutEnabled = enabled } }
-            return ok
+            let r = try await postActionDetailed(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
+            vdutLastError = r.ok ? nil : r.error
+            if r.ok { updateOnMain { self.vdutEnabled = enabled } }
+            return r.ok
         } catch {
+            vdutLastError = nil
             return false
         }
     }
 
     public func setVdutSetpoint(voltageV: Double, currentLimitMa: Double) async -> Bool {
         do {
-            let ok = try await postAction(path: "/api/daq/vdut/setpoint", json: [
+            let r = try await postActionDetailed(path: "/api/daq/vdut/setpoint", json: [
                 "voltageV": voltageV,
                 "currentLimitMa": currentLimitMa
             ])
+            let ok = r.ok
+            vdutLastError = ok ? nil : r.error
             if ok {
                 updateOnMain {
                     self.vdutVoltageSetpointV = voltageV
@@ -1060,6 +1068,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             }
             return ok
         } catch {
+            vdutLastError = nil
             return false
         }
     }
@@ -1393,20 +1402,37 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func postAction(path: String, json: [String: Any]) async throws -> Bool {
-        guard let device = activeDevice else { return false }
+        try await postActionDetailed(path: path, json: json).ok
+    }
+
+    /// Firmware error text from a `{"error": "..."}` reply body (nil when absent).
+    nonisolated static func firmwareErrorText(from data: Data) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return firmwareErrorText(from: obj)
+    }
+
+    nonisolated static func firmwareErrorText(from obj: [String: Any]) -> String? {
+        guard let text = obj["error"] as? String, !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// Like `postAction`, but also surfaces the firmware's `error` string (e.g. a
+    /// battery-sim run owning VDUT -> 409) instead of collapsing it to `false`.
+    public func postActionDetailed(path: String, json: [String: Any]) async throws -> (ok: Bool, error: String?) {
+        guard let device = activeDevice else { return (false, nil) }
 
         // BLE control plane: tunnel the request and read back the {"ok":...} flag.
         // Paths the firmware tunnel doesn't implement return ok:false gracefully.
         if transport == .ble {
-            guard let obj = await bleJSON(path, body: json) else { return false }
-            return (obj["ok"] as? Bool) ?? false
+            guard let obj = await bleJSON(path, body: json) else { return (false, nil) }
+            return ((obj["ok"] as? Bool) ?? false, Self.firmwareErrorText(from: obj))
         }
 
         var urlStr = device.ip
         if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
             urlStr = "http://\(urlStr)"
         }
-        guard let url = URL(string: "\(urlStr)\(path)") else { return false }
+        guard let url = URL(string: "\(urlStr)\(path)") else { return (false, nil) }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -1419,13 +1445,15 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         let (data, response) = try await gatedData(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else { return false }
+              (200...299).contains(httpResponse.statusCode) else {
+            return (false, Self.firmwareErrorText(from: data))
+        }
         // TR-11b: an older firmware reports a failed action as 200 {"ok":false}.
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let ok = obj["ok"] as? Bool {
-            return ok
+            return (ok, ok ? nil : Self.firmwareErrorText(from: obj))
         }
-        return true
+        return (true, nil)
     }
     
     /// POST JSON and decode the response body (firmware returns HTTP 200 for non-ok results).

@@ -44,6 +44,7 @@
 		B08212B904701C4769026071 /* DaqLinkState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A9988F8F3540297C3821CA /* DaqLinkState.swift */; };
 		B4ED84CF1EEE3397E9294C07 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11A9C8116A9BEBC05E47330 /* main.swift */; };
 		B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* VdutErrorTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* VdutErrorTextTests.swift */; };
 		B83E96224066571AB2B30F9B /* BattSimReopenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E9D9F1C0FB95AFA74E4C220 /* BattSimReopenTests.swift */; };
 		B87ED7B51E741295F15CF91E /* BugBusterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487F663BDDC3592989BBDD1B /* BugBusterApp.swift */; };
 		B9CEE55677C802F63FEAC777 /* WebSocketREPL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */; };
@@ -83,6 +84,7 @@
 		281AB38E1D5A2045DDACBBBE /* DeviceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceModels.swift; sourceTree = "<group>"; };
 		282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeAxis.swift; sourceTree = "<group>"; };
 		29C0E4643F1BD7613C184577 /* WebSocketREPL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketREPL.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* VdutErrorTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VdutErrorTextTests.swift; sourceTree = "<group>"; };
 		2E9D9F1C0FB95AFA74E4C220 /* BattSimReopenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimReopenTests.swift; sourceTree = "<group>"; };
 		30CE02C081BB4C8A5DE3486B /* DaqExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqExport.swift; sourceTree = "<group>"; };
 		354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionManager.swift; sourceTree = "<group>"; };
@@ -176,6 +178,7 @@
 			isa = PBXGroup;
 			children = (
 				2E9D9F1C0FB95AFA74E4C220 /* BattSimReopenTests.swift */,
+				A1B2C3D4E5F60718293A4B5D /* VdutErrorTextTests.swift */,
 				93278BE66C9BEEEBDCFEFEC8 /* DiagnosticsTransportTests.swift */,
 			);
 			path = Tests;
@@ -402,6 +405,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B83E96224066571AB2B30F9B /* BattSimReopenTests.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* VdutErrorTextTests.swift in Sources */,
 				B5E5CB30E742D31F085A73D1 /* DiagnosticsTransportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
