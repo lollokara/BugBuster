@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking  // URLSession lives here outside Apple platforms (Linux/Windows CI)
+#endif
 
 // =============================================================================
 // HubClient.swift - read side of the ESPFleet hub for the Battery view (spec
