@@ -145,6 +145,7 @@ extern "C" ScriptSubmitResult scripting_submit(const char *src, size_t len, cons
 extern "C" ScriptSubmitResult scripting_submit_file(const char *name, ScriptSource source, bool replace, uint32_t *out_id);
 extern "C" bool  scripting_wait_slot_free(uint32_t timeout_ms);
 extern "C" void  scripting_log_event(char level, const char *fmt, ...);
+extern "C" void  scripting_log(char level, const char *msg, size_t len);
 
 
 // V2-D: native exec pool cleanup — implemented in mphalport.c (C linkage).
@@ -226,6 +227,46 @@ void scripting_log_event(char level, const char *fmt, ...)
         sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
         size_t len = sr_format_line(line, sizeof(line), ts, level, "sys", text, tlen);
         log_push_locked(line, len);
+        xSemaphoreGive(s_log_mutex);
+    }
+}
+
+void scripting_log(char level, const char *msg, size_t len)
+{
+    if (level != 'E' && level != 'W' && level != 'I' && level != 'D') {
+        level = 'I';
+    }
+    if (!msg) {
+        msg = "";
+        len = 0;
+    }
+
+    // Strip trailing \r and \n so we format exactly one clean line
+    size_t text_len = len;
+    while (text_len > 0 && (msg[text_len - 1] == '\n' || msg[text_len - 1] == '\r')) {
+        text_len--;
+    }
+
+    // Tee to stderr (CDC #0) for console visibility, except while a BBP host owns it:
+    // raw bytes there corrupt the COBS stream. Output still reaches the log ring.
+    if (!bbpCdcClaimed()) {
+        fwrite(msg, 1, text_len, stderr);
+        fputc('\n', stderr);
+    }
+
+    // Also feed the browser REPL terminal. repl_ws_forward() is non-blocking
+    // and becomes a no-op until a WebSocket session is authenticated.
+    repl_ws_forward(msg, text_len);
+    repl_ws_forward("\n", 1);
+
+    if (!s_log_mutex) return;
+    char line[SR_LINE_MAX + 40];
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        uint32_t ts = now_ms();
+        sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
+        size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", msg, text_len);
+        ring_emit(NULL, line, n);
+        sr_line_set_level(&s_line_asm, 'I', ts, ring_emit, NULL);
         xSemaphoreGive(s_log_mutex);
     }
 }

@@ -16,6 +16,8 @@ export const bugbusterCompletions: CompletionSource = (context) => {
 
       // bugbuster functions
       snippetCompletion("bugbuster.sleep(${ms})", { label: "bugbuster.sleep", detail: "cooperative sleep", type: "function" }),
+      snippetCompletion("bugbuster.log('${level}', '${msg}')", { label: "bugbuster.log", detail: "log to ring with level", type: "function" }),
+      snippetCompletion("bugbuster.ticks_ms()", { label: "bugbuster.ticks_ms", detail: "milliseconds since boot", type: "function" }),
       snippetCompletion("bugbuster.Channel(${id})", { label: "bugbuster.Channel", detail: "analog channel (0-3)", type: "class" }),
       snippetCompletion("bugbuster.I2C(sda_io=${sda}, scl_io=${scl}, freq=${400000})", { label: "bugbuster.I2C", detail: "I2C bus setup", type: "class" }),
       snippetCompletion("i2c.close()", { label: "I2C.close", detail: "release shared I2C controller", type: "method" }),
@@ -78,6 +80,7 @@ export const bugbusterCompletions: CompletionSource = (context) => {
       snippetCompletion("bb_helpers.dac_ramp(channel=${ch}, lo=${0.0}, hi=${5.0}, step=${1.0})", { label: "bb_helpers.dac_ramp", type: "function" }),
 
       // bb_logging
+      snippetCompletion("bb_logging.debug('${msg}')", { label: "bb_logging.debug", type: "function" }),
       snippetCompletion("bb_logging.info('${msg}')", { label: "bb_logging.info", type: "function" }),
       snippetCompletion("bb_logging.warn('${msg}')", { label: "bb_logging.warn", type: "function" }),
       snippetCompletion("bb_logging.error('${msg}')", { label: "bb_logging.error", type: "function" }),

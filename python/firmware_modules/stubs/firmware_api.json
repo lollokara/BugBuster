@@ -20,6 +20,33 @@
      "doc": "Sleep ``ms`` milliseconds; a stop request interrupts it."
     },
     {
+     "name": "log",
+     "signature": "log(level: str, msg: str) -> None",
+     "params": [
+      {
+       "name": "level",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      },
+      {
+       "name": "msg",
+       "kind": "positional",
+       "annotation": "str",
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Write one structured line to the script log ring with ``level`` ('E', 'W', 'I', 'D') and src 'mpy'."
+    },
+    {
+     "name": "ticks_ms",
+     "signature": "ticks_ms() -> int",
+     "params": [],
+     "returns": "int",
+     "doc": "Return milliseconds since boot (matching the script log timestamps)."
+    },
+    {
      "name": "vadj_pd_warning",
      "signature": "vadj_pd_warning(rail: int, voltage: float) -> str | None",
      "params": [
@@ -3127,8 +3154,22 @@
   },
   {
    "name": "bb_logging",
-   "doc": "Timestamped print helpers (``bb_logging.py`` on the device).",
+   "doc": "Timestamped log helpers (``bb_logging.py`` on the device).",
    "functions": [
+    {
+     "name": "debug",
+     "signature": "debug(msg) -> None",
+     "params": [
+      {
+       "name": "msg",
+       "kind": "positional",
+       "annotation": null,
+       "default": null
+      }
+     ],
+     "returns": "None",
+     "doc": "Log a DEBUG-level message with timestamp."
+    },
     {
      "name": "info",
      "signature": "info(msg) -> None",
@@ -3141,7 +3182,7 @@
       }
      ],
      "returns": "None",
-     "doc": "Print an INFO-level message with timestamp."
+     "doc": "Log an INFO-level message with timestamp."
     },
     {
      "name": "warn",
@@ -3155,7 +3196,7 @@
       }
      ],
      "returns": "None",
-     "doc": "Print a WARN-level message with timestamp."
+     "doc": "Log a WARN-level message with timestamp."
     },
     {
      "name": "error",
@@ -3169,7 +3210,7 @@
       }
      ],
      "returns": "None",
-     "doc": "Print an ERROR-level message with timestamp."
+     "doc": "Log an ERROR-level message with timestamp."
     }
    ],
    "classes": [],

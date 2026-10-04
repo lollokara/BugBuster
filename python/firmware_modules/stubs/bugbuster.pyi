@@ -34,6 +34,12 @@ HAT_LED_WHITE: int
 def sleep(ms: int) -> None:
     """Sleep ``ms`` milliseconds; a stop request interrupts it."""
 
+def log(level: str, msg: str) -> None:
+    """Write one structured line to the script log ring with ``level`` ('E', 'W', 'I', 'D') and src 'mpy'."""
+
+def ticks_ms() -> int:
+    """Return milliseconds since boot (matching the script log timestamps)."""
+
 def vadj_pd_warning(rail: int, voltage: float) -> str | None:
     """USB-PD headroom warning for VADJ ``rail`` (1-2) at ``voltage``, or None."""
 
