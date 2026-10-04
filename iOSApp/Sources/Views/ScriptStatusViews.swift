@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum ScriptViewMetrics {
+    static let minTouchTarget: CGFloat = 44
+}
+
 /// Copy and colours shared by the pill, the header and the autorun panel.
 enum ScriptStatusText {
     static func stateLabel(_ s: ScriptRunStatus) -> String {
@@ -78,22 +82,23 @@ struct ScriptStatusPill: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 6) {
                             Text(status.displayName)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .font(.subheadline.monospaced().weight(.semibold))
                                 .lineLimit(1)
                             if let label = ScriptStatusText.elapsedLabel(elapsed) {
                                 Text(label)
-                                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                                    .font(.caption2.weight(.medium).monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
                         }
                         if let lastLine, !lastLine.isEmpty {
                             Text(lastLine)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.caption2.monospaced())
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                     }
                 }
+                .frame(minHeight: ScriptViewMetrics.minTouchTarget)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -101,9 +106,10 @@ struct ScriptStatusPill: View {
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(.red)
-                    .padding(7)
+                    .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.tint(.red), in: Circle())
@@ -112,7 +118,7 @@ struct ScriptStatusPill: View {
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: 420)
         .glassEffect(.regular, in: Capsule())
     }
@@ -126,43 +132,68 @@ struct ScriptStatusHeader: View {
     let onToggleLog: () -> Void
     let onStop: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: sizeClass == .compact ? 8 : 12) {
             Circle()
                 .fill(ScriptStatusText.stateColor(status?.state ?? .idle))
                 .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.map { $0.isActive ? $0.displayName : "No script running" } ?? "Connecting…")
-                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .font(.subheadline.monospaced().weight(.semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if let status {
                     Text([ScriptStatusText.stateLabel(status),
                           status.isActive ? ScriptStatusText.sourceLabel(status.source) : nil,
                           status.isActive ? ScriptStatusText.elapsedLabel(elapsed) : nil]
                         .compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
-            Spacer()
+            Spacer(minLength: 4)
             Button(action: onToggleLog) {
-                Label(logVisible ? "Hide log" : "Log", systemImage: "text.alignleft").lineLimit(1).fixedSize()
-                    .font(.system(size: 13, weight: .semibold))
+                if sizeClass == .compact {
+                    Image(systemName: "text.alignleft")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                } else {
+                    Label(logVisible ? "Hide log" : "Log", systemImage: "text.alignleft")
+                        .lineLimit(1).fixedSize()
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                }
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel(logVisible ? "Hide log" : "Show log")
+
             if status?.isActive == true {
                 Button(role: .destructive, action: onStop) {
-                    Label("Stop", systemImage: "stop.fill").lineLimit(1).fixedSize()
-                        .font(.system(size: 13, weight: .semibold))
+                    if sizeClass == .compact {
+                        Image(systemName: "stop.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
+                    } else {
+                        Label("Stop", systemImage: "stop.fill")
+                            .lineLimit(1).fixedSize()
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .disabled(status?.state == .stopping)
+                .accessibilityLabel("Stop \(status?.displayName ?? "script")")
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -179,10 +210,14 @@ struct ScriptAutorunPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Autorun on boot")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.headline)
                 Spacer()
-                Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("Refresh autorun status")
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Refresh autorun status")
                 Menu {
                     ForEach(files, id: \.self) { name in
                         Button(name) { onEnable(name) }
@@ -193,7 +228,9 @@ struct ScriptAutorunPanel: View {
                     }
                 } label: {
                     Text(autorun?.enabled == true ? "Change" : "Enable")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: ScriptViewMetrics.minTouchTarget)
+                        .contentShape(Rectangle())
                 }
                 .disabled(files.isEmpty && autorun?.enabled != true)
             }
@@ -202,15 +239,16 @@ struct ScriptAutorunPanel: View {
                     HStack {
                         Text(row.label).foregroundStyle(.secondary)
                         Spacer()
-                        Text(row.value).font(.system(size: 12, design: .monospaced))
+                        Text(row.value).font(.caption.monospaced())
                     }
-                    .font(.system(size: 12))
+                    .font(.caption)
                 }
             } else {
-                Text("Loading…").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding()
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
+

@@ -33,22 +33,33 @@ struct ScriptsBrowserView: View {
             Section {
                 HStack(spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Stored scripts").font(.system(size: 22, weight: .bold))
+                        Text("Stored scripts").font(.title2.weight(.bold))
                         if let s = model.storage {
                             Text(String(format: "Used %.1f KB of %.1f KB", s.usedBytes / 1024, s.totalBytes / 1024))
-                                .font(.system(size: 11))
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     Spacer()
-                    Button(action: onNew) { Image(systemName: "plus.circle.fill").font(.system(size: 24)) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.blue)
-                        .accessibilityLabel("New script")
-                    Button(action: onREPL) { Image(systemName: "terminal.fill").font(.system(size: 20)) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.cyan)
-                        .accessibilityLabel("Open REPL")
+                    Button(action: onNew) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title2)
+                            .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                    .accessibilityLabel("New script")
+
+                    Button(action: onREPL) {
+                        Image(systemName: "terminal.fill")
+                            .font(.title3)
+                            .frame(minWidth: ScriptViewMetrics.minTouchTarget, minHeight: ScriptViewMetrics.minTouchTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan)
+                    .accessibilityLabel("Open REPL")
                 }
             }
             .listRowBackground(Color.clear)
@@ -69,15 +80,16 @@ struct ScriptsBrowserView: View {
                     HStack {
                         Button { onOpen(name) } label: {
                             Label(name, systemImage: "doc.text")
-                                .font(.system(size: 15, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .font(.body.monospaced())
+                                .frame(maxWidth: .infinity, minHeight: ScriptViewMetrics.minTouchTarget, alignment: .leading)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         ScriptRunMenu(onRun: { onRun(name, $0) }) {
                             Image(systemName: "play.fill")
                                 .foregroundStyle(.green)
-                                .padding(8)
+                                .frame(width: ScriptViewMetrics.minTouchTarget, height: ScriptViewMetrics.minTouchTarget)
+                                .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Run \(name)")
                     }
@@ -91,12 +103,10 @@ struct ScriptsBrowserView: View {
                 }
             }
             .listRowBackground(Color.clear)
-
-            // Clear the floating iPhone tab bar.
-            Color.clear.frame(height: 90).listRowBackground(Color.clear)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .refreshable { await model.loadFiles() }
     }
 }
+

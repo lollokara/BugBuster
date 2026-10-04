@@ -263,16 +263,16 @@ struct ScriptCompletionPopover: View {
                     Button { onPick(item) } label: {
                         HStack(spacing: 8) {
                             Text(Self.glyph(item.kind))
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .font(.caption2.monospaced().weight(.bold))
                                 .foregroundStyle(.cyan)
                                 .frame(width: 18)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.label)
-                                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                    .font(.subheadline.monospaced().weight(.semibold))
                                     .foregroundStyle(.primary)
                                 if !item.detail.isEmpty {
                                     Text(item.detail)
-                                        .font(.system(size: 10, design: .monospaced))
+                                        .font(.caption2.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
