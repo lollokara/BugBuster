@@ -77,6 +77,10 @@ final class ScriptRunManager: ObservableObject {
     var isREPLReadOnly: Bool { status?.holdsFileSlot ?? false }
 
     var isConnected: Bool { client != nil }
+    var isPolling: Bool { loop != nil }
+
+    private var pollingGeneration = 0
+    private var actionEpoch = 0
 
     // MARK: - Connection
 
@@ -139,6 +143,7 @@ final class ScriptRunManager: ObservableObject {
     func disconnect() {
         loop?.cancel()
         loop = nil
+        pollingGeneration += 1
         client = nil
         status = nil
         replacePrompt = nil
@@ -156,13 +161,16 @@ final class ScriptRunManager: ObservableObject {
     private func restartPolling() {
         loop?.cancel()
         loop = nil
+        pollingGeneration += 1
+        let gen = pollingGeneration
         nextStatusAt = .distantPast
         nextLogsAt = .distantPast
         guard autoStart, appActive, client != nil else { return }
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let wait = await self.tick()
+                let wait = await self.tick(generation: gen)
+                guard self.pollingGeneration == gen else { return }
                 do { try await self.sleeper(wait) } catch { return }
             }
         }
@@ -175,43 +183,63 @@ final class ScriptRunManager: ObservableObject {
     /// One scheduling step: poll what is due, return the delay to the next step.
     @discardableResult
     func tick() async -> TimeInterval {
+        await tick(generation: nil)
+    }
+
+    @discardableResult
+    func tick(generation: Int?) async -> TimeInterval {
         guard client != nil else { return policy.tick }
+        if let generation, generation != pollingGeneration { return policy.tick }
         let now = clock()
         if now >= nextStatusAt {
-            await refreshStatus()
+            await refreshStatus(generation: generation)
+            if let generation, generation != pollingGeneration { return policy.tick }
             nextStatusAt = now.addingTimeInterval(policy.status)
         }
         if let every = policy.logs, now >= nextLogsAt {
-            await drainLogs()
+            await drainLogs(generation: generation)
+            if let generation, generation != pollingGeneration { return policy.tick }
             nextLogsAt = now.addingTimeInterval(every)
         }
         return policy.tick
     }
 
     func refreshStatus() async {
+        await refreshStatus(generation: nil)
+    }
+
+    func refreshStatus(generation: Int?) async {
         guard let client else { return }
         do {
             let fresh = try await client.status()
+            if let generation, generation != pollingGeneration { return }
             let wasActive = status?.isActive ?? false
             status = fresh
             lastError = nil
             // The run just ended: fetch its last lines (a traceback) even if nothing polls logs.
-            if wasActive && !fresh.isActive { await drainLogs() }
+            if wasActive && !fresh.isActive { await drainLogs(generation: generation) }
         } catch {
+            if let generation, generation != pollingGeneration { return }
             lastError = error.localizedDescription
         }
     }
 
     /// Read pages until one comes back short (caught up), at most `maxPagesPerDrain`.
     func drainLogs() async {
+        await drainLogs(generation: nil)
+    }
+
+    func drainLogs(generation: Int?) async {
         guard let client else { return }
         for _ in 0..<Self.maxPagesPerDrain {
             do {
                 let page = try await client.logs(since: log.cursor)
+                if let generation, generation != pollingGeneration { return }
                 log.ingest(page)
                 if page.restarted { continue }              // re-read the new ring from 0 now
                 if page.data.count < ScriptsClient.logPageBytes { return }
             } catch {
+                if let generation, generation != pollingGeneration { return }
                 lastError = error.localizedDescription
                 return
             }
@@ -222,10 +250,14 @@ final class ScriptRunManager: ObservableObject {
 
     func run(_ name: String, background: Bool) async {
         guard let client else { return }
+        actionEpoch += 1
+        let epoch = actionEpoch
         do {
             let outcome = try await client.runFile(name, background: background, replace: false)
-            await handle(outcome, requested: name, background: background)
+            guard epoch == actionEpoch else { return }
+            await handle(outcome, requested: name, background: background, epoch: epoch)
         } catch {
+            guard epoch == actionEpoch else { return }
             report(error)
         }
     }
@@ -234,33 +266,44 @@ final class ScriptRunManager: ObservableObject {
     func confirmReplace() async {
         guard let prompt = replacePrompt, let client else { return }
         replacePrompt = nil
+        actionEpoch += 1
+        let epoch = actionEpoch
         do {
             let outcome = try await client.runFile(prompt.requested, background: prompt.background, replace: true)
-            await handle(outcome, requested: prompt.requested, background: prompt.background)
+            guard epoch == actionEpoch else { return }
+            await handle(outcome, requested: prompt.requested, background: prompt.background, epoch: epoch)
         } catch {
+            guard epoch == actionEpoch else { return }
             report(error)
         }
     }
 
     func cancelReplace() {
+        actionEpoch += 1
         replacePrompt = nil
     }
 
     func stop() async {
         guard let client else { return }
+        actionEpoch += 1
+        let epoch = actionEpoch
         do {
             try await client.stop()
+            guard epoch == actionEpoch else { return }
             await refreshStatus()
         } catch {
+            guard epoch == actionEpoch else { return }
             report(error)
         }
     }
 
-    private func handle(_ outcome: ScriptRunOutcome, requested: String, background: Bool) async {
+    private func handle(_ outcome: ScriptRunOutcome, requested: String, background: Bool, epoch: Int) async {
+        guard epoch == actionEpoch else { return }
         switch outcome {
         case .started(_, let name, _):
             log.appendMarker(background ? "Started '\(name)' in background" : "Started '\(name)'")
             if !background { consoleVisible = true }
+            guard epoch == actionEpoch else { return }
             await refreshStatus()
         case .busy(let running, _):
             // Name the holder from the 409 body: the polled status may be up to 5 s old.

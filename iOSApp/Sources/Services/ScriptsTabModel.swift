@@ -148,25 +148,52 @@ final class ScriptsTabModel: ObservableObject {
 /// `mpy` log lines that arrive after it form the transcript (output comes via the log).
 @MainActor
 final class ScriptBLERepl: ObservableObject {
-    @Published private(set) var entries: [(echo: String, afterLineId: Int)] = []
+    struct Entry: Equatable {
+        let echo: String
+        var output: [String] = []
+    }
+
+    @Published private(set) var entries: [Entry] = []
     @Published private(set) var error: String?
     @Published private(set) var isSending = false
 
     private let manager: ScriptRunManager
     private var logObserver: AnyCancellable?
+    private var lastSeenLineId: Int = 0
 
     init(manager: ScriptRunManager) {
         self.manager = manager
-        // Re-render when log lines arrive.
-        logObserver = manager.log.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        self.lastSeenLineId = manager.log.lines.last?.id ?? 0
+        logObserver = manager.log.$lines.sink { [weak self] lines in
+            self?.processLogLines(lines)
+        }
+    }
+
+    private func processLogLines(_ lines: [ScriptLogLine]) {
+        if lines.isEmpty {
+            lastSeenLineId = 0
+            return
+        }
+        if let lastId = lines.last?.id, lastId < lastSeenLineId {
+            lastSeenLineId = 0
+        }
+        let newLines = lines.filter { $0.id > lastSeenLineId }
+        guard !newLines.isEmpty else { return }
+        lastSeenLineId = newLines.last?.id ?? lastSeenLineId
+
+        let mpyLines = newLines.filter { !$0.isMarker && $0.source == "mpy" }
+        if !mpyLines.isEmpty && !entries.isEmpty {
+            entries[entries.count - 1].output.append(contentsOf: mpyLines.map(\.text))
+        }
     }
 
     func submit(_ src: String) async {
         guard let client = manager.client, !src.isEmpty else { return }
+        processLogLines(manager.log.lines)
         isSending = true
         defer { isSending = false }
-        let anchor = manager.log.lines.last?.id ?? 0
-        entries.append((src, anchor))
+        entries.append(Entry(echo: src, output: []))
+        lastSeenLineId = manager.log.lines.last?.id ?? 0
         do {
             _ = try await client.eval(src, persist: true)
             error = nil
@@ -179,12 +206,10 @@ final class ScriptBLERepl: ObservableObject {
 
     func transcript() -> String {
         var out: [String] = []
-        let lines = manager.log.lines.filter { !$0.isMarker && $0.source == "mpy" }
-        for (index, entry) in entries.enumerated() {
+        for entry in entries {
             let parts = entry.echo.split(separator: "\n", omittingEmptySubsequences: false)
             for (i, part) in parts.enumerated() { out.append((i == 0 ? ">>> " : "... ") + part) }
-            let upper = index + 1 < entries.count ? entries[index + 1].afterLineId : Int.max
-            out += lines.filter { $0.id > entry.afterLineId && $0.id <= upper }.map(\.text)
+            out.append(contentsOf: entry.output)
         }
         return out.joined(separator: "\n")
     }

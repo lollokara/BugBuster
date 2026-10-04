@@ -101,9 +101,11 @@ struct ScriptLogFilter: Equatable {
     var query = ""
 
     func matches(_ line: ScriptLogLine) -> Bool {
-        if line.isMarker { return true }
-        guard levels.contains(line.level) else { return false }
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isMarker {
+            return q.isEmpty || line.text.localizedCaseInsensitiveContains(q)
+        }
+        guard levels.contains(line.level) else { return false }
         return q.isEmpty || line.text.localizedCaseInsensitiveContains(q) || line.source.localizedCaseInsensitiveContains(q)
     }
 
