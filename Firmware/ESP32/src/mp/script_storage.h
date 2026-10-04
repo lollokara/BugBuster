@@ -99,6 +99,27 @@ bool script_storage_delete(const char *name, char *err, size_t err_size);
  */
 int script_storage_list(char names[][SCRIPT_NAME_MAX + 1], int max_count);
 
+// ---------------------------------------------------------------------------
+// Chunked upload (BLE tunnel: requests are <= 512 bytes)
+// ---------------------------------------------------------------------------
+
+// Temp file inside the scripts dir. The leading '.' makes
+// script_storage_validate_name() reject it, so it never shows in a listing.
+#define SCRIPT_UPLOAD_TMP_NAME ".upload.tmp"
+
+/**
+ * Append one chunk of an upload of script `name`.
+ *   off == 0  starts (or restarts) the upload: the temp file is truncated.
+ *   off  > 0  must equal the bytes received so far for the same name, else
+ *             the chunk is rejected with err "offset mismatch: expected N".
+ *   final     copies the temp file to /scripts/<name> and removes it.
+ * One upload at a time (a new off == 0 for any name abandons the previous one).
+ * *out_total receives the bytes received so far (0 on failure).
+ */
+bool script_storage_chunk_write(const char *name, uint32_t off, const uint8_t *data, size_t len,
+                                bool final, uint32_t *out_total, char *err, size_t err_size);
+
 #ifdef __cplusplus
 }
 #endif
+

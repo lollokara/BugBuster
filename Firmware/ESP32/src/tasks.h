@@ -435,7 +435,17 @@ bool tasks_apply_vout_range(uint8_t channel, bool bipolar);
 #define TASK_STACK_ADCPOLL   2560
 #define TASK_STACK_FAULTMON  2560
 #define TASK_STACK_CMDPROC   3072  // measured worst case 1672 (DEVICE_RESET / wavegen stop), margin 1400
-#define TASK_STACK_WAVEGEN   2048
+// wavegen CORRECTION, 2026-10-03. The 868 B "peak" was an idle reading taken
+// before any waveform ran. On hardware, POST /api/wavegen/start then /stop
+// 100 ms later during a VADJ1/e-fuse pulse panicked "stack overflow in task
+// wavegen" (coredump pc=panic_abort <- vApplicationStackOverflowHook <-
+// vTaskSwitchContext). The task formatted floats in ESP_LOGI (newlib
+// _vfprintf_r frame 0x320 + _dtoa + esp_log_write*/vprintf ~0x1A0), on top of
+// taskWavegen's own frame, the FPU/PIE coprocessor save area and, during a PCA9535
+// INT storm from the pulse, repeated interrupt frames. Those logs are gone
+// (bbpStartWavegen already logs the params); 3072 keeps >= 1 KB over the
+// remaining worst case (SPI error ESP_LOGE with integer args).
+#define TASK_STACK_WAVEGEN   3072
 #define TASK_STACK_MAINLOOP  5120  // Core-0 main loop; sized from measured 2684 bytes peak
 #define TASK_STACK_BBPCLI    5120  // Core-1 CLI/BBP; measured peak 2760 (TUI exercised, 2026-08-06), margin 2360
 

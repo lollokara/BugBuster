@@ -18,6 +18,7 @@ struct BsStatus: Equatable {
     var socPct = 0.0, elapsedS = 0, remainingS: Int?, provisional = false
     var vMeas = 0.0, iMeas = 0.0, vTarget = 0.0, iAvg = 0.0, fsTotal = 0, fsUsed = 0
     var eDutJ: Double?
+    var canReopen: Bool { BattSim.canReopen(state: state) }
 }
 
 struct BsMeta: Equatable {
@@ -98,11 +99,14 @@ enum BattSim {
     static let chemNames = ["LiPo", "LiFePO4", "NiMH", "Lead-acid"]
     static let errorText = ["", "battlog partition missing", "no run loaded", "busy", "invalid parameters",
                             "not allowed in this state", "USB-PD contract below 9 V / 3 A",
-                            "acquisition not running", "flash I/O error", "run not found"]
+                            "acquisition not running", "flash I/O error", "run not found", "run depleted"]
     static let eventNames: [Int: String] = [1: "created", 2: "start", 3: "pause", 4: "stop", 5: "depleted",
                                             6: "reboot", 7: "param", 8: "stall", 9: "output off",
-                                            10: "PD lost", 11: "store error"]
-    enum Action: Int { case defaults = 14, newRun = 7, start = 8, pause = 9, stop = 10, unload = 11, load = 12, delete = 13 }
+                                            10: "PD lost", 11: "store error", 12: "reopen"]
+    enum Action: Int { case defaults = 14, newRun = 7, start = 8, pause = 9, stop = 10, unload = 11, load = 12, delete = 13, reopen = 15 }
+
+    static func canReopen(state: Int) -> Bool { state == 4 }
+    static func isReopenVisible(state: Int) -> Bool { canReopen(state: state) }
 
     // MARK: Decoders
 
@@ -556,4 +560,14 @@ final class BattSimClient {
         if let run { try await cfgSet(0x080E, .u16, run) }
         _ = try await post("/api/daq/config", ["op": 4, "args": Self.hex([UInt8(a.rawValue)])])
     }
+
+    func reopen(run: Int? = nil) async throws {
+        try await action(.reopen, run: run)
+    }
+
+    func reopen(_ run: Int) async throws {
+        try await action(.reopen, run: run)
+    }
 }
+
+typealias BattSimService = BattSimClient

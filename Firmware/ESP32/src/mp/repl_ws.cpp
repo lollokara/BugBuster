@@ -291,6 +291,14 @@ static void session_ctx_free(void *ctx)
 // WebSocket URI handler
 // ---------------------------------------------------------------------------
 
+// REPL is read-only (log attach) while a file/autorun script holds the slot.
+static bool file_script_running(void)
+{
+    ScriptStatus st;
+    scripting_get_status(&st);
+    return st.file_slot_id != 0;
+}
+
 static esp_err_t handle_repl_ws(httpd_req_t *req)
 {
     int fd = httpd_req_to_sockfd(req);
@@ -422,6 +430,11 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
 
         // Ctrl-C: inject KeyboardInterrupt.
         if (c == 0x03) {
+            if (file_script_running()) {
+                const char ro[] = "\r\n[read-only: stop the script from the Scripts panel]\r\n";
+                repl_ws_forward(ro, sizeof(ro) - 1);
+                continue;
+            }
             ESP_LOGI(TAG, "REPL Ctrl-C from fd=%d", fd);
             scripting_stop();
             s_line_len = 0;
@@ -451,8 +464,14 @@ static esp_err_t handle_repl_ws(httpd_req_t *req)
             if (s_line_len > 0) {
                 // Null-terminate for scripting_run_string.
                 s_line_buf[s_line_len] = '\0';
-                bool ok = scripting_run_string(s_line_buf, s_line_len, true);
-                if (!ok) {
+                ScriptSubmitOpts opts = {};
+                opts.source  = SCRIPT_SRC_REPL;
+                opts.persist = true;
+                ScriptSubmitResult sr = scripting_submit(s_line_buf, s_line_len, &opts, NULL);
+                if (sr == SCRIPT_SUBMIT_BUSY) {
+                    const char busy[] = "[read-only: a script is running, output only]\r\n";
+                    repl_ws_forward(busy, sizeof(busy) - 1);
+                } else if (sr != SCRIPT_SUBMIT_OK) {
                     repl_ws_forward("[queue full]\r\n", 14);
                 }
                 s_line_len = 0;

@@ -15,8 +15,10 @@
 #include <ctype.h>
 #include <unistd.h>
 
-// Base directory for all scripts on the dedicated scripts SPIFFS partition.
+// Overridable so tests/firmware_host can run this file against a temp dir.
+#ifndef SCRIPTS_BASE
 #define SCRIPTS_BASE "/scripts"
+#endif
 
 // ---------------------------------------------------------------------------
 // script_storage_validate_name
@@ -205,3 +207,115 @@ int script_storage_list(char names[][SCRIPT_NAME_MAX + 1], int max_count)
     closedir(dir);
     return count;
 }
+
+// ---------------------------------------------------------------------------
+// Chunked upload
+// ---------------------------------------------------------------------------
+
+static char s_upload_name[SCRIPT_NAME_MAX + 1];
+
+static void upload_abort(const char *tmp)
+{
+    unlink(tmp);
+    s_upload_name[0] = '\0';
+}
+
+bool script_storage_chunk_write(const char *name, uint32_t off, const uint8_t *data, size_t len,
+                                bool final, uint32_t *out_total, char *err, size_t err_size)
+{
+    if (out_total) *out_total = 0;
+    if (!script_storage_validate_name(name)) {
+        snprintf(err, err_size, "invalid script name");
+        return false;
+    }
+    char tmp[256];
+    int tn = snprintf(tmp, sizeof(tmp), "%s/%s", SCRIPTS_BASE, SCRIPT_UPLOAD_TMP_NAME);
+    if (tn <= 0 || (size_t)tn >= sizeof(tmp)) {
+        snprintf(err, err_size, "path too long");
+        return false;
+    }
+
+    if (off == 0) {
+        FILE *f = fopen(tmp, "wb");
+        if (!f) {
+            snprintf(err, err_size, "fopen failed: %s", strerror(errno));
+            return false;
+        }
+        fclose(f);
+        strncpy(s_upload_name, name, SCRIPT_NAME_MAX);
+        s_upload_name[SCRIPT_NAME_MAX] = '\0';
+    } else {
+        struct stat st;
+        if (strcmp(s_upload_name, name) != 0 || stat(tmp, &st) != 0) {
+            snprintf(err, err_size, "no upload in progress for %s", name);
+            return false;
+        }
+        if ((uint32_t)st.st_size != off) {
+            snprintf(err, err_size, "offset mismatch: expected %lu", (unsigned long)st.st_size);
+            return false;
+        }
+    }
+
+    if ((size_t)off + len > SCRIPT_BODY_MAX) {
+        upload_abort(tmp);
+        snprintf(err, err_size, "script too large (max %u)", (unsigned)SCRIPT_BODY_MAX);
+        return false;
+    }
+    if (len > 0) {
+        FILE *f = fopen(tmp, "ab");
+        if (!f) {
+            snprintf(err, err_size, "fopen failed: %s", strerror(errno));
+            return false;
+        }
+        size_t w = fwrite(data, 1, len, f);
+        fclose(f);
+        if (w != len) {
+            upload_abort(tmp);
+            snprintf(err, err_size, "fwrite failed: wrote %zu of %zu", w, len);
+            return false;
+        }
+    }
+    uint32_t total = off + (uint32_t)len;
+    if (!final) {
+        if (out_total) *out_total = total;
+        return true;
+    }
+
+    if (total == 0) {
+        upload_abort(tmp);
+        snprintf(err, err_size, "empty script");
+        return false;
+    }
+    // SPIFFS has no rename(): stream the temp file into the final path.
+    char path[256];
+    if (!script_storage_resolve_path(name, path, sizeof(path))) {
+        upload_abort(tmp);
+        snprintf(err, err_size, "invalid script name");
+        return false;
+    }
+    FILE *in = fopen(tmp, "rb");
+    FILE *out = in ? fopen(path, "wb") : NULL;
+    if (!in || !out) {
+        if (in) fclose(in);
+        upload_abort(tmp);
+        snprintf(err, err_size, "fopen failed: %s", strerror(errno));
+        return false;
+    }
+    uint8_t buf[256];
+    size_t copied = 0, n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) break;
+        copied += n;
+    }
+    fclose(in);
+    fclose(out);
+    upload_abort(tmp);
+    if (copied != total) {
+        unlink(path);
+        snprintf(err, err_size, "copy failed: %zu of %lu", copied, (unsigned long)total);
+        return false;
+    }
+    if (out_total) *out_total = total;
+    return true;
+}
+

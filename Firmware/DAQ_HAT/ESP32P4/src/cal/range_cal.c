@@ -9,6 +9,7 @@
 #include "adaq7769.h"
 #include "smu.h"
 #include "battsim.h"
+#include "log_forward.h"
 #include <string.h>
 #include <math.h>
 #include "esp_log.h"
@@ -578,6 +579,7 @@ esp_err_t range_cal_start(range_cal_engine_t *c, struct daq_board *b)
         return ESP_ERR_INVALID_STATE;
     }
     if (battsim_owns_supply()) return ESP_ERR_INVALID_STATE;   // run owns V_DUT
+    LOG_IMPORTANT("cal", "calibration started");
     // Save caller-supplied R_cal values before memset wipes them.
     float r_a = c->r_cal_a_ohm;
     float r_b = c->r_cal_b_ohm;

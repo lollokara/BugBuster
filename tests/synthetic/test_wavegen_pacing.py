@@ -18,7 +18,7 @@ SRC = (REPO_ROOT / "Firmware/ESP32/src/tasks.cpp").read_text(encoding="utf-8")
 
 def _wavegen_loop() -> str:
     start = SRC.index("// Generation loop")
-    end = SRC.index('ESP_LOGI("wavegen", "Stopped")', start)
+    end = SRC.index("esp_timer_stop(pace);", start)
     return re.sub(r"//[^\n]*", "", SRC[start:end])
 
 

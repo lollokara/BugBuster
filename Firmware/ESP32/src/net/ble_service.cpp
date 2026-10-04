@@ -68,7 +68,9 @@ static volatile bool s_wifi_busy  = false;
 // API tunnel response notify handle.
 static uint16_t s_apiresp_val_handle = 0;
 // API tunnel request is dispatched off the NimBLE host task (see api_req_task).
-static char s_api_req_buf[256];
+// 512 = ATT max attribute length: room for a files/chunk request
+// ({"id","path","body":{"name","off","b64","final"}}) with ~360 base64 chars.
+static char s_api_req_buf[512];
 static volatile bool s_api_busy = false;
 
 // A control write/read is only honoured once the central has presented a valid

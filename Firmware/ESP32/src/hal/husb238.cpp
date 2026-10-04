@@ -13,6 +13,7 @@ static const char *TAG = "husb238";
 
 static Husb238State s_state = {};
 static uint8_t s_requested_pdo = 0;
+static uint32_t s_last_warn_key = 0;   // edge-trigger for the PD status warnings
 
 // HUSB238 SRC_PDO selection nibble in bits [7:4]:
 // 1=5V, 2=9V, 3=12V, 8=15V, 9=18V, 10=20V (Adafruit reference driver).
@@ -208,25 +209,43 @@ bool husb238_update(void)
     // Keep selected_pdo stable for UI/debug using requested value when available.
     uint8_t effective_sel = s_requested_pdo ? s_requested_pdo : s_state.selected_pdo;
     Husb238Voltage selected_v = decode_status_voltage(effective_sel, true);
+    // Warn once per distinct anomaly, not once per poll: husb238_update() runs
+    // several times a second (pd_manager, debug/HTTP/BBP, HAT).
+    uint32_t warn_key = 0;
     if (s_state.attached && selected_v != HUSB238_V_UNATTACHED) {
         // Only fall back to selected PDO when status decode is unavailable.
         // Do not override a valid status code; that can hide real negotiation failures.
         if (s_state.voltage == HUSB238_V_UNATTACHED) {
-            ESP_LOGW(TAG,
-                     "PD status voltage unavailable (code=%u), falling back to effective PDO=0x%02X (req=0x%02X reg=0x%02X)",
-                     (unsigned)voltage_code, (unsigned)effective_sel,
-                     (unsigned)s_requested_pdo, (unsigned)s_state.selected_pdo);
-            s_state.voltage = selected_v;
-            s_state.voltage_v = husb238_decode_voltage(selected_v);
+            if (s_state.has_5v_contract) {
+                // Attached on the 5 V default contract: the status voltage field
+                // reads 0 and PD_STATUS1 bit2 carries the information. Valid state.
+                s_state.voltage = HUSB238_V_5V;
+            } else {
+                s_state.voltage = selected_v;
+                warn_key = 0x10000u | ((uint32_t)voltage_code << 8) | effective_sel
+                           | ((uint32_t)s_requested_pdo << 20) | ((uint32_t)s_state.selected_pdo << 24);
+                if (warn_key != s_last_warn_key) {
+                    ESP_LOGW(TAG,
+                             "PD status voltage unavailable (code=%u), falling back to effective PDO=0x%02X (req=0x%02X reg=0x%02X)",
+                             (unsigned)voltage_code, (unsigned)effective_sel,
+                             (unsigned)s_requested_pdo, (unsigned)s_state.selected_pdo);
+                }
+            }
+            s_state.voltage_v = husb238_decode_voltage(s_state.voltage);
             s_state.power_w = s_state.voltage_v * s_state.current_a;
         } else if (s_state.voltage != selected_v) {
-            ESP_LOGW(TAG,
-                     "PD status voltage code=%u differs from effective PDO=0x%02X (req=0x%02X reg=0x%02X)",
-                     (unsigned)voltage_code, (unsigned)effective_sel,
-                     (unsigned)s_requested_pdo, (unsigned)s_state.selected_pdo);
+            warn_key = 0x20000u | ((uint32_t)voltage_code << 8) | effective_sel
+                       | ((uint32_t)s_requested_pdo << 20) | ((uint32_t)s_state.selected_pdo << 24);
+            if (warn_key != s_last_warn_key) {
+                ESP_LOGW(TAG,
+                         "PD status voltage code=%u differs from effective PDO=0x%02X (req=0x%02X reg=0x%02X)",
+                         (unsigned)voltage_code, (unsigned)effective_sel,
+                         (unsigned)s_requested_pdo, (unsigned)s_state.selected_pdo);
+            }
         }
         s_state.selected_pdo = effective_sel;
     }
+    s_last_warn_key = warn_key;
 
     return true;
 }

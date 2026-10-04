@@ -87,6 +87,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_spi.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_net.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_hat.c
+        ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/moddaq.c
     )
 
     # MicroPython extmod machine sources that are compiled in by mpconfigport.h

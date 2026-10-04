@@ -10,6 +10,7 @@
 #include "battsim_model.h"
 #include "battsim_integ.h"
 #include "battsim_store.h"
+#include "log_forward.h"
 
 #include <math.h>
 #include <string.h>
@@ -213,11 +214,24 @@ static bs_hist_rec_v2_t make_rec(const agg_t *a, int64_t t_end, int64_t cq,
 
 static void event(uint16_t code, int32_t a, int32_t b)
 {
+    switch (code) {
+    case BS_EV_START:     LOG_IMPORTANT("battsim", "run %u start", (unsigned)S.meta.run_id); break;
+    case BS_EV_PAUSE:     LOG_IMPORTANT("battsim", "run %u pause", (unsigned)S.meta.run_id); break;
+    case BS_EV_STOP:      LOG_IMPORTANT("battsim", "run %u stop", (unsigned)S.meta.run_id); break;
+    case BS_EV_DEPLETED:  LOG_IMPORTANT("battsim", "run %u depleted", (unsigned)S.meta.run_id); break;
+    case BS_EV_STALL:     LOG_IMPORTANT("battsim", "run %u stalled", (unsigned)S.meta.run_id); break;
+    case BS_EV_PD_LOST:   LOG_IMPORTANT("battsim", "USB-PD lost, run %u paused", (unsigned)S.meta.run_id); break;
+    case BS_EV_STORE_ERR: LOG_IMPORTANT("battsim", "flash store error"); break;
+    default: break;
+    }
     if (!run_writable()) return;
     bs_event_t ev = { .t_s = (uint32_t)(sim_ticks() / TICKS_PER_S), .code = code,
                       .a = a, .b = b };
     bs_store_event(S.meta.run_id, &ev);
 }
+
+_Static_assert(BS_ST_PAUSED == 1 && BS_ST_DEPLETED == 3 && BS_ST_STOPPED == 4,
+               "bs_reopen_check() hard-codes the battsim_state_t values");
 
 static void checkpoint(void)
 {
@@ -243,6 +257,18 @@ static void dump_s1(void)
     memcpy(&tmp[first], S.ring, S.ring_head * sizeof(bs_hist_rec_v2_t));
     bs_store_s1_write(S.meta.run_id, tmp, S1_RING);
     heap_caps_free(tmp);
+}
+
+int battsim_s1_since(uint16_t run_id, uint32_t since_t_s, bs_s1_sample_t *out, int max, bool *more)
+{
+    if (more) *more = false;
+    lock();
+    int n = -1;
+    if (S.loaded && S.meta.run_id == run_id && S.ring) {
+        n = bs_s1_since(S.ring, S.ring_head, S.ring_count, S1_RING, since_t_s, out, max, more);
+    }
+    unlock();
+    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1126,20 @@ bool battsim_action(uint8_t action_id)
         }
         ok = true;
         break;
+    case DAQ_ACT_BS_RUN_REOPEN: {
+        // STOPPED -> PAUSED, output stays off. ck.ticks / counters untouched;
+        // START re-bases the wall clock, so the stopped gap is never integrated.
+        bs_reopen_t r = bs_reopen_check(S.loaded ? S.ck.state : BS_ST_NONE, S.loaded,
+                                        S.loaded && run_writable());
+        if (r == BS_REOPEN_NO_RUN)       { S.err = BS_E_NO_RUN; break; }
+        if (r == BS_REOPEN_DEPLETED)     { S.err = BS_E_DEPLETED; break; }
+        if (r != BS_REOPEN_OK)           { S.err = BS_E_STATE; break; }
+        S.ck.state = BS_ST_PAUSED;
+        event(BS_EV_REOPEN, 0, (int32_t)wall_now());
+        checkpoint();
+        ok = true;
+        break;
+    }
     case DAQ_ACT_BS_RUN_UNLOAD:
         unload_locked();
         ok = true;

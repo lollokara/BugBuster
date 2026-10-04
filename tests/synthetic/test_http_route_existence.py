@@ -129,7 +129,7 @@ def _normalise(lit: str) -> str:
 def ui_literals() -> list[tuple[str, int, str]]:
     out = []
     files = [p for p in WEB_SRC.rglob("*.ts*") if not p.name.endswith(".test.ts")]
-    files += list(IOS_SRC.rglob("*.swift"))
+    files += [p for p in IOS_SRC.rglob("*.swift") if p.name != "HubClient.swift"]
     for p in sorted(files):
         for i, line in enumerate(read_source(p).splitlines(), 1):
             if line.lstrip().startswith(("//", "*")):

@@ -44,6 +44,12 @@ API_CORE = REPO / "Firmware/ESP32/src/net/api_core.cpp"
 # unified. Each entry must carry a reason. Remove entries as they are fixed --
 # never add one without a finding to point at.
 KNOWN_DIVERGENCES: dict[str, str] = {
+    "/api/wifi/scan": (
+        "Both transports share api_core_wifi_scan_json() for the document, but "
+        "HTTP runs the full blocking wifi_scan() while the BLE tunnel scans on "
+        "a worker and answers with the last cached result after 4.5 s so it "
+        "stays inside the client's 6 s timeout."
+    ),
     "/api/gpio": (
         "HTTP emits name/modeName/pulldown; the api_core copy omits all three, "
         "so the same GET returns a different document per transport. "
@@ -201,3 +207,64 @@ def test_known_divergences_are_still_real():
             stale.append(f"{uri}: now delegates -- remove it from ALIAS_KNOWN_DIVERGENCES")
 
     assert not stale, "Stale allowlist entries:\n  " + "\n  ".join(stale)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/selftest/supplies",
+    "/api/selftest/supplies/cached",
+    "/api/wifi/scan",
+    "/api/update/status",
+    "/api/update/check",
+])
+def test_diagnostics_gets_are_served_over_the_ble_tunnel(path):
+    """The iOS Diagnostics tab reads these over BLE; unknown path there means a blank card."""
+    ac = _read(API_CORE)
+    assert f'strcmp(path, "{path}") == 0' in ac
+
+
+# ---------------------------------------------------------------------------
+# Scripts runtime (spec 2026-10-03 §2). While the phone is on the DAQ C6
+# hotspot it reaches the S3 only over BLE, so every scripts route is dispatched
+# by api_core_handle() (bodies in net/api_scripts.cpp) and HTTP only delegates.
+# ---------------------------------------------------------------------------
+SCRIPTS_ROUTES = [
+    "status", "logs", "stop", "files", "files/get", "files/delete", "files/chunk",
+    "run-file", "eval", "autorun/status", "autorun/enable", "autorun/disable",
+]
+
+# (uri, method) HTTP handlers on a scripts path that may stay transport-specific.
+SCRIPTS_HTTP_ONLY: dict[tuple[str, str], str] = {
+    ("/api/scripts/files", "HTTP_POST"): (
+        "Legacy raw-body upload (text/x-python, up to 32 KB) kept for the web UI and "
+        "Python client; unchanged by the spec. BLE and new clients use "
+        "POST /api/scripts/files/chunk, which api_core serves."
+    ),
+}
+
+
+@pytest.mark.parametrize("sfx", SCRIPTS_ROUTES)
+def test_scripts_route_is_served_by_api_core_and_delegated_over_http(sfx):
+    ac = _read(API_CORE)
+    ws = _read(WEBSERVER)
+    block = ac[ac.index('strncmp(path, "/api/scripts/", 13) == 0'):]
+    block = block[:block.index("return api_error(\"unknown path\")")]
+    assert f'strcmp(sfx, "{sfx}") == 0' in block, f"/api/scripts/{sfx} not dispatched by api_core_handle()"
+
+    uri = f"/api/scripts/{sfx}"
+    regs = [(m, h) for u, m, h in _registrations(ws) if u == uri]
+    assert regs, f"{uri} is reachable over BLE but not registered over HTTP"
+    bodies = _handler_bodies(ws)
+    for method, handler in regs:
+        if (uri, method) in SCRIPTS_HTTP_ONLY:
+            continue
+        assert "api_core_handle" in bodies.get(handler, ""), (
+            f"{uri} {method} -> {handler}() must delegate to api_core_handle()")
+
+
+def test_scripts_http_only_allowlist_is_still_real():
+    ws = _read(WEBSERVER)
+    bodies = _handler_bodies(ws)
+    for (uri, method), _why in SCRIPTS_HTTP_ONLY.items():
+        handler = next((h for u, m, h in _registrations(ws) if u == uri and m == method), None)
+        assert handler, f"{uri} {method} no longer registered -- drop it from SCRIPTS_HTTP_ONLY"
+        assert "api_core_handle" not in bodies[handler], f"{uri} {method} now delegates -- drop it"

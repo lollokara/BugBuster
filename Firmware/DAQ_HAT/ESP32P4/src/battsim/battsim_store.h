@@ -86,7 +86,7 @@ _Static_assert(sizeof(bs_hist_rec_v2_t) == 48, "bs_hist_rec_v2_t wire size");
 typedef enum {
     BS_EV_CREATED = 1,  BS_EV_START = 2,    BS_EV_PAUSE = 3,   BS_EV_STOP = 4,
     BS_EV_DEPLETED = 5, BS_EV_REBOOT = 6,   BS_EV_PARAM = 7,   BS_EV_STALL = 8,
-    BS_EV_OUTPUT_OFF = 9, BS_EV_PD_LOST = 10, BS_EV_STORE_ERR = 11,
+    BS_EV_OUTPUT_OFF = 9, BS_EV_PD_LOST = 10, BS_EV_STORE_ERR = 11, BS_EV_REOPEN = 12,
 } bs_event_code_t;
 
 typedef struct __attribute__((packed)) {

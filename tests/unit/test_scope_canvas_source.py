@@ -209,14 +209,22 @@ def test_vdut_card_does_not_depend_on_an_open_time_fetch():
     another `.onAppear`, and would raise IndexError if it gains none."""
     src = read_source(VDUT_CARD)
     match = re.search(r"\.onAppear\s*\{", src)
-    assert match is not None, "VDUTControlsCard must seed its drafts in onAppear"
+    if match is not None:
+        open_at = match.end() - 1
+    else:
+        # `.onAppear(perform: fn)` form: the handler is the named method, so
+        # scan that method's body instead.
+        ref = re.search(r"\.onAppear\(perform:\s*(\w+)\s*\)", src)
+        assert ref is not None, "VDUTControlsCard must seed its drafts in onAppear"
+        fn = re.search(r"func\s+" + re.escape(ref.group(1)) + r"\s*\([^)]*\)[^{]*\{", src)
+        assert fn is not None, f"onAppear handler {ref.group(1)} not found"
+        open_at = fn.end() - 1
 
-    # Brace-match from the opening '{' to find the exact extent of the
-    # onAppear closure, however long it is.
-    start = match.end() - 1
+    # Brace-match from the opening '{' to find the exact extent of the block,
+    # however long it is.
     depth = 0
     end = None
-    for i, ch in enumerate(src[start:], start=start):
+    for i, ch in enumerate(src[open_at:], start=open_at):
         if ch == "{":
             depth += 1
         elif ch == "}":
@@ -225,7 +233,7 @@ def test_vdut_card_does_not_depend_on_an_open_time_fetch():
                 end = i
                 break
     assert end is not None, "unbalanced braces while scanning onAppear block"
-    onAppear_block = src[start:end]
+    onAppear_block = src[open_at:end]
 
     assert "refreshVdutStatus" not in onAppear_block, (
         "the card must render already-prefetched values, not kick off the fetch "

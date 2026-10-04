@@ -140,3 +140,11 @@ double bs_self_discharge_pc(const bs_params_t *p, int64_t q_rem_pc, double dt_s)
     // expm1: 1 - exp(-x) cancels catastrophically at the ~1e-9 per-second x.
     return (double)q_rem_pc * -expm1(-lambda * dt_s);
 }
+
+bs_reopen_t bs_reopen_check(uint8_t state, bool loaded, bool writable)
+{
+    if (!loaded) return BS_REOPEN_NO_RUN;
+    if (state == 3) return BS_REOPEN_DEPLETED;   // BS_ST_DEPLETED
+    if (state != 4 || !writable) return BS_REOPEN_STATE;   // BS_ST_STOPPED only
+    return BS_REOPEN_OK;
+}

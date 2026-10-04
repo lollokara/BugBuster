@@ -4,6 +4,46 @@
 
 ### Added
 
+- **Device streams logs and battery runs to the ESPFleet hub; hub-first battery view.**
+  The ESP32-S3 automatically discovers the local ESPFleet hub via mDNS (`_espfleet._tcp`),
+  registers via agent heartbeat, sets its system clock from hub time, ships S3,
+  MicroPython and P4 logs from a 64 KB PSRAM ring, streams active 1 Hz battery runs
+  with a 2 h backlog, and backfills historical runs across all tiers (`s1.bin`, `mDDDD.bin`,
+  `q15.bin`) driven by hub coverage diffs. The P4 DAQ HAT exposes a pull ring for ERROR
+  and important logs (`HATP_CMD_LOG_PULL`). iOS app reads hub series data first with seamless
+  fallback to device tiers when on the DAQ softAP hotspot. New S3 configuration and status
+  routes (`/api/hub/status`, `/api/hub/config`, `/api/hub/resync`).
+- **Boot diagnostics package and crash dump API.** 30 s after boot the S3 logs
+  `BOOTRPT` lines (system, heap/DMA/PSRAM, per-task stack headroom, network, HAT,
+  scripts, crash summary) for the remote logger. `GET /api/system/crash`
+  (`?report=1`, `?offset=&len=` chunks, `?raw=1` ELF download) and
+  `POST /api/system/crash/clear` expose the stored coredump (2 URIs, admin token,
+  BLE-reachable except `raw`). The crash summary now carries the exception name,
+  registers, whether the dump matches the running build, and a pre-crash RTC
+  snapshot (heap, tightest stack, boot phase, consecutive-crash count).
+- **Python and MCP consumers of the boot package.** `bugbuster.crash` decodes the
+  crash summary, the `?report=1` bundle and `BOOTRPT` log lines exported from the
+  log platform (`parse_bootrpt_lines`, multi-boot, tolerant of ESP prefixes and
+  lost parts). `BugBuster.get_crash_info / get_boot_report / download_coredump /
+  clear_coredump` (HTTP) and four MCP tools in `discovery`: `crash_info`,
+  `boot_report` (live or from log text), `crash_dump_save`, `crash_clear`
+  (needs `confirm=True`).
+- **Scripts as background jobs.** One named script slot with source
+  (manual/autorun/repl), state and last exit in `/api/scripts/status`;
+  `run-file` returns at once and answers 409 naming the running script unless
+  `replace=1` (3 s cooperative stop, then VM reset). Eval and REPL input are
+  refused while a script runs. The log ring holds structured
+  `<ts_ms> <L> <src> <text>` lines. The whole scripts API, plus chunked
+  uploads, is now reachable over the BLE tunnel.
+- **MicroPython `daq` module.** VDUT control (`daq.vdut`, `daq.read`), battery
+  simulator runs (`daq.run.new/start/pause/stop/edit/delete/list/status`) and
+  live 1 s samples (`daq.samples`, new P4 op `BS_HOP_S1_SINCE`).
+- **Script API stubs.** `.pyi` stubs and examples for every on-device module,
+  compiled by `python/tools/stubs_to_json.py` into
+  `python/firmware_modules/stubs/firmware_api.json` for iOS and the portal.
+- **iOS DAQ-aware VDUT card.** The Overview VDUT card follows the attached DAQ
+  HAT, and the Battery tab gets a dashboard layout on iPad and in landscape.
+
 - **MicroPython example.** On-device VADJ1/e-fuse 1 pulse script with a random
   1-12 minute test interval (switchable to 1-12 hours).
 
@@ -35,6 +75,23 @@
   sizes).
 
 ### Fixed
+
+- **Scripts tab over BLE.** `/api/scripts/storage` was HTTP-only, so over BLE it
+  answered `unknown path` and the whole file list failed to load; it now lives in
+  `api_scripts.cpp` and is dispatched by `api_core_handle` (HTTP delegates to it).
+  `rawRequest` over BLE also keeps DELETE (mapped to `files/delete`, so swipe-delete
+  really deletes) and decodes the base64 `files/get` pages, following `off` until
+  `size` so long scripts are not truncated.
+- **iOS Diagnostics and Scripts over BLE.** The AD74416H supplies card now
+  decodes the flat object the firmware returns (the old `{supplies:[...]}`
+  shape failed silently), and GET requests and script calls are routed through
+  the BLE tunnel instead of throwing `badURL`; the REPL shows a "needs Wi-Fi"
+  state.
+- **Selftest, Wi-Fi and update routes over BLE.** `api_core_handle` now serves
+  `/api/selftest/supplies[/cached]`, `/api/wifi/scan` and
+  `/api/update/{status,check}`, so the iOS Diagnostics tab is no longer blank
+  over BLE. The BLE Wi-Fi scan runs on a worker and returns the last cached
+  result after 4.5 s.
 
 - **Scripting over MCP HTTP.** The Python client now uses the existing HTTP
   status, logs and stop routes for scripts; the MCP wrapper recognizes scripts

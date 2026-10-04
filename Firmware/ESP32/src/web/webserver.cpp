@@ -44,6 +44,7 @@
 #include "mdns_responder.h"
 #include "ws_stream.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/base64.h"
 #include "quicksetup.h"
 #include "ext_bus.h"
 #include "http_adapter.h"
@@ -51,6 +52,7 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+#include "diag/crash_report.h"
 
 // Shared buffer for script-name listing handlers. Declared at file scope so that
 // EXT_RAM_BSS_ATTR actually takes effect (the attribute is silently ignored on
@@ -315,15 +317,15 @@ static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 // Helper: receive and parse JSON body from request
 // -----------------------------------------------------------------------------
 
-static cJSON* recv_json_body(httpd_req_t *req)
+static cJSON* recv_json_body_cap(httpd_req_t *req, int cap)
 {
     int total = req->content_len;
-    if (total <= 0 || total > 1024) return NULL;
+    if (total <= 0 || total > cap) return NULL;
     char *buf = (char*)malloc(total + 1);
     if (!buf) return NULL;
     int received = 0;
     while (received < total) {
-        int ret = httpd_req_recv(req, buf + received, total - received);
+        int ret = upload_recv(req, buf + received, total - received);
         if (ret <= 0) { free(buf); return NULL; }
         received += ret;
     }
@@ -331,6 +333,11 @@ static cJSON* recv_json_body(httpd_req_t *req)
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     return root;
+}
+
+static cJSON* recv_json_body(httpd_req_t *req)
+{
+    return recv_json_body_cap(req, 1024);
 }
 
 // -----------------------------------------------------------------------------
@@ -658,6 +665,59 @@ static esp_err_t handle_get_system_memory(httpd_req_t *req)
 {
     char *resp = api_core_handle("GET", "/api/system/memory", NULL);
     if (!resp) return send_error(req, 500, "memory status failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// GET /api/system/crash[?report=1 | ?offset=N&len=M | ?raw=1]  (admin)
+// JSON via api_core_handle (shared with BLE). ?raw=1 streams the stored ELF
+// coredump as a download: 1 KB heap slice at a time, nothing else buffered.
+static esp_err_t handle_get_system_crash(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+
+    char query[64] = {0};
+    char flag[8] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "raw", flag, sizeof(flag)) == ESP_OK && flag[0] == '1') {
+        size_t total = crash_report_dump_size();
+        if (total == 0) return send_error(req, 404, "No coredump stored");
+        const size_t SLICE = 1024;
+        uint8_t *buf = (uint8_t *)malloc(SLICE);
+        if (!buf) return send_error(req, 500, "Out of memory");
+        char origin_buf[96];
+        set_cors_headers(req, origin_buf, sizeof(origin_buf));
+        httpd_resp_set_type(req, "application/octet-stream");
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"bugbuster-coredump.elf\"");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+        esp_err_t rc = ESP_OK;
+        for (size_t off = 0; off < total && rc == ESP_OK; off += SLICE) {
+            size_t n = total - off < SLICE ? total - off : SLICE;
+            if (crash_report_dump_read(off, buf, n) != ESP_OK) { rc = ESP_FAIL; break; }
+            rc = httpd_resp_send_chunk(req, (const char *)buf, n);
+        }
+        free(buf);
+        if (rc != ESP_OK) {
+            httpd_resp_sendstr_chunk(req, NULL);   // abort: truncated body, client sees bad length
+            return ESP_FAIL;
+        }
+        return httpd_resp_send_chunk(req, NULL, 0);
+    }
+
+    char *resp = api_core_handle("GET", req->uri, NULL);
+    if (!resp) return send_error(req, 500, "crash info failed");
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
+}
+
+// POST /api/system/crash/clear  (admin) — erase the stored coredump
+static esp_err_t handle_post_system_crash_clear(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    char *resp = api_core_handle("POST", "/api/system/crash/clear", NULL);
+    if (!resp) return send_error(req, 500, "crash clear failed");
     esp_err_t rc = send_raw_json(req, resp);
     cJSON_free(resp);
     return rc;
@@ -1919,23 +1979,8 @@ static esp_err_t handle_get_selftest_supply(httpd_req_t *req)
 // GET /api/selftest/supplies/cached — cached supply rail voltages
 static esp_err_t handle_get_selftest_supplies_cached(httpd_req_t *req)
 {
-    // PWR-10: cache only - the main loop's monitor step is the sampler.
-    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
-
-    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "available", sv->available);
-    cJSON_AddNumberToObject(root, "timestampMs", sv->timestamp_ms);
-    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
-    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
-        cJSON *obj = cJSON_CreateObject();
-        cJSON_AddNumberToObject(obj, "rail", i);
-        cJSON_AddStringToObject(obj, "name", rail_names[i]);
-        cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
-        cJSON_AddItemToArray(arr, obj);
-    }
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/selftest/supplies/cached", NULL);
+    return send_api_core_result(req, resp, "supplies unavailable");
 }
 
 // GET /api/overview — coalesced snapshot for the on-device Overview tab.
@@ -2006,17 +2051,8 @@ static esp_err_t handle_post_efuse_imon(httpd_req_t *req)
 // GET /api/selftest/supplies — measure internal ADC supplies
 static esp_err_t handle_get_selftest_supplies(httpd_req_t *req)
 {
-    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "valid", s->valid);
-    cJSON_AddBoolToObject(root, "suppliesOk", s->supplies_ok);
-    cJSON_AddNumberToObject(root, "avddHiV", s->avdd_hi_v);
-    cJSON_AddNumberToObject(root, "dvccV", s->dvcc_v);
-    cJSON_AddNumberToObject(root, "avccV", s->avcc_v);
-    cJSON_AddNumberToObject(root, "avssV", s->avss_v);
-    cJSON_AddNumberToObject(root, "tempC", s->temp_c);
-    return send_json(req, root);
+    char *resp = api_core_handle("GET", "/api/selftest/supplies", NULL);
+    return send_api_core_result(req, resp, "supplies unavailable");
 }
 
 // =============================================================================
@@ -2572,7 +2608,9 @@ static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *
     if (!resp) return send_error(req, 500, fail_msg);
     cJSON *parsed = cJSON_Parse(resp);
     bool is_error = parsed && cJSON_GetObjectItem(parsed, "error") != NULL;
-    esp_err_t rc = send_raw_json(req, resp, is_error ? 400 : 200);
+    // A battery-sim run owning VDUT is a state conflict, not a bad request.
+    bool owned = is_error && cJSON_GetObjectItem(parsed, "runId") != NULL;
+    esp_err_t rc = send_raw_json(req, resp, owned ? 409 : is_error ? 400 : 200);
     if (parsed) cJSON_Delete(parsed);
     cJSON_free(resp);
     return rc;
@@ -2624,6 +2662,35 @@ static esp_err_t handle_post_daq_bs_read(httpd_req_t *req)
     char *resp = api_core_handle("POST", "/api/daq/bs/read", body);
     if (body) cJSON_Delete(body);
     return send_api_core_result(req, resp, "battsim read failed");
+}
+
+// GET /api/hub/status - hub streaming counters (no secrets, no admin token).
+// GET/POST /api/hub/config and POST /api/hub/resync change or reveal the hub URL: admin only.
+static esp_err_t handle_get_hub_status(httpd_req_t *req)
+{
+    return send_api_core_result(req, api_core_handle("GET", "/api/hub/status", NULL), "hub status failed");
+}
+
+static esp_err_t handle_get_hub_config(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    return send_api_core_result(req, api_core_handle("GET", "/api/hub/config", NULL), "hub config failed");
+}
+
+static esp_err_t handle_post_hub_config(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    if (!body) return send_error(req, 400, "Invalid JSON");
+    char *resp = api_core_handle("POST", "/api/hub/config", body);
+    cJSON_Delete(body);
+    return send_api_core_result(req, resp, "hub config failed");
+}
+
+static esp_err_t handle_post_hub_resync(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    return send_api_core_result(req, api_core_handle("POST", "/api/hub/resync", NULL), "hub resync failed");
 }
 
 // POST /api/daq/config  body: {"op": 0..4, "args": hex}. SET (1) and ACTION (4)
@@ -3795,17 +3862,7 @@ static esp_err_t handle_get_wifi_scan(httpd_req_t *req)
 {
     wifi_scan_result_t results[20];
     int count = wifi_scan(results, 20);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr = cJSON_AddArrayToObject(root, "networks");
-    for (int i = 0; i < count; i++) {
-        cJSON *item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "ssid", results[i].ssid);
-        cJSON_AddNumberToObject(item, "rssi", results[i].rssi);
-        cJSON_AddNumberToObject(item, "auth", results[i].auth);
-        cJSON_AddItemToArray(arr, item);
-    }
-    return send_json(req, root);
+    return send_json(req, api_core_wifi_scan_json(results, count));
 }
 
 // POST /api/wifi/ap_password  body: {"password":"..."}  (admin auth required)
@@ -4347,7 +4404,8 @@ static esp_err_t handle_get_update_status(httpd_req_t *req)
     if (check_admin_auth(req) != ESP_OK) {
         return send_error(req, 401, "Admin token required");
     }
-    return send_json(req, update_manager_status_json());
+    char *resp = api_core_handle("GET", "/api/update/status", NULL);
+    return send_api_core_result(req, resp, "Update status unavailable");
 }
 
 typedef struct { uint32_t targets; } http_update_apply_args_t;
@@ -4704,81 +4762,90 @@ static esp_err_t handle_post_pairing_rotate(httpd_req_t *req)
 
 #define SCRIPTS_EVAL_MAX_BYTES 32768
 
-static uint32_t infer_script_eval_id(const ScriptStatus *before, const ScriptStatus *after)
+// Scripts routes are served by api_core_handle() (api_scripts.cpp) so BLE and
+// HTTP cannot drift. {"running":"<name>"} = the single file-script slot is
+// taken -> 409; any other {"error"} -> 400; else 200.
+static esp_err_t send_scripts_result(httpd_req_t *req, char *resp)
 {
-    if (!before) return 0;
-
-    // If the new script started immediately, the status now points at its ID.
-    if (after &&
-        after->is_running &&
-        after->current_script_id != 0 &&
-        (!before->is_running || after->current_script_id != before->current_script_id)) {
-        return after->current_script_id;
-    }
-
-    // Otherwise predict the queued ID from the pre-submit watermark. A short
-    // script can finish before the post-submit status read, so using after.total_runs
-    // here would report one past the actual script ID.
-    uint32_t high_watermark = before->total_runs;
-    if (before->current_script_id > high_watermark) high_watermark = before->current_script_id;
-    return high_watermark + 1;
+    if (!resp) return send_error(req, 500, "scripts request failed");
+    cJSON *parsed = cJSON_Parse(resp);
+    int code = 200;
+    if (parsed && cJSON_IsString(cJSON_GetObjectItem(parsed, "running"))) code = 409;
+    else if (parsed && cJSON_GetObjectItem(parsed, "error")) code = 400;
+    if (parsed) cJSON_Delete(parsed);
+    esp_err_t rc = send_raw_json(req, resp, code);
+    cJSON_free(resp);
+    return rc;
 }
 
-// POST /api/scripts/eval
+// Re-frame an api_scripts {"data": base64} reply as raw bytes for HTTP clients
+// that predate the JSON shape (web console, Python client). Logic stays shared.
+static esp_err_t send_scripts_b64_as(httpd_req_t *req, char *resp, const char *ctype, bool log_cursor)
+{
+    if (!resp) return send_error(req, 500, "scripts request failed");
+    cJSON *j = cJSON_Parse(resp);
+    cJSON_free(resp);
+    if (!j) return send_error(req, 500, "scripts request failed");
+    cJSON *err = cJSON_GetObjectItem(j, "error");
+    if (cJSON_IsString(err)) {
+        esp_err_t rc = send_error(req, strcmp(err->valuestring, "script not found") == 0 ? 404 : 400,
+                                  err->valuestring);
+        cJSON_Delete(j);
+        return rc;
+    }
+    cJSON *data = cJSON_GetObjectItem(j, "data");
+    const char *b64 = cJSON_IsString(data) ? data->valuestring : "";
+    size_t blen = strlen(b64), olen = 0, cap = blen / 4 * 3 + 4;
+    unsigned char *raw = (unsigned char *)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!raw || mbedtls_base64_decode(raw, cap, &olen, (const unsigned char *)b64, blen) != 0) {
+        if (raw) heap_caps_free(raw);
+        cJSON_Delete(j);
+        return send_error(req, 500, "decode failed");
+    }
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
+    httpd_resp_set_type(req, ctype);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    char next_hdr[24];
+    cJSON *next = cJSON_GetObjectItem(j, "next");
+    if (log_cursor && cJSON_IsNumber(next)) {
+        snprintf(next_hdr, sizeof(next_hdr), "%.0f", next->valuedouble);
+        httpd_resp_set_hdr(req, "X-BugBuster-Log-Next", next_hdr);
+        httpd_resp_set_hdr(req, "Access-Control-Expose-Headers", "X-BugBuster-Log-Next");
+    }
+    esp_err_t rc = httpd_resp_send(req, (const char *)raw, (ssize_t)olen);
+    heap_caps_free(raw);
+    cJSON_Delete(j);
+    return rc;
+}
+
+// POST /api/scripts/eval[?persist=true] — raw Python body (<= 32 KB). Wrapped
+// as {"src": ...} for the shared api_scripts eval (409 while a script runs).
 static esp_err_t handle_post_scripts_eval(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    // Parse optional ?persist=true query parameter
-    bool persist = false;
-    char query[256] = {0};   // see the truncation note in handle_get_scope
-    esp_err_t qrc = httpd_req_get_url_query_str(req, query, sizeof(query));
-    if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
-        return send_error(req, 400, "query string too long");
-    }
-    if (qrc == ESP_OK) {
-        char persist_val[8] = {0};
-        if (httpd_query_key_value(query, "persist", persist_val, sizeof(persist_val)) == ESP_OK) {
-            persist = (strcmp(persist_val, "true") == 0 || strcmp(persist_val, "1") == 0);
-        }
-    }
-
     int total = req->content_len;
     if (total <= 0 || total > SCRIPTS_EVAL_MAX_BYTES) {
         return send_error(req, 400, "Body must be 1-32768 bytes of Python source");
     }
-
-    char *src = (char*)malloc(total + 1);
+    char *src = (char *)heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!src) return send_error(req, 500, "Out of memory");
-
-    ScriptStatus before = {};
-    scripting_get_status(&before);
-
     int received = 0;
     while (received < total) {
         int ret = upload_recv(req, src + received, total - received);
         if (ret <= 0) {
-            free(src);
+            heap_caps_free(src);
             return send_error(req, 500, "Receive error");
         }
         received += ret;
     }
     src[total] = '\0';
-
-    bool ok = scripting_run_string(src, (size_t)total, persist);
-    free(src);
-
-    cJSON *root = cJSON_CreateObject();
-    if (ok) {
-        ScriptStatus after = {};
-        scripting_get_status(&after);
-        cJSON_AddBoolToObject(root, "ok", true);
-        cJSON_AddNumberToObject(root, "id", infer_script_eval_id(&before, &after));
-    } else {
-        cJSON_AddBoolToObject(root, "ok", false);
-        cJSON_AddStringToObject(root, "err", "queue_full");
-    }
-    return send_json(req, root);
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "src", src);
+    heap_caps_free(src);
+    char *resp = api_core_handle("POST", req->uri, body);
+    cJSON_Delete(body);
+    return send_scripts_result(req, resp);
 }
 
 // POST /api/scripts/lint
@@ -4817,75 +4884,18 @@ static esp_err_t handle_post_scripts_lint(httpd_req_t *req)
     return send_json(req, root);
 }
 
-// GET /api/scripts/logs
+// GET /api/scripts/logs[?since=N] — text/plain (+ X-BugBuster-Log-Next with since)
 static esp_err_t handle_get_scripts_logs(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    char *buf = (char*)malloc(MP_LOG_RING_SIZE + 1);
-    if (!buf) return send_error(req, 500, "Out of memory");
-
-    bool use_cursor = false;
-    uint64_t since = 0;
-    char query[256] = {0};   // see the truncation note in handle_get_scope
-    esp_err_t qrc = httpd_req_get_url_query_str(req, query, sizeof(query));
-    if (qrc == ESP_ERR_HTTPD_RESULT_TRUNC) {
-        free(buf);
-        return send_error(req, 400, "query string too long");
-    }
-    if (qrc == ESP_OK) {
-        char since_val[24] = {0};
-        if (httpd_query_key_value(query, "since", since_val, sizeof(since_val)) == ESP_OK) {
-            use_cursor = true;
-            since = strtoull(since_val, NULL, 10);
-        }
-    }
-
-    uint64_t next = since;
-    size_t len = use_cursor
-        ? scripting_get_logs_since(buf, MP_LOG_RING_SIZE, since, &next)
-        : scripting_get_logs(buf, MP_LOG_RING_SIZE);
-    buf[len] = '\0';
-
-    char origin_buf[96];
-    set_cors_headers(req, origin_buf, sizeof(origin_buf));
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    if (use_cursor) {
-        char next_hdr[24];
-        snprintf(next_hdr, sizeof(next_hdr), "%llu", (unsigned long long)next);
-        httpd_resp_set_hdr(req, "X-BugBuster-Log-Next", next_hdr);
-        httpd_resp_set_hdr(req, "Access-Control-Expose-Headers", "X-BugBuster-Log-Next");
-    }
-    esp_err_t ret = httpd_resp_send(req, buf, (ssize_t)len);
-    free(buf);
-    return ret;
+    return send_scripts_b64_as(req, api_core_handle("GET", req->uri, NULL), "text/plain", true);
 }
 
 // GET /api/scripts/status
 static esp_err_t handle_get_scripts_status(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    ScriptStatus st;
-    scripting_get_status(&st);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "running", st.is_running);
-    cJSON_AddNumberToObject(root, "currentScriptId", st.current_script_id);
-    cJSON_AddNumberToObject(root, "totalRuns", st.total_runs);
-    cJSON_AddNumberToObject(root, "totalErrors", st.total_errors);
-    cJSON_AddStringToObject(root, "lastError", st.last_error_msg);
-    // V2-A persistent-mode fields — mode as string enum per V2 spec
-    cJSON_AddStringToObject(root, "mode",
-        st.mode == SCRIPTING_MODE_PERSISTENT ? "PERSISTENT" : "EPHEMERAL");
-    cJSON_AddNumberToObject(root, "globalsBytes", st.globals_bytes_est);
-    cJSON_AddNumberToObject(root, "globalsCount", st.globals_count);
-    cJSON_AddNumberToObject(root, "autoResetCount", st.auto_reset_count);
-    cJSON_AddNumberToObject(root, "lastEvalAtMs", st.last_eval_at_ms);
-    cJSON_AddNumberToObject(root, "idleForMs", st.idle_for_ms);
-    cJSON_AddBoolToObject(root, "watermarkSoftHit", st.watermark_soft_hit);
-    return send_json(req, root);
+    return send_scripts_result(req, api_core_handle("GET", req->uri, NULL));
 }
 
 // POST /api/scripts/reset — reset the persistent VM
@@ -4904,12 +4914,7 @@ static esp_err_t handle_post_scripts_reset(httpd_req_t *req)
 static esp_err_t handle_post_scripts_stop(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    scripting_stop();
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    return send_json(req, root);
+    return send_scripts_result(req, api_core_handle("POST", req->uri, NULL));
 }
 
 // POST /api/scripts/files  — upload a script file
@@ -4963,193 +4968,99 @@ static esp_err_t handle_post_scripts_files(httpd_req_t *req)
 static esp_err_t handle_get_scripts_files(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON *arr  = cJSON_CreateArray();
-    for (int i = 0; i < count; i++) {
-        cJSON_AddItemToArray(arr, cJSON_CreateString(s_script_names[i]));
-    }
-    cJSON_AddItemToObject(root, "files", arr);
-    return send_json(req, root);
+    return send_scripts_result(req, api_core_handle("GET", req->uri, NULL));
 }
 
-// GET /api/scripts/storage — SPIFFS/script storage telemetry
+// GET /api/scripts/storage — SPIFFS/script storage telemetry (shared with BLE via api_scripts.cpp)
 static esp_err_t handle_get_scripts_storage(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    size_t total = 0;
-    size_t used = 0;
-    esp_err_t err = esp_spiffs_info("scripts", &total, &used);
-    if (err != ESP_OK) {
+    char *resp = api_core_handle("GET", "/api/scripts/storage", NULL);
+    if (!resp) return send_error(req, 500, "SPIFFS info unavailable");
+    if (strstr(resp, "\"error\"")) {
+        cJSON_free(resp);
         return send_error(req, 500, "SPIFFS info unavailable");
     }
-
-    int count = script_storage_list(s_script_names, SCRIPT_LIST_MAX);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "totalBytes", (double)total);
-    cJSON_AddNumberToObject(root, "usedBytes", (double)used);
-    cJSON_AddNumberToObject(root, "freeBytes", (double)((total > used) ? (total - used) : 0));
-    cJSON_AddNumberToObject(root, "scriptCount", count);
-    cJSON_AddNumberToObject(root, "maxScriptBytes", SCRIPT_BODY_MAX);
-    cJSON_AddNumberToObject(root, "maxScripts", SCRIPT_LIST_MAX);
-    return send_json(req, root);
+    esp_err_t rc = send_raw_json(req, resp);
+    cJSON_free(resp);
+    return rc;
 }
 
-// GET /api/scripts/files/get  — download a script file
-// Query param: name=<filename>
+// GET /api/scripts/files/get?name=X — whole file as text/x-python (one page)
 static esp_err_t handle_get_scripts_file(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    char query[256] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
-        return send_error(req, 400, "Missing query string");
-    }
-    char name[SCRIPT_NAME_MAX + 1] = {0};
-    if (httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
-        return send_error(req, 400, "Missing 'name' query parameter");
-    }
-    if (!script_storage_validate_name(name)) {
-        return send_error(req, 400, "Invalid script name");
-    }
-
-    uint8_t *buf = (uint8_t *)malloc(SCRIPT_BODY_MAX + 1);
-    if (!buf) return send_error(req, 500, "Out of memory");
-
-    size_t file_len = SCRIPT_BODY_MAX;
-    char err[80] = {0};
-    bool ok = script_storage_read(name, buf, &file_len, err, sizeof(err));
-    if (!ok) {
-        free(buf);
-        return send_error(req, 404, err);
-    }
-
-    char origin_buf[96];
-    set_cors_headers(req, origin_buf, sizeof(origin_buf));
-    httpd_resp_set_type(req, "text/x-python; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    esp_err_t ret = httpd_resp_send(req, (const char *)buf, (ssize_t)file_len);
-    free(buf);
-    return ret;
+    char path[192];
+    int n = snprintf(path, sizeof(path), "%s%slen=%u", req->uri,
+                     strchr(req->uri, '?') ? "&" : "?", (unsigned)SCRIPT_BODY_MAX);
+    if (n <= 0 || (size_t)n >= sizeof(path)) return send_error(req, 400, "query string too long");
+    return send_scripts_b64_as(req, api_core_handle("GET", path, NULL),
+                               "text/x-python; charset=utf-8", false);
 }
 
-// DELETE /api/scripts/files  — delete a script file
-// Query param: name=<filename>
+// DELETE /api/scripts/files?name=X — same operation as POST /api/scripts/files/delete
 static esp_err_t handle_delete_scripts_file(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    char query[256] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
-        return send_error(req, 400, "Missing query string");
-    }
-    char name[SCRIPT_NAME_MAX + 1] = {0};
-    if (httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
-        return send_error(req, 400, "Missing 'name' query parameter");
-    }
-    if (!script_storage_validate_name(name)) {
-        return send_error(req, 400, "Invalid script name");
-    }
-
-    char err[80] = {0};
-    bool ok = script_storage_delete(name, err, sizeof(err));
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", ok);
-    if (!ok) cJSON_AddStringToObject(root, "err", err);
-    return send_json(req, root);
+    const char *q = strchr(req->uri, '?');
+    char path[160];
+    int n = snprintf(path, sizeof(path), "/api/scripts/files/delete%s", q ? q : "");
+    if (n <= 0 || (size_t)n >= sizeof(path)) return send_error(req, 400, "query string too long");
+    return send_scripts_result(req, api_core_handle("POST", path, NULL));
 }
 
 // GET /api/scripts/autorun/status
 static esp_err_t handle_get_autorun_status(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    AutorunStatus st;
-    autorun_get_status(&st);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "enabled",      st.enabled);
-    cJSON_AddBoolToObject(root, "has_script",   st.has_script);
-    cJSON_AddBoolToObject(root, "io12_high",    st.io12_high);
-    cJSON_AddBoolToObject(root, "last_run_ok",  st.last_run_ok);
-    cJSON_AddNumberToObject(root, "last_run_id", (double)st.last_run_id);
-    return send_json(req, root);
+    return send_scripts_result(req, api_core_handle("GET", req->uri, NULL));
 }
 
 // POST /api/scripts/autorun/enable  — Query param: name=<filename>
 static esp_err_t handle_post_autorun_enable(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    char query[256] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
-        return send_error(req, 400, "Missing query string");
-    }
-    char name[SCRIPT_NAME_MAX + 1] = {0};
-    if (httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
-        return send_error(req, 400, "Missing 'name' query parameter");
-    }
-    if (!script_storage_validate_name(name)) {
-        return send_error(req, 400, "Invalid script name");
-    }
-
-    char err[80] = {0};
-    bool ok = autorun_set_enabled(name, err, sizeof(err));
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", ok);
-    if (!ok) cJSON_AddStringToObject(root, "err", err);
-    return send_json(req, root);
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    return send_scripts_result(req, resp);
 }
 
 // POST /api/scripts/autorun/disable
 static esp_err_t handle_post_autorun_disable(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
-
-    char err[80] = {0};
-    bool ok = autorun_set_disabled(err, sizeof(err));
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", ok);
-    if (!ok) cJSON_AddStringToObject(root, "err", err);
-    return send_json(req, root);
+    return send_scripts_result(req, api_core_handle("POST", req->uri, NULL));
 }
 
-// POST /api/scripts/run-file  — run a stored script file
-// Query param: name=<filename>
+// POST /api/scripts/run-file?name=X[&background=1][&replace=1]  (409 when busy)
 static esp_err_t handle_post_scripts_run_file(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    return send_scripts_result(req, resp);
+}
 
-    char query[256] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
-        return send_error(req, 400, "Missing query string");
-    }
-    char name[SCRIPT_NAME_MAX + 1] = {0};
-    if (httpd_query_key_value(query, "name", name, sizeof(name)) != ESP_OK) {
-        return send_error(req, 400, "Missing 'name' query parameter");
-    }
-    if (!script_storage_validate_name(name)) {
-        return send_error(req, 400, "Invalid script name");
-    }
+// POST /api/scripts/files/chunk  body {"name","off","b64","final"}
+static esp_err_t handle_post_scripts_files_chunk(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body_cap(req, 6144);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    return send_scripts_result(req, resp);
+}
 
-    uint32_t script_id = 0;
-    bool ok = scripting_run_file(name, &script_id);
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", ok);
-    if (ok) {
-        cJSON_AddNumberToObject(root, "id", script_id);
-    } else {
-        cJSON_AddStringToObject(root, "err", "queue_full_or_file_not_found");
-    }
-    return send_json(req, root);
+// POST /api/scripts/files/delete  (BLE spelling of DELETE /api/scripts/files)
+static esp_err_t handle_post_scripts_files_delete(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body(req);
+    char *resp = api_core_handle("POST", req->uri, body);
+    if (body) cJSON_Delete(body);
+    return send_scripts_result(req, resp);
 }
 
 // =============================================================================
@@ -5175,6 +5086,8 @@ bool initWebServer(void)
     // Keep route capacity close to the real table size. httpd_register_uri_handler
     // call count as of 2026-08-06: 128 in this file + 4 registry routes
     // (http_adapter_register) + 1 WS stream route + 1 REPL WS route = 134.
+    // 2026-10-03 recount: 134 httpd_register_uri_handler(s_server) calls in this file
+    // (incl. the 2 /api/system/crash routes) + 4 registry + 2 WS = 140 of 150.
     // 128 alone silently starved the last ~6 registrations (registry routes,
     // this file's own wildcard "/*" catch-all) with ESP_ERR_HTTPD_HANDLERS_FULL.
     // 150 gives headroom without reserving a large unused slot table from heap.
@@ -5256,6 +5169,16 @@ bool initWebServer(void)
         .uri = "/api/system/memory", .method = HTTP_GET, .handler = handle_get_system_memory, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_system_memory);
+
+    httpd_uri_t uri_system_crash = {
+        .uri = "/api/system/crash", .method = HTTP_GET, .handler = handle_get_system_crash, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_system_crash);
+
+    httpd_uri_t uri_system_crash_clear = {
+        .uri = "/api/system/crash/clear", .method = HTTP_POST, .handler = handle_post_system_crash_clear, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_system_crash_clear);
 
     httpd_uri_t uri_faults = {
         .uri = "/api/faults", .method = HTTP_GET, .handler = handle_get_faults, .user_ctx = NULL
@@ -5541,6 +5464,27 @@ bool initWebServer(void)
         .uri = "/api/daq/bs/read", .method = HTTP_POST, .handler = handle_post_daq_bs_read, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_daq_bs_read);
+    httpd_uri_t uri_hub_status = {
+        .uri = "/api/hub/status", .method = HTTP_GET, .handler = handle_get_hub_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_status);
+    // POST alias: iOS only has a POST helper (ConnectionManager.postJSON), which also works over BLE.
+    httpd_uri_t uri_hub_status_post = {
+        .uri = "/api/hub/status", .method = HTTP_POST, .handler = handle_get_hub_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_status_post);
+    httpd_uri_t uri_hub_config_get = {
+        .uri = "/api/hub/config", .method = HTTP_GET, .handler = handle_get_hub_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_config_get);
+    httpd_uri_t uri_hub_config_post = {
+        .uri = "/api/hub/config", .method = HTTP_POST, .handler = handle_post_hub_config, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_config_post);
+    httpd_uri_t uri_hub_resync = {
+        .uri = "/api/hub/resync", .method = HTTP_POST, .handler = handle_post_hub_resync, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_hub_resync);
     httpd_uri_t uri_daq_config = {
         .uri = "/api/daq/config", .method = HTTP_POST, .handler = handle_post_daq_config, .user_ctx = NULL
     };
@@ -5864,6 +5808,16 @@ bool initWebServer(void)
         .uri = "/api/scripts/reset", .method = HTTP_POST, .handler = handle_post_scripts_reset, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_scripts_reset);
+
+    httpd_uri_t uri_scripts_files_chunk = {
+        .uri = "/api/scripts/files/chunk", .method = HTTP_POST, .handler = handle_post_scripts_files_chunk, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scripts_files_chunk);
+
+    httpd_uri_t uri_scripts_files_delete_post = {
+        .uri = "/api/scripts/files/delete", .method = HTTP_POST, .handler = handle_post_scripts_files_delete, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_scripts_files_delete_post);
 
     // ----- IO Ownership routes -----
 

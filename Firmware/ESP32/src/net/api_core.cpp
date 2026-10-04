@@ -20,6 +20,12 @@
 //          /api/daq/wifi_stream/{start,stop}, /api/daq/vdut/{enable,setpoint},
 //          /api/daq/bs, /api/daq/bs/read (battery simulator), /api/daq/config
 //          (DAQ settings registry passthrough)
+//   CRASH  : GET /api/system/crash[?report=1|?offset=N&len=M] (summary, boot bundle,
+//            base64 coredump slice), POST /api/system/crash/clear — crash_report.cpp.
+//   SCRIPTS: /api/scripts/{status,logs,stop,files,storage,files/get,files/delete,
+//            files/chunk,run-file,eval,autorun/status,autorun/enable,
+//            autorun/disable} — bodies in api_scripts.cpp (the REPL WebSocket
+//            stays HTTP-only).
 //
 // PENDING (planned, mirror the HTTP handler then expose here): IDAC cal writes
 //   (/api/idac/cal/{point,clear,save}), channel signal-path config
@@ -28,7 +34,6 @@
 // NOT supported over BLE (USB/WiFi only — too high-rate or out of scope):
 //   - Scope waveform streaming (/api/scope/*)
 //   - Logic analyzer / DAQ power-analyzer streaming
-//   - Scripts + Python REPL (/api/scripts/*, WebSocket)
 //   - Binary OTA upload (/api/ota/upload*) — superseded over BLE by the
 //     git-release updater above (/api/ota/check|apply).
 //
@@ -69,7 +74,10 @@
 #include "esp_wifi.h"
 #include "power/pd_manager.h"
 #include "quicksetup.h"
+#include "api_scripts.h"
+#include "diag/crash_report.h"
 #include "mbedtls/base64.h"
+#include "api_hub.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
 extern AD74416H_SPI spiDriver;
@@ -471,11 +479,29 @@ static char *api_daq_vdut_status(void)
 }
 
 // POST /api/daq/vdut/enable — enable/disable the DAQ HAT DUT power supply.
+// A loaded battery-sim run makes the P4 refuse VDUT writes with the same reject
+// as a dead HAT. Called only after a write failed (success path unchanged).
+// Returns a 409 body {"error", "runId"} or NULL when no run owns the supply.
+static char *vdut_owned_by_run_error(void)
+{
+    int run = hat_daq_vdut_owner_run();
+    if (run < 0) return NULL;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "battery simulator run %d is loaded and owns VDUT; unload it first", run);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", false);
+    cJSON_AddStringToObject(r, "error", msg);
+    cJSON_AddNumberToObject(r, "runId", run);
+    return json_take(r);
+}
+
 static char *api_daq_vdut_enable(const cJSON *body)
 {
     cJSON *jen = body_get(body, "enabled");
     if (!cJSON_IsBool(jen)) return api_error("enabled required");
     if (!hat_daq_vdut_enable(cJSON_IsTrue(jen))) {
+        char *owned = vdut_owned_by_run_error();
+        if (owned) return owned;
         return api_error("HAT not responding or not a DAQ HAT");
     }
     cJSON *root = cJSON_CreateObject();
@@ -502,6 +528,8 @@ static char *api_daq_vdut_setpoint(const cJSON *body)
         return api_error("currentLimitMa out of range");
     }
     if (!hat_daq_vdut_setpoint(vdut_v, ilimit_a)) {
+        char *owned = vdut_owned_by_run_error();
+        if (owned) return owned;
         return api_error("HAT not responding, not a DAQ HAT, or setpoint rejected");
     }
     cJSON *root = cJSON_CreateObject();
@@ -1196,6 +1224,111 @@ static char *api_hat_calibrate_start(const cJSON *body)
 // OTA — drives the on-device updater that pulls signed git releases. Small JSON
 // commands (no binary transfer), so they work identically over BLE and HTTP.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Selftest supplies + WiFi scan. The HTTP handlers delegate here (supplies) or
+// share the scan JSON builder (wifi/scan).
+// ---------------------------------------------------------------------------
+static cJSON *selftest_supplies_json(void)
+{
+    const SelftestInternalSupplies *s = selftest_measure_internal_supplies();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "valid", s->valid);
+    cJSON_AddBoolToObject(root, "suppliesOk", s->supplies_ok);
+    cJSON_AddNumberToObject(root, "avddHiV", s->avdd_hi_v);
+    cJSON_AddNumberToObject(root, "dvccV", s->dvcc_v);
+    cJSON_AddNumberToObject(root, "avccV", s->avcc_v);
+    cJSON_AddNumberToObject(root, "avssV", s->avss_v);
+    cJSON_AddNumberToObject(root, "tempC", s->temp_c);
+    return root;
+}
+
+static cJSON *selftest_supplies_cached_json(void)
+{
+    // PWR-10: cache only - the main loop's monitor step is the sampler.
+    const SelftestSupplyVoltages *sv = selftest_get_supply_voltages();
+
+    static const char *rail_names[SELFTEST_RAIL_COUNT] = {"VADJ1", "VADJ2", "VLOGIC"};
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "available", sv->available);
+    cJSON_AddNumberToObject(root, "timestampMs", sv->timestamp_ms);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rails");
+    for (int i = 0; i < SELFTEST_RAIL_COUNT; i++) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "rail", i);
+        cJSON_AddStringToObject(obj, "name", rail_names[i]);
+        cJSON_AddNumberToObject(obj, "voltageV", sv->voltage[i]);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    return root;
+}
+
+cJSON *api_core_wifi_scan_json(const wifi_scan_result_t *results, int count)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "networks");
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", results[i].ssid);
+        cJSON_AddNumberToObject(item, "rssi", results[i].rssi);
+        cJSON_AddNumberToObject(item, "auth", results[i].auth);
+        cJSON_AddItemToArray(arr, item);
+    }
+    return root;
+}
+
+// wifi_scan() blocks for ~3 s, and the BLE client gives up after 6 s while the
+// single in-flight tunnel slot stays held. The scan therefore runs on its own
+// task into a cache; the tunnel waits a bounded time for it and otherwise
+// answers with the last completed scan (same shape, possibly empty).
+#define BLE_WIFI_SCAN_MAX       20
+#define BLE_WIFI_SCAN_WAIT_MS   4500
+
+static wifi_scan_result_t s_scan_cache[BLE_WIFI_SCAN_MAX];
+static int                s_scan_cache_n = 0;
+static volatile bool      s_scan_running = false;
+static SemaphoreHandle_t  s_scan_done = NULL;
+static portMUX_TYPE       s_scan_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void wifi_scan_task(void *arg)
+{
+    (void)arg;
+    wifi_scan_result_t results[BLE_WIFI_SCAN_MAX];
+    int count = wifi_scan(results, BLE_WIFI_SCAN_MAX);
+    portENTER_CRITICAL(&s_scan_lock);
+    memcpy(s_scan_cache, results, sizeof(wifi_scan_result_t) * (size_t)count);
+    s_scan_cache_n = count;
+    s_scan_running = false;
+    portEXIT_CRITICAL(&s_scan_lock);
+    xSemaphoreGive(s_scan_done);
+    vTaskDelete(NULL);
+}
+
+static char *api_wifi_scan(void)
+{
+    if (!s_scan_done) {
+        s_scan_done = xSemaphoreCreateBinary();
+        if (!s_scan_done) return api_error("out of memory");
+    }
+    if (!s_scan_running) {
+        xSemaphoreTake(s_scan_done, 0);  // drop a stale completion
+        s_scan_running = true;
+        if (xTaskCreate(wifi_scan_task, "ble_wscan", 4096, NULL, 4, NULL) != pdPASS) {
+            s_scan_running = false;
+        }
+    }
+    xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(BLE_WIFI_SCAN_WAIT_MS));
+
+    wifi_scan_result_t snap[BLE_WIFI_SCAN_MAX];
+    int n;
+    portENTER_CRITICAL(&s_scan_lock);
+    n = s_scan_cache_n;
+    memcpy(snap, s_scan_cache, sizeof(wifi_scan_result_t) * (size_t)n);
+    portEXIT_CRITICAL(&s_scan_lock);
+    return json_take(api_core_wifi_scan_json(snap, n));
+}
+
 static char *api_ota_status(void)
 {
     cJSON *r = update_manager_status_json();
@@ -1886,6 +2019,8 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/device/info") == 0) return api_device_info();
     if (strcmp(path, "/api/status") == 0)      return api_status();
     if (strcmp(path, "/api/system/memory") == 0) return api_system_memory();
+    if (strcmp(path, "/api/system/crash") == 0) return crash_report_api_get(path);
+    if (strncmp(path, "/api/system/crash?", 18) == 0) return crash_report_api_get(path);  // BLE keeps the query
     if (strcmp(path, "/api/hat") == 0)         return api_hat();
     if (strcmp(path, "/api/hat/v2/rails") == 0) return api_hat_v2_rails();
     if (strncmp(path, "/api/hat/calibration", 20) == 0) return api_hat_calibration(path);
@@ -1895,6 +2030,13 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/overview") == 0)    return api_overview();
     if (strcmp(path, "/api/gpio") == 0)        return api_gpio_list();
     if (strcmp(path, "/api/ota/status") == 0)  return api_ota_status();
+    // HTTP names for the same updater queries (webserver.cpp routes them here /
+    // to update_manager_status_json()), so BLE clients can use either spelling.
+    if (strcmp(path, "/api/update/status") == 0) return api_ota_status();
+    if (strcmp(path, "/api/update/check") == 0)  return api_ota_check();
+    if (strcmp(path, "/api/selftest/supplies") == 0)        return json_take(selftest_supplies_json());
+    if (strcmp(path, "/api/selftest/supplies/cached") == 0) return json_take(selftest_supplies_cached_json());
+    if (strcmp(path, "/api/wifi/scan") == 0)   return api_wifi_scan();
     if (strcmp(path, "/api/ota/releases") == 0) return api_ota_releases();
     if (strcmp(path, "/api/selftest") == 0)    return api_selftest_get();
     if (strcmp(path, "/api/selftest/efuse_imon") == 0) return api_efuse_imon(is_post, body);
@@ -1932,6 +2074,7 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
     if (strcmp(path, "/api/usbpd/select") == 0)     return api_usbpd_select(body);
     if (strcmp(path, "/api/lshift/oe") == 0)        return api_lshift_oe(body);
     if (strcmp(path, "/api/device/reset") == 0)     return api_device_reset();
+    if (strcmp(path, "/api/system/crash/clear") == 0) return crash_report_api_clear();
     if (strcmp(path, "/api/ota/check") == 0)        return api_ota_check();
     if (strcmp(path, "/api/ota/apply") == 0)        return api_ota_apply(body);
     if (strcmp(path, "/api/selftest/worker") == 0)    return api_selftest_worker(body);
@@ -1959,6 +2102,11 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
         if (strcmp(sfx, "adc") == 0)        return api_channel_adc(ch);
     }
 
+    // Hub streaming settings and status (spec 2026-10-03 section 6): BLE-reachable like every route.
+    if (strcmp(path, "/api/hub/status") == 0)  return api_hub_status(path, body);
+    if (strcmp(path, "/api/hub/config") == 0)  return api_hub_config(path, body);
+    if (strcmp(path, "/api/hub/resync") == 0)  return api_hub_resync(path, body);
+
     // QuickSetup: /api/quicksetup (list) and /api/quicksetup/<slot>[/apply|delete]
     if (strcmp(path, "/api/quicksetup") == 0) return api_quicksetup_list();
     if (strncmp(path, "/api/quicksetup/", 16) == 0) {
@@ -1973,6 +2121,33 @@ char *api_core_handle(const char *method, const char *path, const cJSON *body)
             if (*sfx == '\0')               return api_quicksetup_get(slot);
         }
     }
+
+    // Scripts runtime (spec 2026-10-03 §2). BLE is the only path to the S3
+    // while the phone sits on the DAQ hotspot, so every scripts route lives
+    // here. BLE requests carry "?name=..." in the path: the suffix stops at '?'.
+    if (strncmp(path, "/api/scripts/", 13) == 0) {
+        char sfx[32] = "";
+        const char *q = strchr(path, '?');
+        size_t n = q ? (size_t)(q - (path + 13)) : strlen(path + 13);
+        if (n < sizeof(sfx)) {
+            memcpy(sfx, path + 13, n);
+            sfx[n] = '\0';
+        }
+        if (strcmp(sfx, "status") == 0)          return api_scripts_status(path, body);
+        if (strcmp(sfx, "logs") == 0)            return api_scripts_logs(path, body);
+        if (strcmp(sfx, "stop") == 0)            return api_scripts_stop(path, body);
+        if (strcmp(sfx, "files") == 0)           return api_scripts_files(path, body);
+        if (strcmp(sfx, "storage") == 0)         return api_scripts_storage(path, body);
+        if (strcmp(sfx, "files/get") == 0)       return api_scripts_file_get(path, body);
+        if (strcmp(sfx, "files/delete") == 0)    return api_scripts_file_delete(path, body);
+        if (strcmp(sfx, "files/chunk") == 0)     return api_scripts_file_chunk(path, body);
+        if (strcmp(sfx, "run-file") == 0)        return api_scripts_run_file(path, body);
+        if (strcmp(sfx, "eval") == 0)            return api_scripts_eval(path, body);
+        if (strcmp(sfx, "autorun/status") == 0)  return api_scripts_autorun_status(path, body);
+        if (strcmp(sfx, "autorun/enable") == 0)  return api_scripts_autorun_enable(path, body);
+        if (strcmp(sfx, "autorun/disable") == 0) return api_scripts_autorun_disable(path, body);
+    }
+
 
     return api_error("unknown path");
 }

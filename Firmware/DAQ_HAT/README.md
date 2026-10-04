@@ -296,3 +296,14 @@ final schematic.
 Key ICs: 3× ADAQ7769-1 (24-bit DAQ), 3× AD8411A (current-sense amp), ADG5204
 (mux), LTM8056 (DUT buck-boost), DS4424 (quad IDAC), ADR4540 (4.096 V
 reference), SiT8208 (16.384 MHz MCLK), 2× AD7415 (temperature).
+
+## Local builds: use PlatformIO 6.1.19 (same as CI)
+
+CI builds the P4 and the S3 with `platformio==6.1.19` (see `.github/workflows/daq-hat-firmware.yml` and `esp32-firmware.yml`). Build locally with the same version:
+
+```sh
+python3 -m venv ~/.venvs/pio61 && ~/.venvs/pio61/bin/pip install "platformio==6.1.19"
+cd Firmware/DAQ_HAT/ESP32P4 && PLATFORMIO_CORE_DIR=~/.platformio-p4-61 ~/.venvs/pio61/bin/pio run -e esp32p4
+```
+
+Do not build the P4 with PlatformIO 6.2.x (e.g. Homebrew's). The pinned pioarduino platform (55.03.39) requires `tool-scons` 4.40801. Core 6.2 installs 4.41101, and the platform's `_check_tool_version` then `rmtree`s the shared `~/.platformio/packages/tool-scons`. The build fails with `No module named 'SCons.Tool.FortranCommon'` and leaves the shared package broken for the next build. Moving to pioarduino 55.03.312-1 fixes 6.2 but requires Core >= 6.2.0, so it breaks CI (6.1.19) and moves the P4 to ESP-IDF 5.5.5. Bump CI and the platform together, and re-test the P4 on hardware, if that is ever wanted.

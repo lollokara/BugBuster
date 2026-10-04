@@ -32,7 +32,7 @@ _TASKS = [
     ("adcPoll", 2560, 1268),
     ("faultMon", 2560, 1204),
     ("cmdProc", 3072, 1400),
-    ("wavegen", 2048, 1180),
+    ("wavegen", 3072, 2204),
     ("mainLoop", 5120, 2436),
     ("bbpCli", 5120, 2360),
 ]

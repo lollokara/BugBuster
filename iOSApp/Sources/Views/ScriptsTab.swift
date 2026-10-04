@@ -414,7 +414,22 @@ struct ScriptsTab: View {
             .padding(.vertical, 12)
 
             // Terminal output — fills all remaining space
-            if let client = replClient {
+            if connectionManager.transport == .ble {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                    Text("The REPL needs WiFi")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("The terminal streams over a WebSocket, which isn't available on a Bluetooth connection.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 24)
+                Spacer()
+            } else if let client = replClient {
                 REPLTerminalConsole(client: client)
             } else {
                 Spacer()
@@ -534,7 +549,7 @@ struct ScriptsTab: View {
     // MARK: - Helper Methods
 
     private func initializeREPL() {
-        guard replClient == nil else { return }
+        guard replClient == nil, connectionManager.transport == .wifi else { return }
         let ip = connectionManager.activeDevice?.ip ?? ""
         replClient = WebSocketREPL(host: ip, token: connectionManager.adminToken)
         replClient?.connect()
@@ -561,7 +576,8 @@ struct ScriptsTab: View {
         Task {
             do {
                 let res: ScriptListResponse = try await connectionManager.getRequest(path: "/api/scripts/files")
-                let storage: StorageInfo = try await connectionManager.getRequest(path: "/api/scripts/storage")
+                // Best effort: firmware that predates the shared storage route (BLE) must not hide the list.
+                let storage: StorageInfo? = try? await connectionManager.getRequest(path: "/api/scripts/storage")
                 DispatchQueue.main.async {
                     self.files = res.files.map { ScriptFile(name: $0) }
                     self.storageInfo = storage
@@ -583,25 +599,10 @@ struct ScriptsTab: View {
         let normalizedName = name.hasSuffix(".py") ? name : "\(name).py"
         Task {
             do {
-                let urlStr = connectionManager.activeDevice?.ip ?? ""
-                var urlComponents = URLComponents()
-                urlComponents.scheme = "http"
-                urlComponents.host = urlStr
-                urlComponents.path = "/api/scripts/files"
-                urlComponents.queryItems = [URLQueryItem(name: "name", value: normalizedName)]
-                guard let url = urlComponents.url else { return }
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-                if !connectionManager.adminToken.isEmpty {
-                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-                }
-                request.httpBody = "# \(normalizedName)\n# Write your MicroPython code here\n".data(using: .utf8)
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
+                _ = try await connectionManager.rawRequest(
+                    method: "POST", path: "/api/scripts/files", query: ["name": normalizedName],
+                    body: "# \(normalizedName)\n# Write your MicroPython code here\n".data(using: .utf8),
+                    contentType: "text/plain")
                 DispatchQueue.main.async {
                     newFileName = ""
                     loadFiles()
@@ -616,23 +617,8 @@ struct ScriptsTab: View {
     private func openEditor(for name: String) {
         Task {
             do {
-                let urlStr = connectionManager.activeDevice?.ip ?? ""
-                var urlComponents = URLComponents()
-                urlComponents.scheme = "http"
-                urlComponents.host = urlStr
-                urlComponents.path = "/api/scripts/files/get"
-                urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-                guard let url = urlComponents.url else { return }
-                var request = URLRequest(url: url)
-                request.httpMethod = "GET"
-                if !connectionManager.adminToken.isEmpty {
-                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-                }
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
+                let data = try await connectionManager.rawRequest(
+                    method: "GET", path: "/api/scripts/files/get", query: ["name": name])
                 let content = String(data: data, encoding: .utf8) ?? ""
                 DispatchQueue.main.async {
                     self.editingContent = content
@@ -652,26 +638,10 @@ struct ScriptsTab: View {
     @discardableResult
     private func saveScriptCore() async -> Bool {
         guard let name = editingFileName else { return false }
-        guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else { return false }
         do {
-            var urlComponents = URLComponents()
-            urlComponents.scheme = "http"
-            urlComponents.host = ip
-            urlComponents.path = "/api/scripts/files"
-            urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-            guard let url = urlComponents.url else { return false }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-            if !connectionManager.adminToken.isEmpty {
-                request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-            }
-            request.httpBody = editingContent.data(using: .utf8)
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                throw URLError(.badServerResponse)
-            }
+            _ = try await connectionManager.rawRequest(
+                method: "POST", path: "/api/scripts/files", query: ["name": name],
+                body: editingContent.data(using: .utf8), contentType: "text/plain")
             DispatchQueue.main.async { self.isEditorDirty = false }
             return true
         } catch {
@@ -682,33 +652,15 @@ struct ScriptsTab: View {
 
     private func runScript(_ name: String) {
         Task {
-            guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else {
+            guard connectionManager.activeDevice != nil else {
                 DispatchQueue.main.async { runStatusMessage = "Error: not connected" }
                 return
             }
-            var urlComponents = URLComponents()
-            urlComponents.scheme = "http"
-            urlComponents.host = ip
-            urlComponents.path = "/api/scripts/run-file"
-            urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-            guard let url = urlComponents.url else {
-                DispatchQueue.main.async { runStatusMessage = "Error: bad URL" }
-                return
-            }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            if !connectionManager.adminToken.isEmpty {
-                request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-            }
             do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                _ = try await connectionManager.rawRequest(
+                    method: "POST", path: "/api/scripts/run-file", query: ["name": name])
                 DispatchQueue.main.async {
-                    if (200...299).contains(code) {
-                        withAnimation { runStatusMessage = "Running \(name)…" }
-                    } else {
-                        withAnimation { runStatusMessage = "Error: server returned \(code)" }
-                    }
+                    withAnimation { runStatusMessage = "Running \(name)…" }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -733,45 +685,22 @@ struct ScriptsTab: View {
     }
 
     private func lintScript() {
-        guard let ip = connectionManager.activeDevice?.ip, !ip.isEmpty else {
+        guard connectionManager.activeDevice != nil else {
             self.lintErrorMessage = "Not connected"
             self.lintSuccess = false
             return
         }
 
         Task {
+            struct LintResponse: Codable {
+                let ok: Bool
+                let err: String?
+            }
+
             do {
-                var urlComponents = URLComponents()
-                urlComponents.scheme = "http"
-                urlComponents.host = ip
-                urlComponents.path = "/api/scripts/lint"
-                guard let url = urlComponents.url else { return }
-
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-                if !connectionManager.adminToken.isEmpty {
-                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-                }
-                request.httpBody = editingContent.data(using: .utf8)
-
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    DispatchQueue.main.async {
-                        self.lintErrorMessage = "Server returned status \(code)"
-                        self.lintSuccess = false
-                    }
-                    return
-                }
-
-                struct LintResponse: Codable {
-                    let ok: Bool
-                    let err: String?
-                }
-
-                let res = try JSONDecoder().decode(LintResponse.self, from: data)
+                let res = try await connectionManager.rawRequest(
+                    LintResponse.self, method: "POST", path: "/api/scripts/lint",
+                    body: editingContent.data(using: .utf8), contentType: "text/plain")
                 DispatchQueue.main.async {
                     self.lintSuccess = res.ok
                     self.lintErrorMessage = res.err
@@ -788,23 +717,8 @@ struct ScriptsTab: View {
     private func deleteFile(_ name: String) {
         Task {
             do {
-                let urlStr = connectionManager.activeDevice?.ip ?? ""
-                var urlComponents = URLComponents()
-                urlComponents.scheme = "http"
-                urlComponents.host = urlStr
-                urlComponents.path = "/api/scripts/files"
-                urlComponents.queryItems = [URLQueryItem(name: "name", value: name)]
-                guard let url = urlComponents.url else { return }
-                var request = URLRequest(url: url)
-                request.httpMethod = "DELETE"
-                if !connectionManager.adminToken.isEmpty {
-                    request.setValue(connectionManager.adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token")
-                }
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
+                _ = try await connectionManager.rawRequest(
+                    method: "DELETE", path: "/api/scripts/files", query: ["name": name])
                 DispatchQueue.main.async { loadFiles() }
             } catch {
                 DispatchQueue.main.async { errorMessage = "Delete failed: \(error.localizedDescription)" }

@@ -91,6 +91,7 @@ from .hal import BugBusterHAL, PortMode
 from .bus import BugBusterBusManager, BusPlanError, BusRouteEntry, BusRoutePlan
 from .discovery import DiscoveredDevice, discover, discover_mdns, resolve_local
 from .ota import OTAClient, OTAError, OTAInfo, PartitionInfo
+from .crash import BootReport, CrashSummary, PreCrash, parse_bootrpt_lines
 
 __all__ = [
     # Factory functions
@@ -108,6 +109,12 @@ __all__ = [
     "OTAError",
     "OTAInfo",
     "PartitionInfo",
+
+    # Crash dump / boot report
+    "BootReport",
+    "CrashSummary",
+    "PreCrash",
+    "parse_bootrpt_lines",
 
     # Main client
     "BugBuster",

@@ -23,7 +23,7 @@ def _swift_fn(src: str, sig: str) -> str:
 
 
 def test_ios_post_action_reads_ok_flag_over_http():
-    body = _swift_fn(CM.read_text(encoding="utf-8"), "public func postAction(")
+    body = _swift_fn(CM.read_text(encoding="utf-8"), "public func postActionDetailed(")
     http_part = body.split("if transport == .ble", 1)[1].split("}", 1)[1]
     assert '["ok"]' in http_part, "HTTP branch ignores the ok flag"
 

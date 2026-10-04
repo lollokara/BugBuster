@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "daq_settings.h"
+#include "battsim_s1.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,7 +25,7 @@ typedef enum {
     BS_ST_PAUSED   = 1,   // run loaded, output off, everything frozen
     BS_ST_ACTIVE   = 2,   // output on, integrating
     BS_ST_DEPLETED = 3,   // cutoff reached, output off (final)
-    BS_ST_STOPPED  = 4,   // finalised by the user (final)
+    BS_ST_STOPPED  = 4,   // finalised by the user (REOPEN -> PAUSED)
 } battsim_state_t;
 
 // battsim_status_t.flags
@@ -41,6 +42,7 @@ typedef enum {
 typedef enum {
     BS_E_NONE = 0, BS_E_NO_STORE, BS_E_NO_RUN, BS_E_BUSY, BS_E_INVALID,
     BS_E_STATE, BS_E_NO_PD, BS_E_NO_ACQ, BS_E_IO, BS_E_NOT_FOUND,
+    BS_E_DEPLETED,   // REOPEN refused: cutoff reached (physical end)
 } battsim_err_t;
 
 // Wire status (HAT link / BBP). Little-endian, packed, append-only.
@@ -98,6 +100,10 @@ bool battsim_load_run(uint16_t run_id);
 bool battsim_delete_run(uint16_t run_id);
 /** Host wall clock (Unix seconds) - stamped into new runs. */
 void battsim_set_epoch(uint32_t unix_s);
+
+/** Live 1 s samples of the loaded run (BS_HOP_S1_SINCE). -1 if run_id is not
+ *  the loaded run; otherwise the count copied (see bs_s1_since()). */
+int battsim_s1_since(uint16_t run_id, uint32_t since_t_s, bs_s1_sample_t *out, int max, bool *more);
 
 /** daq_fast_task hook (see battsim_integ.h). watts_mean = block mean of V*I. */
 void battsim_fast_push(float amps_mean, float volts_mean, float watts_mean,

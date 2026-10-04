@@ -1998,17 +1998,19 @@ static uint8_t hat_recv_frame_wide(uint8_t *out, uint16_t cap, uint16_t *out_len
     return cmd;
 }
 
-int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
-                   uint32_t timeout_ms)
+// One request/reply on the wide (<= 240 B) path. HAT_CMD_BS and HAT_CMD_LOG_PULL share it.
+static int hat_wide_request(uint8_t cmd, uint8_t rsp_code, const uint8_t *req, uint8_t req_len,
+                            uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                            uint32_t lock_timeout_ms)
 {
-    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return -1;
-    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        return -1;
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(lock_timeout_ms)) != pdTRUE) {
+        ESP_LOGD(TAG, "HAT wide cmd 0x%02X: mutex busy", cmd);
+        return HAT_ERR_LOCK_BUSY;
     }
     int result = -1;
     if (!s_commit_in_progress) uart_flush_input(HAT_UART_NUM);
-    if (hat_send_frame(HAT_CMD_BS, req, req_len)) {
+    if (hat_send_frame(cmd, req, req_len)) {
         // Receive straight into the caller's buffer: no extra 240 B on this stack.
         uint16_t cap = rsp_cap > 255 ? 255 : rsp_cap;
         uint16_t n = 0;
@@ -2019,13 +2021,44 @@ int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t r
             uint8_t code = hat_recv_frame_wide(rsp, cap, &n,
                                                (deadline - now) * portTICK_PERIOD_MS + 1);
             if (code == 0) break;
-            if (code == HAT_RSP_BS_DATA) { result = n; break; }
+            if (code == rsp_code) { result = n; break; }
             if (code == HAT_RSP_ERROR) { result = -2; break; }
             // Anything else is a stray frame; keep waiting for ours.
         }
     }
     if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
     return result;
+}
+
+int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                   uint32_t timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, timeout_ms + 100);
+}
+
+int hat_bs_request_polite(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                          uint32_t timeout_ms, uint32_t lock_timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull_polite(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                        uint32_t lock_timeout_ms)
+{
+    if (!rsp) return -1;
+    const uint8_t req[4] = { (uint8_t)after_seq, (uint8_t)(after_seq >> 8),
+                             (uint8_t)(after_seq >> 16), (uint8_t)(after_seq >> 24) };
+    return hat_wide_request(HAT_CMD_LOG_PULL, HAT_RSP_LOG_DATA, req, sizeof req, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms)
+{
+    return hat_log_pull_polite(after_seq, rsp, rsp_cap, timeout_ms, 10);
 }
 
 bool hat_daq_vdut_status(hat_vdut_status_t *out)
@@ -2064,6 +2097,17 @@ bool hat_daq_vdut_enable(bool enable)
     uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
     uint8_t code = hat_command(HAT_CMD_DAQ_VDUT_ENABLE, &payload, 1, rsp, &rsp_len, 300, sizeof(rsp));
     return code == HAT_RSP_OK;
+}
+
+int hat_daq_vdut_owner_run(void)
+{
+    // BsStatus wire layout: u8 version, u8 state, u8 flags, u8 last_error, u16 run_id LE.
+    const uint8_t req[1] = { 0 /* BsOp.STATUS */ };
+    uint8_t rsp[96] = {};
+    int got = hat_bs_request(req, sizeof(req), rsp, sizeof(rsp), 300);
+    if (got < 6) return -1;
+    if (rsp[1] == 0 /* BS_ST_NONE */) return -1;
+    return (int)(rsp[4] | (rsp[5] << 8));
 }
 
 bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
