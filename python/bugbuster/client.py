@@ -24,7 +24,7 @@ import logging
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import serial  # pyserial - needed for SerialException in drain-loop guard
 
@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from .script import ScriptSession
     from .memory import MemoryStatus
     from .crash import BootReport, CrashSummary
+    from .hal import BugBusterHAL
+    from .bus import BugBusterBusManager
 
 
 class BugBusterWarning(UserWarning):
@@ -447,14 +449,14 @@ class BugBuster:
     """
 
     def __init__(self, transport: Transport):
-        self._t         = transport
-        self._usb       = isinstance(transport, USBTransport)
-        self._connected = False
-        self._hal       = None
-        self._bus       = None
+        self._t: Any                   = transport
+        self._usb                      = isinstance(transport, USBTransport)
+        self._connected                = False
+        self._hal: Optional['BugBusterHAL'] = None
+        self._bus: Optional['BugBusterBusManager'] = None
         # Cached HAT presence: None = unknown (probe on demand), bool = known
-        self._hat_present_cache = None
-        self._admin_token = None
+        self._hat_present_cache: Optional[bool] = None
+        self._admin_token: Optional[str]        = None
         # Unit-testable pre-send hook: set to a callable to inject failures.
         # Cleared automatically after each fire (one-shot).
         self._usb_pre_send_hook = None
@@ -634,7 +636,7 @@ class BugBuster:
     def _http_get(self, path: str, **params) -> dict:
         return self._t.get(path, params=params or None)
 
-    def _http_post(self, path: str, body: dict = None) -> dict:
+    def _http_post(self, path: str, body: Optional[dict] = None) -> dict:
         headers = {}
         if self._admin_token:
             headers["X-BugBuster-Admin-Token"] = self._admin_token
@@ -1882,12 +1884,12 @@ class BugBuster:
         if len(raw) > 255:
             raise ValueError("I2C write payload must be <=255 bytes")
         if not self._usb:
-            resp = self._http_post("/bus/i2c/write", {
+            http_resp = self._http_post("/bus/i2c/write", {
                 "address": address & 0x7F,
                 "timeoutMs": timeout_ms,
                 "data": list(raw),
             })
-            return int(resp.get("written", 0))
+            return int(http_resp.get("written", 0))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, len(raw)) + raw
         resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE, payload, address)
         return resp[0]
@@ -1898,12 +1900,12 @@ class BugBuster:
         if not (1 <= length <= 255):
             raise ValueError("I2C read length must be 1-255 bytes")
         if not self._usb:
-            resp = self._http_post("/bus/i2c/read", {
+            http_resp = self._http_post("/bus/i2c/read", {
                 "address": address & 0x7F,
                 "length": length,
                 "timeoutMs": timeout_ms,
             })
-            return bytes(resp.get("data", []))
+            return bytes(http_resp.get("data", []))
         payload = struct.pack("<BHB", address & 0x7F, timeout_ms & 0xFFFF, length)
         resp = self._ext_i2c_cmd(CmdId.EXT_I2C_READ, payload, address)
         count = resp[0]
@@ -1925,13 +1927,13 @@ class BugBuster:
         if not (1 <= read_length <= 255):
             raise ValueError("I2C write-read length must be 1-255 bytes")
         if not self._usb:
-            resp = self._http_post("/bus/i2c/write_read", {
+            http_resp = self._http_post("/bus/i2c/write_read", {
                 "address": address & 0x7F,
                 "writeData": list(raw),
                 "readLength": read_length,
                 "timeoutMs": timeout_ms,
             })
-            return bytes(resp.get("data", []))
+            return bytes(http_resp.get("data", []))
         payload = struct.pack("<BHBB", address & 0x7F, timeout_ms & 0xFFFF, len(raw), read_length) + raw
         resp = self._ext_i2c_cmd(CmdId.EXT_I2C_WRITE_READ, payload, address)
         count = resp[0]
@@ -2000,11 +2002,11 @@ class BugBuster:
         if not (1 <= len(raw) <= 512):
             raise ValueError("SPI transfer length must be 1-512 bytes")
         if not self._usb:
-            resp = self._http_post("/bus/spi/transfer", {
+            http_resp = self._http_post("/bus/spi/transfer", {
                 "data": list(raw),
                 "timeoutMs": timeout_ms,
             })
-            return bytes(resp.get("data", []))
+            return bytes(http_resp.get("data", []))
         payload = struct.pack("<HH", timeout_ms & 0xFFFF, len(raw)) + raw
         resp = self._usb_cmd(CmdId.EXT_SPI_TRANSFER, payload)
         count = struct.unpack_from("<H", resp, 0)[0]
@@ -2305,8 +2307,8 @@ class BugBuster:
             ]
         """
         if not self._usb:
-            resp = self._http_get("/uart/config")
-            bridges = resp.get("bridges", [])
+            http_resp = self._http_get("/uart/config")
+            bridges = http_resp.get("bridges", [])
             return [
                 {
                     "bridge_id": b.get("id", 0),
@@ -2419,8 +2421,8 @@ class BugBuster:
         excluded.
         """
         if not self._usb:
-            resp = self._http_get("/uart/pins")
-            return list(resp.get("available", []))
+            http_resp = self._http_get("/uart/pins")
+            return list(http_resp.get("available", []))
 
         resp  = self._usb_cmd(CmdId.GET_UART_PINS)
         count = resp[0]
@@ -2439,10 +2441,10 @@ class BugBuster:
             resp = self._usb_cmd(CmdId.MUX_GET_ALL)
             return list(resp[:4])
         else:
-            resp = self._http_get("/mux")
-            if "states" not in resp:
+            http_resp = self._http_get("/mux")
+            if "states" not in http_resp:
                 raise ProtocolError("MUX_GET_ALL: response missing 'states' field")
-            return list(resp["states"])
+            return list(http_resp["states"])
 
     def mux_set_all(self, states: list[int]) -> None:
         """
@@ -3414,8 +3416,8 @@ class BugBuster:
             _require_resp_len(resp, 1, "HAT_CALIBRATE_START")
             return resp[0]
         else:
-            resp = self._http_post("/hat/v2/calibrate/start", {"railId": rail_id})
-            return resp.get("status", 0)
+            http_resp = self._http_post("/hat/v2/calibrate/start", {"railId": rail_id})
+            return http_resp.get("status", 0)
 
     def hat_calibrate_status(self) -> dict:
         """Get the status of the current HAT calibration sweep."""
@@ -3447,22 +3449,22 @@ class BugBuster:
                 })
             return status
         else:
-            resp = self._http_get("/hat/v2/calibrate/status")
+            http_resp = self._http_get("/hat/v2/calibrate/status")
             return {
-                "state": resp.get("state", 0),
-                "progress": resp.get("progress", 0),
-                "rail_id": resp.get("railId", 0),
-                "last_error": resp.get("lastError", 0),
-                "persist_state": resp.get("persistState", 0),
-                "stage": resp.get("stage", 0),
-                "point": resp.get("point", 0),
-                "code": resp.get("code", 0),
-                "measured_mv": resp.get("measuredMv", -1),
-                "min_mv": resp.get("minMv", -1),
-                "max_mv": resp.get("maxMv", -1),
-                "max_gap_mv": resp.get("maxGapMv", -1),
-                "max_error_mv": resp.get("maxErrorMv", -1),
-                "validation_flags": resp.get("validationFlags", 0),
+                "state": http_resp.get("state", 0),
+                "progress": http_resp.get("progress", 0),
+                "rail_id": http_resp.get("railId", 0),
+                "last_error": http_resp.get("lastError", 0),
+                "persist_state": http_resp.get("persistState", 0),
+                "stage": http_resp.get("stage", 0),
+                "point": http_resp.get("point", 0),
+                "code": http_resp.get("code", 0),
+                "measured_mv": http_resp.get("measuredMv", -1),
+                "min_mv": http_resp.get("minMv", -1),
+                "max_mv": http_resp.get("maxMv", -1),
+                "max_gap_mv": http_resp.get("maxGapMv", -1),
+                "max_error_mv": http_resp.get("maxErrorMv", -1),
+                "validation_flags": http_resp.get("validationFlags", 0),
             }
 
     def hat_calibrate_import(self, rail_id: int, points: list[dict]) -> bool:
@@ -3521,13 +3523,13 @@ class BugBuster:
                 "dir": bool(resp[1])
             }
         else:
-            resp = self._http_post("/hat/v2/level_shift", {
+            http_resp = self._http_post("/hat/v2/level_shift", {
                 "oe": oe,
                 "dir": direction
             })
             return {
-                "oe": resp.get("oe", False),
-                "dir": resp.get("dir", False)
+                "oe": http_resp.get("oe", False),
+                "dir": http_resp.get("dir", False)
             }
 
     def hat_la_set_trigger(self, trigger_type=0, channel: int = 0) -> bool:
@@ -3874,7 +3876,7 @@ class BugBuster:
         :param channels: Number of channels (1, 2, or 4)
         :return: List of channels, each a list of 0/1 values
         """
-        result = [[] for _ in range(channels)]
+        result: list[list[int]] = [[] for _ in range(channels)]
         bits_per_sample = channels
 
         for byte_val in raw:
@@ -4110,7 +4112,7 @@ class BugBuster:
     def start_adc_dsp_stream(
         self,
         channel:         int,
-        rate:            "AdcRate"  = None,
+        rate:            Optional["AdcRate"] = None,
         window_samples:  int        = 256,
         spike_threshold: float      = 0.1,
         n_fft_peaks:     int        = 8,
@@ -4792,7 +4794,7 @@ class BugBuster:
             raise RuntimeError(f"IO slots {refused} are held by another owner")
         self._io_claimed_slots = (self._io_claimed_slots or set()) | set(slots)
 
-    def io_release(self, slots: list[int] = None) -> None:
+    def io_release(self, slots: Optional[list[int]] = None) -> None:
         """
         Explicitly release IO slot ownership.
 

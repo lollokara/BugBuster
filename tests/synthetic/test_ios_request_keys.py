@@ -15,7 +15,7 @@ import re
 from tests.lib.srcread import read_source
 
 OVERVIEW = read_source("iOSApp/Sources/Views/OverviewTab.swift")
-SCRIPTS = read_source("iOSApp/Sources/Views/ScriptsTab.swift")
+SCRIPTS_CLIENT = read_source("iOSApp/Sources/Services/ScriptsClient.swift")
 
 
 def _json_after(src: str, path_fragment: str) -> str:
@@ -48,9 +48,12 @@ def test_quicksetup_list_decodes_the_slots_wrapper():
 
 
 def test_autorun_enable_passes_name_query():
-    i = SCRIPTS.index("func toggleAutorun")
-    fn = SCRIPTS[i:i + 900]
-    assert "autorun/enable?name=" in fn, fn[:300]
+    i = SCRIPTS_CLIENT.index("func setAutorun")
+    fn = SCRIPTS_CLIENT[i:i + 700]
+    assert '"/api/scripts/autorun/enable", query: ["name": name]' in fn, fn[:300]
+    # firmware reads name from the JSON body (BLE) or the query string (HTTP)
+    fw = read_source("Firmware/ESP32/src/net/api_scripts.cpp")
+    assert 'arg_str(body, path, "name"' in fw.split("static bool arg_name(", 1)[1].split("}", 1)[0]
 
 
 def test_firmware_still_expects_these_keys():

@@ -200,14 +200,24 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
         await readValue(Self.chrSensor)
     }
 
+    /// Firmware `s_api_req_buf[512]` (Firmware/ESP32/src/net/ble_service.cpp:73):
+    /// `ble_write_to_buf` (lines 170-175, 465) rejects writes with `len >= buf_sz`
+    /// to leave room for the NUL terminator, so the request JSON must be <= 511 bytes.
+    public static let maxTunnelRequestBytes = 511
+
+    /// The exact bytes written to the API-request characteristic. Slashes stay
+    /// unescaped so a base64 upload chunk costs one byte per character.
+    public static func tunnelPayload(path: String, body: [String: Any]?, id: Int) -> Data? {
+        var payload: [String: Any] = ["path": path, "id": id]
+        if let body = body, !body.isEmpty { payload["body"] = body }
+        return try? JSONSerialization.data(withJSONObject: payload, options: [.withoutEscapingSlashes])
+    }
+
     /// Send a request over the API tunnel and return the reassembled JSON.
     /// `body` is omitted from the frame when nil/empty.
     public func apiRequest(path: String, body: [String: Any]? = nil, timeout: TimeInterval = 6.0) async -> Data? {
         await opGate.wait()
         defer { Task { await opGate.signal() } }
-
-        var payload: [String: Any] = ["path": path]
-        if let body = body, !body.isEmpty { payload["body"] = body }
 
         return await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
             bleQueue.async {
@@ -217,10 +227,10 @@ public final class BLETransport: NSObject, ObservableObject, CBCentralManagerDel
                 self.reqIdCounter = self.reqIdCounter &+ 1
                 if self.reqIdCounter == 0 { self.reqIdCounter = 1 }
                 let reqId = self.reqIdCounter
-                payload["id"] = Int(reqId)
 
-                guard let json = try? JSONSerialization.data(withJSONObject: payload),
-                      json.count <= 240 else {  // firmware APIReq buffer is 256
+                // Over the ATT MTU, CoreBluetooth sends a long (prepared) write.
+                guard let json = Self.tunnelPayload(path: path, body: body, id: Int(reqId)),
+                      json.count <= Self.maxTunnelRequestBytes else {
                     cont.resume(returning: nil); return
                 }
 
