@@ -126,6 +126,7 @@ class DaqAction(IntEnum):
     BS_RUN_LOAD       = 12
     BS_RUN_DELETE     = 13
     BS_DEFAULTS       = 14
+    BS_RUN_REOPEN     = 15
 
 
 # --- SMU calibration (CmdId.DAQ_CAL sub-ops, map to P4 HAT cmd 0x56+op) --------

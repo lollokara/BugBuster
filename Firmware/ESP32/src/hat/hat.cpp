@@ -7,6 +7,7 @@
 // =============================================================================
 
 #include "hat.h"
+#include "hat_action_policy.h"
 #include "tasks.h"
 #include "pca9535.h"
 #include "dio.h"
@@ -79,8 +80,12 @@ static void hat_note_uart_success(void)
     s_state.degraded = false;
 }
 
+static uint32_t s_timeout_total;
+uint32_t hat_timeout_total(void) { return s_timeout_total; }
+
 static void hat_note_uart_timeout(void)
 {
+    s_timeout_total++;
     s_state.last_timeout_ms = hat_now_ms();
     if (s_state.consecutive_timeouts < UINT8_MAX) {
         s_state.consecutive_timeouts++;
@@ -461,8 +466,9 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
     return final_rsp;
 }
 
-uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+static uint8_t hat_command_ex(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                              uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len,
+                              bool may_retry)
 {
     if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
         ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
@@ -484,7 +490,7 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     //   received but corrupted -> retry promptly with minimal backoff
     // - Timeout (rsp == 0 with s_last_error == 0) means the peer may be gone
     //   or unresponsive -> retry with connection reset and longer backoff
-    if (rsp == 0 && !s_commit_in_progress) {
+    if (rsp == 0 && !s_commit_in_progress && may_retry) {
         bool is_crc_error = (s_last_error != 0 && s_last_error != 0xFF && s_last_error != 0xFE);
         
         if (is_crc_error) {
@@ -533,6 +539,12 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     }
 
     return rsp;
+}
+
+uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+{
+    return hat_command_ex(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len, true);
 }
 
 // -----------------------------------------------------------------------------
@@ -1998,17 +2010,19 @@ static uint8_t hat_recv_frame_wide(uint8_t *out, uint16_t cap, uint16_t *out_len
     return cmd;
 }
 
-int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
-                   uint32_t timeout_ms)
+// One request/reply on the wide (<= 240 B) path. HAT_CMD_BS and HAT_CMD_LOG_PULL share it.
+static int hat_wide_request(uint8_t cmd, uint8_t rsp_code, const uint8_t *req, uint8_t req_len,
+                            uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                            uint32_t lock_timeout_ms)
 {
-    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
     if (!s_state.connected || s_state.type != HAT_TYPE_DAQ_POWER) return -1;
-    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        return -1;
+    if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(lock_timeout_ms)) != pdTRUE) {
+        ESP_LOGD(TAG, "HAT wide cmd 0x%02X: mutex busy", cmd);
+        return HAT_ERR_LOCK_BUSY;
     }
     int result = -1;
     if (!s_commit_in_progress) uart_flush_input(HAT_UART_NUM);
-    if (hat_send_frame(HAT_CMD_BS, req, req_len)) {
+    if (hat_send_frame(cmd, req, req_len)) {
         // Receive straight into the caller's buffer: no extra 240 B on this stack.
         uint16_t cap = rsp_cap > 255 ? 255 : rsp_cap;
         uint16_t n = 0;
@@ -2019,13 +2033,44 @@ int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t r
             uint8_t code = hat_recv_frame_wide(rsp, cap, &n,
                                                (deadline - now) * portTICK_PERIOD_MS + 1);
             if (code == 0) break;
-            if (code == HAT_RSP_BS_DATA) { result = n; break; }
+            if (code == rsp_code) { result = n; break; }
             if (code == HAT_RSP_ERROR) { result = -2; break; }
             // Anything else is a stray frame; keep waiting for ours.
         }
     }
     if (s_hat_mutex) xSemaphoreGive(s_hat_mutex);
     return result;
+}
+
+int hat_bs_request(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                   uint32_t timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, timeout_ms + 100);
+}
+
+int hat_bs_request_polite(const uint8_t *req, uint8_t req_len, uint8_t *rsp, uint16_t rsp_cap,
+                          uint32_t timeout_ms, uint32_t lock_timeout_ms)
+{
+    if (!req || req_len == 0 || req_len > HAT_BS_REQ_MAX || !rsp) return -1;
+    return hat_wide_request(HAT_CMD_BS, HAT_RSP_BS_DATA, req, req_len, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull_polite(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms,
+                        uint32_t lock_timeout_ms)
+{
+    if (!rsp) return -1;
+    const uint8_t req[4] = { (uint8_t)after_seq, (uint8_t)(after_seq >> 8),
+                             (uint8_t)(after_seq >> 16), (uint8_t)(after_seq >> 24) };
+    return hat_wide_request(HAT_CMD_LOG_PULL, HAT_RSP_LOG_DATA, req, sizeof req, rsp, rsp_cap,
+                            timeout_ms, lock_timeout_ms);
+}
+
+int hat_log_pull(uint32_t after_seq, uint8_t *rsp, uint16_t rsp_cap, uint32_t timeout_ms)
+{
+    return hat_log_pull_polite(after_seq, rsp, rsp_cap, timeout_ms, 10);
 }
 
 bool hat_daq_vdut_status(hat_vdut_status_t *out)
@@ -2064,6 +2109,17 @@ bool hat_daq_vdut_enable(bool enable)
     uint8_t rsp[4] = {}; uint8_t rsp_len = 0;
     uint8_t code = hat_command(HAT_CMD_DAQ_VDUT_ENABLE, &payload, 1, rsp, &rsp_len, 300, sizeof(rsp));
     return code == HAT_RSP_OK;
+}
+
+int hat_daq_vdut_owner_run(void)
+{
+    // BsStatus wire layout: u8 version, u8 state, u8 flags, u8 last_error, u16 run_id LE.
+    const uint8_t req[1] = { 0 /* BsOp.STATUS */ };
+    uint8_t rsp[96] = {};
+    int got = hat_bs_request(req, sizeof(req), rsp, sizeof(rsp), 300);
+    if (got < 6) return -1;
+    if (rsp[1] == 0 /* BS_ST_NONE */) return -1;
+    return (int)(rsp[4] | (rsp[5] << 8));
 }
 
 bool hat_daq_vdut_setpoint(float vdut_v, float ilimit_a)
@@ -2490,7 +2546,12 @@ uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     // CONFIG_VALUE 0x93 / CONFIG_SCHEMA 0x94) and not just OK/ERROR. Returns 0
     // on timeout.
     if (!s_state.connected) return 0;
-    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+    // CONFIG_ACTION runs to completion on the P4 (see hat_action_policy.h): long
+    // budget, single send. Other callers wait on the HAT mutex meanwhile and give
+    // up quietly (a failed mutex take does not count as a link timeout).
+    return hat_command_ex(cmd, payload, payload_len, rsp_payload, rsp_len,
+                          hat_request_timeout_ms(cmd, timeout_ms), max_rsp_len,
+                          hat_request_may_retry(cmd) != 0);
 }
 
 bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)

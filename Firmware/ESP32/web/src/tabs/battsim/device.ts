@@ -80,6 +80,19 @@ export async function runDir(run: number): Promise<RunFile[]> {
   }
 }
 
+/** Just the run ids (one or two small requests), for polling until a delete shows. */
+export async function runIds(): Promise<number[]> {
+  const ids: number[] = [];
+  for (;;) {
+    const raw = await bs(OP_LIST_RUNS, le16(ids.length));
+    const d = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    const total = d.getUint16(0, true);
+    const page = Math.floor((raw.length - 4) / 2);
+    for (let i = 0; i < page; i++) ids.push(d.getUint16(4 + 2 * i, true));
+    if (page === 0 || ids.length >= total) return ids;
+  }
+}
+
 export interface RunSummary { runId: number; active: boolean; meta: BsMeta | null; bytes: number }
 
 export async function listRuns(): Promise<RunSummary[]> {

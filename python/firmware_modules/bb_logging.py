@@ -1,12 +1,13 @@
 # bb_logging.py — BugBuster on-device logging helpers (frozen module)
 #
-# Provides formatted log output using print() with level prefix.
+# Provides formatted log output using bugbuster.log() with level prefix.
 # Import with: import bb_logging
 #
 # These run on-device without VFS — compiled as frozen .mpy bytecode.
 #
 # Usage:
 #   import bb_logging
+#   bb_logging.debug('Reading raw samples')
 #   bb_logging.info('Starting sweep')
 #   bb_logging.warn('Voltage above threshold')
 #   bb_logging.error('Sensor not responding')
@@ -23,16 +24,28 @@ def _ts():
         return '[----------]'
 
 
+def _emit(level, text):
+    try:
+        bugbuster.log(level, text)
+    except AttributeError:
+        print(text)
+
+
+def debug(msg):
+    """Log a DEBUG-level message with timestamp."""
+    _emit('D', '%s DEBUG %s' % (_ts(), msg))
+
+
 def info(msg):
-    """Print an INFO-level message with timestamp."""
-    print('%s INFO  %s' % (_ts(), msg))
+    """Log an INFO-level message with timestamp."""
+    _emit('I', '%s INFO  %s' % (_ts(), msg))
 
 
 def warn(msg):
-    """Print a WARN-level message with timestamp."""
-    print('%s WARN  %s' % (_ts(), msg))
+    """Log a WARN-level message with timestamp."""
+    _emit('W', '%s WARN  %s' % (_ts(), msg))
 
 
 def error(msg):
-    """Print an ERROR-level message with timestamp."""
-    print('%s ERROR %s' % (_ts(), msg))
+    """Log an ERROR-level message with timestamp."""
+    _emit('E', '%s ERROR %s' % (_ts(), msg))

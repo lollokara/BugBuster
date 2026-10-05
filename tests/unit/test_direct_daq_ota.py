@@ -999,8 +999,8 @@ def test_reduced_task_stack_sizes_are_exactly_the_new_values():
          "used to encode was measured too early in boot; the true worst case "
          "is 1672 B (tasks_apply_channel_function on the DEVICE_RESET path, "
          "isolated on hardware 2026-08-06), leaving 1400 B of margin.")
-    assert re.search(r"#define\s+TASK_STACK_WAVEGEN\s+2048\b", code), \
-        "TASK_STACK_WAVEGEN must be exactly 2048 (measured peak 868, margin 1180)"
+    assert re.search(r"#define\s+TASK_STACK_WAVEGEN\s+3072\b", code), \
+        "TASK_STACK_WAVEGEN must be exactly 3072 (see the 2026-10-03 overflow note in tasks.h)"
 
 
 def test_main_loop_static_stack_is_exactly_the_new_value():
@@ -1363,11 +1363,17 @@ def _local_stack_array_sizes(code: str):
 
 def _s3_link_task_stack_size() -> int:
     m = re.search(
-        r'xTaskCreatePinnedToCore\(\s*service_task\s*,\s*"s3_link"\s*,\s*(\d+)',
+        r'xTaskCreatePinnedToCore\(\s*service_task\s*,\s*"s3_link"\s*,\s*(\w+)',
         S3LINK_C,
     )
     assert m, "could not find the s3_link service_task stack size"
-    return int(m.group(1))
+    size = m.group(1)
+    if not size.isdigit():  # named macro, e.g. S3LINK_TASK_STACK in s3_link.h
+        h = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
+        d = re.search(r"#define\s+" + re.escape(size) + r"\s+(\d+)", h)
+        assert d, f"could not resolve {size} in s3_link.h"
+        size = d.group(1)
+    return int(size)
 
 
 def test_relay_stage_end_has_no_multikb_stack_array():
@@ -1669,3 +1675,22 @@ def test_fw_apply_worker_uses_internal_ram_and_refresh_uses_spiram():
     assert "MALLOC_CAP_INTERNAL" in apply_fn, \
         "the flash-writing apply worker must use internal RAM"
 
+
+
+def test_wavegen_task_does_no_float_logging_and_has_stack_headroom():
+    """Crash 2026-10-03: 'stack overflow in task wavegen' with a 2048 B stack.
+
+    taskWavegen used to emit ESP_LOGI("wavegen", "Start: ... %.1fHz ...") and
+    "Stopped" itself. newlib's float vfprintf frame alone is 0x320 B (+ _dtoa,
+    esp_log_write*, vprintf), stacked on the task frame, the FPU coprocessor
+    save area and, during an e-fuse/PCA9535 pulse, the extra interrupt frames
+    of the PCA INT storm -- that crossed 2048 B. The start path already logs
+    the parameters on bbpCli (bbp.cpp), so the task must not format floats.
+    """
+    body = TASKS_CPP.split("static void taskWavegen", 1)[1].split("\n}\n", 1)[0]
+    assert not re.search(r'ESP_LOG[IWEDV]\s*\([^;]*%[-0-9.]*[fgeFGE]', body), \
+        "taskWavegen must not format floats in a log call"
+    assert 'ESP_LOGI("wavegen"' not in body, \
+        "taskWavegen must not log from the generation path (Start/Stopped)"
+    assert re.search(r"#define\s+TASK_STACK_WAVEGEN\s+3072\b", _strip_noise(TASKS_H)), \
+        "TASK_STACK_WAVEGEN must be 3072 (868 B idle peak + log/ISR worst case)"

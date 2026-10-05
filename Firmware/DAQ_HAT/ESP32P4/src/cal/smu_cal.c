@@ -11,6 +11,7 @@
 #include <math.h>
 
 #include "esp_log.h"
+#include "log_forward.h"
 #include "esp_rom_crc.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -1021,6 +1022,7 @@ esp_err_t smu_cal_start(smu_cal_t *c, smu_cal_mode_t mode)
         return ESP_ERR_INVALID_STATE;   // already running
     }
     if (battsim_owns_supply()) return ESP_ERR_INVALID_STATE;   // run owns V_DUT
+    LOG_IMPORTANT("cal", "calibration started");
     reset_run_state(c, mode);
     c->phase = SMU_CAL_RUNNING;
     xTaskNotifyGive(c->task);

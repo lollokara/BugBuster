@@ -267,6 +267,30 @@ The C6 is flashed by the P4 driving its ROM loader, so the P4 must still be
 running its current image when the C6 is written. That is why the system-wide
 update order is **RP2040 → C6 → P4 → S3**.
 
+## Reset and crash reports (P4)
+
+On every boot the P4 pushes its reset reason, and after a panic / watchdog reset the crash
+summary, into the log ring the S3 pulls (`HATP_CMD_LOG_PULL`). The S3 ships them to the hub as
+`source=p4` records with the tags below. The format is `key=value` pairs separated by single
+spaces, one line (<= 79 chars) per record. Source of truth: `ESP32P4/src/diag/boot_report.h`.
+
+| tag | level | message |
+|---|---|---|
+| `p4rst` | `I` (`W` when `abnormal=1`) | `reset=<NAME> code=<esp_reset_reason_t> abnormal=<0\|1> boot=<boots since power-up>` |
+| `p4rst` | `I` | `last_act=<DAQ_ACT_* id, 0 none> run=<selected run> inflight=<0\|1> up_ms=<previous uptime>` (previous boot's breadcrumb; not after power-up) |
+| `p4crash` | `W` | `task=<name> pc=0x<hex> ra=0x<hex>` |
+| `p4crash` | `W` | `sp=0x<hex> cause=0x<mcause> tval=0x<mtval>` |
+| `p4crash` | `W` | `elf=<9 hex of the app ELF sha256> depth=<n>` |
+| `p4crash` | `W` | `why=<IDF panic reason>` (when available) |
+| `p4crash` | `W` | `bt0=0x..,0x..,...` (5 addresses per line, `bt1=`, ...): code-looking words on the crashed task's stack, innermost first; resolve against the ELF named by `elf=` |
+
+Reset names: `UNKNOWN POWERON EXT SW PANIC INT_WDT TASK_WDT WDT DEEPSLEEP BROWNOUT SDIO USB JTAG EFUSE
+PWR_GLITCH CPU_LOCKUP`; abnormal = `PANIC INT_WDT TASK_WDT WDT BROWNOUT PWR_GLITCH CPU_LOCKUP`.
+`inflight=1` after an abnormal reset means the P4 died inside that S3-requested action
+(`last_act=12` is `DAQ_ACT_BS_RUN_LOAD`). `p4crash` lines come from the flash coredump
+(`coredump` partition) and are reported once; `no coredump partition ...` means a P4 flashed with
+an older partition table. RISC-V cannot unwind on the device, so the `bt` lines are candidates.
+
 ## Status
 
 Done: ADAQ7769-1 driver, range manager and per-range calibration, seamless
@@ -296,3 +320,14 @@ final schematic.
 Key ICs: 3× ADAQ7769-1 (24-bit DAQ), 3× AD8411A (current-sense amp), ADG5204
 (mux), LTM8056 (DUT buck-boost), DS4424 (quad IDAC), ADR4540 (4.096 V
 reference), SiT8208 (16.384 MHz MCLK), 2× AD7415 (temperature).
+
+## Local builds: use PlatformIO 6.1.19 (same as CI)
+
+CI builds the P4 and the S3 with `platformio==6.1.19` (see `.github/workflows/daq-hat-firmware.yml` and `esp32-firmware.yml`). Build locally with the same version:
+
+```sh
+python3 -m venv ~/.venvs/pio61 && ~/.venvs/pio61/bin/pip install "platformio==6.1.19"
+cd Firmware/DAQ_HAT/ESP32P4 && PLATFORMIO_CORE_DIR=~/.platformio-p4-61 ~/.venvs/pio61/bin/pio run -e esp32p4
+```
+
+Do not build the P4 with PlatformIO 6.2.x (e.g. Homebrew's). The pinned pioarduino platform (55.03.39) requires `tool-scons` 4.40801. Core 6.2 installs 4.41101, and the platform's `_check_tool_version` then `rmtree`s the shared `~/.platformio/packages/tool-scons`. The build fails with `No module named 'SCons.Tool.FortranCommon'` and leaves the shared package broken for the next build. Moving to pioarduino 55.03.312-1 fixes 6.2 but requires Core >= 6.2.0, so it breaks CI (6.1.19) and moves the P4 to ESP-IDF 5.5.5. Bump CI and the platform together, and re-test the P4 on hardware, if that is ever wanted.

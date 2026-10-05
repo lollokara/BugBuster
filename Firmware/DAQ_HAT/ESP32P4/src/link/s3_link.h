@@ -192,6 +192,10 @@ extern "C" {
 // MUST match S3 hat.h HAT_CMD_BS / HAT_RSP_BS_DATA.
 #define HATP_CMD_BS              0x7Bu
 
+// P4 ERROR / LOG_IMPORTANT records: [u32 after_seq] -> HATP_RSP_LOG_DATA (diag/log_ring.h wire format).
+// MUST match S3 hat.h HAT_CMD_LOG_PULL / HAT_RSP_LOG_DATA.
+#define HATP_CMD_LOG_PULL        0x7Eu
+
 // CONFIG_GET_ALL flags.
 #define HATP_CONFIG_FLAG_SECRET  0x01u   // include secret values (e.g. wifi pw)
 
@@ -212,8 +216,14 @@ extern "C" {
 #define HATP_RSP_DAQ_VDUT_STATUS 0x98u // payload: s3link_vdut_status_t; response to HATP_CMD_DAQ_VDUT_STATUS
 #define HATP_RSP_DAQ_C6_VERSION  0x99u // payload: s3link_c6_version_t; response to HATP_CMD_DAQ_C6_VERSION
 #define HATP_RSP_BS_DATA         0x9Au // payload: battsim host reply (battsim_host.h)
+#define HATP_RSP_LOG_DATA        0x9Bu // payload: log ring pull reply (diag/log_ring.h)
 
 // Firmware version reported in GET_INFO.
+// Stack of the s3_link dispatcher task. It runs every S3 request synchronously, including
+// battery-sim LOAD / NEW / DELETE (LittleFS + two 368 B checkpoint structs + the settings
+// notify chain). 4096 B overflowed on LOAD of a real run: HW stack guard -> "Stack
+// protection fault" panic -> P4 reset -> the S3 saw only a timeout.
+#define S3LINK_TASK_STACK    12288u
 #define S3LINK_FW_MAJOR      1u
 #define S3LINK_FW_MINOR      0u
 

@@ -96,7 +96,8 @@ struct DiagnosticsTab: View {
     @State private var cachedSupplies: SelftestSupplyCached? = nil
 
     // AD74416H Internal Diagnostics
-    @State private var internalSupplies: [InternalSupplyEntry]? = nil
+    @State private var internalSupplies: InternalSuppliesResponse? = nil
+    @State private var internalSuppliesError: String? = nil
     @State private var isLoadingInternalSupplies = false
     
     // Confirmation dialogs
@@ -147,6 +148,7 @@ struct DiagnosticsTab: View {
             }
             .padding()
         }
+        .accessibilityIdentifier("diagnostics_tab_view")
         .background(
             LinearGradient(
                 colors: [Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.02, green: 0.03, blue: 0.06)],
@@ -481,9 +483,22 @@ struct DiagnosticsTab: View {
                 }
             }
 
-            if let supplies = internalSupplies {
+            if let message = internalSuppliesError {
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+            }
+
+            if let reading = internalSupplies {
+                HStack(spacing: 6) {
+                    Image(systemName: reading.valid && reading.suppliesOk ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Text(!reading.valid ? "Reading not valid" : (reading.suppliesOk ? "Supplies OK" : "Supplies out of range"))
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(reading.valid && reading.suppliesOk ? .green : .orange)
+
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    ForEach(supplies) { entry in
+                    ForEach(reading.supplies) { entry in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.name)
                                 .font(.system(size: 9, weight: .bold))
@@ -496,7 +511,7 @@ struct DiagnosticsTab: View {
                         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
-            } else {
+            } else if internalSuppliesError == nil {
                 Text("Tap refresh to read internal diagnostics.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
@@ -1396,14 +1411,19 @@ struct DiagnosticsTab: View {
 
     private func fetchInternalSupplies() {
         isLoadingInternalSupplies = true
+        internalSuppliesError = nil
         Task {
-            if let resp: InternalSuppliesResponse = try? await connectionManager.getRequest(path: "/api/selftest/supplies") {
+            do {
+                let resp: InternalSuppliesResponse = try await connectionManager.getRequest(path: "/api/selftest/supplies")
                 DispatchQueue.main.async {
-                    self.internalSupplies = resp.supplies
+                    self.internalSupplies = resp
                     self.isLoadingInternalSupplies = false
                 }
-            } else {
-                DispatchQueue.main.async { self.isLoadingInternalSupplies = false }
+            } catch {
+                DispatchQueue.main.async {
+                    self.internalSuppliesError = "Internal diagnostics failed: \(error.localizedDescription)"
+                    self.isLoadingInternalSupplies = false
+                }
             }
         }
     }

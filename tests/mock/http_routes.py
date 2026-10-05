@@ -301,9 +301,9 @@ def dispatch(device, method: str, path: str, params: dict, body: dict, headers: 
 
     if key == ("GET", "/selftest/supplies"):
         return {
-            "valid": True, "supplies_ok": True,
-            "avdd_hi_v": 21.5, "dvcc_v": 5.0, "avcc_v": 5.0,
-            "avss_v": -16.0, "temp_c": 25.0,
+            "valid": True, "suppliesOk": True,
+            "avddHiV": 21.5, "dvccV": 5.0, "avccV": 5.0,
+            "avssV": -16.0, "tempC": 25.0,
         }
 
     # GPIO — GET /gpio → {"gpios": [...]}

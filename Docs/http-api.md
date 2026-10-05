@@ -67,6 +67,27 @@ For real-time streams (REPL and Scope Data), authentication occurs during the ha
 
 ---
 
+## 2b. Crash dump & boot report
+
+Two routes (of the 150 httpd slots; 140 are in use). Both need the admin token
+and are also served over the BLE tunnel via `api_core_handle`, except `raw=1`.
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/system/crash` | GET | Summary: reset reason, boot count, crash streak, and if a coredump is stored its size, panic reason, task, PC, `exccause_name`, `vaddr`, backtrace, `a0..a15`, `dump_elf` / `elf_match` (does the dump belong to the running build?) and `pre` (last RTC snapshot before the crash). `ready:false` until the boot-time check finishes (about 1 s after boot). |
+| `/api/system/crash?report=1` | GET | The full boot bundle (`sys`, `mem`, `net`, `hw`, `scripts`, `crash`) on demand. |
+| `/api/system/crash?offset=N&len=M` | GET | Base64 slice of the ELF coredump, at most 768 raw bytes per call: `{ok, offset, len, total, eof, data}`. Works over BLE. |
+| `/api/system/crash?raw=1` | GET | The ELF coredump as `application/octet-stream` (HTTP only, streamed in 1 KB slices). Decode with `espcoredump.py info_corefile -c <file> <firmware.elf>`; check `elf_match` first. |
+| `/api/system/crash/clear` | POST | Erase the stored coredump. `{ok, had_dump}`; returns `ok:false` while the boot-time check has not run. |
+
+**Boot report.** 30 s after boot completes the firmware logs the same sections as
+`BOOTRPT <boot> <section> <i>/<n> <json>` lines (tag `bootrpt`, at most 360 bytes
+of JSON per line, `<i>/<n>` are the parts of one JSON document, `end` closes the
+report). The `crash` section is logged at warning level when a dump is stored or
+the last reset was abnormal. The remote log shipper forwards these lines like any
+other log. Memory: ~80 B RTC RAM for the snapshot, a ~0.6 KB PSRAM summary, and a
+throw-away 8 KB task that exists only while the report is built.
+
 ## 3. Status & Global Monitoring (8 URIs)
 
 | Endpoint | Method | Description | Auth |
@@ -159,6 +180,7 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 | Endpoint | Method | Body / Query |
 | :--- | :--- | :--- |
 | `/api/scripts/eval` | POST | Body: Raw Python code. Query: `?persist=true`. |
+| `/api/scripts/lint` | POST | HTTP: raw Python text body. BLE tunnel (JSON, request <= 512 B): `{"name":"x.py"}` lints the stored file or `{"src":"..."}` lints inline source. Reply `{ok:true}` or `{ok:false,err}`. |
 | `/api/scripts/run-file` | POST | Query: `?name=myscript.py`. |
 | `/api/scripts/status` | GET | Memory usage, script ID, and VM state. |
 | `/api/scripts/stop` | POST | Terminates running script. |
@@ -168,6 +190,16 @@ Pattern: `/api/channel/{0-3}/{suffix}` or `/api/channel/` (suffixes also mapped 
 | `/api/scripts/files/get` | GET | Query: `?name=...`. Download script. |
 | `/api/scripts/storage` | GET | SPIFFS filesystem usage. |
 | `/api/scripts/autorun/` | GET/POST | Enable/Disable boot script. |
+
+---
+
+## 8b. ESPFleet Hub Streaming (3 URIs)
+
+| Endpoint | Method | Body / Query |
+| :--- | :--- | :--- |
+| `/api/hub/status` | GET | Connection state, discovery source, push epoch, backlogs, synced runs. |
+| `/api/hub/config` | GET/POST | Body: `{"hub_url": "...", "hub_enabled": bool, "log_level_s3": "W"}`. |
+| `/api/hub/resync` | POST | Clears per-run synced marks to trigger full coverage re-diff. |
 
 ---
 

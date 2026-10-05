@@ -149,11 +149,12 @@ typedef enum {
     DAQ_ACT_BS_RUN_NEW        = 7,   // create + load a run from the keys (PAUSED)
     DAQ_ACT_BS_RUN_START      = 8,   // output on, integrate
     DAQ_ACT_BS_RUN_PAUSE      = 9,   // output off, everything frozen
-    DAQ_ACT_BS_RUN_STOP       = 10,  // finalise the run (kept on flash)
+    DAQ_ACT_BS_RUN_STOP       = 10,  // finalise the run (kept on flash) and unload it: HAT leaves battsim mode
     DAQ_ACT_BS_RUN_UNLOAD     = 11,  // leave battery-sim mode
     DAQ_ACT_BS_RUN_LOAD       = 12,  // load run DAQ_K_BS_RUN_SELECT (PAUSED)
     DAQ_ACT_BS_RUN_DELETE     = 13,  // delete run DAQ_K_BS_RUN_SELECT
     DAQ_ACT_BS_DEFAULTS       = 14,  // chemistry defaults -> cutoff/R_int/Peukert/SD
+    DAQ_ACT_BS_RUN_REOPEN     = 15,  // STOPPED run -> PAUSED (refused for DEPLETED)
 } daq_action_t;
 
 // -----------------------------------------------------------------------------

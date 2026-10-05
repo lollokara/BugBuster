@@ -96,6 +96,12 @@ float bs_peukert_factor(const bs_params_t *p, float i_amps);
 // Self-discharge over @dt_s seconds from @q_rem_pc remaining (exponential).
 double bs_self_discharge_pc(const bs_params_t *p, int64_t q_rem_pc, double dt_s);
 
+// REOPEN policy: only a loaded, writable STOPPED run may go back to PAUSED.
+// @state is a battsim_state_t value (0 NONE 1 PAUSED 2 ACTIVE 3 DEPLETED
+// 4 STOPPED). DEPLETED is refused on its own code: that end is physical.
+typedef enum { BS_REOPEN_OK = 0, BS_REOPEN_NO_RUN, BS_REOPEN_DEPLETED, BS_REOPEN_STATE } bs_reopen_t;
+bs_reopen_t bs_reopen_check(uint8_t state, bool loaded, bool writable);
+
 #ifdef __cplusplus
 }
 #endif

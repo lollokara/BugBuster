@@ -16,6 +16,8 @@
 #include "bbp.h"
 #include "tasks.h"
 #include "esp_attr.h"
+#include "script_runtime.h"
+
 
 // MicroPython core headers — must be wrapped in extern "C" because MP is
 // compiled as C, and its headers don't include their own extern "C" guards.
@@ -46,6 +48,9 @@ extern "C" {
 
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <time.h>
+
 
 static const char *TAG = "scripting";
 
@@ -54,16 +59,36 @@ static const char *TAG = "scripting";
 // ---------------------------------------------------------------------------
 
 typedef struct {
+    uint32_t          refcount;
+    SemaphoreHandle_t sem;
+    char             *payload;
+    size_t            len;
+    bool              lint_ok;
+    char              err[128];
+} ScriptLintJob;
+
+static void lint_job_release(ScriptLintJob *job)
+{
+    if (!job) return;
+    if (__atomic_sub_fetch(&job->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        if (job->payload) free(job->payload);
+        if (job->sem) vSemaphoreDelete(job->sem);
+        free(job);
+    }
+}
+
+typedef struct {
     uint32_t          id;
     char             *payload;   // heap-allocated copy; freed by task after run
     size_t            len;
     bool              persist;   // V2-A: true = switch to / stay in PERSISTENT mode
     bool              is_lint;
-    SemaphoreHandle_t lint_sem;
-    char             *lint_err_out;
-    size_t            lint_err_max;
-    bool             *lint_ok_out;
+    ScriptLintJob    *lint_job;
+    char              name[SCRIPT_NAME_MAX + 1];
+    ScriptSource      source;
+    bool              is_file;   // holds the file-script slot
 } ScriptCmd;
+
 
 // ---------------------------------------------------------------------------
 // Module-level state (plain C statics — no MP_STATE_PORT slots per spec)
@@ -80,6 +105,12 @@ static size_t   s_log_head = 0;   // write position
 static size_t   s_log_used = 0;   // bytes in ring
 static uint64_t s_log_total = 0;  // absolute bytes accepted into the ring
 static bool     s_log_truncated = false;
+static uint32_t s_log_dropped = 0;
+static uint32_t s_log_dropped_total = 0;   // cumulative, for the hub health record
+
+// Structured-line assembler for MicroPython output (guarded by s_log_mutex).
+static sr_line_asm_t s_line_asm;
+
 
 // Stop flag — volatile, written by scripting_stop(), read by task/hooks
 static volatile bool s_stop_requested = false;
@@ -128,6 +159,12 @@ extern "C" size_t scripting_get_logs(char *out, size_t max);
 extern "C" size_t scripting_get_logs_since(char *out, size_t max, uint64_t since, uint64_t *out_next);
 extern "C" void  scripting_get_status(ScriptStatus *out);
 extern "C" void  scripting_reset_vm(void);
+extern "C" ScriptSubmitResult scripting_submit(const char *src, size_t len, const ScriptSubmitOpts *opts, uint32_t *out_id);
+extern "C" ScriptSubmitResult scripting_submit_file(const char *name, ScriptSource source, bool replace, uint32_t *out_id);
+extern "C" bool  scripting_wait_slot_free(uint32_t timeout_ms);
+extern "C" void  scripting_log_event(char level, const char *fmt, ...);
+extern "C" void  scripting_log(char level, const char *msg, size_t len);
+
 
 // V2-D: native exec pool cleanup — implemented in mphalport.c (C linkage).
 extern "C" void  bb_native_code_free_all(void);
@@ -155,6 +192,166 @@ static void log_push_locked(const char *str, size_t len)
     }
 }
 
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+static scripting_log_tee_fn s_log_tee;
+void scripting_set_log_tee(scripting_log_tee_fn fn) { s_log_tee = fn; }
+
+static void ring_emit(void *ctx, const char *line, size_t len)
+{
+    (void)ctx;
+    log_push_locked(line, len);
+    if (s_log_tee) s_log_tee(line, len);
+}
+
+
+uint32_t scripting_log_dropped_total(void)
+{
+    return __atomic_load_n(&s_log_dropped_total, __ATOMIC_RELAXED) + __atomic_load_n(&s_log_dropped, __ATOMIC_RELAXED);
+}
+
+static void emit_drop_warning_locked(uint32_t ts)
+{
+    uint32_t dropped = __atomic_exchange_n(&s_log_dropped, 0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_log_dropped_total, dropped, __ATOMIC_RELAXED);
+    if (dropped > 0) {
+        char drop_msg[64];
+        int dn = snprintf(drop_msg, sizeof(drop_msg), "%lu log lines dropped (busy)", (unsigned long)dropped);
+        if (dn > 0) {
+            char drop_line[SR_LINE_MAX + 40];
+            size_t dlen = sr_format_line(drop_line, sizeof(drop_line), ts, 'W', "sys", drop_msg, (size_t)dn);
+            ring_emit(NULL, drop_line, dlen);
+        }
+    }
+}
+
+
+// Level stamped on MicroPython output ('E' while a traceback prints).
+static void log_set_level(char level)
+{
+    if (!s_log_mutex) return;
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        sr_line_set_level(&s_line_asm, level, now_ms(), ring_emit, NULL);
+        xSemaphoreGive(s_log_mutex);
+    }
+}
+
+// Close a dangling partial line (script ended without '\n').
+static void log_flush(void)
+{
+    if (!s_log_mutex) return;
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        sr_line_flush(&s_line_asm, now_ms(), ring_emit, NULL);
+        xSemaphoreGive(s_log_mutex);
+    }
+}
+
+void scripting_log_event(char level, const char *fmt, ...)
+{
+    char text[160];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    size_t tlen = (size_t)n < sizeof(text) ? (size_t)n : sizeof(text) - 1;
+    ESP_LOGI(TAG, "%s", text);
+    if (!s_log_mutex) return;
+    char line[SR_LINE_MAX + 40];
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        uint32_t ts = now_ms();
+        emit_drop_warning_locked(ts);
+        sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
+        size_t len = sr_format_line(line, sizeof(line), ts, level, "sys", text, tlen);
+        log_push_locked(line, len);
+        xSemaphoreGive(s_log_mutex);
+    } else {
+        __atomic_fetch_add(&s_log_dropped, 1, __ATOMIC_RELAXED);
+    }
+}
+
+void scripting_log(char level, const char *msg, size_t len)
+{
+    if (level != 'E' && level != 'W' && level != 'I' && level != 'D') {
+        level = 'I';
+    }
+    if (!msg) {
+        msg = "";
+        len = 0;
+    }
+
+    // Count non-empty segments separated by \r or \n
+    size_t non_empty_segments = 0;
+    size_t seg_start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+            if (i > seg_start) {
+                non_empty_segments++;
+            }
+            seg_start = i + 1;
+        }
+    }
+
+    // Tee to stderr (CDC #0) and browser REPL terminal
+    if (non_empty_segments == 0) {
+        if (!bbpCdcClaimed()) {
+            fputc('\n', stderr);
+        }
+        repl_ws_forward("\n", 1);
+    } else {
+        seg_start = 0;
+        for (size_t i = 0; i <= len; i++) {
+            if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+                size_t seg_len = i - seg_start;
+                if (seg_len > 0) {
+                    if (!bbpCdcClaimed()) {
+                        fwrite(msg + seg_start, 1, seg_len, stderr);
+                        fputc('\n', stderr);
+                    }
+                    repl_ws_forward(msg + seg_start, seg_len);
+                    repl_ws_forward("\n", 1);
+                }
+                seg_start = i + 1;
+            }
+        }
+    }
+
+    if (!s_log_mutex) return;
+    size_t lines_to_emit = (non_empty_segments == 0) ? 1 : non_empty_segments;
+    if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+        __atomic_fetch_add(&s_log_dropped, (uint32_t)lines_to_emit, __ATOMIC_RELAXED);
+        return;
+    }
+
+    uint32_t ts = now_ms();
+    emit_drop_warning_locked(ts);
+    sr_line_flush(&s_line_asm, ts, ring_emit, NULL);
+
+    char line[SR_LINE_MAX + 40];
+    if (non_empty_segments == 0) {
+        size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", "", 0);
+        ring_emit(NULL, line, n);
+    } else {
+        seg_start = 0;
+        for (size_t i = 0; i <= len; i++) {
+            if (i == len || msg[i] == '\n' || msg[i] == '\r') {
+                size_t seg_len = i - seg_start;
+                if (seg_len > 0) {
+                    size_t n = sr_format_line(line, sizeof(line), ts, level, "mpy", msg + seg_start, seg_len);
+                    ring_emit(NULL, line, n);
+                }
+                seg_start = i + 1;
+            }
+        }
+    }
+
+    sr_line_set_level(&s_line_asm, 'I', ts, ring_emit, NULL);
+    xSemaphoreGive(s_log_mutex);
+}
+
 // ---------------------------------------------------------------------------
 // Public API — scripting_log_push (called from mphalport.c)
 // ---------------------------------------------------------------------------
@@ -169,12 +366,18 @@ void scripting_log_push(const char *str, size_t len)
     // and becomes a no-op until a WebSocket session is authenticated.
     repl_ws_forward(str, len);
 
+    // The ring stores structured lines; the REPL terminal and stderr above keep
+    // the raw bytes so interactive output still looks like a terminal.
     if (!s_log_mutex) return;
     if (xSemaphoreTake(s_log_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        log_push_locked(str, len);
+        emit_drop_warning_locked(now_ms());
+        sr_line_feed(&s_line_asm, now_ms(), str, len, ring_emit, NULL);
         xSemaphoreGive(s_log_mutex);
+    } else {
+        __atomic_fetch_add(&s_log_dropped, 1, __ATOMIC_RELAXED);
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Public API — scripting_get_logs
@@ -247,7 +450,12 @@ bool scripting_stop_requested(void)
 void scripting_stop(void)
 {
     s_stop_requested = true;
+    if (s_status_mutex && xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        if (s_status.is_running) s_status.state = SCRIPT_STATE_STOPPING;
+        xSemaphoreGive(s_status_mutex);
+    }
 }
+
 
 // ---------------------------------------------------------------------------
 // VM hook — called at every back-edge by the MICROPY_VM_HOOK_LOOP macro.
@@ -267,32 +475,47 @@ void scripting_vm_hook(void)
 // Status helpers
 // ---------------------------------------------------------------------------
 
-static void status_set_running(uint32_t id)
+static void status_set_running(const ScriptCmd *cmd)
 {
-    if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    if (xSemaphoreTake(s_status_mutex, portMAX_DELAY) == pdTRUE) {
         s_status.is_running = true;
-        s_status.current_script_id = id;
+        s_status.current_script_id = cmd->id;
+        strncpy(s_status.name, cmd->name, SCRIPT_NAME_MAX);
+        s_status.name[SCRIPT_NAME_MAX] = '\0';
+        s_status.source = cmd->source;
+        s_status.state = SCRIPT_STATE_RUNNING;
+        time_t now = time(NULL);
+        s_status.started_at_epoch = now > (time_t)1700000000;   // wall clock has been set
+        s_status.started_at = s_status.started_at_epoch ? (uint32_t)now : now_ms();
         xSemaphoreGive(s_status_mutex);
     }
 }
 
-static void status_set_done(bool had_error, const char *err_msg)
+// portMAX_DELAY: a missed release would hold the file-script slot forever.
+static void status_set_done(const ScriptCmd *cmd, ScriptExit exit_kind, const char *err_msg)
 {
-    if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    if (xSemaphoreTake(s_status_mutex, portMAX_DELAY) == pdTRUE) {
         s_status.is_running = false;
         s_status.last_script_id = s_status.current_script_id;  // capture before clear
         s_status.current_script_id = 0;
         s_status.total_runs++;
-        if (had_error) {
+        s_status.last_exit = exit_kind;
+        s_status.state = (exit_kind == SCRIPT_EXIT_ERROR) ? SCRIPT_STATE_ERROR : SCRIPT_STATE_DONE;
+        if (exit_kind == SCRIPT_EXIT_ERROR) {
             s_status.total_errors++;
             if (err_msg) {
                 strncpy(s_status.last_error_msg, err_msg, sizeof(s_status.last_error_msg) - 1);
                 s_status.last_error_msg[sizeof(s_status.last_error_msg) - 1] = '\0';
             }
         }
+        if (s_status.file_slot_id == cmd->id) {   // a replace may already own the slot
+            s_status.file_slot_id = 0;
+            s_status.file_slot_name[0] = '\0';
+        }
         xSemaphoreGive(s_status_mutex);
     }
 }
+
 
 // Update V2-A persistent-mode fields that require MP task context (gc_info etc.).
 // MUST be called from taskMicroPython only (while VM is alive).
@@ -501,8 +724,9 @@ static void taskMicroPython(void *pvParam)
             ESP_LOGI(TAG, "Persistent VM reset honored before eval id=%u", (unsigned)cmd.id);
         }
 
-        bool had_error = false;
+        ScriptExit exit_kind = SCRIPT_EXIT_OK;
         char err_msg[64] = {0};
+
 
         // Initialize VM if not already alive (ephemeral always; persistent on first use)
         if (!s_vm_initialized) {
@@ -510,27 +734,29 @@ static void taskMicroPython(void *pvParam)
         }
 
         if (cmd.is_lint) {
-            bool lint_ok = false;
-            nlr_buf_t nlr;
-            if (nlr_push(&nlr) == 0) {
-                mp_lexer_t *lex = mp_lexer_new_from_str_len(
-                    MP_QSTR__lt_string_gt_, cmd.payload, cmd.len, 0);
-                qstr source_name = lex->source_name;
-                mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
-                mp_compile(&pt, source_name, false);
-                nlr_pop();
-                lint_ok = true;
-            } else {
-                lint_ok = false;
-                mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
-                if (cmd.lint_err_out && cmd.lint_err_max > 0) {
-                    string_printer_t sp_data = { cmd.lint_err_out, 0, cmd.lint_err_max };
+            ScriptLintJob *job = cmd.lint_job;
+            if (job) {
+                bool lint_ok = false;
+                nlr_buf_t nlr;
+                if (nlr_push(&nlr) == 0) {
+                    mp_lexer_t *lex = mp_lexer_new_from_str_len(
+                        MP_QSTR__lt_string_gt_, job->payload, job->len, 0);
+                    qstr source_name = lex->source_name;
+                    mp_parse_tree_t pt = mp_parse(lex, MP_PARSE_FILE_INPUT);
+                    mp_compile(&pt, source_name, false);
+                    nlr_pop();
+                    lint_ok = true;
+                } else {
+                    lint_ok = false;
+                    mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
+                    string_printer_t sp_data = { job->err, 0, sizeof(job->err) };
                     mp_print_t custom_print = { &sp_data, string_printer_strn };
                     mp_obj_print_exception(&custom_print, exc);
                 }
+                job->lint_ok = lint_ok;
+                if (job->sem) xSemaphoreGive(job->sem);
+                lint_job_release(job);
             }
-            if (cmd.lint_ok_out) *cmd.lint_ok_out = lint_ok;
-            if (cmd.lint_sem) xSemaphoreGive(cmd.lint_sem);
         } else {
             // In EPHEMERAL mode with persist=true: switch to persistent mode.
             // In PERSISTENT mode: persist flag is sticky (ignored if false).
@@ -542,7 +768,12 @@ static void taskMicroPython(void *pvParam)
 
             // Clear stop flag at the start of each new script
             s_stop_requested = false;
-            status_set_running(cmd.id);
+            status_set_running(&cmd);
+            if (cmd.is_file) {
+                scripting_log_event('I', "start %s id=%lu source=%s", cmd.name,
+                                    (unsigned long)cmd.id, sr_source_name(cmd.source));
+            }
+
 
             nlr_buf_t nlr;
             if (nlr_push(&nlr) == 0) {
@@ -554,20 +785,26 @@ static void taskMicroPython(void *pvParam)
                 mp_call_function_0(module_fun);
                 nlr_pop();
             } else {
-                // Exception was raised — print traceback to log ring via mp_hal_stdout
-                had_error = true;
+                // A stop request surfaces as KeyboardInterrupt: that is a
+                // requested exit, not an error.
                 mp_obj_t exc = MP_OBJ_FROM_PTR(nlr.ret_val);
-                mp_obj_print_exception(&mp_plat_print, exc);
-
-                // Also capture a short form into status
                 mp_obj_type_t *type = (mp_obj_type_t *)mp_obj_get_type(exc);
+                bool stopped = s_stop_requested &&
+                    mp_obj_is_subclass_fast(MP_OBJ_FROM_PTR(type),
+                                            MP_OBJ_FROM_PTR(&mp_type_KeyboardInterrupt));
+                exit_kind = stopped ? SCRIPT_EXIT_STOPPED : SCRIPT_EXIT_ERROR;
+
+                log_set_level(stopped ? 'W' : 'E');
+                mp_obj_print_exception(&mp_plat_print, exc);
+                log_set_level('I');
+
                 if (type && type->name) {
-                    const char *type_name = qstr_str(type->name);
-                    snprintf(err_msg, sizeof(err_msg), "%s", type_name);
+                    snprintf(err_msg, sizeof(err_msg), "%s", qstr_str(type->name));
                 } else {
                     snprintf(err_msg, sizeof(err_msg), "exception");
                 }
             }
+
         }
 
         // In EPHEMERAL mode: tear down VM after every eval.
@@ -595,18 +832,32 @@ static void taskMicroPython(void *pvParam)
             }
         }
 
-        // Free the payload copy
-        free(cmd.payload);
+        // Free the payload copy (lint payload is owned by ScriptLintJob and freed by lint_job_release)
+        if (!cmd.is_lint) {
+            free(cmd.payload);
+        }
 
         if (!cmd.is_lint) {
+            log_flush();
             // Update persistent-mode status fields under mutex
             if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
                 status_update_mp_fields_locked();
                 xSemaphoreGive(s_status_mutex);
             }
 
-            status_set_done(had_error, err_msg);
+            status_set_done(&cmd, exit_kind, err_msg);
+            if (cmd.is_file) {
+                if (exit_kind == SCRIPT_EXIT_OK) {
+                    scripting_log_event('I', "done %s id=%lu", cmd.name, (unsigned long)cmd.id);
+                } else if (exit_kind == SCRIPT_EXIT_STOPPED) {
+                    scripting_log_event('W', "stopped %s id=%lu", cmd.name, (unsigned long)cmd.id);
+                } else {
+                    scripting_log_event('E', "error %s id=%lu: %s", cmd.name,
+                                        (unsigned long)cmd.id, err_msg);
+                }
+            }
         }
+
 
         // M05: yield at least one tick between back-to-back evals so lower-
         // priority tasks (idle, WDT feed) get CPU time even when the queue is
@@ -623,6 +874,9 @@ static void taskMicroPython(void *pvParam)
 void scripting_init(void)
 {
     memset(&s_status, 0, sizeof(s_status));
+    s_log_dropped = 0;
+    sr_line_init(&s_line_asm, "mpy", 'I');
+
 
     // Allocate GC heap from PSRAM
     s_gc_heap = heap_caps_malloc(MP_HEAP_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -667,41 +921,127 @@ void scripting_init(void)
     ESP_LOGI(TAG, "Scripting engine ready (queue depth %u)", (unsigned)MP_QUEUE_DEPTH);
 }
 
-// ---------------------------------------------------------------------------
-// scripting_run_string — copy src and enqueue
-// ---------------------------------------------------------------------------
-
-bool scripting_run_string(const char *src, size_t len, bool persist)
+static char *copy_payload(const char *src, size_t len)
 {
-    if (!s_enabled || !src || len == 0 || !s_queue) return false;
-
-    // Allocate payload copy — PSRAM if large, internal heap if small
-    char *payload;
-    if (len > 1024) {
-        payload = (char *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    } else {
-        payload = (char *)malloc(len + 1);
-    }
-    if (!payload) {
-        ESP_LOGE(TAG, "scripting_run_string: payload alloc failed (%zu bytes)", len);
-        return false;
-    }
+    // PSRAM if large, internal heap if small
+    char *payload = (len > 1024)
+        ? (char *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+        : (char *)malloc(len + 1);
+    if (!payload) return NULL;
     memcpy(payload, src, len);
     payload[len] = '\0';
+    return payload;
+}
+
+// Caller holds s_status_mutex.
+static void claim_slot_locked(const ScriptCmd *cmd)
+{
+    s_status.file_slot_id = cmd->id;
+    strncpy(s_status.file_slot_name, cmd->name, SCRIPT_NAME_MAX);
+    s_status.file_slot_name[SCRIPT_NAME_MAX] = '\0';
+}
+
+static void release_slot(uint32_t id)
+{
+    if (xSemaphoreTake(s_status_mutex, portMAX_DELAY) == pdTRUE) {
+        if (s_status.file_slot_id == id) {
+            s_status.file_slot_id = 0;
+            s_status.file_slot_name[0] = '\0';
+        }
+        xSemaphoreGive(s_status_mutex);
+    }
+}
+
+bool scripting_wait_slot_free(uint32_t timeout_ms)
+{
+    if (!s_status_mutex) return true;
+    TickType_t t0 = xTaskGetTickCount();
+    for (;;) {
+        bool free_now = false;
+        if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            free_now = (s_status.file_slot_id == 0);
+            xSemaphoreGive(s_status_mutex);
+        }
+        if (free_now) return true;
+        if ((xTaskGetTickCount() - t0) >= pdMS_TO_TICKS(timeout_ms)) return false;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+ScriptSubmitResult scripting_submit(const char *src, size_t len, const ScriptSubmitOpts *opts,
+                                    uint32_t *out_id)
+{
+    if (!s_enabled || !src || len == 0 || !s_queue || !opts) return SCRIPT_SUBMIT_DISABLED;
 
     ScriptCmd cmd = {};
     cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
-    cmd.payload = payload;
-    cmd.len     = len;
-    cmd.persist = persist;
+    cmd.persist = opts->persist;
+    cmd.source  = opts->source;
+    cmd.is_file = opts->is_file;
+    const char *nm = opts->name ? opts->name
+                   : (opts->source == SCRIPT_SRC_REPL ? "<repl>" : "<eval>");
+    strncpy(cmd.name, nm, SCRIPT_NAME_MAX);
+    cmd.name[SCRIPT_NAME_MAX] = '\0';
+
+    // Admission and the slot claim are one critical section, so two racing
+    // file runs (BLE + HTTP) cannot both see a free slot.
+    uint32_t holder_id = 0;
+    char holder[SCRIPT_NAME_MAX + 1];
+    xSemaphoreTake(s_status_mutex, portMAX_DELAY);
+    sr_admit_t adm = sr_admit(s_status.file_slot_id != 0, opts->is_file, opts->replace);
+    holder_id = s_status.file_slot_id;
+    strncpy(holder, s_status.file_slot_name, SCRIPT_NAME_MAX);
+    holder[SCRIPT_NAME_MAX] = '\0';
+    if (adm == SR_ADMIT_START && opts->is_file) claim_slot_locked(&cmd);
+    xSemaphoreGive(s_status_mutex);
+
+    if (adm == SR_ADMIT_BUSY) return SCRIPT_SUBMIT_BUSY;
+
+    if (adm == SR_ADMIT_REPLACE) {
+        scripting_log_event('W', "replace %s id=%lu with %s", holder,
+                            (unsigned long)holder_id, cmd.name);
+        scripting_stop();
+        if (!scripting_wait_slot_free(MP_REPLACE_STOP_TIMEOUT_MS)) {
+            // Never delete taskMicroPython: the holder may own s_hat_mutex or a
+            // bus lock. The reset flag tears the VM down before the queued
+            // script runs, once the holder returns from its C call.
+            scripting_log_event('W', "%s did not stop in %u ms; VM reset queued", holder,
+                                (unsigned)MP_REPLACE_STOP_TIMEOUT_MS);
+            scripting_reset_vm();
+        }
+        xSemaphoreTake(s_status_mutex, portMAX_DELAY);
+        bool taken_by_other = s_status.file_slot_id != 0 && s_status.file_slot_id != holder_id;
+        if (!taken_by_other) claim_slot_locked(&cmd);
+        xSemaphoreGive(s_status_mutex);
+        if (taken_by_other) return SCRIPT_SUBMIT_BUSY;
+    }
+
+    cmd.payload = copy_payload(src, len);
+    if (!cmd.payload) {
+        if (opts->is_file) release_slot(cmd.id);
+        ESP_LOGE(TAG, "scripting_submit: payload alloc failed (%zu bytes)", len);
+        return SCRIPT_SUBMIT_QUEUE_FULL;
+    }
+    cmd.len = len;
 
     if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
-        free(payload);
-        ESP_LOGW(TAG, "scripting_run_string: queue full");
-        return false;
+        free(cmd.payload);
+        if (opts->is_file) release_slot(cmd.id);
+        ESP_LOGW(TAG, "scripting_submit: queue full");
+        return SCRIPT_SUBMIT_QUEUE_FULL;
     }
-    return true;
+    if (out_id) *out_id = cmd.id;
+    return SCRIPT_SUBMIT_OK;
 }
+
+bool scripting_run_string(const char *src, size_t len, bool persist)
+{
+    ScriptSubmitOpts o = {};
+    o.source  = SCRIPT_SRC_MANUAL;
+    o.persist = persist;
+    return scripting_submit(src, len, &o, NULL) == SCRIPT_SUBMIT_OK;
+}
+
 
 bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t max_err)
 {
@@ -737,43 +1077,68 @@ bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t ma
         return false;
     }
 
+    ScriptLintJob *job = (ScriptLintJob *)calloc(1, sizeof(ScriptLintJob));
+    if (!job) {
+        free(payload);
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Out of memory");
+        }
+        return false;
+    }
+
     SemaphoreHandle_t sem = xSemaphoreCreateBinary();
     if (!sem) {
         free(payload);
+        free(job);
         if (out_err && max_err > 0) {
             snprintf(out_err, max_err, "Failed to create semaphore");
         }
         return false;
     }
 
-    bool lint_ok = false;
+    job->refcount = 2; // 1 for caller, 1 for taskMicroPython
+    job->sem      = sem;
+    job->payload  = payload;
+    job->len      = len;
+    job->lint_ok  = false;
+
     if (out_err && max_err > 0) {
         out_err[0] = '\0';
     }
 
     ScriptCmd cmd = {};
-    cmd.id = 0;
-    cmd.payload = payload;
-    cmd.len = len;
-    cmd.persist = false;
-    cmd.is_lint = true;
-    cmd.lint_sem = sem;
-    cmd.lint_err_out = out_err;
-    cmd.lint_err_max = max_err;
-    cmd.lint_ok_out = &lint_ok;
+    cmd.id        = 0;
+    cmd.payload   = payload;
+    cmd.len       = len;
+    cmd.persist   = false;
+    cmd.is_lint   = true;
+    cmd.lint_job  = job;
 
     if (xQueueSend(s_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+        job->payload = NULL; // prevent double-free
         free(payload);
         vSemaphoreDelete(sem);
+        free(job);
         if (out_err && max_err > 0) {
             snprintf(out_err, max_err, "Scripting queue is full");
         }
         return false;
     }
 
-    xSemaphoreTake(sem, portMAX_DELAY);
-    vSemaphoreDelete(sem);
+    bool taken = (xSemaphoreTake(sem, pdMS_TO_TICKS(5000)) == pdTRUE);
+    bool lint_ok = false;
+    if (taken) {
+        lint_ok = job->lint_ok;
+        if (!lint_ok && out_err && max_err > 0) {
+            snprintf(out_err, max_err, "%s", job->err);
+        }
+    } else {
+        if (out_err && max_err > 0) {
+            snprintf(out_err, max_err, "Interpreter timed out (5s)");
+        }
+    }
 
+    lint_job_release(job);
     return lint_ok;
 }
 
@@ -796,46 +1161,39 @@ uint8_t scripting_get_mp_session(void)
     return s_mp_session;
 }
 
-// ---------------------------------------------------------------------------
-// scripting_run_file — load script from SPIFFS and enqueue
-// ---------------------------------------------------------------------------
-
-bool scripting_run_file(const char *name, uint32_t *out_id)
+ScriptSubmitResult scripting_submit_file(const char *name, ScriptSource source, bool replace,
+                                         uint32_t *out_id)
 {
-    if (!s_enabled || !name || !s_queue) return false;
+    if (!s_enabled || !name || !s_queue) return SCRIPT_SUBMIT_DISABLED;
 
-    // Allocate read buffer from PSRAM
     uint8_t *buf = (uint8_t *)heap_caps_malloc(SCRIPT_BODY_MAX + 1,
                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
-        ESP_LOGE(TAG, "scripting_run_file: buf alloc failed");
-        return false;
+        ESP_LOGE(TAG, "scripting_submit_file: buf alloc failed");
+        return SCRIPT_SUBMIT_QUEUE_FULL;
     }
-
     size_t file_len = SCRIPT_BODY_MAX;
     char err[80] = {0};
-    bool read_ok = script_storage_read(name, buf, &file_len, err, sizeof(err));
-    if (!read_ok) {
-        ESP_LOGE(TAG, "scripting_run_file: read '%s' failed: %s", name, err);
-        free(buf);
-        return false;
+    if (!script_storage_read(name, buf, &file_len, err, sizeof(err)) || file_len == 0) {
+        ESP_LOGE(TAG, "scripting_submit_file: read '%s' failed: %s", name, err);
+        heap_caps_free(buf);
+        return SCRIPT_SUBMIT_NOT_FOUND;
     }
-    buf[file_len] = '\0';
 
-    ScriptCmd cmd = {};
-    cmd.id      = __atomic_fetch_add(&s_next_id, 1, __ATOMIC_RELAXED);
-    cmd.payload = (char *)buf;
-    cmd.len     = file_len;
-    // Propagate current persistence mode so file-runs from a PERSISTENT VM
-    // stay persistent (V2-A contract).  EPHEMERAL → persist=false (default).
-    cmd.persist = (s_mode == SCRIPTING_MODE_PERSISTENT);
-
-    if (out_id) *out_id = cmd.id;
-
-    if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
-        free(buf);
-        ESP_LOGW(TAG, "scripting_run_file: queue full");
-        return false;
-    }
-    return true;
+    ScriptSubmitOpts o = {};
+    o.name    = name;
+    o.source  = source;
+    o.is_file = true;
+    o.replace = replace;
+    // File-runs from a PERSISTENT VM stay persistent (V2-A contract).
+    o.persist = (s_mode == SCRIPTING_MODE_PERSISTENT);
+    ScriptSubmitResult r = scripting_submit((const char *)buf, file_len, &o, out_id);
+    heap_caps_free(buf);
+    return r;
 }
+
+bool scripting_run_file(const char *name, uint32_t *out_id)
+{
+    return scripting_submit_file(name, SCRIPT_SRC_MANUAL, false, out_id) == SCRIPT_SUBMIT_OK;
+}
+

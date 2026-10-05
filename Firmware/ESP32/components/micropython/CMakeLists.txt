@@ -87,6 +87,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_spi.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_net.c
         ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/modbugbuster_hat.c
+        ${CMAKE_CURRENT_LIST_DIR}/../../src/mp/moddaq.c
     )
 
     # MicroPython extmod machine sources that are compiled in by mpconfigport.h
@@ -579,8 +580,7 @@ with open(output_file, 'w') as f: f.write('\\n'.join(out_lines) + '\\n')\n\
                 set(MPYCROSS_BIN "${_mpycross_pip}")
                 message(STATUS "MicroPython: using pip-installed mpy-cross: ${MPYCROSS_BIN}")
             else()
-                message(STATUS "MicroPython: mpy-cross not found via pip, skipping frozen modules")
-                # Ensure stub frozen_content.c exists (written earlier)
+                message(FATAL_ERROR "MicroPython: mpy-cross not found via pip, cannot freeze modules")
             endif()
         else()
             execute_process(
@@ -593,29 +593,63 @@ with open(output_file, 'w') as f: f.write('\\n'.join(out_lines) + '\\n')\n\
             endif()
         endif()
     endif()
+    if(NOT EXISTS "${MPYCROSS_BIN}")
+        message(FATAL_ERROR "MicroPython: mpy-cross host binary not found at ${MPYCROSS_BIN}")
+    endif()
+
+    # ── Ensure micropython-lib drivers exist ─────────────────────────────────
+    if(NOT EXISTS "${MICROPY_DIR}/lib/micropython-lib/micropython/drivers/bus/onewire/onewire.py")
+        find_package(Git QUIET)
+        if(GIT_FOUND)
+            message(STATUS "MicroPython: initializing lib/micropython-lib submodule...")
+            execute_process(
+                COMMAND "${GIT_EXECUTABLE}" submodule update --init --depth 1 lib/micropython-lib
+                WORKING_DIRECTORY "${MICROPY_DIR}"
+                RESULT_VARIABLE _r_submod
+            )
+            if(_r_submod)
+                message(FATAL_ERROR "MicroPython: failed to initialize lib/micropython-lib submodule (${_r_submod})")
+            endif()
+        else()
+            message(FATAL_ERROR "MicroPython: lib/micropython-lib submodule missing and git not found")
+        endif()
+    endif()
 
     # ── Block B — frozen_content.c ───────────────────────────────────────────
+    # If frozen_content.c contains the empty stub, remove it so makemanifest.py
+    # does not skip generation due to timestamp comparison against the stub.
+    if(EXISTS "${MICROPY_FROZEN_CONTENT}")
+        file(READ "${MICROPY_FROZEN_CONTENT}" _current_frozen)
+        if(NOT _current_frozen MATCHES "bb_logging")
+            file(REMOVE "${MICROPY_FROZEN_CONTENT}")
+        endif()
+    endif()
+
     # -b must be CMAKE_BINARY_DIR because mpy-tool.py reads
     # ${build_dir}/genhdr/qstrdefs.preprocessed.h (generated in Step 5 above).
-    if(EXISTS "${MPYCROSS_BIN}")
-        execute_process(
-            COMMAND "${Python3_EXECUTABLE}" "${MICROPY_DIR}/tools/makemanifest.py"
-                -o "${MICROPY_FROZEN_CONTENT}"
-                -b "${CMAKE_BINARY_DIR}"
-                --mpy-cross "${MPYCROSS_BIN}"
-                --mpy-cross-flags=-march=xtensawin
-                -v "MPY_DIR=${MICROPY_DIR}"
-                -v "PORT_DIR=${CMAKE_CURRENT_LIST_DIR}"
-                -v "MPY_LIB_DIR="
-                "${CMAKE_CURRENT_LIST_DIR}/manifest.py"
-            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-            RESULT_VARIABLE _r
-        )
-        if(_r)
-            message(WARNING "MicroPython: makemanifest.py failed (${_r}), using stub frozen_content.c")
-        endif()
-    else()
-        message(STATUS "MicroPython: mpy-cross not available, using stub frozen_content.c")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${MICROPY_DIR}/tools/makemanifest.py"
+            -o "${MICROPY_FROZEN_CONTENT}"
+            -b "${CMAKE_BINARY_DIR}"
+            --mpy-cross "${MPYCROSS_BIN}"
+            --mpy-cross-flags=-march=xtensawin
+            -v "MPY_DIR=${MICROPY_DIR}"
+            -v "PORT_DIR=${CMAKE_CURRENT_LIST_DIR}"
+            -v "MPY_LIB_DIR="
+            "${CMAKE_CURRENT_LIST_DIR}/manifest.py"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        RESULT_VARIABLE _r
+    )
+    if(_r)
+        message(FATAL_ERROR "MicroPython: makemanifest.py failed (${_r})")
+    endif()
+
+    # Verify that frozen_content.c was generated and contains BugBuster frozen modules
+    file(READ "${MICROPY_FROZEN_CONTENT}" _frozen_content_src)
+    if(NOT _frozen_content_src MATCHES "bb_logging" OR
+       NOT _frozen_content_src MATCHES "bb_helpers" OR
+       NOT _frozen_content_src MATCHES "bb_devices")
+        message(FATAL_ERROR "MicroPython: frozen_content.c is missing required BugBuster modules (bb_logging, bb_helpers, bb_devices)")
     endif()
 
     # ── Step 7: moduledefs.h ──────────────────────────────────────────────────

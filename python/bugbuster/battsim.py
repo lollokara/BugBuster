@@ -46,6 +46,7 @@ class BsOp(IntEnum):
     READ = 3
     PROFILE = 4
     SET_EPOCH = 5
+    S1_SINCE = 6
 
 
 class BsState(IntEnum):
@@ -84,10 +85,11 @@ class BsEvent(IntEnum):
     OUTPUT_OFF = 9
     PD_LOST = 10
     STORE_ERR = 11
+    REOPEN = 12
 
 
 BS_ERRORS = ["none", "no store", "no run", "busy", "invalid", "state", "no PD contract",
-             "acquisition not running", "I/O error", "not found"]
+             "acquisition not running", "I/O error", "not found", "run depleted"]
 
 FLAG_PROVISIONAL = 0x01
 FLAG_STORE_OK = 0x02
@@ -119,6 +121,39 @@ REC_SIZE = {1: struct.calcsize(_REC_V1_FMT), 2: struct.calcsize(_REC_V2_FMT)}
 CKPT_SIZE = 352
 assert STATUS_SIZE == 88 and META_SIZE == 68 and EVENT_SIZE == 16
 assert REC_SIZE[1] == 32 and REC_SIZE[2] == 48
+
+_S1_FMT = "<IHHiHH"          # bs_s1_sample_t (battsim_s1.h)
+S1_SIZE = struct.calcsize(_S1_FMT)
+S1_SINCE_MAX = 14
+assert S1_SIZE == 16
+
+
+@dataclass
+class S1Sample:
+    """One live 1 s sample (BS_HOP_S1_SINCE)."""
+    t_s: int
+    v: float
+    i: float          # A, interval mean
+    soc_pct: float
+    flags: int        # RF_*
+    dt_s: int
+
+    @property
+    def p(self) -> float:
+        return self.v * self.i
+
+
+def parse_s1_since(raw: bytes) -> Tuple[int, List[S1Sample], bool]:
+    if len(raw) < 4:
+        raise ValueError("short S1_SINCE reply")
+    run, n, more = struct.unpack_from("<HBB", raw, 0)
+    if len(raw) < 4 + n * S1_SIZE:
+        raise ValueError("truncated S1_SINCE reply")
+    out = []
+    for k in range(n):
+        t, v_mv, soc, i_ua, flags, dt = struct.unpack_from(_S1_FMT, raw, 4 + k * S1_SIZE)
+        out.append(S1Sample(t, v_mv / 1e3, i_ua * 1e-6, soc / 100.0, flags, dt))
+    return run, out, bool(more)
 
 
 # --------------------------------------------------------------------------
@@ -528,6 +563,20 @@ class BattSim:
     def set_epoch(self, unix_s: Optional[int] = None) -> None:
         self._req(BsOp.SET_EPOCH, struct.pack("<I", int(time.time() if unix_s is None else unix_s)))
 
+    def samples_since(self, run: int, since_s: int = 0, max_samples: int = 600) -> List[S1Sample]:
+        """Live 1 s samples of the *loaded* run with t_s > since_s (last hour only)."""
+        out: List[S1Sample] = []
+        since = since_s
+        while len(out) < max_samples:
+            want = min(S1_SINCE_MAX, max_samples - len(out))
+            _, recs, more = parse_s1_since(
+                self._req(BsOp.S1_SINCE, struct.pack("<HIB", run, since, want)))
+            out += recs
+            if not recs or not more:
+                break
+            since = recs[-1].t_s
+        return out
+
     # -- history -----------------------------------------------------------
     def sync_run(self, run: int, cache_dir: str,
                  progress: Optional[Callable[[str, int, int], None]] = None) -> str:
@@ -613,6 +662,11 @@ class BattSim:
 
     def stop(self) -> None:
         self._act(DaqAction.BS_RUN_STOP)
+
+    def reopen(self) -> None:
+        """Resume a STOPPED loaded run: STOPPED -> PAUSED (output stays off).
+        Refused for a depleted run; press start to continue integrating."""
+        self._act(DaqAction.BS_RUN_REOPEN)
 
     def unload(self) -> None:
         self._act(DaqAction.BS_RUN_UNLOAD)

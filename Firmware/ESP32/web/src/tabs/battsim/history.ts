@@ -5,7 +5,7 @@
 
 export const STATE_NAMES = ["No run", "Paused", "Active", "Depleted", "Stopped"];
 export const CHEM_NAMES = ["LiPo", "LiFePO4", "NiMH", "Lead-acid"];
-export const ERROR_TEXT = ["", "battlog partition missing", "no run loaded", "busy", "invalid parameters",
+export const ERROR_TEXT = ["", "battlog partition missing", "no run loaded", "busy (run loaded or active)", "invalid parameters",
   "not allowed in this state", "USB-PD contract below 9 V / 3 A", "acquisition not running",
   "flash I/O error", "run not found"];
 export const EVENT_NAMES: Record<number, string> = {

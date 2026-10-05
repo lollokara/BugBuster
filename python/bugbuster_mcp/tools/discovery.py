@@ -1,7 +1,8 @@
 """
 BugBuster MCP — Discovery and status tools.
 
-Tools: device_status, device_info, check_faults, selftest
+Tools: device_status, device_info, check_faults, selftest, crash_info, boot_report,
+crash_dump_save, crash_clear
 """
 
 from __future__ import annotations
@@ -445,3 +446,143 @@ def register(mcp) -> None:
                 for d in devs
             ]
         return out
+
+    # ------------------------------------------------------------------
+    # Crash dump and boot report (HTTP transport, admin token)
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    def crash_info() -> dict:
+        """
+        Why did the device last reset, and is there a coredump to analyse?
+
+        Reads GET /api/system/crash. Returns the reset reason, boot count and
+        consecutive-crash streak, and when a coredump is stored: task, PC,
+        exception name (e.g. LoadProhibited), backtrace, registers, the size,
+        whether the dump belongs to the firmware now running (elf_match), and
+        ``pre`` - the heap/stack/boot-phase snapshot taken seconds before the
+        crash. ``warnings`` lists what looks wrong; ``next_steps`` says how to
+        decode it.
+
+        HTTP transport only (USB sessions get an error naming the fix).
+        """
+        bb = session.get_client()
+        try:
+            c = bb.get_crash_info()
+        except NotImplementedError as e:
+            return {"error": str(e), "transport": "usb" if session.is_usb() else "http"}
+        out: dict[str, Any] = {
+            "summary": c.summary(),
+            "ready": c.ready,
+            "reset": {"reason": c.reset_reason, "abnormal": c.abnormal,
+                      "boot": c.boot, "streak": c.streak, "bootloop": c.bootloop},
+            "has_dump": c.has_dump,
+            "warnings": c.warnings(),
+        }
+        if c.has_dump:
+            out["dump"] = {
+                "size_bytes": c.size, "panic": c.panic, "task": c.task,
+                "pc": f"0x{c.pc:08x}" if c.pc is not None else None,
+                "exccause": c.exccause, "exccause_name": c.exccause_name,
+                "vaddr": f"0x{c.vaddr:08x}" if c.vaddr is not None else None,
+                "backtrace": [f"0x{a:08x}" for a in c.backtrace],
+                "backtrace_corrupt": c.bt_corrupt,
+                "registers_a0_a15": [f"0x{r:08x}" for r in c.regs],
+                "dump_elf_sha": c.dump_elf, "matches_running_firmware": c.elf_match,
+            }
+            out["next_steps"] = [
+                "crash_dump_save() to download the ELF coredump",
+                c.addr2line_command(), c.decode_command(),
+                "crash_clear(confirm=True) once the dump is saved",
+            ]
+        if c.pre:
+            p = c.pre
+            out["pre_crash"] = {
+                "boot": p.boot, "phase": p.phase, "uptime_ms": p.up_ms,
+                "internal_free": p.int_free, "internal_min_ever": p.int_min,
+                "internal_largest_block": p.int_largest,
+                "psram_free": p.psram_free,
+                "tightest_stack": {"task": p.min_stack_task, "free_bytes": p.min_stack_free},
+                "wifi_sta": p.wifi_sta, "hat": p.hat, "usb": p.usb,
+            }
+        return out
+
+    @mcp.tool()
+    def boot_report(log_text: str = "") -> dict:
+        """
+        The diagnostics package the device logs ~30 s after every boot: system
+        and firmware identity, heap/DMA/PSRAM, per-task stack headroom, network,
+        HAT, script engine state and the crash summary.
+
+        With no arguments it is built live from the device (HTTP transport).
+        Pass ``log_text`` - raw lines exported from the log platform or a serial
+        capture, containing ``BOOTRPT <boot> <section> <i>/<n> <json>`` - to
+        decode past boots instead; every boot found is returned, oldest first,
+        so a regression between boots is visible.
+        """
+        if log_text.strip():
+            from bugbuster.crash import parse_bootrpt_lines
+            reports = parse_bootrpt_lines(log_text)
+            if not reports:
+                return {"error": "no BOOTRPT lines found in log_text", "reports": []}
+            return {"count": len(reports),
+                    "reports": [dict(r.to_dict(), summary=r.summary()) for r in reports]}
+        bb = session.get_client()
+        try:
+            r = bb.get_boot_report()
+        except NotImplementedError as e:
+            return {"error": str(e), "transport": "usb" if session.is_usb() else "http"}
+        return dict(r.to_dict(), summary=r.summary())
+
+    @mcp.tool()
+    def crash_dump_save(directory: str = "") -> dict:
+        """
+        Download the stored ELF coredump to the host (~100-250 KB, 768 B per
+        request, so allow a few seconds). The file is named
+        ``bugbuster-coredump-boot<N>-<elfsha>.elf`` inside ``directory``
+        (default: the system temp dir). Save it BEFORE crash_clear().
+
+        Returns the path, size and a CRC-less sanity check (ELF magic). HTTP
+        transport only.
+        """
+        import os
+        import tempfile
+
+        bb = session.get_client()
+        try:
+            c = bb.get_crash_info()
+            if not c.has_dump:
+                return {"error": "no valid coredump is stored on the device", "saved": False}
+            data = bb.download_coredump()
+        except NotImplementedError as e:
+            return {"error": str(e), "transport": "usb" if session.is_usb() else "http"}
+        except FileNotFoundError as e:
+            return {"error": str(e), "saved": False}
+        target = directory or tempfile.gettempdir()
+        os.makedirs(target, exist_ok=True)
+        sha = "".join(ch for ch in c.dump_elf[:9] if ch.isalnum()) or "unknown"
+        path = os.path.join(target, f"bugbuster-coredump-boot{c.boot}-{sha}.elf")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return {"saved": True, "path": path, "size_bytes": len(data),
+                "elf_magic_ok": data[:4] == b"\x7fELF",
+                "matches_running_firmware": c.elf_match,
+                "decode": c.decode_command(path)}
+
+    @mcp.tool()
+    def crash_clear(confirm: bool = False) -> dict:
+        """
+        Erase the coredump stored in flash (and the pre-crash snapshot with it).
+        Irreversible: call crash_dump_save() first. A new crash overwrites the
+        dump anyway; clearing just stops the old one being reported every boot.
+
+        Requires confirm=True. HTTP transport, admin token.
+        """
+        from ..safety import require_confirm
+        require_confirm(confirm, "crash_clear", "permanently erases the stored coredump")
+        bb = session.get_client()
+        try:
+            had = bb.clear_coredump()
+        except NotImplementedError as e:
+            return {"error": str(e), "transport": "usb" if session.is_usb() else "http"}
+        return {"cleared": True, "had_dump": had}

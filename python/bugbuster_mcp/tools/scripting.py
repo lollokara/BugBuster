@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 
 from .. import session
+from bugbuster.client import ScriptBusyError
 
 _LOG_READS_MAX = 64   # bounded drain per poll
 
@@ -38,6 +39,12 @@ def _status_dict(st) -> dict:
         "last_eval_at_ms":   st.last_eval_at_ms,
         "idle_for_ms":       st.idle_for_ms,
         "watermark_soft_hit": st.watermark_soft_hit,
+        "name":              getattr(st, "name", ""),
+        "source":            getattr(st, "source", ""),
+        "state":             getattr(st, "state", ""),
+        "last_exit":         getattr(st, "last_exit", ""),
+        "started_at":        getattr(st, "started_at", 0),
+        "file_slot_id":      getattr(st, "file_slot_id", 0),
     }
 
 
@@ -151,6 +158,28 @@ def register(mcp) -> None:
         """Delete a stored script file."""
         session.get_client().script_delete(name)
         return {"success": True, "name": name}
+
+    @mcp.tool()
+    def script_run_file(name: str, replace: bool = False) -> dict:
+        """
+        Start a stored script as a background job on the device and return at
+        once; it keeps running after this call. Poll run_device_script-style
+        with script_autorun(action="status") / the engine status for progress.
+
+        Only one stored script runs at a time. If another holds the slot the
+        device refuses unless ``replace`` is True, which stops it (3 s
+        cooperative stop, then a VM reset) and starts this one.
+
+        Returns: success, id, name — or success False with ``running``/``id``
+        naming the script that holds the slot.
+        """
+        bb = session.get_client()
+        try:
+            r = bb.script_run_file(name, background=True, replace=replace)
+        except ScriptBusyError as exc:
+            return {"success": False, "error": str(exc), "running": exc.running,
+                    "id": exc.script_id}
+        return {"success": True, "id": r.script_id, "name": name}
 
     @mcp.tool()
     def script_autorun(action: str = "status", name: str | None = None) -> dict:

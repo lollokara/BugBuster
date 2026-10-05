@@ -130,15 +130,25 @@ wscat -c 'ws://device.local/api/scripts/repl/ws'
 
 ## The `bugbuster` Module
 
-### Cooperative sleep
+### Cooperative sleep and timing
 
 ```python
 bugbuster.sleep(ms)
+ms = bugbuster.ticks_ms()
 ```
 
-Blocks for `ms` milliseconds. Unlike `time.sleep()` (which is unavailable), `bugbuster.sleep()` cooperates with the script-stop mechanism: calling `script_stop` injects a `KeyboardInterrupt` at the next `bugbuster.sleep()` call.
+- `bugbuster.sleep(ms)`: Blocks for `ms` milliseconds. Unlike `time.sleep()` (which is unavailable), `bugbuster.sleep()` cooperates with the script-stop mechanism: calling `script_stop` injects a `KeyboardInterrupt` at the next `bugbuster.sleep()` call.
+- `bugbuster.ticks_ms()`: Returns milliseconds since boot, matching the timestamps used in the script log ring.
 
 **Required:** Always use `bugbuster.sleep()` in your scripts, never `time.sleep()`.
+
+### Native logging
+
+```python
+bugbuster.log(level, msg)
+```
+
+Writes ONE complete line to the log ring with `level` (`'E'`, `'W'`, `'I'`, or `'D'`) and source `mpy`. Flushes any pending partial stdout line first, emits the structured line, and restores stdout level to `'I'`. Also echoes to the console (stderr / WebSocket REPL) consistent with `print()`. Higher-level structured logging is provided by the `bb_logging` module.
 
 ### Analog Channels (0–3)
 
@@ -391,6 +401,7 @@ New device examples live beside the existing scripts:
 ```python
 import bb_logging
 
+bb_logging.debug('Reading raw samples')
 bb_logging.info('Starting measurement')
 bb_logging.warn('Voltage above threshold')
 bb_logging.error('Sensor not responding')
@@ -674,7 +685,7 @@ This allows you to:
 
 | Component | File | Purpose |
 |---|---|---|
-| Module globals & constants | `Firmware/ESP32/src/mp/modbugbuster.c` | `bugbuster.FUNC_*`, `sleep`, type registration |
+| Module globals & constants | `Firmware/ESP32/src/mp/modbugbuster.c` | `bugbuster.FUNC_*`, `sleep`, `log`, `ticks_ms`, type registration |
 | Channel binding | `Firmware/ESP32/src/mp/modbugbuster_channel.c` | `Channel` class, voltage/function/digital methods |
 | I2C binding | `Firmware/ESP32/src/mp/modbugbuster_i2c.c` | `I2C` class, scan/read/write methods |
 | SPI binding | `Firmware/ESP32/src/mp/modbugbuster_spi.c` | `SPI` class, transfer method |

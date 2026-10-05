@@ -404,8 +404,8 @@ class BugBusterHAL:
 
     def begin(
         self,
-        supply_voltage: float = None,
-        vlogic:         float = None,
+        supply_voltage: float | None = None,
+        vlogic:         float | None = None,
     ) -> None:
         """
         Power-up sequence — call once before :meth:`configure`.

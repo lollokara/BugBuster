@@ -17,6 +17,36 @@ public enum TransportKind: String, Codable {
     case ble
 }
 
+/// Errors from the control-plane helpers that callers show to the user.
+public enum ConnectionAPIError: LocalizedError {
+    case bleNoResponse(String)
+    case bleRejected(path: String, message: String)
+    case needsWiFi(String)
+    case httpStatus(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bleNoResponse(let path): return "No reply over Bluetooth for \(path)"
+        case .bleRejected(let path, let message): return "\(path) is not available over Bluetooth (\(message)). Connect over Wi-Fi."
+        case .needsWiFi(let what): return "\(what) needs a Wi-Fi connection"
+        case .httpStatus(let code): return "Server returned \(code)"
+        }
+    }
+}
+
+/// The BLE API tunnel surface ConnectionManager depends on.
+public protocol BLEAPITransport: AnyObject {
+    func apiRequest(path: String, body: [String: Any]?, timeout: TimeInterval) async -> Data?
+}
+
+extension BLEAPITransport {
+    public func apiRequest(path: String, body: [String: Any]? = nil, timeout: TimeInterval = 6.0) async -> Data? {
+        await apiRequest(path: path, body: body, timeout: timeout)
+    }
+}
+
+extension BLETransport: BLEAPITransport {}
+
 public struct DiscoveredDevice: Identifiable, Hashable, Codable {
     public var id: String { isBle ? "ble:\(bleId?.uuidString ?? hostname)" : (mac.isEmpty ? hostname : mac) }
     public let hostname: String
@@ -54,6 +84,9 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     // MARK: - BLE
     /// CoreBluetooth control plane mirroring the WiFi API surface.
     public let ble = BLETransport()
+    /// Tunnel used for BLE control-plane requests. Defaults to `ble`; a test
+    /// can swap in a fake so routing is verifiable without CoreBluetooth.
+    public lazy var bleAPI: BLEAPITransport = ble
     /// BugBuster peripherals seen over BLE (separate list from Bonjour results).
     @Published public var bleDevices: [DiscoveredDevice] = []
     /// True once CoreBluetooth is powered on and authorised.
@@ -1003,22 +1036,30 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         vdutPrefetchTask = nil
     }
 
+    /// Firmware error text from the last failed `setVdut*` call (nil on success or when
+    /// the firmware gave none), e.g. "battery simulator run 3 is loaded and owns VDUT; ...".
+    @Published public private(set) var vdutLastError: String?
+
     public func setVdutEnable(_ enabled: Bool) async -> Bool {
         do {
-            let ok = try await postAction(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
-            if ok { updateOnMain { self.vdutEnabled = enabled } }
-            return ok
+            let r = try await postActionDetailed(path: "/api/daq/vdut/enable", json: ["enabled": enabled])
+            vdutLastError = r.ok ? nil : r.error
+            if r.ok { updateOnMain { self.vdutEnabled = enabled } }
+            return r.ok
         } catch {
+            vdutLastError = nil
             return false
         }
     }
 
     public func setVdutSetpoint(voltageV: Double, currentLimitMa: Double) async -> Bool {
         do {
-            let ok = try await postAction(path: "/api/daq/vdut/setpoint", json: [
+            let r = try await postActionDetailed(path: "/api/daq/vdut/setpoint", json: [
                 "voltageV": voltageV,
                 "currentLimitMa": currentLimitMa
             ])
+            let ok = r.ok
+            vdutLastError = ok ? nil : r.error
             if ok {
                 updateOnMain {
                     self.vdutVoltageSetpointV = voltageV
@@ -1027,6 +1068,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
             }
             return ok
         } catch {
+            vdutLastError = nil
             return false
         }
     }
@@ -1163,7 +1205,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
 
     /// Issue a JSON request over the BLE API tunnel and decode the `{...}` body.
     private func bleJSON(_ path: String, body: [String: Any]? = nil) async -> [String: Any]? {
-        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        guard let data = await bleAPI.apiRequest(path: path, body: body) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
@@ -1171,7 +1213,7 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     /// Used for endpoints whose BLE payload mirrors the HTTP shape 1:1
     /// (e.g. /api/overview, /api/gpio).
     private func bleDecoded<T: Decodable>(_ type: T.Type, path: String, body: [String: Any]? = nil) async -> T? {
-        guard let data = await ble.apiRequest(path: path, body: body) else { return nil }
+        guard let data = await bleAPI.apiRequest(path: path, body: body) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 
@@ -1360,20 +1402,37 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func postAction(path: String, json: [String: Any]) async throws -> Bool {
-        guard let device = activeDevice else { return false }
+        try await postActionDetailed(path: path, json: json).ok
+    }
+
+    /// Firmware error text from a `{"error": "..."}` reply body (nil when absent).
+    nonisolated static func firmwareErrorText(from data: Data) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return firmwareErrorText(from: obj)
+    }
+
+    nonisolated static func firmwareErrorText(from obj: [String: Any]) -> String? {
+        guard let text = obj["error"] as? String, !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// Like `postAction`, but also surfaces the firmware's `error` string (e.g. a
+    /// battery-sim run owning VDUT -> 409) instead of collapsing it to `false`.
+    public func postActionDetailed(path: String, json: [String: Any]) async throws -> (ok: Bool, error: String?) {
+        guard let device = activeDevice else { return (false, nil) }
 
         // BLE control plane: tunnel the request and read back the {"ok":...} flag.
         // Paths the firmware tunnel doesn't implement return ok:false gracefully.
         if transport == .ble {
-            guard let obj = await bleJSON(path, body: json) else { return false }
-            return (obj["ok"] as? Bool) ?? false
+            guard let obj = await bleJSON(path, body: json) else { return (false, nil) }
+            return ((obj["ok"] as? Bool) ?? false, Self.firmwareErrorText(from: obj))
         }
 
         var urlStr = device.ip
         if !urlStr.lowercased().hasPrefix("http://") && !urlStr.lowercased().hasPrefix("https://") {
             urlStr = "http://\(urlStr)"
         }
-        guard let url = URL(string: "\(urlStr)\(path)") else { return false }
+        guard let url = URL(string: "\(urlStr)\(path)") else { return (false, nil) }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -1386,13 +1445,15 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         let (data, response) = try await gatedData(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else { return false }
+              (200...299).contains(httpResponse.statusCode) else {
+            return (false, Self.firmwareErrorText(from: data))
+        }
         // TR-11b: an older firmware reports a failed action as 200 {"ok":false}.
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let ok = obj["ok"] as? Bool {
-            return ok
+            return (ok, ok ? nil : Self.firmwareErrorText(from: obj))
         }
-        return true
+        return (true, nil)
     }
     
     /// POST JSON and decode the response body (firmware returns HTTP 200 for non-ok results).
@@ -1443,9 +1504,121 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         return res
     }
 
+    /// GET and decode over HTTP or the BLE tunnel, same selection as `postJSON`.
+    /// Over BLE `activeDevice.ip` is empty, so the HTTP path would throw badURL.
     public func getRequest<T: Decodable>(path: String) async throws -> T {
         guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
+        if transport == .ble {
+            return try await bleThrowingDecoded(T.self, path: path)
+        }
         return try await performRequest(ip: device.ip, path: path, token: adminToken)
+    }
+
+    /// BLE tunnel request that surfaces failures. The tunnel answers paths it
+    /// does not implement with `{"error":"..."}`, which would otherwise decode
+    /// "successfully" into all-optional models or fail with a generic decode error.
+    private func bleThrowingDecoded<T: Decodable>(_ type: T.Type, path: String, body: [String: Any]? = nil) async throws -> T {
+        let data = try await bleRawData(path: path, body: body)
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func bleRawData(path: String, body: [String: Any]? = nil) async throws -> Data {
+        guard let data = await bleAPI.apiRequest(path: path, body: body, timeout: 6.0) else {
+            throw ConnectionAPIError.bleNoResponse(path)
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let err = obj["error"] as? String {
+            throw ConnectionAPIError.bleRejected(path: path, message: err)
+        }
+        return data
+    }
+
+    static func bleTunnelPath(_ path: String, query: [String: String]) -> String {
+        guard !query.isEmpty else { return path }
+        var c = URLComponents()
+        c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return path + "?" + (c.percentEncodedQuery ?? "")
+    }
+
+    /// Whole script source over BLE. `/api/scripts/files/get` answers one base64 page
+    /// `{size, off, n, data}`, so follow `off` until `size` bytes are in; stopping at the
+    /// first page would hand the editor a truncated file that a later save would persist.
+    private func bleScriptFileData(query: [String: String]) async throws -> Data {
+        let path = "/api/scripts/files/get"
+        var out = Data()
+        while true {
+            var q = query
+            q["off"] = String(out.count)
+            let page = try await bleRawData(path: Self.bleTunnelPath(path, query: q))
+            guard let obj = try JSONSerialization.jsonObject(with: page) as? [String: Any],
+                  let b64 = obj["data"] as? String,
+                  let chunk = Data(base64Encoded: b64),
+                  let size = obj["size"] as? Int else {
+                throw ConnectionAPIError.bleRejected(path: path, message: "Malformed script file reply")
+            }
+            out.append(chunk)
+            if chunk.isEmpty || out.count >= size { return out }
+        }
+    }
+
+    /// Raw request for endpoints with non-JSON bodies/replies (script files).
+    /// HTTP goes through the shared session + gate with the admin token. Over
+    /// BLE only body-less requests can be tunnelled (the tunnel carries a JSON
+    /// body), so uploads throw `.needsWiFi`.
+    public func rawRequest(method: String, path: String, query: [String: String] = [:],
+                           body: Data? = nil, contentType: String? = nil) async throws -> Data {
+        guard activeDevice != nil else { throw URLError(.notConnectedToInternet) }
+        if transport == .ble {
+            guard body == nil else { throw ConnectionAPIError.needsWiFi("Uploading script text") }
+            // The tunnel carries a path only, never the HTTP verb: DELETE has its own spelling.
+            if method == "DELETE" && path == "/api/scripts/files" {
+                return try await bleRawData(path: Self.bleTunnelPath("/api/scripts/files/delete", query: query))
+            }
+            // HTTP reframes the shared base64 reply as the script text; do the same here.
+            if path == "/api/scripts/files/get" { return try await bleScriptFileData(query: query) }
+            return try await bleRawData(path: Self.bleTunnelPath(path, query: query))
+        }
+        let reply = try await httpExchange(method: method, path: path, query: query, body: body, contentType: contentType)
+        guard (200...299).contains(reply.status) else { throw ConnectionAPIError.httpStatus(reply.status) }
+        return reply.body
+    }
+
+    /// One HTTP exchange that keeps the status code and headers. The scripts API
+    /// answers busy with `409` + a JSON body and pages logs with
+    /// `X-BugBuster-Log-Next`, so unlike `rawRequest` a non-2xx is returned, not thrown.
+    /// Header names are lower-cased.
+    public func httpExchange(method: String, path: String, query: [String: String] = [:],
+                             body: Data? = nil, contentType: String? = nil,
+                             timeout: TimeInterval? = nil) async throws -> (status: Int, headers: [String: String], body: Data) {
+        guard let device = activeDevice else { throw URLError(.notConnectedToInternet) }
+        let trimmed = device.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw URLError(.badURL) }
+        var base = trimmed
+        if !base.lowercased().hasPrefix("http://") && !base.lowercased().hasPrefix("https://") { base = "http://\(base)" }
+        guard var comps = URLComponents(string: "\(base)\(path)") else { throw URLError(.badURL) }
+        if !query.isEmpty { comps.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        guard let url = comps.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let timeout { request.timeoutInterval = timeout }
+        if let contentType = contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        if !adminToken.isEmpty { request.setValue(adminToken, forHTTPHeaderField: "X-BugBuster-Admin-Token") }
+        request.httpBody = body
+        let (data, response) = try await gatedData(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        var headers: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let key = key as? String, let value = value as? String { headers[key.lowercased()] = value }
+        }
+        return (http.statusCode, headers, data)
+    }
+
+    /// Decode a JSON reply from `rawRequest` (POST/DELETE with no JSON model of its own).
+    public func rawRequest<T: Decodable>(_ type: T.Type, method: String, path: String,
+                                         query: [String: String] = [:], body: Data? = nil,
+                                         contentType: String? = nil) async throws -> T {
+        let data = try await rawRequest(method: method, path: path, query: query, body: body, contentType: contentType)
+        return try JSONDecoder().decode(type, from: data)
     }
     
     public func setLShiftOe(on: Bool) async -> Bool {

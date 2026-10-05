@@ -46,6 +46,7 @@ jobs:
           # Initialize only the submodules required for the ESP32 firmware build
           git submodule update --init --depth 1 Firmware/ESP32/components/micropython/micropython || true
           git submodule update --init --depth 1 Firmware/ESP32/components/esp-dsp || true
+          git -C Firmware/ESP32/components/micropython/micropython submodule update --init --depth 1 lib/micropython-lib || true
 
       - name: Setup Python
         uses: actions/setup-python@v6.2.0
@@ -76,6 +77,14 @@ jobs:
         run: |
           pio run -d Firmware/ESP32 -e esp32s3
           pio run -d Firmware/ESP32 -e esp32s3 -t buildfs
+
+      - name: Verify frozen modules in build
+        shell: bash
+        run: |
+          build_dir="Firmware/ESP32/.pio/build/esp32s3"
+          grep -q "frozen_module_bb_logging" "$build_dir/frozen_content.c"
+          grep -q "frozen_module_bb_helpers" "$build_dir/frozen_content.c"
+          grep -q "frozen_module_bb_devices" "$build_dir/frozen_content.c"
 
       - name: Package ESP32 artifacts
         shell: bash

@@ -187,6 +187,9 @@ static inline uint32_t millis_now(void) {
 #define MP_HEAP_SIZE           (1u * 1024u * 1024u)   // 1 MB GC heap in PSRAM
 #define MP_TASK_STACK          (8u * 1024u)            // FreeRTOS task stack (bytes); 6 KiB left 1964 B after one HTTPS request
 #define MP_QUEUE_DEPTH         4u                       // Script command queue depth
-#define MP_LOG_RING_SIZE       4096u                    // Log ring buffer size (bytes)
+#define MP_LOG_RING_SIZE       16384u                   // Log ring (PSRAM, EXT_RAM_BSS_ATTR); structured lines cost ~20 B each
+#define MP_LOG_RESP_MAX        4096u                    // Max log bytes per /api/scripts/logs reply (page with ?since=)
 #define MP_PERSISTENT_IDLE_MS  (10u * 60u * 1000u)     // Auto-reset VM after 10 min idle
 #define MP_IDLE_CHECK_MS       10000u                   // Queue poll interval in persistent mode
+#define MP_REPLACE_STOP_TIMEOUT_MS 3000u                // run-file replace=1: cooperative stop budget before a VM reset is queued
+

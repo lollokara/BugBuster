@@ -5,7 +5,7 @@ control of BugBuster hardware. Once it is registered, the model can measure
 signals, drive outputs, manage power rails, capture traces, scan buses, and
 debug a target over SWD - on its own, without a human relaying readings.
 
-**141 tools in 19 groups, 6 resources, 4 prompt workflows.**
+**146 tools in 19 groups, 6 resources, 4 prompt workflows.**
 
 ## Install
 
@@ -114,7 +114,7 @@ Claude Code, or your client's tool inspector. The groups:
 
 | Group | Count | Covers |
 |---|---:|---|
-| `discovery` | 10 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
+| `discovery` | 14 | `device_status` (call this first), `device_info`, `check_faults`, `selftest`, `device_memory`, `crash_info` / `boot_report` / `crash_dump_save` / `crash_clear` (reset cause, coredump, boot diagnostics), board profiles, device discovery, `link_status` / `reset_link` for control-link health and recovery |
 | `io_config` | 3 | `configure_io` (required before any read/write), `set_supply_voltage`, `reset_device` |
 | `analog` | 6 | `read_voltage`, `read_current`, `read_resistance`, `write_voltage`, `write_current`, `observe_adc` (bounded summary) |
 | `digital` | 2 | `read_digital`, `write_digital` |
@@ -131,7 +131,7 @@ Claude Code, or your client's tool inspector. The groups:
 | `ota` | 9 | Firmware and SPIFFS upload, release check and apply, rollback, status |
 | `io_owner` | 4 | Cooperative IO leases - `io_claim`, `io_release`, `io_owner_status`, `io_force_release` |
 | `advanced` | 3 | `mux_control`, `register_access`, `idac_control` - risk-gated |
-| `scripting` | 6 | `run_device_script` (waits for the end and returns all logs), `script_list` / `script_get` / `script_put` / `script_delete`, `script_autorun` |
+| `scripting` | 7 | `run_device_script` (waits for the end and returns all logs), `script_run_file` (background job; `replace` to take over the single slot), `script_list` / `script_get` / `script_put` / `script_delete`, `script_autorun` |
 
 Two rules the model has to follow, and the tools enforce:
 
