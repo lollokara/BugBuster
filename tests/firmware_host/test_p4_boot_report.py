@@ -17,10 +17,12 @@ MAIN = r"""
 int main(void) {
     char l[100]; br_crumb_t c, prev;
     memset(&c, 0xA5, sizeof c);                       /* power-up garbage */
-    printf("valid0=%d boot=%u\n", br_crumb_boot(&c, &prev), c.boot);
+    int v = br_crumb_boot(&c, &prev);                 /* own statement: arg eval order is unspecified */
+    printf("valid0=%d boot=%u\n", v, c.boot);
     br_crumb_begin(&c, 12, 2, 4321);
     br_crumb_t snap = c;                              /* what RTC RAM holds across a panic */
-    printf("valid1=%d boot=%u\n", br_crumb_boot(&snap, &prev), snap.boot);
+    v = br_crumb_boot(&snap, &prev);
+    printf("valid1=%d boot=%u\n", v, snap.boot);
     br_fmt_crumb(l, sizeof l, &prev); puts(l);
     br_crumb_end(&snap, 9000);
     printf("inflight=%u\n", snap.inflight);
