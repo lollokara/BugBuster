@@ -20,9 +20,24 @@ esp_err_t sb_adaq_save(adaq7769_t *dev, bool usable, sb_adaq_shadow_t *s)
         if (err == ESP_OK) err = adaq7769_get_gain_cal(dev, &s->gain24);
     }
     if (err != ESP_OK) {
-        ESP_LOGE("standby_adaq", "cal read failed: cont_read %d crc_append %d status_append %d",
-                 (int)dev->cfg.cont_read, (int)dev->cfg.crc_append, (int)dev->cfg.status_append);
-        return err;
+        // A constant 0x00 CRC byte means the part is not producing CRC: it was reset (or its interface
+        // register cleared) while the driver still believes CRC is on. Look at the part with CRC off, say
+        // what it holds (reset defaults = it lost power / was reset), then re-assert the interface format
+        // exactly as identify/restore do and try once more.
+        uint8_t ifmt = 0xFF, pclk = 0xFF, chip = 0xFF;
+        adaq_ll_set_crc(&dev->ll, false, false);
+        adaq_ll_read_reg(&dev->ll, ADAQ_REG_INTERFACE_FORMAT, &ifmt);
+        adaq_ll_read_reg(&dev->ll, ADAQ_REG_POWER_CLOCK, &pclk);
+        adaq_ll_read_reg(&dev->ll, ADAQ_REG_CHIP_TYPE, &chip);
+        ESP_LOGE("standby_adaq", "cal read failed (cont_read %d crc_append %d); part holds IF=0x%02x CLK=0x%02x CHIP=0x%02x",
+                 (int)dev->cfg.cont_read, (int)dev->cfg.crc_append, ifmt, pclk, chip);
+        adaq_ll_write_reg(&dev->ll, ADAQ_REG_INTERFACE_FORMAT, ADAQ_IF_EN_SPI_CRC);
+        adaq_ll_set_crc(&dev->ll, true, false);
+        dev->cfg.crc_append = true;
+        err = adaq7769_get_offset_cal(dev, &s->offset24);
+        if (err == ESP_OK) err = adaq7769_get_gain_cal(dev, &s->gain24);
+        ESP_LOGW("standby_adaq", "after re-asserting CRC the read %s", err == ESP_OK ? "succeeds" : "still fails");
+        if (err != ESP_OK) return err;
     }
 
     s->cfg = dev->cfg;

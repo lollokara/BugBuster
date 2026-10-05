@@ -267,7 +267,10 @@ static StandbyStepResult step_quiesce(uint32_t now, bool first)
 {
     if (first) {
         s_power_transition = true;
-        ESP_LOGI(TAG, "quiesce: pausing analog workers");
+        ESP_LOGI(TAG, "quiesce: pausing analog workers (forced %d, timeout %u ms, idle %u ms, clients %u, work %u)",
+                 (int)s_sys.policy.forced, (unsigned)s_sys.policy.timeout_ms,
+                 (unsigned)(now - s_sys.policy.idle_since_ms), (unsigned)standby_client_count(&s_sys.policy),
+                 (unsigned)s_sys.work_depth);
     }
     if (standby_system_analog_depth(&s_sys) != 0 || tasks_cmd_busy()) {
         if (tasks_cmd_busy() && !tasks_drain_command_queue(500)) {
@@ -718,5 +721,7 @@ int standby_hw_bbp(StandbySource src, const uint8_t *payload, size_t len, uint8_
 {
     StandbySystem *s = standby_runtime();
     if (!s) return -CMD_ERR_INVALID_STATE;
+    if (len >= 1 && payload[0] == STANDBY_SUBOP_SLEEP)
+        ESP_LOGW(TAG, "explicit sleep requested over BBP (%s)", src == STANDBY_SRC_USB ? "usb" : "other");
     return standby_api_bbp(s, payload, len, resp, resp_len, src);
 }

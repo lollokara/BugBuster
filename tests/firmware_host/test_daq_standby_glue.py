@@ -534,6 +534,14 @@ int main(void) {
     assert(!r.ready && r.failure == SB_FAIL_NONE && nsent == 1 && sent[0].d[3] == 6);   // forwarded, never assumed done
     run_queued();
     assert(strstr(trace, "analog_off") == NULL);                                   // the rails are not cut for an unproven screen
+    {   // the C6 keeps a newer generation than this transaction (a restart reset the counter): STALE
+        bb_standby_reply_t st; memset(&st, 0, sizeof st);
+        st.schema = BB_STANDBY_SCHEMA; st.failure = 2; st.generation = 45;
+        nsent = 0;
+        standby_p4_on_c6_reply((const uint8_t *)&st, sizeof st);
+        assert(nsent == 1 && sent[0].d[1] == BB_ST_OP_PROGRESS && sent[0].d[3] == BB_ST_BOOT_STAGE);   // rebased, not wedged
+        assert((sent[0].d[4] | (sent[0].d[5] << 8)) == 45);
+    }
     now_us += (SB_C6_STEP_TIMEOUT_MS + 100) * 1000ll;                              // ... and silent past the C6 deadline:
     standby_p4_service(now_us / 1000);                                             // never ready without its confirmation
     r = s3(BB_ST_OP_SLEEP, 5, 45);

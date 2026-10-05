@@ -309,6 +309,7 @@ void standby_system_tick(StandbySystem *s)
     if (!s->initialised) return;
     uint32_t now = sys_now(s);
     poll_hat(s, now);
+    now = sys_now(s);   /* the HAT exchange can take hundreds of ms: activity during it must not look 'future' */
     uint32_t local = s->ops.inhibitors(s->ops.ctx);
 
     sys_lock(s);

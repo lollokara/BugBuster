@@ -144,8 +144,10 @@ uint32_t standby_idle_remaining_ms(const StandbyPolicy *policy, uint32_t now_ms)
     if (policy->state != STANDBY_ACTIVE || policy->timeout_ms == 0 || policy->inhibitors != 0 ||
         standby_client_count(policy) != 0)
         return 0;
-    uint32_t elapsed = now_ms - policy->idle_since_ms;
-    return elapsed >= policy->timeout_ms ? 0 : policy->timeout_ms - elapsed;
+    /* Signed: an activity stamp taken after the caller captured now_ms is 'in the future', i.e. zero idle. */
+    int32_t elapsed = (int32_t)(now_ms - policy->idle_since_ms);
+    if (elapsed < 0) elapsed = 0;
+    return (uint32_t)elapsed >= policy->timeout_ms ? 0 : policy->timeout_ms - (uint32_t)elapsed;
 }
 
 StandbyStep standby_tick(StandbyPolicy *policy, uint32_t now_ms, uint32_t inhibitors)
@@ -175,7 +177,7 @@ StandbyStep standby_tick(StandbyPolicy *policy, uint32_t now_ms, uint32_t inhibi
     bool due = policy->state == STANDBY_ACTIVE &&
                ((explicit_sleep && !inhibited) ||
                 (!inhibited && policy->timeout_ms != 0 &&
-                 (uint32_t)(now_ms - policy->idle_since_ms) >= policy->timeout_ms));
+                 (int32_t)(now_ms - policy->idle_since_ms) >= (int32_t)policy->timeout_ms));
     if (due) {
         policy->forced = explicit_sleep;
         next_generation(policy);

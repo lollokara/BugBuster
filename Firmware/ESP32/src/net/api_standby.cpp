@@ -2,6 +2,7 @@
 // api_standby.cpp - see api_standby.h. Semantics live in power/standby_api.c.
 // =============================================================================
 
+#include "esp_log.h"
 #include "api_standby.h"
 
 #include <math.h>
@@ -123,6 +124,7 @@ char *api_standby_handle(const char *method, const char *path, const cJSON *body
         }
     }
     if (strcmp(sfx, "/sleep") == 0) {
+        ESP_LOGW("standby", "explicit sleep requested over HTTP/BLE");
         switch (standby_system_sleep(s)) {
         case STANDBY_RC_OK:
             return status_json();

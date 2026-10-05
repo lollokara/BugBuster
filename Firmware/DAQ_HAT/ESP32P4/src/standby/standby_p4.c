@@ -221,6 +221,23 @@ void standby_p4_on_c6_reply(const uint8_t *payload, uint8_t len)
     uint32_t t = now_ms();
     s_c6_reply_ms = t ? t : 1u;
     s_c6_last = r;
+    if (r.failure == 2u /* C6 STALE */ && s_sb.step_running != 0u) {
+        // The C6 holds a newer generation than this transaction (an S3 / P4 restart reset the counter
+        // while the C6 kept running). The P4 already accepted the request, so it is authoritative:
+        // rebase the C6 (the same BOOT-stage progress frame an S3 boot sends) and let the retry through.
+        bb_standby_request_t n;
+        memset(&n, 0, sizeof(n));
+        n.schema = BB_STANDBY_SCHEMA;
+        n.op = BB_ST_OP_PROGRESS;
+        n.state = s_sb.state;
+        n.stage = BB_ST_BOOT_STAGE;
+        n.timeout_seconds = s_sb.timeout_known ? s_sb.timeout_s : 0xFFFFu;
+        taskENTER_CRITICAL(&s_mux);
+        n.generation = s_sb.generation;
+        taskEXIT_CRITICAL(&s_mux);
+        ESP_LOGW(TAG, "C6 reported a stale generation: rebasing it to %lu", (unsigned long)n.generation);
+        send_to_c6(&n);
+    }
     taskENTER_CRITICAL(&s_mux);
     sb_p4_set_c6(&s_sb, true, true);
     sb_p4_c6_reply(&s_sb, &r, t);

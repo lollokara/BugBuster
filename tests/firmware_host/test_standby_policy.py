@@ -78,6 +78,15 @@ int main(void) {
     assert(standby_tick(&policy, 139999, 0) == STANDBY_NO_STEP);
     puts("wraparound/activity");
 
+    // Activity that lands while a tick is blocked (the HAT exchange takes hundreds of ms) is stamped
+    // AFTER the tick's own clock reading. That must read as "just now", never as a 49-day idle.
+    standby_init(&policy, 0, 300);
+    standby_activity(&policy, 5000);
+    assert(standby_tick(&policy, 4990, 0) == STANDBY_NO_STEP);
+    assert(policy.state == STANDBY_ACTIVE);
+    assert(standby_idle_remaining_ms(&policy, 4990) == 300000);
+    puts("future-activity-stamp");
+
     standby_init(&policy, 0, 60);
     assert(!standby_presence(&policy, 0, true, 0));
     for (uint32_t client = 1; client <= STANDBY_MAX_CLIENTS; ++client)
@@ -162,6 +171,7 @@ def test_standby_policy_and_order():
         "timeouts/default/off/boundary",
         "all-inhibitors/fresh-idle",
         "wraparound/activity",
+        "future-activity-stamp",
         "presence/expiry/capacity/stale-close/host-wake",
         "preparation-cancel/late-ack/serialized-recovery",
         "new-work-cancels-preparation",
