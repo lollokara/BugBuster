@@ -81,7 +81,7 @@ extern "C" {
 #define SB_LEASE_TTL_DEFAULT_MS 15000u
 #define SB_LEASE_TTL_MAX_MS     60000u
 
-#define SB_C6_STEP_TIMEOUT_MS   2000u   // C6 must confirm stage 6 / 11 inside this
+#define SB_C6_STEP_TIMEOUT_MS   6000u   // C6 must confirm stage 6 / 11 inside this
 #define SB_C6_RETRY_MS          250u    // forward is repeated until confirmed
 #define SB_WORKER_TIMEOUT_MS    15000u  // stop_fast bounds itself near 2 s; this is the backstop
 
@@ -134,6 +134,10 @@ typedef struct {
     uint8_t  c6_confirmed_stage; // stage that reply confirmed (0 = none)
     bool     c6_failed;          // the last C6-confirmed stage failed or timed out
     bool     c6_dark;            // the C6 was told to go dark and is not yet restored
+    // GPIO54 is both the +/-26 V enable and the C6's CHIP_PU: cutting the analog rails resets the C6.
+    // So the C6 is made dark BEFORE the rails go (a C6 phase inside stage 5), stage 6 then completes
+    // from that confirmation, and the C6 stages of a wake are skipped while the rails are still off.
+    bool     c6_predark;         // stage 5 is waiting for the C6 to confirm the panel dark
 
     // --- boot / loading progress, forwarded to the C6 ---
     uint16_t boot_completed, boot_failed, boot_skipped;   // the S3's report; the P4 bit is never taken from it
@@ -237,6 +241,8 @@ void sb_p4_build_c6_request(const sb_p4_t *c, uint8_t forward_stage,
                             bb_standby_request_t *out);
 // Periodic: time out C6 / worker steps. Returns true when a C6 re-forward is due.
 bool sb_p4_tick(sb_p4_t *c, uint32_t now_ms);
+// The stage the C6 must be sent for the running step (6 during the pre-dark phase of stage 5), 0 = none.
+uint8_t sb_p4_c6_forward_stage(const sb_p4_t *c);
 // Union of everything that currently refuses sleep, for the reply.
 uint32_t sb_p4_inhibitors(const sb_p4_t *c, uint32_t local_inhibitors, uint32_t now_ms);
 

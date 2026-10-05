@@ -30,7 +30,6 @@
 
 static const char *TAG = "standby_p4";
 
-#define C6_REPLY_FRESH_MS      5000u   // a C6 that has not answered a POLL within this is "absent"
 #define MIRROR_PERIOD_MS       1000u
 
 static sb_p4_t           s_sb;
@@ -202,7 +201,12 @@ static void refresh_c6_present(uint32_t t)
     // Linked = the C6 said hello on DDP. Responsive = it answered a standby frame
     // recently. Linked but silent is an OLD C6: it is an inhibitor, never "absent".
     const bool linked = s_b && s_b->ddp.running && s_b->ddp.c6_present;
-    const bool responsive = s_c6_reply_ms != 0u && (uint32_t)(t - s_c6_reply_ms) < C6_REPLY_FRESH_MS;
+    // A C6 that answered once on this link understands standby: a later gap in its replies is a
+    // stage timeout/retry problem, not "unsupported" (the sleep sequence pauses the 1 Hz poll for
+    // longer than C6_REPLY_FRESH_MS between stages, which used to refuse INDICATORS_OFF).
+    if (!linked) s_c6_reply_ms = 0u;
+    const bool responsive = s_c6_reply_ms != 0u;
+    (void)t;
     taskENTER_CRITICAL(&s_mux);
     sb_p4_set_c6(&s_sb, linked, responsive);
     taskEXIT_CRITICAL(&s_mux);
@@ -244,6 +248,14 @@ int standby_p4_s3_request(const uint8_t *payload, uint8_t len, uint8_t *out)
     taskENTER_CRITICAL(&s_mux);
     sb_p4_handle(&s_sb, &rq, t, seq, local, &rp, &fx);
     taskEXIT_CRITICAL(&s_mux);
+
+    if (rp.failure != 0u && rq.op != BB_ST_OP_POLL) {
+        ESP_LOGW(TAG, "request op %u stage %u refused: failure %u (c6 linked %d responsive %d present %d unsupported %d missing %d, last reply %lu ms ago)",
+                 (unsigned)rq.op, (unsigned)rq.stage, (unsigned)rp.failure,
+                 (int)(s_b && s_b->ddp.running && s_b->ddp.c6_present), (int)(s_c6_reply_ms != 0u),
+                 (int)s_sb.c6_present, (int)s_sb.c6_unsupported, (int)s_sb.c6_missing,
+                 (unsigned long)(s_c6_reply_ms ? t - s_c6_reply_ms : 0u));
+    }
 
     if (fx.run_stage != 0u && !daq_board_standby_defer(s_b, fx.run_stage, fx.run_generation)) {
         // The ctrl queue stayed full: fail the stage rather than leave it hanging.
@@ -376,10 +388,19 @@ void standby_p4_service(uint32_t t)
     bool reforward;
     uint8_t stage;
     taskENTER_CRITICAL(&s_mux);
+    const uint8_t was_running = s_sb.step_running;
     reforward = sb_p4_tick(&s_sb, t);
     stage = s_sb.step_running;
+    const uint8_t fwd_stage = sb_p4_c6_forward_stage(&s_sb);
+    const bool c6_failed_now = was_running != 0u && stage == 0u && s_sb.c6_failed;
     taskEXIT_CRITICAL(&s_mux);
-    if (reforward) forward_stage_to_c6(&s_last_s3_rq, stage);
+    if (c6_failed_now) {
+        ESP_LOGW(TAG, "C6 did not confirm stage %u (last reply %lu ms ago, last hello %lu ms ago, rx frames %lu crc errors %lu)",
+                 (unsigned)was_running, (unsigned long)(s_c6_reply_ms ? t - s_c6_reply_ms : 0u),
+                 (unsigned long)(s_b->ddp.c6_info_ms ? t - s_b->ddp.c6_info_ms : 0u),
+                 (unsigned long)s_b->ddp.rx_frames, (unsigned long)s_b->ddp.crc_errors);
+    }
+    if (reforward) forward_stage_to_c6(&s_last_s3_rq, fwd_stage);
 
     if (stage == 0u && (uint32_t)(t - s_last_mirror_ms) >= MIRROR_PERIOD_MS) {
         s_last_mirror_ms = t;

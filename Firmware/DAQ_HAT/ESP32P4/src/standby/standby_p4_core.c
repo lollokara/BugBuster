@@ -167,6 +167,12 @@ static void complete_stage(sb_p4_t *c, uint8_t stage)
     c->failure = SB_FAIL_NONE;
 }
 
+static bool c6_confirmed_dark(const sb_p4_t *c)
+{
+    return c->gen_valid && c->c6_confirmed_gen == c->generation &&
+           c->c6_confirmed_stage == SB_STAGE_INDICATORS_OFF;
+}
+
 static void finish_wake(sb_p4_t *c)
 {
     c->state = BB_ST_ACTIVE;
@@ -209,6 +215,7 @@ static void abandon_stage(sb_p4_t *c)
 {
     if (c->step_running == SB_STAGE_HAT_SLEEP) c->hw_paused = true;
     c->step_running = 0;
+    c->c6_predark = false;
 }
 
 void sb_p4_handle(sb_p4_t *c, const bb_standby_request_t *rq, uint32_t now_ms,
@@ -375,12 +382,32 @@ void sb_p4_handle(sb_p4_t *c, const bb_standby_request_t *rq, uint32_t now_ms,
         // unless stage 3 completed AT THIS generation; the worker re-reads the pads too.
         if (c->state != BB_ST_ASLEEP || !c->hw_paused ||
             !(c->steps_done & (1u << SB_STAGE_MUX_OFF))) { fail = SB_FAIL_ORDER; break; }
+        if (!c6_confirmed_dark(c) && (c->c6_unsupported || c->c6_missing)) {
+            fail = SB_FAIL_HW;                    // the screen cannot be proven dark before the rails go
+            break;
+        }
+        if (c->c6_present && !c6_confirmed_dark(c)) {
+            // The rails also reset the C6 (shared GPIO54): its panel must be dark before they go.
+            c->c6_dark = true;
+            c->c6_predark = true;
+            c->step_running = stage;
+            c->step_started_ms = now_ms;
+            c->step_last_forward_ms = now_ms;
+            fx->forward_c6 = true;
+            fx->forward_stage = SB_STAGE_INDICATORS_OFF;
+            break;
+        }
         c->analog_cut = true;                     // conservative: true from the moment it is dispatched
         start_worker(c, stage, now_ms, fx);
         break;
 
     case SB_STAGE_INDICATORS_OFF:
         if (c->state != BB_ST_ASLEEP) { fail = SB_FAIL_ORDER; break; }
+        if (c6_confirmed_dark(c)) {               // confirmed before the rails went (the C6 is in reset now)
+            complete_stage(c, stage);
+            ready = true;
+            break;
+        }
         if (c->c6_unsupported || c->c6_missing) { fail = SB_FAIL_HW; break; }   // cannot prove the screen is off
         if (!c->c6_present) { complete_stage(c, stage); ready = true; break; }
         c->c6_dark = true;                        // assumed from the moment it is asked
@@ -389,8 +416,8 @@ void sb_p4_handle(sb_p4_t *c, const bb_standby_request_t *rq, uint32_t now_ms,
 
     case SB_STAGE_WAKE_SAFE:
         if (c->state != BB_ST_ACTIVE) c->state = BB_ST_WAKING;
-        if (!c->c6_present || !c->c6_dark) {
-            complete_stage(c, stage);             // nothing was turned off: nothing to repeat
+        if (!c->c6_present || !c->c6_dark || c->analog_cut) {
+            complete_stage(c, stage);             // nothing to repeat, or the C6 is in reset until the rails return
             ready = true;
             break;
         }
@@ -564,6 +591,7 @@ static void c6_step_failed(sb_p4_t *c, uint8_t failure)
 {
     const uint8_t stage = c->step_running;
     c->step_running = 0;
+    c->c6_predark = false;
     c->failure = failure;
     c->c6_failed = true;
     if (stage == SB_STAGE_INDICATORS_ON) {
@@ -587,8 +615,8 @@ void sb_p4_c6_reply(sb_p4_t *c, const bb_standby_reply_t *r, uint32_t now_ms)
     c->c6_activity_seen = r->activity;            // a lower value just means the C6 rebooted
     c->c6_activity_valid = true;
 
-    const uint8_t stage = c->step_running;
-    if (!is_c6_stage(stage) || r->generation != c->generation) return;
+    const uint8_t stage = c->c6_predark ? SB_STAGE_INDICATORS_OFF : c->step_running;
+    if (!(c->c6_predark || is_c6_stage(stage)) || r->generation != c->generation) return;
 
     if (r->failure != SB_FAIL_NONE) { c6_step_failed(c, SB_FAIL_HW); return; }
     if (!r->ready) return;
@@ -601,6 +629,11 @@ void sb_p4_c6_reply(sb_p4_t *c, const bb_standby_reply_t *r, uint32_t now_ms)
     c->c6_confirmed_gen = r->generation;
     c->c6_confirmed_stage = stage;
     c->c6_failed = false;
+    if (c->c6_predark) {                          // stage 5 goes on from here: the next request starts the rails off
+        c->c6_predark = false;
+        c->step_running = 0;
+        return;
+    }
     if (stage == SB_STAGE_INDICATORS_ON) finish_wake(c);
     complete_stage(c, stage);
 }
@@ -649,7 +682,7 @@ bool sb_p4_tick(sb_p4_t *c, uint32_t now_ms)
     const uint8_t stage = c->step_running;
     if (stage != 0u) {
         const uint32_t age = now_ms - c->step_started_ms;
-        if (is_c6_stage(stage)) {
+        if (c->c6_predark || is_c6_stage(stage)) {
             if (age >= SB_C6_STEP_TIMEOUT_MS) {
                 c6_step_failed(c, SB_FAIL_TIMEOUT);
             } else if ((now_ms - c->step_last_forward_ms) >= SB_C6_RETRY_MS) {
@@ -704,4 +737,9 @@ void sb_btn_gate(sb_btn_gate_t *g, bool blocked, bool any_held, bool any_raw, ui
     }
     out->events = raw_events;
     if (press_edge || raw_events) out->activity = true;
+}
+
+uint8_t sb_p4_c6_forward_stage(const sb_p4_t *c)
+{
+    return c->c6_predark ? (uint8_t)SB_STAGE_INDICATORS_OFF : c->step_running;
 }

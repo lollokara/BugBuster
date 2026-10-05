@@ -1,6 +1,7 @@
 #include "log_forward.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -28,8 +29,9 @@ static int hook(const char *fmt, va_list ap)
     vsnprintf(line, sizeof line, fmt, copy);
     va_end(copy);
     char level, tag[LOG_TAG_MAX + 1], msg[LOG_MSG_MAX + 1];
-    if (log_ring_parse_line(line, &level, tag, sizeof tag, msg, sizeof msg) && level == 'E') {
-        push('E', tag, msg);
+    if (log_ring_parse_line(line, &level, tag, sizeof tag, msg, sizeof msg) &&
+        (level == 'E' || level == 'W' || (level == 'I' && strncmp(tag, "standby", 7) == 0))) {
+        push(level, tag, msg);   /* errors, warnings and the standby sequence: the hub is the wireless console */
     }
     return n;
 }

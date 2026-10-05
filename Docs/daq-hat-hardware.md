@@ -291,7 +291,7 @@ GPIO2/3/4/5 are the ESP32-P4's default JTAG pad signals (MTCK/MTDI/MTMS/MTDO). T
 | Item | Detail |
 |---|---|
 | C6 power | Shares `ESP_3V3`/`VBAT` with P4. No independent power-down. |
-| C6 CHIP_PU | Permanently HIGH via R76 (10kΩ inside module). C6 cannot be hardware-reset independently. |
+| C6 CHIP_PU | **Shared with GPIO54 (`26V_EN`) on the assembled board** (reported by the board owner, 2026-10-05; the schematic PDF shows only the ±26 V enable on GPIO54, so verify against the netlist). Cutting ±26 V therefore resets the C6, and standby must darken the panel and LEDs *before* the rails go. The earlier note that CHIP_PU is permanently high is superseded. |
 | C6 crystal | Y3, 40 MHz, independent of P4 crystal. |
 | C6 flash | C6FH8 has 8MB embedded flash (in-package). |
 
@@ -311,7 +311,7 @@ GPIO2/3/4/5 are the ESP32-P4's default JTAG pad signals (MTCK/MTDI/MTMS/MTDO). T
 | 13 | C6_IO5/MTDI | NetJ4_3 | - | C6 JTAG MTDI → J4 |
 | 14 | C6_IO4/MTMS | NetJ4_1 | - | C6 JTAG MTMS → J4 |
 
-> **C6 reset/boot caveat:** C6 CHIP_PU is permanently HIGH inside the module - P4 cannot hardware-reset C6. GPIO43/44 put C6 into UART download mode at next boot. To reflash C6 via P4: drive GPIO43 LOW + GPIO44 LOW, then software-reset C6 (C6 RTC_CNTL register). C6 only enters download mode on next reboot.
+> **C6 reset/boot caveat:** GPIO54 (`26V_EN`) also drives C6 CHIP_PU on the assembled board (see the table above), so a ±26 V cycle resets the C6; the P4 has no other hardware reset line. System standby relies on this: stage 5 first makes the C6 dark (panel, backlight and a latched all-off WS2812 frame, because the strip keeps its last colour without data), then cuts the rails; the C6 reboots when they return. GPIO43/44 put C6 into UART download mode at next boot. To reflash C6 via P4: drive GPIO43 LOW + GPIO44 LOW, then software-reset C6 (C6 RTC_CNTL register). C6 only enters download mode on next reboot.
 
 **P4 UART configuration for C6:**
 - GPIO32 = UART TX (OUTPUT) - use UART1 or UART2 via GPIO matrix; UART0 is the console on GPIO37/38

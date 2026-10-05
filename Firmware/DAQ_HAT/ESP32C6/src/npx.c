@@ -35,6 +35,7 @@ static uint8_t s_grb[NPX_COUNT * 3];   // GRB byte stream
 static volatile uint8_t s_ch_codes[4] = { 0, 0, 0, 0 };
 
 static volatile bool s_standby_off = false;
+static volatile bool s_dark_sent = false;   // a dark frame went out and the strip had time to latch it
 
 void npx_set_channel_codes(const uint8_t codes[4])
 {
@@ -131,15 +132,20 @@ static void npx_task(void *arg)
     bool blanked = false;
     for (;;) {
         if (s_standby_off) {
-            if (!blanked) {                  // one dark frame, then idle
+            if (!blanked) {                  // two dark frames (WS2812 keeps its last colour once the data stops)
                 memset(s_grb, 0, sizeof(s_grb));
                 show();
+                vTaskDelay(pdMS_TO_TICKS(2));    // > the 280 us latch
+                show();
+                vTaskDelay(pdMS_TO_TICKS(2));
                 blanked = true;
+                s_dark_sent = true;
             }
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
         blanked = false;
+        s_dark_sent = false;
         render((uint32_t)(esp_timer_get_time() / 1000));
         vTaskDelay(pdMS_TO_TICKS(30));
     }
@@ -148,6 +154,13 @@ static void npx_task(void *arg)
 void npx_set_standby_off(bool off)
 {
     s_standby_off = off;
+    if (!off) s_dark_sent = false;
+}
+
+bool npx_standby_dark(void)
+{
+    if (!s_chan || !s_enc) return true;     // no strip driver: nothing can be lit by us
+    return s_standby_off && s_dark_sent;
 }
 
 void npx_init(void)

@@ -22,6 +22,14 @@ Open work only. Everything delivered has moved to `CHANGELOG.MD` under
   (timeout select, state, Wake) now lives in the existing USB PD tab. Still open: actual
   WebView/CDP screenshots, live USB/Wi-Fi/MCP, GPIO54 conflict check, flashing, physical
   and input-power measurement.
+- [VERIFIED 2026-10-05, DAQ HAT bench, DUT/IO detached] OTA of S3/P4/C6 and 10 consecutive sleep/wake cycles over HTTP
+  (sleep ~0.4-0.8 s, wake ~1.5-1.9 s, no P4 failure lines). Root cause of the first sleep failure: GPIO54 is both
+  `26V_EN` and the C6's CHIP_PU, so analog-off reset the C6 before it could confirm stage 6. Fixed by darkening the C6
+  (panel, backlight, latched all-off WS2812 frame) inside stage 5 before the rails go; stage 6 completes from that, the C6
+  stages of a wake are skipped while the rails are off. Also: P4 `W`/`E` and `standby*` log lines now reach the hub
+  (ESPFleet) for wireless debugging; the C6 boot splash waits 15 s (25 s overall) for the S3 report; ADAQ calibration reads
+  retry. Still open: physical check of panel/backlight/LED darkness, held-button wake (VDUT must not toggle), power
+  measurement, LA HAT, degraded/no-Wi-Fi boot, WebView/CDP screenshots.
 
 Populated by the multi-surface audit of 2026-08-20 and its verification pass,
 then extended by the **per-feature audit of 2026-10-01** (every device feature

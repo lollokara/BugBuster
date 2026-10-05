@@ -134,6 +134,10 @@ void standby_c6_service(uint32_t t)
 
     npx_set_standby_off(leds_off);      // transient override; the saved LED setting is untouched
 
+    if (act == SB_DISP_SLEEP && leds_off && !npx_standby_dark()) {
+        act = SB_DISP_NONE;             // the strip is blanked first: "dark" is never reported while LEDs are lit
+    }
+
     if (act == SB_DISP_SLEEP) {
         // The core is told what the driver REALLY reported. A failed sequence is not
         // "dark": it is retained, reported to the P4 and retried.

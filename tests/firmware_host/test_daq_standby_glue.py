@@ -166,6 +166,15 @@ static void c6_says(uint32_t gen, uint8_t state, uint8_t ready) {
     r.schema = BB_STANDBY_SCHEMA; r.generation = gen; r.state = state; r.ready = ready;
     standby_p4_on_c6_reply((const uint8_t *)&r, sizeof r);
 }
+// Stage 5 first makes the C6 dark (+/-26 V is also the C6's CHIP_PU), then starts the rails worker.
+static bb_standby_reply_t s3_stage5(uint32_t gen) {
+    bb_standby_reply_t r = s3(BB_ST_OP_SLEEP, 5, gen);
+    if (!r.ready && r.failure == 0 && nsent > 0 && sent[nsent - 1].d[3] == 6) {
+        c6_says(gen, BB_ST_ASLEEP, 1);
+        r = s3(BB_ST_OP_SLEEP, 5, gen);
+    }
+    return r;
+}
 // A production board: the C6 is linked and has answered a standby frame.
 static void fresh(void) {
     memset(&board, 0, sizeof board);
@@ -204,7 +213,7 @@ int main(void) {
     assert(s3(BB_ST_OP_SLEEP, 1, 9).ready);
     s3(BB_ST_OP_SLEEP, 2, 9); run_queued();
     s3(BB_ST_OP_SLEEP, 3, 9); run_queued(); s3(BB_ST_OP_SLEEP, 3, 9); s3(BB_ST_OP_SLEEP, 4, 9);
-    s3(BB_ST_OP_SLEEP, 5, 9); run_queued();
+    s3_stage5(9); run_queued();
     assert(s3(BB_ST_OP_SLEEP, 6, 9).ready && nsent == 0);                          // nothing to turn off
     board.ddp.running = true; board.ddp.c6_present = true;                         // but a linked, silent one is still an old C6
     assert(s3(BB_ST_OP_POLL, 0, 0).inhibitors & BB_ST_INH_HAT_UNKNOWN);
@@ -242,15 +251,15 @@ int main(void) {
     assert(!strcmp(trace, "mux_off;") && !standby_p4_adc_available() && standby_analog_adc_available());
     assert(s3(BB_ST_OP_SLEEP, 3, 10).ready && s3(BB_ST_OP_SLEEP, 4, 10).ready);
     trace[0] = 0;
-    r = s3(BB_ST_OP_SLEEP, 5, 10);                                            // the analog rails: worker, not inline
+    r = s3_stage5(10);                                            // the analog rails: worker, not inline
     assert(!r.ready && queued[nq - 1] == 5 && queued_gen[nq - 1] == 10 && trace[0] == 0);
     run_queued();
     assert(!strcmp(trace, "analog_off;") && !standby_p4_adc_available() && !standby_analog_adc_available());
-    assert(s3(BB_ST_OP_SLEEP, 5, 10).ready);
-    r = s3(BB_ST_OP_SLEEP, 6, 10);                                            // the C6 must prove its screen is dark
-    assert(!r.ready && nsent == 1 && sent[0].cmd == DDP_CMD_STANDBY && sent[0].d[3] == 6);
-    c6_says(10, BB_ST_ASLEEP, 1);
-    assert(s3(BB_ST_OP_SLEEP, 6, 10).ready);
+    assert(s3_stage5(10).ready);
+    // the C6 proved its screen dark BEFORE the rails went (they also reset it): one forward, stage 6
+    assert(nsent == 1 && sent[0].cmd == DDP_CMD_STANDBY && sent[0].d[3] == 6);
+    r = s3(BB_ST_OP_SLEEP, 6, 10);
+    assert(r.ready && nsent == 1);                                            // nothing more to ask the C6
     nsent = 0;
     puts("p4-sleep");
 
@@ -273,10 +282,8 @@ int main(void) {
 
     // ---- wake: rails, converters, then NOTHING is reconnected and nothing restarts ----
     nsent = 0;
-    r = s3(BB_ST_OP_WAKE, 7, 11);                                                 // the C6 was told to go dark: it must say it is back
-    assert(!r.ready);
-    c6_says(11, BB_ST_WAKING, 1);
-    assert(s3(BB_ST_OP_WAKE, 7, 11).ready);
+    r = s3(BB_ST_OP_WAKE, 7, 11);                                                 // the C6 is in reset until the rails return
+    assert(r.ready && nsent == 0);
     trace[0] = 0;
     r = s3(BB_ST_OP_WAKE, 8, 11);
     assert(!r.ready && queued[nq - 1] == 8 && queued_gen[nq - 1] == 11);
@@ -386,14 +393,14 @@ int main(void) {
     r = s3(BB_ST_OP_SLEEP, 3, 58);
     assert(!r.ready && r.state == BB_ST_FAULT_SAFE && r.failure == SB_FAIL_HW);
     nq = 0; trace[0] = 0;
-    r = s3(BB_ST_OP_SLEEP, 5, 58);                                                  // stage 5 is never even dispatched
+    r = s3_stage5(58);                                                  // stage 5 is never even dispatched
     assert(!r.ready && nq == 0 && strstr(trace, "analog_off") == NULL && g_routes_held);
     fresh();                                                                        // the rail cut fails
     s3(BB_ST_OP_SLEEP, 1, 61); s3(BB_ST_OP_SLEEP, 2, 61); run_queued();
     s3(BB_ST_OP_SLEEP, 2, 61);
     s3(BB_ST_OP_SLEEP, 3, 61); run_queued(); s3(BB_ST_OP_SLEEP, 3, 61); s3(BB_ST_OP_SLEEP, 4, 61);
     g_off_ok = false;
-    s3(BB_ST_OP_SLEEP, 5, 61); run_queued();
+    s3_stage5(61); run_queued();
     r = s3(BB_ST_OP_SLEEP, 6, 61);
     assert(!r.ready && r.state == BB_ST_FAULT_SAFE && r.failure == SB_FAIL_HW && !standby_p4_adc_available());
     g_off_ok = true;                                                                // wake after a failed cut resets everything
@@ -521,10 +528,17 @@ int main(void) {
     // a C6 that stops answering after the sleep began cannot be assumed dark
     s3(BB_ST_OP_SLEEP, 2, 45); run_queued(); s3(BB_ST_OP_SLEEP, 3, 45); run_queued();
     s3(BB_ST_OP_SLEEP, 3, 45); s3(BB_ST_OP_SLEEP, 4, 45);
-    s3(BB_ST_OP_SLEEP, 5, 45); run_queued();
-    now_us += 6 * 1000000ll;                                                       // > C6_REPLY_FRESH_MS without an answer
-    r = s3(BB_ST_OP_SLEEP, 6, 45);
-    assert(!r.ready && r.failure == SB_FAIL_HW && nsent == 0);
+    now_us += 6 * 1000000ll;                                                       // a gap in its replies is not "unsupported"
+    nsent = 0; trace[0] = 0;
+    r = s3(BB_ST_OP_SLEEP, 5, 45);                                                 // the C6 must go dark BEFORE the rails (GPIO54)
+    assert(!r.ready && r.failure == SB_FAIL_NONE && nsent == 1 && sent[0].d[3] == 6);   // forwarded, never assumed done
+    run_queued();
+    assert(strstr(trace, "analog_off") == NULL);                                   // the rails are not cut for an unproven screen
+    now_us += (SB_C6_STEP_TIMEOUT_MS + 100) * 1000ll;                              // ... and silent past the C6 deadline:
+    standby_p4_service(now_us / 1000);                                             // never ready without its confirmation
+    r = s3(BB_ST_OP_SLEEP, 5, 45);
+    run_queued();
+    assert(!r.ready && strstr(trace, "analog_off") == NULL);
     puts("p4-old-c6");
 
     // ---- the Analyzer boot milestone is the P4's own result ------------------------
@@ -546,13 +560,11 @@ int main(void) {
     c6_says(0, BB_ST_ACTIVE, 1);                                                    // it answered a poll
     s3(BB_ST_OP_SLEEP, 1, 50); s3(BB_ST_OP_SLEEP, 2, 50); run_queued();
     s3(BB_ST_OP_SLEEP, 3, 50); run_queued(); s3(BB_ST_OP_SLEEP, 3, 50); s3(BB_ST_OP_SLEEP, 4, 50);
-    s3(BB_ST_OP_SLEEP, 5, 50); run_queued();
     nsent = 0;
-    r = s3(BB_ST_OP_SLEEP, 6, 50);
-    assert(!r.ready && nsent == 1 && sent[0].cmd == DDP_CMD_STANDBY);
+    s3_stage5(50); run_queued();
+    assert(nsent == 1 && sent[0].cmd == DDP_CMD_STANDBY);                           // the C6 is darkened before the rails go
     assert(sent[0].d[1] == BB_ST_OP_SLEEP && sent[0].d[3] == 6);
-    c6_says(50, BB_ST_ASLEEP, 1);
-    assert(s3(BB_ST_OP_SLEEP, 6, 50).ready);
+    assert(s3(BB_ST_OP_SLEEP, 6, 50).ready && nsent == 1);
     nsent = 0;
     standby_p4_service(now_us / 1000 + 1500);                                       // periodic mirror
     assert(nsent == 1 && sent[0].d[1] == BB_ST_OP_POLL && (sent[0].d[8] | (sent[0].d[9] << 8)) == 300);
@@ -595,6 +607,8 @@ bool display_backlight_restore(uint8_t l) { recf("bl_restore=%d", l); return tru
 bool display_flush(void)                  { rec("flush"); return !d_fail_flush; }
 static int npx_last = -1;
 void npx_set_standby_off(bool off)        { if (npx_last != off) { npx_last = off; recf("npx_off=%d", off); } }
+static bool npx_dark_ready = true;                                  // the strip latched its dark frame
+bool npx_standby_dark(void)                { return npx_dark_ready; }
 void splash_draw(const sb_c6_view_t *v)   { rec(v->mode == SB_UI_BOOT ? "splash_boot" : "splash_wake"); }
 void splash_draw_logo_frame(void)         { rec("logo"); }
 
@@ -639,8 +653,17 @@ int main(void) {
     trace[0] = 0;
     rp = req(BB_ST_OP_SLEEP, 6, 5, 300);
     assert(!rp.ready && rp.state == BB_ST_PREPARING && rp.generation == 5);
+    // The +/-26 V cut resets the C6 and a WS2812 strip keeps its last colour without data: the
+    // panel is not put to sleep, and "dark" is not reported, until the dark frame has been latched.
+    npx_dark_ready = false;
+    standby_c6_service(4990);
+    assert(!strcmp(trace, "npx_off=1;"));
+    rp = req(BB_ST_OP_SLEEP, 6, 5, 300);
+    assert(!rp.ready);
+    npx_dark_ready = true;
+    trace[0] = 0;
     standby_c6_service(5000);
-    assert(!strcmp(trace, "npx_off=1;asleep=1;wait;bl_off;panel=0;"));
+    assert(!strcmp(trace, "asleep=1;wait;bl_off;panel=0;"));
     rp = req(BB_ST_OP_SLEEP, 6, 5, 300);
     assert(rp.ready && rp.state == BB_ST_ASLEEP);
     assert(standby_c6_ui_mode(5001) == SB_UI_DARK && standby_c6_input_blocked(5001));

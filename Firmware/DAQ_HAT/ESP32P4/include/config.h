@@ -67,7 +67,7 @@
 // esp_wifi_init() only resets the C6 if that handshake actually fails. See
 // .mex/patterns/daq-hat-ios-wifi-streaming.md.
 // -----------------------------------------------------------------------------
-#define C6_RST_PIN        ((gpio_num_t)54)   // C6 CHIP_PU  (LOW = reset)
+#define C6_RST_PIN        ((gpio_num_t)54)   // C6 CHIP_PU (LOW = reset). SAME net as PWR_26V_EN_PIN: cutting +/-26 V resets the C6
 #define C6_BOOT_PIN       ((gpio_num_t)44)   // C6 GPIO9 strap (LOW = download mode)
 #define C6_BOOT_EN_PIN    ((gpio_num_t)43)   // C6 GPIO8 (0=UART dl, 1=SDIO dl)
 #define C6_IO2_PIN        ((gpio_num_t) 6)   // C6 GPIO2  (reserved)

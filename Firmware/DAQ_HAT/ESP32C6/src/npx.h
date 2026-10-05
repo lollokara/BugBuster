@@ -29,6 +29,10 @@ void npx_set_channel_codes(const uint8_t codes[4]);
 // (WS2812 chips still draw their quiescent current when dark.)
 void npx_set_standby_off(bool off);
 
+// True once the standby override is set AND a dark frame has been sent and latched. The C6 is reset by the
+// +/-26 V rail cut and a WS2812 strip keeps its last colour without data, so sleep waits for this.
+bool npx_standby_dark(void);
+
 #ifdef __cplusplus
 }
 #endif

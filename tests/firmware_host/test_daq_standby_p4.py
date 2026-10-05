@@ -52,6 +52,15 @@ static bb_standby_reply_t run_worker(sb_p4_t *c, bool sleep_op, uint8_t st, uint
                                      uint32_t now, bool ok) {
     sb_p4_fx_t fx;
     uint8_t op = sleep_op ? BB_ST_OP_SLEEP : BB_ST_OP_WAKE;
+    if (sleep_op && st == 5 && c->c6_present) {
+        // +/-26 V also resets the C6 (GPIO54): its panel is made dark first, then the rails go.
+        bb_standby_reply_t p = call(c, rq(op, 5, gen), now, 0, &fx);
+        assert(!p.ready && fx.forward_c6 && fx.forward_stage == 6 && fx.run_stage == 0 && c->c6_predark);
+        assert(sb_p4_c6_forward_stage(c) == 6);
+        bb_standby_reply_t cr = c6_reply(gen, BB_ST_ASLEEP, 1, 0, 0);
+        sb_p4_c6_reply(c, &cr, now);
+        assert(!c->c6_predark && c->step_running == 0);
+    }
     bb_standby_reply_t r = call(c, rq(op, st, gen), now, 0, &fx);
     if (!(!r.ready && fx.run_stage == st && fx.run_generation == gen)) {
         fprintf(stderr, "run_worker stage %u gen %u: ready=%u failure=%u state=%u run_stage=%u\n", st, gen,
@@ -80,21 +89,22 @@ static void go_asleep(sb_p4_t *c, uint32_t gen, uint32_t t) {
     assert(!c->analog_cut);
     r = run_worker(c, true, 5, gen, t, true);                   // the DAQ analog rails
     assert(r.ready && c->analog_cut);
-    r = sleep_stage(c, 6, gen, t, &fx);
-    assert(!r.ready && fx.forward_c6 && fx.forward_stage == 6);
-    bb_standby_reply_t cr = c6_reply(gen, BB_ST_ASLEEP, 1, 0, 0);
-    sb_p4_c6_reply(c, &cr, t + 5);
-    r = sleep_stage(c, 6, gen, t + 6, &fx);
-    assert(r.ready && r.state == BB_ST_ASLEEP);
+    r = sleep_stage(c, 6, gen, t, &fx);                         // the C6 was made dark before the rails went
+    assert(r.ready && r.state == BB_ST_ASLEEP && !fx.forward_c6);
 }
 
 static void go_awake(sb_p4_t *c, uint32_t gen, uint32_t t) {
     sb_p4_fx_t fx;
     bb_standby_reply_t r = wake_stage(c, 7, gen, t, &fx);
-    assert(!r.ready && fx.forward_c6 && fx.forward_stage == 7 && r.state == BB_ST_WAKING);
-    bb_standby_reply_t cr = c6_reply(gen, BB_ST_WAKING, 1, 0, 0);
-    sb_p4_c6_reply(c, &cr, t + 2);
-    assert(wake_stage(c, 7, gen, t + 3, &fx).ready);
+    bb_standby_reply_t cr;
+    if (c->analog_cut) {                                        // the C6 is in reset until the rails return
+        assert(r.ready && !fx.forward_c6 && r.state == BB_ST_WAKING);
+    } else {
+        assert(!r.ready && fx.forward_c6 && fx.forward_stage == 7 && r.state == BB_ST_WAKING);
+        cr = c6_reply(gen, BB_ST_WAKING, 1, 0, 0);
+        sb_p4_c6_reply(c, &cr, t + 2);
+        assert(wake_stage(c, 7, gen, t + 3, &fx).ready);
+    }
     if (c->analog_cut) {
         r = wake_stage(c, 9, gen, t + 3, &fx);                  // converters before the rails: refused
         assert(!r.ready && r.failure == SB_FAIL_ORDER && fx.run_stage == 0);
@@ -386,10 +396,9 @@ int main(void) {
     call(&c, rq(BB_ST_OP_SLEEP, 1, 12), 0, 0, &fx);
     run_worker(&c, true, 2, 12, 0, true);
     run_worker(&c, true, 3, 12, 0, true); sleep_stage(&c, 4, 12, 0, &fx);
-    run_worker(&c, true, 5, 12, 0, true);
     sb_p4_set_c6(&c, true, false);
-    r = sleep_stage(&c, 6, 12, 5, &fx);
-    assert(!r.ready && r.failure == SB_FAIL_HW && !fx.forward_c6);
+    r = sleep_stage(&c, 5, 12, 5, &fx);                         // the rails would also reset an unproven C6
+    assert(!r.ready && r.failure == SB_FAIL_HW && !fx.forward_c6 && fx.run_stage == 0 && !c.analog_cut);
     puts("old-c6");
 
     // ---- C6 confirmation: retry, timeout, failure, absent ------------------
@@ -399,25 +408,24 @@ int main(void) {
     run_worker(&c, true, 2, 50, 0, true);
     run_worker(&c, true, 3, 50, 0, true);
     call(&c, rq(BB_ST_OP_SLEEP, 4, 50), 0, 0, &fx);
-    run_worker(&c, true, 5, 50, 0, true);
-    call(&c, rq(BB_ST_OP_SLEEP, 6, 50), 1000, 0, &fx);
-    assert(c.step_running == 6 && c.c6_dark);
+    call(&c, rq(BB_ST_OP_SLEEP, 5, 50), 1000, 0, &fx);                  // the C6 phase of stage 5 (rails still on)
+    assert(c.step_running == 5 && c.c6_predark && c.c6_dark && fx.forward_stage == 6 && !c.analog_cut);
     assert(!sb_p4_tick(&c, 1000 + SB_C6_RETRY_MS - 1));
     assert(sb_p4_tick(&c, 1000 + SB_C6_RETRY_MS));                      // re-forward due
     assert(!sb_p4_tick(&c, 1000 + SB_C6_RETRY_MS + 1));
     bb_standby_reply_t wrong = c6_reply(49, BB_ST_ASLEEP, 1, 0, 0);     // other generation: ignored
     sb_p4_c6_reply(&c, &wrong, 1300);
-    assert(c.step_running == 6);
+    assert(c.step_running == 5 && c.c6_predark);
     bb_standby_reply_t early = c6_reply(50, BB_ST_ASLEEP, 0, 0, 0);     // not ready yet
     sb_p4_c6_reply(&c, &early, 1300);
-    assert(c.step_running == 6);
+    assert(c.step_running == 5 && c.c6_predark);
     sb_p4_tick(&c, 1000 + SB_C6_STEP_TIMEOUT_MS);
-    assert(c.step_running == 0 && c.failure == SB_FAIL_TIMEOUT && c.state == BB_ST_ASLEEP);
-    r = call(&c, rq(BB_ST_OP_SLEEP, 6, 50), 4000, 0, &fx);              // S3 retry re-forwards
-    assert(!r.ready && fx.forward_c6);
+    assert(c.step_running == 0 && !c.c6_predark && c.failure == SB_FAIL_TIMEOUT && c.state == BB_ST_ASLEEP && !c.analog_cut);
+    r = call(&c, rq(BB_ST_OP_SLEEP, 5, 50), 8000, 0, &fx);              // S3 retry re-forwards, rails still on
+    assert(!r.ready && fx.forward_c6 && fx.forward_stage == 6 && fx.run_stage == 0);
     bb_standby_reply_t bad = c6_reply(50, BB_ST_ASLEEP, 1, 0, 0); bad.failure = 1;
-    sb_p4_c6_reply(&c, &bad, 4001);
-    assert(c.step_running == 0 && c.failure == SB_FAIL_HW);
+    sb_p4_c6_reply(&c, &bad, 8001);
+    assert(c.step_running == 0 && !c.c6_predark && c.failure == SB_FAIL_HW);
     // The C6 vanished: on a production board (a display is expected) that is NOT "nothing to
     // turn off" - the screen cannot be proven dark, so stage 6 fails and sleep is inhibited.
     sb_p4_set_c6(&c, false, false);
