@@ -293,6 +293,7 @@ char *api_scripts_file_chunk(const char *path, const cJSON *body)
     char err[96] = {0};
     bool ok = script_storage_chunk_write(name, off, raw, rlen, final, &total, err, sizeof(err));
     heap_caps_free(raw);
+    scripting_transfer_activity(SCRIPT_XFER_FILE, ok && !final);
     if (!ok) return err_json(err);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
@@ -423,4 +424,79 @@ char *api_scripts_autorun_disable(const char *path, const cJSON *body)
     char err[80] = {0};
     if (!autorun_set_disabled(err, sizeof(err))) return err_json(err);
     return ok_json();
+}
+
+// Same effect as POST /api/scripts/reset (webserver.cpp); no HTTP route needed by the tunnel.
+char *api_scripts_reset(const char *path, const cJSON *body)
+{
+    (void)path; (void)body;
+    scripting_reset_vm();
+    return ok_json();
+}
+
+// Runs the enabled autorun script now (BBP SCRIPT_AUTORUN sub 3). Blocks until the
+// script ends or AUTORUN_MAX_WALL_MS, like the BBP sub-op. A held file slot is refused
+// up front with the run-file {running,id} shape so clients treat it as busy.
+char *api_scripts_autorun_run(const char *path, const cJSON *body)
+{
+    (void)path; (void)body;
+    ScriptStatus st;
+    scripting_get_status(&st);
+    if (st.file_slot_id != 0) return busy_json("a script is running; autorun run-now is refused until it ends");
+    uint32_t id = 0;
+    char err[80] = {0};
+    bool ok = autorun_run_now(&id, err, sizeof(err));
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", ok);
+    if (id) cJSON_AddNumberToObject(root, "id", id);
+    if (!ok) cJSON_AddStringToObject(root, "error", err[0] ? err : "autorun script did not complete");
+    return take(root);
+}
+
+// --- USB tunnel dispatcher (BBP SCRIPT_AUTORUN sub 6/7) ----------------------
+// Op ids are wire-stable; the order mirrors scripts.rs tunnel::Op. Arguments
+// are the JSON body only (no query string), typed as the routes above expect.
+typedef char *(*script_route_fn)(const char *path, const cJSON *body);
+static const struct { const char *name; script_route_fn fn; } s_tunnel_ops[] = {
+    { "caps",            NULL },
+    { "status",          api_scripts_status },
+    { "logs",            api_scripts_logs },
+    { "stop",            api_scripts_stop },
+    { "files",           api_scripts_files },
+    { "storage",         api_scripts_storage },
+    { "files/get",       api_scripts_file_get },
+    { "files/delete",    api_scripts_file_delete },
+    { "files/chunk",     api_scripts_file_chunk },
+    { "run-file",        api_scripts_run_file },
+    { "eval",            api_scripts_eval },
+    { "lint",            api_scripts_lint },
+    { "autorun/status",  api_scripts_autorun_status },
+    { "autorun/enable",  api_scripts_autorun_enable },
+    { "autorun/disable", api_scripts_autorun_disable },
+    { "autorun/run",     api_scripts_autorun_run },
+    { "reset",           api_scripts_reset },
+};
+#define TUNNEL_OP_COUNT ((unsigned)(sizeof(s_tunnel_ops) / sizeof(s_tunnel_ops[0])))
+
+static char *tunnel_caps(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddNumberToObject(root, "tunnel", 1);
+    cJSON_AddNumberToObject(root, "maxScriptBytes", SCRIPT_BODY_MAX);
+    cJSON_AddNumberToObject(root, "filePage", SCRIPTS_FILE_PAGE);
+    cJSON_AddNumberToObject(root, "logPage", MP_LOG_RESP_MAX);
+    cJSON *ops = cJSON_AddArrayToObject(root, "ops");
+    for (unsigned i = 1; i < TUNNEL_OP_COUNT; i++) cJSON_AddItemToArray(ops, cJSON_CreateString(s_tunnel_ops[i].name));
+    return take(root);
+}
+
+char *api_scripts_dispatch(unsigned op, const cJSON *body, bool *known)
+{
+    if (known) *known = op < TUNNEL_OP_COUNT;
+    if (op >= TUNNEL_OP_COUNT) return NULL;
+    if (op == 0) return tunnel_caps();
+    char path[48];
+    snprintf(path, sizeof(path), "/api/scripts/%s", s_tunnel_ops[op].name);
+    return s_tunnel_ops[op].fn(path, body);
 }

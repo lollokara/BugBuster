@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::bbp;
 use crate::state::{ChannelState, DeviceState, DiagState};
-use crate::transport::Transport;
+use crate::transport::{HttpExchange, HttpReply, Transport};
 
 fn encode_husb_current_code(max_current_a: f64) -> u8 {
     // HUSB238 current-code table in 0.5A..5.0A non-linear steps.
@@ -2212,6 +2212,32 @@ impl Transport for HttpTransport {
 
     fn base_url(&self) -> Option<String> {
         Some(self.base_url.clone())
+    }
+
+    async fn http_exchange(&self, req: HttpExchange) -> Result<HttpReply> {
+        if !self.connected.load(Ordering::Relaxed) {
+            return Err(anyhow!("Not connected"));
+        }
+        let method = reqwest::Method::from_bytes(req.method.as_bytes())?;
+        let url = format!("{}{}", self.base_url, req.path);
+        let mut rb = self.client.request(method, &url).timeout(req.timeout);
+        if !req.query.is_empty() {
+            rb = rb.query(&req.query);
+        }
+        if let Some((body, content_type)) = req.body {
+            rb = rb
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(body);
+        }
+        let resp = rb.send().await?;
+        let status = resp.status().as_u16();
+        let headers = resp
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| Some((k.as_str().to_ascii_lowercase(), v.to_str().ok()?.to_string())))
+            .collect();
+        let body = resp.bytes().await?.to_vec();
+        Ok(HttpReply { status, headers, body })
     }
 }
 

@@ -191,6 +191,26 @@ typedef struct {
 void scripting_get_status(ScriptStatus *out);
 
 // ---------------------------------------------------------------------------
+// Aggregate work (standby inhibitor)
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    SCRIPT_XFER_USB  = 0,   // BBP SCRIPT_UPLOAD / SCRIPT_AUTORUN tunnel staging
+    SCRIPT_XFER_FILE = 1,   // /api/scripts/files/chunk upload (HTTP, BLE)
+    SCRIPT_XFER_COUNT
+} ScriptXferSource;
+
+/**
+ * True while any job is queued or executing (files, evals, REPL lines, lint) or a
+ * script transfer was active within SR_XFER_LEASE_MS. An idle persistent VM is false.
+ * Lock-free (atomics); callable from any task.
+ */
+bool scripting_has_work(void);
+
+/** Mark a transfer frame seen (active) or the transfer finished/aborted (inactive). */
+void scripting_transfer_activity(ScriptXferSource src, bool active);
+
+// ---------------------------------------------------------------------------
 // VM reset (persistent mode only)
 // ---------------------------------------------------------------------------
 
