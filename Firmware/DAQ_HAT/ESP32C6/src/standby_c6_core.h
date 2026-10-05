@@ -51,8 +51,8 @@ extern "C" {
 #define SB_C6_WAKE_MASK ((uint16_t)((1u << 7) | (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11)))
 #define SB_C6_WAKE_ITEMS 5u
 
-#define SB_C6_BOOT_TIMEOUT_MS      20000u  // overall: unresolved milestones become "timed out"
-#define SB_C6_LEGACY_S3_MS         6000u   // P4 is live but the S3 never sent a boot report
+#define SB_C6_BOOT_TIMEOUT_MS      25000u  // overall: unresolved milestones become "timed out"
+#define SB_C6_LEGACY_S3_MS         15000u  // P4 is live but the S3 never sent a boot report
 #define SB_C6_HOLD_CLEAN_MS        400u    // show a clean 100 % this long
 #define SB_C6_HOLD_ISSUES_MS       2500u   // show a degraded result long enough to read
 #define SB_C6_WAKE_HOLD_MS         400u
