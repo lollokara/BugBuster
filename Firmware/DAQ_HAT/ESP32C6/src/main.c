@@ -19,6 +19,7 @@
 #include "npx.h"
 #include "c6_config.h"
 #include "wifi_hosted.h"
+#include "standby_c6.h"
 #include "version.h"
 #include "esp_task_wdt.h"
 
@@ -75,11 +76,27 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
 
     theme_init();
-    settings_init();
-    theme_set_dark(g_settings.dark_mode);   // apply persisted theme
 
+    // The splash comes up BEFORE the slow or optional init so it covers it: the
+    // panel is initialised with its light parked off, the first logo frame goes into
+    // panel RAM, and only then does the backlight come on. Every milestone below is
+    // reported when its work has actually finished - never on a timer.
     ESP_ERROR_CHECK(display_init());
     gfx_init(display_framebuffer(), DISP_WIDTH, DISP_HEIGHT);
+    standby_c6_init(now_ms());
+    // The ESP-Hosted radio bridge only starts on demand (WiFi streaming), so at boot
+    // it is honestly skipped rather than reported as up.
+    standby_c6_local(BB_ST_BOOT_C6_WIFI, SB_ITEM_SKIPPED);
+    standby_c6_render(now_ms(), true);
+    const bool light_ok = display_backlight_restore(255);
+    standby_c6_local(BB_ST_BOOT_DISPLAY, light_ok ? SB_ITEM_OK : SB_ITEM_FAILED);   // the driver's answer, not an assumption
+    standby_c6_render(now_ms(), true);
+
+    settings_init();
+    theme_set_dark(g_settings.dark_mode);   // apply persisted theme
+    standby_c6_local(BB_ST_BOOT_SETTINGS, SB_ITEM_OK);
+    standby_c6_render(now_ms(), true);
+
     ui_init();
     ddp_init();
     buttons_init();
@@ -110,6 +127,37 @@ void app_main(void)
 
         uint32_t t = now_ms();
 
+        // Standby / boot progress: deadlines, panel + LED actions, inhibitors.
+        standby_c6_service(t);
+
+        // 1 Hz presence announce so the C6 and P4 discover each other regardless of
+        // boot order / a transient link drop (the P4 also probes us with GET_INFO).
+        // It keeps running while the panel is dark: the link is the wake channel.
+        if ((uint32_t)(t - last_hello) >= 1000) {
+            last_hello = t;
+            ddp_announce_presence();
+        }
+
+        // Drain every button source each pass so nothing queues behind a dark or
+        // loading screen. While blocked the events are discarded (the P4 already
+        // consumes a wake gesture to release); otherwise they are meaningful activity.
+        uint32_t ev = buttons_poll(t) | ddp_take_buttons();
+        const sb_ui_mode_t ui_mode = standby_c6_ui_mode(t);
+        if (standby_c6_input_blocked(t)) {
+            ev = 0;
+        } else if (ev) {
+            standby_c6_activity();
+        }
+        if (ui_mode != SB_UI_NORMAL) {
+            in_menu = false;                       // a menu never survives a sleep / wake
+            if (ui_mode == SB_UI_DARK) {
+                vTaskDelay(pdMS_TO_TICKS(50));     // dark: no redraw, no flush
+            } else {
+                standby_c6_render(t, false);       // boot / wake loading bar, only on change
+                vTaskDelay(min_yield);
+            }
+            continue;
+        }
         // WiFi streaming handoff: the P4 has (or is about to) hand the shared
         // SDIO link to ESP-Hosted for iOS DAQ streaming. Stop the normal
         // readout/menu render -- it would otherwise contend with the radio
@@ -130,16 +178,6 @@ void app_main(void)
             continue;
         }
         wifi_stream_prev = false;
-
-        // 1 Hz presence announce so the C6 and P4 discover each other
-        // regardless of boot order / a transient link drop (the P4 also probes
-        // us with GET_INFO). Cheap keepalive; dropped if no P4 is attached.
-        if ((uint32_t)(t - last_hello) >= 1000) {
-            last_hello = t;
-            ddp_announce_presence();
-        }
-
-        uint32_t ev = buttons_poll(t) | ddp_take_buttons();
 
         // The PD guard warning is moot once the S3 reports a valid contract.
         if (home_pd_ok(9000, 3000)) ui_clear_warning_if(UI_WARN_NEED_PD);

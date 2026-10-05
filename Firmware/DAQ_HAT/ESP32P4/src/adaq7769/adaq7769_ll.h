@@ -172,6 +172,13 @@ static inline void adaq_ll_cs_deassert(adaq_ll_t *ll)
 /** @brief Track whether SPI CRC is active so register access can append/verify. */
 void adaq_ll_set_crc(adaq_ll_t *ll, bool enabled, bool xor_mode);
 
+/** @brief Standby gate (all devices). While closed - the analog supply is off -
+ *         every register/sample access returns ESP_ERR_INVALID_STATE. With
+ *         @p owner_passes the CALLING task alone may still transact, so it can
+ *         restore the converters before the gate opens for everybody. */
+void adaq_ll_gate_set(bool closed, bool owner_passes);
+bool adaq_ll_gate_closed(void);
+
 /** @brief ADAQ7769-1 CRC-8 over @p len bytes, given an initial value. */
 uint8_t adaq_ll_crc8(const uint8_t *data, size_t len, uint8_t init);
 

@@ -43,6 +43,19 @@ void adc_leds_set_manual(bool manual);
  */
 bool adc_leds_manual_active(void);
 
+/**
+ * @brief Standby entry: remember the manual-override state, drive all six
+ *        LEDs off and suspend auto updates. Needs the converter powered.
+ */
+void adc_leds_standby_off(void);
+
+/**
+ * @brief Standby exit (after the converter was re-initialised): reconfigure the
+ *        GPIOs as outputs (all dark) and restore the saved manual-override state.
+ *        Output levels are not restored.
+ */
+void adc_leds_standby_restore(void);
+
 #ifdef __cplusplus
 }
 #endif

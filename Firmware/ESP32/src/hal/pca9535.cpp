@@ -8,6 +8,7 @@
 #include "ds4424.h"
 #include "config.h"
 #include "selftest.h"
+#include "power/standby_hw.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -528,7 +529,11 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
         // During active self-test calibration we intentionally toggle rails.
         // Suppress PG callbacks to keep ISR-path work minimal and avoid
         // feeding expected transitions into the generic fault path.
-        bool suppress_pg_events = selftest_is_busy();
+        const bool selftest_busy = selftest_is_busy();
+        // Standby explains only the loss of a rail it switched OFF on purpose (enable bit low).
+        // A rail whose enable is still high that loses PG is a genuine fault, transition or not.
+        // E-fuse and thermal faults are reported by other branches and are never suppressed.
+        const bool standby_transition = standby_hw_power_transition();
         struct { uint8_t mask; uint8_t ch; const char *name; } pg_pins[] = {
             { PCA9535_VADJ1_PG, 1, "VADJ1_PG" },
             { PCA9535_VADJ2_PG, 2, "VADJ2_PG" },
@@ -544,7 +549,9 @@ static void check_changes(uint8_t old_input0, uint8_t new_input0,
                 if (s_fault_cfg.log_events) {
                     ESP_LOGW(TAG, "%s %s", pg_pins[i].name, restored ? "RESTORED" : "LOST");
                 }
-                if (!suppress_pg_events && s_fault_cb) s_fault_cb(&evt);
+                const bool rail_enabled = (i == 0) ? s_state.vadj1_en : s_state.vadj2_en;
+                const bool expected_loss = standby_transition && !rail_enabled;
+                if (!(selftest_busy || expected_loss) && s_fault_cb) s_fault_cb(&evt);
             }
         }
     }

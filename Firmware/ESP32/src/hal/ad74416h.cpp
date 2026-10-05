@@ -58,6 +58,20 @@ bool AD74416H::begin()
     // 3. Initialise the SPI bus
     _spi.begin();
 
+    return verifyAndEnable();
+}
+
+bool AD74416H::reinitialize()
+{
+    pin_write(_pin_reset, 1);
+    delay_ms(1);
+    hardwareReset();
+    delay_ms(POWER_UP_DELAY_MS);
+    return verifyAndEnable();
+}
+
+bool AD74416H::verifyAndEnable()
+{
     // 4. SPI communication verification via SCRATCH register
     //    Some AD74416H silicon revisions need a few dummy transactions after
     //    reset before the SPI interface is fully responsive. Retry up to 3 times.
@@ -171,6 +185,17 @@ ChannelFunction AD74416H::getChannelFunction(uint8_t ch)
     return (ChannelFunction)func_code;
 }
 
+bool AD74416H::readChannelFunction(uint8_t ch, ChannelFunction* out)
+{
+    ch = clampCh(ch);
+    uint16_t reg_val = 0;
+    if (!_spi.readRegister(AD74416H_REG_CH_FUNC_SETUP(ch), &reg_val)) return false;
+    if (out) {
+        *out = (ChannelFunction)((reg_val & CH_FUNC_SETUP_CH_FUNC_MASK) >> CH_FUNC_SETUP_CH_FUNC_SHIFT);
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // DAC Functions
 // ---------------------------------------------------------------------------
@@ -251,7 +276,7 @@ bool AD74416H::readAdcConfig(uint8_t ch, uint16_t* val)
     return ok;
 }
 
-void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagMask)
+bool AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagMask)
 {
     // Per datasheet: channels/diagnostics cannot be modified while continuous
     // sequence is in progress. Must stop first, wait for ADC_BUSY=0, then restart.
@@ -271,7 +296,7 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
         _spi.writeRegister(REG_ADC_CONV_CTRL, stopped);
         xSemaphoreGiveRecursive(g_spi_bus_mutex);
     } else {
-        return;
+        return false;
     }
 
     // Step 2: Wait for ADC_BUSY to clear (timeout ~500ms for slow ADC rates)
@@ -290,6 +315,7 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
     }
 
     // Step 3: Build and write new configuration
+    bool ok = false;
     if (g_spi_bus_mutex != NULL &&
         xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) == pdTRUE) {
         AdcConvSeq seq = continuous ? ADC_CONV_SEQ_START_CONT : ADC_CONV_SEQ_START_SINGLE;
@@ -305,10 +331,19 @@ void AD74416H::startAdcConversion(bool continuous, uint8_t chMask, uint8_t diagM
         if (diagMask & 0x04) ctrl |= ADC_CONV_CTRL_DIAG_EN2_MASK;
         if (diagMask & 0x08) ctrl |= ADC_CONV_CTRL_DIAG_EN3_MASK;
 
-        _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
+        ok = _spi.writeRegister(REG_ADC_CONV_CTRL, ctrl);
 
         xSemaphoreGiveRecursive(g_spi_bus_mutex);
     }
+    return ok;
+}
+
+bool AD74416H::verifyAdcConversion(uint8_t chMask, uint8_t diagMask)
+{
+    uint16_t v = 0;
+    if (!_spi.readRegister(REG_ADC_CONV_CTRL, &v)) return false;
+    const uint16_t want = (uint16_t)((chMask & 0x0F) | ((diagMask & 0x0F) << 4));
+    return (v & 0x00FF) == want;
 }
 
 void AD74416H::enableAdcChannel(uint8_t ch, bool enable)
@@ -728,7 +763,7 @@ float AD74416H::readDieTemperature()
     return diagCodeToValue(raw, 1);  // source 1 = temperature
 }
 
-void AD74416H::setupDiagnostics()
+bool AD74416H::setupDiagnostics()
 {
     // Configure all 4 diagnostic slots with useful defaults:
     //   Slot 0: Die temperature (code 1)
@@ -740,7 +775,9 @@ void AD74416H::setupDiagnostics()
                     | (0x05 << 4)   // slot 1: AVDD_HI
                     | (0x02 << 8)   // slot 2: DVCC
                     | (0x03 << 12); // slot 3: AVCC
-    _spi.writeRegister(REG_DIAG_ASSIGN, assign);
+    if (!_spi.writeRegister(REG_DIAG_ASSIGN, assign)) return false;
+    uint16_t back = 0;
+    return _spi.readRegister(REG_DIAG_ASSIGN, &back) && back == assign;
 }
 
 void AD74416H::configureDiagSlot(uint8_t slot, uint8_t source)

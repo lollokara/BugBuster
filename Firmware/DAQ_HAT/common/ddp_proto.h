@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "standby_wire.h"
 
 #define DDP_SYNC            0xAAu
 #define DDP_MAX_PAYLOAD     240u
@@ -74,6 +75,7 @@
 #define DDP_CMD_MB_RESPONSE     0x1Au  // P4 -> C6: u8 req_type, u8 status, then result data
 #define DDP_CMD_WIFI_STREAM_MODE 0x1Du // u8 enable (1=entering WiFi stream mode, 0=leaving)
 #define DDP_CMD_SET_BATTSIM     0x1Eu  // ddp_battsim_t - battery simulator status (~2 Hz)
+#define DDP_CMD_STANDBY         BB_DDP_CMD_STANDBY  // 0x1F, both ways: P4 -> C6 bb_standby_request_t, C6 -> P4 bb_standby_reply_t
 
 // --- Events (C6 -> P4), 0x60..0x7F -----------------------------------------
 // Emitted unsolicited by the C6 when the user changes settings on-device, so
@@ -213,6 +215,7 @@ typedef struct __attribute__((packed)) {
 #define DDP_MB_SCRIPT_STOP  0x06u  // stop the running script (no args)
 #define DDP_MB_SET_RAIL_EN  0x07u  // args: u8 rail (0=VLOGIC/lshift,1=VADJ1,2=VADJ2), u8 on
 #define DDP_MB_FWINFO       0x08u  // read firmware versions + GitHub releases (no args)
+#define DDP_MB_STANDBY_POLICY BB_MB_STANDBY_POLICY  // 0x0A, args: u16 LE seconds (0=Off,60,300,900); result data: u16 LE seconds, u8 state
 #define DDP_MB_FW_APPLY     0x09u  // args: u8 rel_index, u8 targets (DDP_FW_T_* mask)
 
 // DDP_CMD_MB_RESPONSE payload: [u8 req_type][u8 status][data...]

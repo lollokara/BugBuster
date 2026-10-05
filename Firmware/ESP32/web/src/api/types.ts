@@ -192,3 +192,20 @@ export interface UpdateStatus {
   currentRp2040: string;
   currentEsp32: string;
 }
+
+/** /api/standby/* reply: the 28-byte BBP status record as JSON (state is a string). */
+export interface StandbyStatus {
+  schema: number;
+  state: "active" | "preparing" | "asleep" | "waking" | "fault_safe" | string;
+  ready: boolean;
+  stage: number;
+  generation: number;
+  timeoutSeconds: number;
+  clients: number;
+  failedStage: number;
+  inhibitors: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  idleRemainingMs: number;
+}

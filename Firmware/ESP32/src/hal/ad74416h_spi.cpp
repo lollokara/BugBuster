@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "ad74416h_spi.h"
+#include "power/standby_hw.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -136,6 +137,7 @@ bool AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
     frame[SPI_FRAME_BYTE_DATA_LO] = (uint8_t)(data & 0xFF);
     frame[SPI_FRAME_BYTE_CRC]     = computeCRC8(frame);
 
+    if (!standby_hw_bus_gate_open()) return false;
     if (g_spi_bus_mutex == NULL ||
         xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
         ESP_LOGE("spi", "writeRegister(0x%02X): bus timeout", addr);
@@ -154,6 +156,10 @@ bool AD74416H_SPI::writeRegister(uint8_t addr, uint16_t data)
 // ---------------------------------------------------------------------------
 bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 {
+    if (!standby_hw_bus_gate_open()) {
+        if (data != NULL) *data = 0xFFFF;
+        return false;
+    }
     if (g_spi_bus_mutex == NULL ||
         xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
         ESP_LOGE("spi", "readRegister(0x%02X): bus timeout", addr);
@@ -201,6 +207,7 @@ bool AD74416H_SPI::readRegister(uint8_t addr, uint16_t* data)
 // ---------------------------------------------------------------------------
 bool AD74416H_SPI::updateRegister(uint8_t addr, uint16_t mask, uint16_t val)
 {
+    if (!standby_hw_bus_gate_open()) return false;
     if (g_spi_bus_mutex == NULL ||
         xSemaphoreTakeRecursive(g_spi_bus_mutex, BUS_TIMEOUT) != pdTRUE) {
         ESP_LOGE("spi", "updateRegister(0x%02X): bus timeout", addr);

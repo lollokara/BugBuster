@@ -1,6 +1,6 @@
 {
   "source": "Firmware/DAQ_HAT/ESP32P4/src/stream/usb_proto.h",
-  "source_sha256": "17a71bf90c66c28ede80321f41c868fdaa376bdbf936dbe978afa59c2f867ed5",
+  "source_sha256": "d9e23bfd834486a54ed91713e6ed6e581601d8bf40113aef516b4b724207386e",
   "struct": "usb_status_payload_t",
   "size": 116,
   "fields": {

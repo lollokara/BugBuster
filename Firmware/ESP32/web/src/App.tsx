@@ -13,6 +13,7 @@ import {
 import { PairingModal } from "./components/PairingModal";
 import { ErrorBoundary } from "./components/ErrorBoundary"; // WEB-8
 import { Overview } from "./tabs/overview/Overview";
+import { startStandbyPresence } from "./state/standby";
 
 // Tabs other than Overview are dynamically imported so their JS only ships
 // to the browser when the tab is first opened. Overview is the landing tab
@@ -135,6 +136,9 @@ export function App() {
     tick();
     return () => { alive = false; };
   }, []);
+
+  // Logical standby presence is bound to the app connection, not to the page being open.
+  useEffect(() => startStandbyPresence(), []);
 
   const spiOk = deviceStatus.value?.spiOk ?? deviceStatus.value?.spi_ok ?? false;
   const mac = deviceMac.value ?? "--";

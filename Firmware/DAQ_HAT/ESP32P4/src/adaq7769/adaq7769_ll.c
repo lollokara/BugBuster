@@ -4,6 +4,8 @@
 
 #include "adaq7769_ll.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "hal/spi_ll.h"
 #include "esp_rom_gpio.h"
@@ -40,6 +42,30 @@ void adaq_ll_set_crc(adaq_ll_t *ll, bool enabled, bool xor_mode)
 {
     ll->crc_enabled = enabled;
     ll->crc_xor     = xor_mode;
+}
+
+// Standby gate. While the analog supply is off an SPI access reads garbage (or
+// drives the unpowered part), so every transport entry point refuses unless the
+// caller is the one task the gate lets through.
+static volatile bool        s_gate_closed;
+static volatile TaskHandle_t s_gate_owner;
+
+void adaq_ll_gate_set(bool closed, bool owner_passes)
+{
+    s_gate_owner = (closed && owner_passes) ? xTaskGetCurrentTaskHandle() : NULL;
+    s_gate_closed = closed;
+}
+
+bool adaq_ll_gate_closed(void)
+{
+    return s_gate_closed;
+}
+
+static inline bool gate_refuses(void)
+{
+    if (!s_gate_closed) return false;
+    const TaskHandle_t owner = s_gate_owner;
+    return owner == NULL || owner != xTaskGetCurrentTaskHandle();
 }
 
 // -----------------------------------------------------------------------------
@@ -142,6 +168,7 @@ esp_err_t adaq_ll_add_device(adaq_ll_t *ll, spi_host_device_t host,
 // -----------------------------------------------------------------------------
 esp_err_t adaq_ll_set_mode(adaq_ll_t *ll, uint8_t mode)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     if (ll->dev_cfg)  { spi_bus_remove_device(ll->dev_cfg);  ll->dev_cfg  = NULL; }
     if (ll->dev_data) { spi_bus_remove_device(ll->dev_data); ll->dev_data = NULL; }
 
@@ -177,6 +204,7 @@ esp_err_t adaq_ll_set_mode(adaq_ll_t *ll, uint8_t mode)
 esp_err_t adaq_ll_reconfig(adaq_ll_t *ll, uint8_t mode, uint32_t cfg_hz,
                            int input_delay_ns)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     if (cfg_hz) ll->cfg_hz = cfg_hz;
     if (ll->dev_cfg)  { spi_bus_remove_device(ll->dev_cfg);  ll->dev_cfg  = NULL; }
     if (ll->dev_data) { spi_bus_remove_device(ll->dev_data); ll->dev_data = NULL; }
@@ -210,6 +238,7 @@ esp_err_t adaq_ll_reconfig(adaq_ll_t *ll, uint8_t mode, uint32_t cfg_hz,
 // -----------------------------------------------------------------------------
 esp_err_t adaq_ll_write_reg(adaq_ll_t *ll, uint8_t addr, uint8_t val)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     // Full-duplex: instruction in the command phase, data byte in the data
     // phase (CS stays low across both; MISO ignored).
     spi_transaction_t t = {0};
@@ -227,6 +256,7 @@ esp_err_t adaq_ll_write_reg(adaq_ll_t *ll, uint8_t addr, uint8_t val)
 
 esp_err_t adaq_ll_read_reg(adaq_ll_t *ll, uint8_t addr, uint8_t *val)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     // Full-duplex, SEAMLESS byte buffer, clocking EXACTLY the frame the ADAQ
     // expects: 16 SCLK for a plain read (8 instruction + 8 data), 24 SCLK with
     // CRC (+8). The ADAQ resets DOUT at its expected frame length, so any
@@ -273,6 +303,7 @@ esp_err_t adaq_ll_read_reg(adaq_ll_t *ll, uint8_t addr, uint8_t *val)
 // register value (and its dropped LSB) actually lands across the byte boundary.
 esp_err_t adaq_ll_read_reg2(adaq_ll_t *ll, uint8_t addr, uint8_t *b1, uint8_t *b2)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     WORD_ALIGNED_ATTR uint8_t tx[4] = {0};
     WORD_ALIGNED_ATTR uint8_t rx[4] = {0};
     tx[0] = ADAQ_INSTR_READ(addr);
@@ -292,6 +323,7 @@ esp_err_t adaq_ll_read_reg2(adaq_ll_t *ll, uint8_t addr, uint8_t *b1, uint8_t *b
 
 esp_err_t adaq_ll_read_adc24(adaq_ll_t *ll, int32_t *sample)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     // Word-aligned buffers keep the SPI DMA happy (unaligned stack buffers can
     // silently read back zeros on ESP32-P4).
     WORD_ALIGNED_ATTR uint8_t tx[8] = {0};
@@ -334,6 +366,7 @@ esp_err_t adaq_ll_read_adc24(adaq_ll_t *ll, int32_t *sample)
 
 esp_err_t adaq_ll_write_raw(adaq_ll_t *ll, const uint8_t *tx, size_t len)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     // dev_cfg has command_bits=8; a raw byte stream must send ZERO command
     // bits, so use the extended transaction with SPI_TRANS_VARIABLE_CMD.
     spi_transaction_ext_t te = {0};
@@ -346,6 +379,7 @@ esp_err_t adaq_ll_write_raw(adaq_ll_t *ll, const uint8_t *tx, size_t len)
 
 esp_err_t adaq_ll_contread_word(adaq_ll_t *ll, uint8_t *rx, size_t len_bytes)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     spi_transaction_t t = {0};
     t.length    = len_bytes * 8;
     t.rxlength  = len_bytes * 8;
@@ -360,6 +394,7 @@ esp_err_t adaq_ll_contread_word(adaq_ll_t *ll, uint8_t *rx, size_t len_bytes)
 // other device on the same host can transact.
 esp_err_t adaq_ll_bus_acquire(adaq_ll_t *ll)
 {
+    if (gate_refuses()) return ESP_ERR_INVALID_STATE;
     return spi_device_acquire_bus(ll->dev_data, portMAX_DELAY);
 }
 

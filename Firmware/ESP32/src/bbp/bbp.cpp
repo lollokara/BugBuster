@@ -19,6 +19,7 @@
 #include "esp_mac.h"
 #include "esp_log.h"
 #include "serial_io.h"
+#include "standby_hw.h"
 
 #include <string.h>
 
@@ -622,6 +623,7 @@ bool bbpDetectHandshake(uint8_t byte)
             // Enter binary mode
             s_active = true;
             s_cdcClaimed = true;   // Sticky — CDC #0 is now binary-only for the rest of boot
+            standby_hw_usb_session(true); // new LEGACY epoch (counts as a client until it registers presence); wakes
             s_rxLen = 0;
             s_evtSeq = 0;
             s_lastFrameMs = millis_now();
@@ -647,6 +649,7 @@ void bbpExitBinaryMode(void)
     bbpStopWavegen();  // Stop wavegen on disconnect
     cmd_ota_abort_session();
     s_active = false;
+    standby_hw_usb_session(false);   // the epoch ends with the session
     s_rxLen = 0;
     s_magic_idx = 0;
 

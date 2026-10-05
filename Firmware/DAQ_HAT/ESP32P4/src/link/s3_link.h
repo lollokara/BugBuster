@@ -23,6 +23,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "standby_wire.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -196,6 +197,12 @@ extern "C" {
 // MUST match S3 hat.h HAT_CMD_LOG_PULL / HAT_RSP_LOG_DATA.
 #define HATP_CMD_LOG_PULL        0x7Eu
 
+// System standby: the S3 coordinator drives this participant step by step. One
+// 16 B bb_standby_request_t in, one 16 B bb_standby_reply_t out (common/
+// standby_wire.h). Served inline on the s3_link task: it never blocks - hardware
+// stages are queued to the ctrl task and the S3 re-polls until reply.ready.
+#define HATP_CMD_STANDBY         BB_HAT_CMD_STANDBY   // 0x7C
+#define HATP_RSP_STANDBY         BB_HAT_RSP_STANDBY   // 0x9C
 // CONFIG_GET_ALL flags.
 #define HATP_CONFIG_FLAG_SECRET  0x01u   // include secret values (e.g. wifi pw)
 
@@ -252,6 +259,12 @@ typedef struct __attribute__((packed)) {
     // go stale for exactly the window this field needs to stay live in.
     uint32_t sta_count;
 } s3link_daq_status_t;
+
+// Availability bits carried in the otherwise-unused `_pad` byte of s3link_daq_status_t
+// and s3link_vdut_status_t (additive: older decoders ignore the byte). The float
+// readings in the same frame are NaN whenever S3LINK_AVAIL_MEAS is clear, so an
+// unavailable ADC chain can never read as a valid zero.
+#define S3LINK_AVAIL_MEAS  0x01u   // last_i/last_v/last_p (meas_v/meas_i) are live readings
 
 // HATP_CMD_DAQ_VDUT_SETPOINT (0x78) payload. MUST stay byte-for-byte identical
 // to the S3-side mirror hat_vdut_setpoint_t in Firmware/ESP32/src/hat/hat.h.

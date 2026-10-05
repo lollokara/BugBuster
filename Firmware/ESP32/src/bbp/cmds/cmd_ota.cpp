@@ -379,6 +379,12 @@ extern "C" void cmd_ota_abort_session(void)
     if (s_ota.active) ota_reset_session(false);
 }
 
+// Standby inhibitor: an upload session (any target) is open.
+extern "C" bool cmd_ota_session_active(void)
+{
+    return s_ota.active;
+}
+
 static int handler_ota(const uint8_t *payload, size_t len, uint8_t *resp, size_t *resp_len)
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;

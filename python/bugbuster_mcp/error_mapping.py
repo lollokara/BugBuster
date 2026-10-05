@@ -78,7 +78,9 @@ def map_device_error(
         return f"{context}. Use io_claim to acquire ownership of the IO slots, then pass the lease handle to this tool"
     
     elif error_code == 0x06:  # Busy
-        return f"{context}. Wait for the current operation to complete, then retry"
+        return (f"{context}. Wait for the current operation to complete, then retry. "
+                "If standby_status shows the device is preparing/asleep/waking, call standby_wake "
+                "and retry once ready; the command is not replayed automatically")
     
     elif error_code == 0x13:  # MUX route rejected by the self-test interlock
         return f"{context}. U17 S3 (IO9 analog path) and the U23 self-test share a net; retry once the self-test / e-fuse current monitor releases U23"

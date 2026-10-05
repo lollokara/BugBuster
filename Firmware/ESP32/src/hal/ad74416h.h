@@ -58,6 +58,14 @@ public:
      */
     bool begin();
 
+    /**
+     * @brief begin() minus the SPI bus/device registration: reset pulse, power-up
+     *        wait, SCRATCH verify, alert clear, reference enable. For the standby
+     *        wake path, where the bus already exists and begin() would hit
+     *        ESP_ERR_INVALID_STATE in spi_bus_initialize().
+     */
+    bool reinitialize();
+
     // -------------------------------------------------------------------------
     // Channel Function
     // -------------------------------------------------------------------------
@@ -84,6 +92,12 @@ public:
      * @return ChannelFunction
      */
     ChannelFunction getChannelFunction(uint8_t ch);
+
+    /**
+     * @brief Like getChannelFunction() but says whether the register could be read
+     *        (a failed read is NOT HIGH_IMP). `ch` is the physical channel.
+     */
+    bool readChannelFunction(uint8_t ch, ChannelFunction* out);
 
     // -------------------------------------------------------------------------
     // DAC
@@ -159,9 +173,15 @@ public:
      * @param diagMask    Bitmask of diagnostics to enable (bit 0=DIAG0, etc.).
      *                    Default 0x01 = DIAG0 (die temperature).
      */
-    void startAdcConversion(bool continuous = true,
+    bool startAdcConversion(bool continuous = true,
                             uint8_t chMask = 0x0F,
                             uint8_t diagMask = 0x01);
+
+    /**
+     * @brief Read ADC_CONV_CTRL back and compare the channel / diagnostic enables
+     *        (bits 0..7) with what startAdcConversion() was asked for.
+     */
+    bool verifyAdcConversion(uint8_t chMask, uint8_t diagMask);
 
     /**
      * @brief Enable or disable ADC conversion for a single channel
@@ -439,7 +459,7 @@ public:
      * Call once after begin(). Diagnostics run as part of the continuous
      * ADC sequence when DIAG_ENx bits are enabled in ADC_CONV_CTRL.
      */
-    void setupDiagnostics();
+    bool setupDiagnostics();   // true = DIAG_ASSIGN written and read back identical
 
     /**
      * @brief Configure a diagnostic slot source.
@@ -525,6 +545,9 @@ public:
 private:
     AD74416H_SPI& _spi;
     gpio_num_t    _pin_reset;
+
+    // begin()/reinitialize() tail: SCRATCH verify, alert clear, REF_EN.
+    bool verifyAndEnable();
 
     // Cached ADC range parameters table (indexed by AdcRange enum)
     static const AdcRangeParams _adc_range_params[8];

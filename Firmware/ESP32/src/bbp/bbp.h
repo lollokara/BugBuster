@@ -309,6 +309,7 @@ extern "C" {
 #define BBP_CMD_EXT_JOB_SUBMIT  0x75  // Queue deferred external I2C/SPI operation
 #define BBP_CMD_EXT_JOB_GET     0x76  // Poll deferred external I2C/SPI operation
 #define BBP_CMD_OTA             0x77  // USB OTA info/upload/rollback control
+#define BBP_CMD_STANDBY         0x78
 #define BBP_CMD_PING            0xFE
 #define BBP_CMD_DISCONNECT      0xFF
 

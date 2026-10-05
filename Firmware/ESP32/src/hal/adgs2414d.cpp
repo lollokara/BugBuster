@@ -10,6 +10,7 @@
 #include "adgs_bbm.h"
 #include "ad74416h_spi.h"
 #include "config.h"
+#include "power/standby_hw.h"
 #include "esp_log.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -83,6 +84,9 @@ SemaphoreHandle_t g_spi_bus_mutex = NULL;
 // clocked out, so callers must not treat this as a hardware fault.
 static bool spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len)
 {
+    // Standby: the analog rail may be down; only the coordinator may clock the bus.
+    if (!standby_hw_bus_gate_open()) return false;
+
     // Acquire SPI bus (max 200ms wait)
     if (g_spi_bus_mutex == NULL ||
         xSemaphoreTakeRecursive(g_spi_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
@@ -421,6 +425,31 @@ bool adgs_init(void)
     ESP_LOGI(TAG, "ADGS2414D mux matrix initialized (%d devices, CS=GPIO%d, LShift OE=GPIO%d)",
              ADGS_NUM_DEVICES, PIN_MUX_CS, PIN_LSHIFT_OE);
     return true;
+}
+
+// Standby wake: the switch matrix lost (or may have lost) its supply. Bring the
+// shadows and the chain back to all-open without touching the SPI device
+// registration or the level-shifter OE line (adgs_init() does both).
+bool adgs_reinit_after_power(void)
+{
+    if (s_spi_dev == NULL || g_spi_bus_mutex == NULL) return false;
+
+    memset(s_mux_state, 0, sizeof(s_mux_state));
+    memset(s_api_main_state, 0, sizeof(s_api_main_state));
+    s_mux_faulted = false;
+    s_readback_available = true;
+    s_readback_checked = false;
+#if defined(BB_IO_OWNERSHIP) && BB_IO_OWNERSHIP
+    memset(s_active_sw, ADGS_NO_ACTIVE_SW, sizeof(s_active_sw));
+#endif
+#if ADGS_NUM_DEVICES > 1
+    adgs_enter_daisy_chain();
+    return adgs_daisy_chain_write(s_mux_state);
+#else
+    s_mux_initialized = true;
+    adgs_address_mode_write(ADGS_REG_SW_DATA, 0x00);
+    return true;
+#endif
 }
 
 void adgs_set_all_raw(const uint8_t states[ADGS_MAIN_DEVICES])

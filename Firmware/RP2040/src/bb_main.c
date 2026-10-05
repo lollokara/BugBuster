@@ -33,6 +33,7 @@
 #include "tusb.h"
 #include "bb_hat_v2.h"
 #include "bb_hat_v2.h"
+#include "bb_standby.h"
 
 #ifdef DEBUGPROBE_INTEGRATION
 extern TaskHandle_t tud_taskhandle;
@@ -234,7 +235,8 @@ static void handle_set_power(const uint8_t *payload, uint8_t len)
 
 static void handle_get_power_status(void)
 {
-    bb_power_update();
+    // While preparing/asleep the rails are off or going off: no routine ADC sampling.
+    if (bb_standby_monitor_allowed()) bb_power_update();
 
     ConnectorStatus a, b;
     bb_power_get_status(&a, &b);
@@ -347,7 +349,7 @@ static void handle_fw_status(void)
 // Command Dispatcher
 // -----------------------------------------------------------------------------
 
-static void dispatch_command(const HatFrame *frame)
+static void dispatch_command_inner(const HatFrame *frame)
 {
     // Log incoming commands (visible via USB stdio or probe_info)
     printf("[BB] CMD 0x%02X len=%d\n", frame->cmd, frame->payload_len);
@@ -642,6 +644,24 @@ static void dispatch_command(const HatFrame *frame)
     }
 }
 
+// Standby gate in front of the dispatcher. Commands that need hardware are refused with
+// BUSY while the HAT is preparing/asleep/waking (the refusal is activity + a wake
+// request); status reads, cleanup, indicator updates and "turn off" always pass.
+static void dispatch_command(const HatFrame *frame)
+{
+    if (frame->cmd == BB_HAT_CMD_STANDBY) {
+        bb_standby_handle_frame(frame->payload, frame->payload_len);
+        return;
+    }
+    bool admitted = false;
+    if (!bb_standby_cmd_enter(frame->cmd, frame->payload, frame->payload_len, &admitted)) {
+        send_error(HAT_ERR_BUSY);
+        return;
+    }
+    dispatch_command_inner(frame);
+    if (admitted) bb_standby_cmd_leave();
+}
+
 // -----------------------------------------------------------------------------
 // Unsolicited notification: capture done
 // Sends a RSP_LA_STATUS frame with state=DONE without a prior command.
@@ -713,6 +733,7 @@ void bb_cmd_task(void *params)
     bb_la_usb_init();
     bb_hat_v2_init();
     bb_fw_update_init();
+    bb_standby_init();
 
     // Configure IRQ pin as open-drain output (shared line, active low).
     // Default state: high-Z (input with pull-up). To assert: set output low.
@@ -741,12 +762,21 @@ void bb_cmd_task(void *params)
         if (now - last_poll >= 1) {
             last_poll = now;
 
-            // Power monitoring — detect new faults and assert IRQ
-            bb_power_update();
-            ConnectorStatus pa, pb;
-            bb_power_get_status(&pa, &pb);
-            if (pa.fault || pb.fault) {
-                bb_irq_pulse();  // Signal ESP32 asynchronously
+            // Power monitoring — detect new faults and assert IRQ. Routine ADC
+            // sampling stops while the HAT is preparing/asleep (rails are off).
+            if (bb_standby_monitor_allowed()) {
+                bb_power_update();
+                ConnectorStatus pa, pb;
+                bb_power_get_status(&pa, &pb);
+                if (pa.fault || pb.fault) {
+                    bb_irq_pulse();  // Signal ESP32 asynchronously
+                }
+            }
+
+            // Standby: expire stale sessions, count owner releases as activity, and
+            // pulse the HAT IRQ while refused work is waiting for the S3 to wake us.
+            if (bb_standby_poll()) {
+                bb_irq_pulse();
             }
 
             // Note: bb_la_poll() is now called on Core 0 during streaming

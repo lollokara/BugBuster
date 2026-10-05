@@ -13,6 +13,7 @@
 		06C977866B9EAD63B4D40555 /* ScriptEditorModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */; };
 		08852D3FE25DDF02C50EA186 /* ConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 354FE7BC4AC280ABDDD2478E /* ConnectionManager.swift */; };
 		0A9E44FD4FECDDEB3B36001D /* HubTile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65142609C4B4F2A086829BB7 /* HubTile.swift */; };
+		BBEC49BFF34BC7CFEF6F1566 /* StandbyCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81B916AECE9A400981A79D5D /* StandbyCard.swift */; };
 		0E589BE16F6E00C609791B62 /* HubRunDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C525461BB9C4D459BB0D3AAD /* HubRunDetailView.swift */; };
 		0F075AD1D48B832C87FD655A /* ScriptEditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 267A6D94128F504FD24E0C0B /* ScriptEditorScreen.swift */; };
 		101E8DF4E9024C1B9FAC14C4 /* ScriptKeyBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC13CD6E951D23328388F5D4 /* ScriptKeyBar.swift */; };
@@ -42,6 +43,7 @@
 		509B997A1A8486087DFE830E /* ScriptStatusTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BF036F114A273A48F81D05 /* ScriptStatusTextTests.swift */; };
 		50B3C04B7B4811FB76BD3499 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEFB68559ED49B9F58C7BB3B /* KeychainHelper.swift */; };
 		512F7AB7BF03E3A2178B48FF /* ScriptRunManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F8A20F06AB74E3B38FD9AC /* ScriptRunManagerTests.swift */; };
+		71095916871BD515AF290008 /* StandbyPresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F0EABB77DE143D24F0F5F3E /* StandbyPresenceTests.swift */; };
 		51307E7F5E37522E853606C4 /* ScopeAxis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282B9F03E865BE7B5F5AC7F3 /* ScopeAxis.swift */; };
 		527F2E0614B8FAD38E487D87 /* ScriptRuntimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624D7AD1D8C99339636DBBFC /* ScriptRuntimeModels.swift */; };
 		53D01B214BFD3208AD323E9B /* TreeSitterPythonRunestone in Frameworks */ = {isa = PBXBuildFile; productRef = 32DE738B0E717F75901F93F7 /* TreeSitterPythonRunestone */; };
@@ -106,6 +108,7 @@
 		D1A8532D3D2B3D7A36FBD2B4 /* MockScriptsWireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4A0C998FE6748C99C1D39E /* MockScriptsWireTests.swift */; };
 		D4C0E9D2CEECCB7922A46E76 /* FirmwareDocs.swift in Sources */ = {isa = PBXBuildFile; fileRef = F65153D685239FC06000373F /* FirmwareDocs.swift */; };
 		D8023B2A266F8FD7FA3ADDB5 /* ScriptRunManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */; };
+		DA6FBFF671E8FE5BA2E5E8D5 /* StandbyPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AB92CBBECD16E7F808F9857 /* StandbyPresence.swift */; };
 		D99CBBB92F8D7AFFC688BD7C /* HubStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC81E679AEA743C96DF616BF /* HubStatus.swift */; };
 		E17221B858F9B293E3856104 /* BatterySimTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6683C8CA14E444FC60415F19 /* BatterySimTab.swift */; };
 		E2108D9A42760D2331D4A9B9 /* SmokeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE06D91AF8F500EF2160FB2 /* SmokeUITests.swift */; };
@@ -187,8 +190,10 @@
 		6028B3E8721D118E1E42A4C4 /* BattSimSocMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattSimSocMergeTests.swift; sourceTree = "<group>"; };
 		624D7AD1D8C99339636DBBFC /* ScriptRuntimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRuntimeModels.swift; sourceTree = "<group>"; };
 		65142609C4B4F2A086829BB7 /* HubTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubTile.swift; sourceTree = "<group>"; };
+		81B916AECE9A400981A79D5D /* StandbyCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandbyCard.swift; sourceTree = "<group>"; };
 		6683C8CA14E444FC60415F19 /* BatterySimTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatterySimTab.swift; sourceTree = "<group>"; };
 		67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManager.swift; sourceTree = "<group>"; };
+		2AB92CBBECD16E7F808F9857 /* StandbyPresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandbyPresence.swift; sourceTree = "<group>"; };
 		70AF72BF497C078DB10623CF /* HubMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubMerge.swift; sourceTree = "<group>"; };
 		785535B23A1E3B43FF7EFEB9 /* bugbuster_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bugbuster_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		78927C5D3127CF889B735E2E /* ScriptsViewsAuditFixesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsViewsAuditFixesTests.swift; sourceTree = "<group>"; };
@@ -241,6 +246,7 @@
 		E11A9C8116A9BEBC05E47330 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		E51803B4BC387FF1BFBB9576 /* DaqScopeCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaqScopeCanvasView.swift; sourceTree = "<group>"; };
 		E6F8A20F06AB74E3B38FD9AC /* ScriptRunManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptRunManagerTests.swift; sourceTree = "<group>"; };
+		5F0EABB77DE143D24F0F5F3E /* StandbyPresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandbyPresenceTests.swift; sourceTree = "<group>"; };
 		EA68770330B0B34D924F887C /* ScriptsBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptsBrowserView.swift; sourceTree = "<group>"; };
 		EC00C726EFD0D794A5B596A1 /* OrientationLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationLock.swift; sourceTree = "<group>"; };
 		EE26D814ABFC90F1B6B87217 /* hub_coverage.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = hub_coverage.json; sourceTree = "<group>"; };
@@ -374,6 +380,7 @@
 				A5888B3A4C5430E79C66503A /* ScriptLogStyleTests.swift */,
 				CCF4ED92AAD30E06BA5B33E8 /* ScriptPillRuleTests.swift */,
 				E6F8A20F06AB74E3B38FD9AC /* ScriptRunManagerTests.swift */,
+				5F0EABB77DE143D24F0F5F3E /* StandbyPresenceTests.swift */,
 				E035DA6A65478EE55227B33C /* ScriptRuntimeModelsTests.swift */,
 				113BC1904D2A24DBBB1AA61F /* ScriptsClientTests.swift */,
 				C7CFF6C7FEBF96894E2AABF0 /* ScriptsTabModelTests.swift */,
@@ -435,6 +442,7 @@
 				C525461BB9C4D459BB0D3AAD /* HubRunDetailView.swift */,
 				FBE597C0F3857B36B68C1F36 /* HubSettingsView.swift */,
 				65142609C4B4F2A086829BB7 /* HubTile.swift */,
+				81B916AECE9A400981A79D5D /* StandbyCard.swift */,
 				D40270FC04657C728A6A0F04 /* HubView.swift */,
 				3FF21832F5299C18916D0CD1 /* iPadRootView.swift */,
 				96BFFB7EB4D458BDCC44DDE2 /* MainTabView.swift */,
@@ -487,6 +495,7 @@
 				3C191A26DE6DDB97C9188297 /* ScriptEditorModel.swift */,
 				C48E5087505DB38147CD178E /* ScriptLogStore.swift */,
 				67510EC8C1D933CBC27D0EA1 /* ScriptRunManager.swift */,
+				2AB92CBBECD16E7F808F9857 /* StandbyPresence.swift */,
 				2E77D3E2DDCD8CB1D3E43D59 /* ScriptsClient.swift */,
 				929B1BADA4CEAD523F6E8BC7 /* ScriptsTabModel.swift */,
 				A251B0598A0E863D57FE5258 /* ScriptsWire.swift */,
@@ -670,6 +679,7 @@
 				7243FA194F755F88947052C4 /* HubSettingsView.swift in Sources */,
 				D99CBBB92F8D7AFFC688BD7C /* HubStatus.swift in Sources */,
 				0A9E44FD4FECDDEB3B36001D /* HubTile.swift in Sources */,
+				BBEC49BFF34BC7CFEF6F1566 /* StandbyCard.swift in Sources */,
 				B339DE01BE5221D361D298BF /* HubView.swift in Sources */,
 				50B3C04B7B4811FB76BD3499 /* KeychainHelper.swift in Sources */,
 				181681F2955495F3399D11BD /* MainTabView.swift in Sources */,
@@ -696,6 +706,7 @@
 				C1C85715CB67C321D1AE44BD /* ScriptLogStore.swift in Sources */,
 				AC6FF5177C1666DBFBF0C2DD /* ScriptREPLView.swift in Sources */,
 				D8023B2A266F8FD7FA3ADDB5 /* ScriptRunManager.swift in Sources */,
+				DA6FBFF671E8FE5BA2E5E8D5 /* StandbyPresence.swift in Sources */,
 				527F2E0614B8FAD38E487D87 /* ScriptRuntimeModels.swift in Sources */,
 				B2B501FF86DE9B543A3665B6 /* ScriptShellOverlays.swift in Sources */,
 				349408AD2449363DB16C4A4F /* ScriptStatusViews.swift in Sources */,
@@ -733,6 +744,7 @@
 				A44DCC808D95AED30A29E630 /* ScriptLogStyleTests.swift in Sources */,
 				1AF5BD12134617E580995BFC /* ScriptPillRuleTests.swift in Sources */,
 				512F7AB7BF03E3A2178B48FF /* ScriptRunManagerTests.swift in Sources */,
+				71095916871BD515AF290008 /* StandbyPresenceTests.swift in Sources */,
 				584A036717E53AC274B937C1 /* ScriptRuntimeModelsTests.swift in Sources */,
 				509B997A1A8486087DFE830E /* ScriptStatusTextTests.swift in Sources */,
 				4F0F76F59E9E044BCE28F990 /* ScriptsClientTests.swift in Sources */,

@@ -70,6 +70,11 @@ class HTTPTransport:
     # WS stream_id for ADC DSP (mirrors WS_STREAM_ADC_DSP = 0x03 in ws_stream.h)
     _WS_STREAM_ADC_DSP = 0x03
 
+    # Standby presence heartbeat owner (set_presence_hook); HTTP has no keepalive of its own.
+    _presence_hook: Optional[Callable[[], None]] = None
+    _presence_thread: Optional[threading.Thread] = None
+    _presence_stop: Optional[threading.Event] = None
+
     def __init__(
         self,
         host:        str,
@@ -126,8 +131,38 @@ class HTTPTransport:
         return info
 
     def disconnect(self) -> None:
+        self.set_presence_hook(None)
         self.stop_dsp_ws_stream()
         self._session.close()
+
+    def set_presence_hook(self, hook: Optional[Callable[[], None]],
+                          period_s: float = 1.0) -> None:
+        """Call ``hook`` every ``period_s`` from a daemon thread until cleared.
+
+        The previous thread (if any) is stopped and joined (bounded) first.
+        """
+        stop, thread = self._presence_stop, self._presence_thread
+        self._presence_hook = None
+        self._presence_stop = self._presence_thread = None
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        if hook is None:
+            return
+        new_stop = threading.Event()
+
+        def _run() -> None:
+            while not new_stop.wait(period_s):
+                try:
+                    hook()
+                except Exception as exc:
+                    log.debug("presence hook failed: %s", exc)
+
+        self._presence_hook = hook
+        self._presence_stop = new_stop
+        self._presence_thread = threading.Thread(target=_run, name="bb-presence", daemon=True)
+        self._presence_thread.start()
 
     # ------------------------------------------------------------------
     # Low-level HTTP helpers

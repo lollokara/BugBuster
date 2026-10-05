@@ -62,6 +62,7 @@ typedef enum {
     USB_REC_STATUS   = 0x06,   // device status / heartbeat
     USB_REC_WAVE_V   = 0x07,   // struct-of-arrays voltage waveform block
     USB_REC_OTA_ACK  = 0x08,   // usb_ota_ack_t, reply to every USB_CMD_OTA_* (C6-26)
+    USB_REC_STANDBY_ACK = 0x09, // bb_standby_reply_t (16 B), reply to every USB_CMD_CLIENT_LEASE
 
     USB_CMD_START        = 0x80,
     USB_CMD_STOP         = 0x81,
@@ -88,6 +89,11 @@ typedef enum {
     USB_CMD_OTA_CONFIRM     = 0x91, // no payload; P4: mark the running image valid
     USB_CMD_OTA_REBOOT      = 0x92, // no payload; P4: reboot into the new image
     USB_CMD_OTA_STATUS      = 0x93, // no payload; reply is an ack snapshot
+
+    // Direct-USB client presence for the system standby: payload usb_cmd_lease_t,
+    // answered with a USB_REC_STANDBY_ACK. Only this frame declares a host present;
+    // a mounted device or an idle IN poll never does.
+    USB_CMD_CLIENT_LEASE    = 0x94,
 } usb_rec_type_t;
 
 // ---- OTA over the vendor link (C6-26) ---------------------------------------
@@ -126,6 +132,30 @@ typedef struct __attribute__((packed)) {
 
 #ifndef __cplusplus
 _Static_assert(sizeof(usb_ota_ack_t) == 24, "usb_ota_ack_t is 24 bytes on the wire");
+#endif
+
+// ---- Client lease (system standby) -----------------------------------------
+// USB_CMD_CLIENT_LEASE payload (12 B, little-endian). Refresh at about ttl/3.
+//   op         0 = release, 1 = acquire / refresh
+//   flags      must be 0
+//   reserved   must be 0
+//   client_id  non-zero, chosen once per host session
+//   ttl_ms     lifetime from this frame; clamped to 1000..60000, 0 = 15000
+// Up to 4 distinct clients are tracked. A 5th while all 4 are live is REFUSED
+// (nothing is evicted). The reply is USB_REC_STANDBY_ACK = bb_standby_reply_t
+// (common/standby_wire.h): ready = 1 when accepted and the system is ACTIVE;
+// failure = 0 ok, 3 malformed frame, 7 table full, 1 recorded but the system is
+// not ACTIVE yet (a wake is already requested); inhibitors = live lease count.
+typedef struct __attribute__((packed)) {
+    uint8_t  op;
+    uint8_t  flags;
+    uint16_t reserved;
+    uint32_t client_id;
+    uint32_t ttl_ms;
+} usb_cmd_lease_t;
+
+#ifndef __cplusplus
+_Static_assert(sizeof(usb_cmd_lease_t) == 12, "usb_cmd_lease_t is 12 bytes on the wire");
 #endif
 
 

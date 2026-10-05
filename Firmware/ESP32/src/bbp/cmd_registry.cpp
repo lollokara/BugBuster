@@ -35,6 +35,8 @@ extern "C" void register_cmds_script(void);
 extern "C" void register_cmds_io_owner(void);
 // Memory telemetry
 extern "C" void register_cmds_memory(void);
+// System standby
+extern "C" void register_cmds_standby(void);
 
 // ---------------------------------------------------------------------------
 // Internal index (grows at init time)
@@ -104,6 +106,8 @@ void cmd_registry_init(void)
     register_cmds_io_owner();
     // Memory telemetry
     register_cmds_memory();
+    // System standby
+    register_cmds_standby();
 
     // Sort by opcode for O(log n) lookup
     qsort(s_registry, s_registry_len, sizeof(s_registry[0]), cmp_opcode);

@@ -130,6 +130,18 @@ const range_cal_t *range_manager_get_cal(const range_manager_t *rm, current_rang
 float           range_manager_shunt_ohm(const range_manager_t *rm, current_range_t range);
 const char     *range_manager_name(current_range_t range);
 
+// Analog supply standby. The shunt-ladder latches, bypass switches and FINE mux
+// lose their supply with the analog rails. park() snapshots the range, drives the
+// bypass and mux address outputs low and stops listening to the latch edges;
+// resume() re-derives the range from the (reset) latches exactly as the boot read
+// does - or re-applies a forced range - and re-arms the edges.
+typedef struct {
+    current_range_t range;
+    bool            override_active;
+} range_standby_t;
+void range_manager_standby_park(range_manager_t *rm, range_standby_t *keep);
+void range_manager_standby_resume(range_manager_t *rm, const range_standby_t *keep);
+
 #ifdef __cplusplus
 }
 #endif

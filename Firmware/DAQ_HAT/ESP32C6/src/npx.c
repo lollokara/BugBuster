@@ -34,6 +34,8 @@ static uint8_t s_grb[NPX_COUNT * 3];   // GRB byte stream
 // drives a pair of neopixels. Set from the DDP RX path (P4 relays S3 status).
 static volatile uint8_t s_ch_codes[4] = { 0, 0, 0, 0 };
 
+static volatile bool s_standby_off = false;
+
 void npx_set_channel_codes(const uint8_t codes[4])
 {
     for (int i = 0; i < 4; i++) s_ch_codes[i] = codes[i];
@@ -126,10 +128,26 @@ static void render(uint32_t now_ms)
 static void npx_task(void *arg)
 {
     (void)arg;
+    bool blanked = false;
     for (;;) {
+        if (s_standby_off) {
+            if (!blanked) {                  // one dark frame, then idle
+                memset(s_grb, 0, sizeof(s_grb));
+                show();
+                blanked = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        blanked = false;
         render((uint32_t)(esp_timer_get_time() / 1000));
         vTaskDelay(pdMS_TO_TICKS(30));
     }
+}
+
+void npx_set_standby_off(bool off)
+{
+    s_standby_off = off;
 }
 
 void npx_init(void)

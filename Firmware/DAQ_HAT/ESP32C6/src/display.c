@@ -20,6 +20,12 @@ static uint16_t *s_fb = NULL;
 static SemaphoreHandle_t s_flush_done = NULL;
 static volatile bool s_flush_pending = false;
 
+// Standby: while asleep nothing may reach the panel, and the backlight level is
+// only remembered. s_bl_forced_off parks the active-low pin at its idle level.
+static volatile bool s_asleep = false;
+static bool s_bl_forced_off = false;
+static uint8_t s_bl_level = 255;
+
 #define FB_PIXELS  (DISP_WIDTH * DISP_HEIGHT)
 #define FB_BYTES   (FB_PIXELS * (int)sizeof(uint16_t))
 
@@ -28,6 +34,29 @@ static volatile bool s_flush_pending = false;
 #define BL_CHANNEL  LEDC_CHANNEL_0
 #define BL_MODE     LEDC_LOW_SPEED_MODE
 #define BL_RES      LEDC_TIMER_8_BIT
+
+static void backlight_channel(uint32_t duty)
+{
+    ledc_channel_config_t ccfg = {
+        .gpio_num   = DISP_PIN_BL,
+        .speed_mode = BL_MODE,
+        .channel    = BL_CHANNEL,
+        .timer_sel  = BL_TIMER,
+        .duty       = duty,
+        .hpoint     = 0,
+    };
+    ledc_channel_config(&ccfg);
+}
+
+static uint32_t backlight_duty(uint8_t level)
+{
+#if DISP_BL_ACTIVE_LOW
+    // Active low: pin LOW = full brightness, so invert the duty.
+    return 255u - level;
+#else
+    return level;
+#endif
+}
 
 static void backlight_init(void)
 {
@@ -40,27 +69,50 @@ static void backlight_init(void)
     };
     ledc_timer_config(&tcfg);
 
-    ledc_channel_config_t ccfg = {
-        .gpio_num   = DISP_PIN_BL,
-        .speed_mode = BL_MODE,
-        .channel    = BL_CHANNEL,
-        .timer_sel  = BL_TIMER,
-        .duty       = 0,
-        .hpoint     = 0,
-    };
-    ledc_channel_config(&ccfg);
+    // Start at the OFF duty so the pin never pulses the light before the first
+    // frame is in panel RAM (display_init parks it hard-off right after).
+    backlight_channel(backlight_duty(0));
 }
 
 void display_set_backlight(uint8_t level)
 {
-#if DISP_BL_ACTIVE_LOW
-    // Active low: pin LOW = full brightness, so invert the duty.
-    uint32_t duty = 255u - level;
-#else
-    uint32_t duty = level;
-#endif
-    ledc_set_duty(BL_MODE, BL_CHANNEL, duty);
+    s_bl_level = level;
+    if (s_asleep || s_bl_forced_off) return;   // remembered; display_backlight_restore() applies it
+    ledc_set_duty(BL_MODE, BL_CHANNEL, backlight_duty(level));
     ledc_update_duty(BL_MODE, BL_CHANNEL);
+}
+
+bool display_backlight_hard_off(void)
+{
+    s_bl_forced_off = true;
+    // PWM at 255/256 is NOT off. Stop the channel and park the pin at its idle level
+    // (active-low: HIGH = LED off).
+    return ledc_stop(BL_MODE, BL_CHANNEL, DISP_BL_ACTIVE_LOW ? 1 : 0) == ESP_OK;
+}
+
+bool display_backlight_restore(uint8_t level)
+{
+    s_bl_forced_off = false;
+    s_bl_level = level;
+    return ledc_channel_config(&(ledc_channel_config_t){
+        .gpio_num   = DISP_PIN_BL,
+        .speed_mode = BL_MODE,
+        .channel    = BL_CHANNEL,
+        .timer_sel  = BL_TIMER,
+        .duty       = backlight_duty(level),
+        .hpoint     = 0,
+    }) == ESP_OK;                               // re-arms the channel that ledc_stop parked
+}
+
+void display_set_asleep(bool asleep)
+{
+    s_asleep = asleep;
+}
+
+bool display_panel_power(bool on)
+{
+    if (!s_panel) return false;
+    return esp_lcd_panel_disp_on_off(s_panel, on) == ESP_OK;
 }
 
 // Called from the SPI ISR when a full-frame transfer completes.
@@ -129,7 +181,7 @@ esp_err_t display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     backlight_init();
-    display_set_backlight(255);
+    display_backlight_hard_off();   // the light comes on only after the first frame is in RAM
 
     ESP_LOGI(TAG, "ST7789 landscape %dx%d ready (fb=%d bytes)", DISP_WIDTH, DISP_HEIGHT, FB_BYTES);
     return ESP_OK;
@@ -140,31 +192,33 @@ uint16_t *display_framebuffer(void)
     return s_fb;
 }
 
-void display_flush(void)
+bool display_flush(void)
 {
-    if (!s_panel || !s_fb) return;
+    if (!s_panel || !s_fb || s_asleep) return false;
     // Single shared framebuffer: issue the transfer and block until the whole
     // frame has shifted out before returning, so the caller can't start
     // rendering the next frame over pixels that are still being sent (which
     // showed up as "half done" frames on the glass).
     s_flush_pending = true;
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, DISP_WIDTH, DISP_HEIGHT, s_fb);
-    xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(200));
+    const bool sent = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, DISP_WIDTH, DISP_HEIGHT, s_fb) == ESP_OK;
+    const bool done = sent && xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(200)) == pdTRUE;
     s_flush_pending = false;
+    return done;
 }
 
-// Block until the most recently issued frame has fully transferred.
-void display_wait_flush(void)
+// Block until the most recently issued frame has fully transferred. False = it did
+// not finish inside the bound (the bus may still be busy).
+bool display_wait_flush(void)
 {
-    if (s_flush_pending) {
-        xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(200));
-        s_flush_pending = false;
-    }
+    if (!s_flush_pending) return true;
+    const bool done = xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(200)) == pdTRUE;
+    s_flush_pending = false;
+    return done;
 }
 
 void display_flush_rect(int x, int y, int w, int h)
 {
-    if (!s_panel || !s_fb) return;
+    if (!s_panel || !s_fb || s_asleep) return;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > DISP_WIDTH)  w = DISP_WIDTH - x;

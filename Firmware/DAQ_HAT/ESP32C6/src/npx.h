@@ -9,6 +9,7 @@
 // the menu or the app takes effect live.
 // =============================================================================
 #include <stdint.h>
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,6 +23,11 @@ void npx_init(void);
 // common/daq_led_codes.h (0=off,1=red,2=green,3=blue,4=yellow,...). Called from
 // the DDP RX path when the P4 relays the S3 channel status.
 void npx_set_channel_codes(const uint8_t codes[4]);
+
+// Standby override: while true every pixel is forced dark whatever npx_mode says.
+// g_settings is not touched, so clearing it restores the persisted look at once.
+// (WS2812 chips still draw their quiescent current when dark.)
+void npx_set_standby_off(bool off);
 
 #ifdef __cplusplus
 }

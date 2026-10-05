@@ -18,6 +18,11 @@ idf_component_register(
         "c6_config.c"
         "npx.c"
         "wifi_hosted.c"
+        "standby_c6_core.c"
+        "standby_c6.c"
+        "display_power.c"
+        "splash.c"
+        "logo_bb.c"
         "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."

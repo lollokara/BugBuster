@@ -463,6 +463,7 @@ class CmdId(IntEnum):
     WIFI_SCAN             = 0xE4
     WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)
     OTA                   = 0x77  # USB OTA info/upload/rollback control
+    STANDBY               = 0x78  # system standby: status / presence / policy / wake / sleep (sub-op byte 0)
 
     # DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
     DAQ_CONFIG            = 0xB6

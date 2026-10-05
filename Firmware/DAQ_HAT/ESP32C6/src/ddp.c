@@ -4,6 +4,7 @@
 #include "display.h"
 #include "c6_config.h"
 #include "npx.h"
+#include "standby_c6.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -78,6 +79,7 @@ static void send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 
 static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
+    standby_c6_p4_alive();   // a CRC-valid P4 frame proves the link only, not that the analyzer works
     switch (cmd) {
     case DDP_CMD_PING:
         send_frame(DDP_RSP_OK, NULL, 0);
@@ -213,6 +215,9 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
                 s_mb_fw_us = esp_timer_get_time();
                 s_mb_fw_have = true;
                 taskEXIT_CRITICAL(&s_mux);
+            } else if (req_type == DDP_MB_STANDBY_POLICY) {
+                // The S3's answer to an Auto Standby change: [type][status][u16 seconds].
+                standby_c6_mb_response(payload, len);
             }
         }
         send_frame(DDP_RSP_OK, NULL, 0);
@@ -220,6 +225,17 @@ static void handle_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
     case DDP_CMD_WIFI_STREAM_MODE:
         if (len >= 1) s_wifi_stream_mode = payload[0] != 0;
         send_frame(DDP_RSP_OK, NULL, 0);
+        break;
+    case DDP_CMD_STANDBY:
+        // A system-standby request or the 1 Hz policy mirror from the P4. The answer
+        // is a bb_standby_reply_t on the same command id (never an RSP_OK).
+        if (len >= sizeof(bb_standby_request_t)) {
+            bb_standby_reply_t r;
+            standby_c6_on_request(payload, (uint8_t *)&r);
+            send_frame(DDP_CMD_STANDBY, (const uint8_t *)&r, sizeof(r));
+        } else {
+            uint8_t e = 1; send_frame(DDP_RSP_ERR, &e, 1);
+        }
         break;
     case DDP_CMD_CAL_STATUS:
         // Live DUT-source calibration status from the P4 cal engine.
@@ -323,16 +339,24 @@ uint8_t ddp_take_buttons(void)
 
 void ddp_send_config_tlv(const uint8_t *tlvs, uint8_t len)
 {
+    standby_c6_activity();   // a committed menu edit is a meaningful user action
     send_frame(DDP_CMD_CONFIG_SET, tlvs, len);
 }
 
 void ddp_send_config_action(uint8_t action_id)
 {
+    standby_c6_activity();
     send_frame(DDP_CMD_CONFIG_ACTION, &action_id, 1);
 }
 
 void ddp_send_mb_request(uint8_t req_type, const uint8_t *args, uint8_t args_len)
 {
+    // Periodic reads while a menu is open are not user actions; writes are.
+    if (req_type == DDP_MB_SET_RAIL || req_type == DDP_MB_SET_EFUSE ||
+        req_type == DDP_MB_SET_RAIL_EN || req_type == DDP_MB_SCRIPT_RUN ||
+        req_type == DDP_MB_SCRIPT_STOP || req_type == DDP_MB_FW_APPLY) {
+        standby_c6_activity();
+    }
     uint8_t buf[1 + 30];
     buf[0] = req_type;
     if (args_len > sizeof(buf) - 1) args_len = sizeof(buf) - 1;
@@ -378,6 +402,7 @@ bool ddp_get_mb_fwinfo(ddp_mb_fwinfo_t *out, uint32_t *age_ms)
 
 void ddp_send_cal_ctrl(uint8_t op, uint8_t arg)
 {
+    if (op != DDP_CAL_OP_STATUS) standby_c6_activity();
     uint8_t p[2] = { op, arg };
     send_frame(DDP_CMD_CAL_CTRL, p, sizeof(p));
 }

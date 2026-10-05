@@ -15,6 +15,7 @@
 #include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
 #include "diag/selftest.h" // selftest_is_supply_monitor_active for ADC poll suppression
 #include "diag/efuse_imon.h"
+#include "power/standby_hw.h"   // analog gate for the poll/monitor workers
 #include "serial_io.h"   // serial_println for fatal init diagnostics
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -234,7 +235,10 @@ static void taskAdcPoll(void* /*pvParameters*/)
 
     for (;;) {
         s_adcLoops++;
-        if (s_device) {
+        // Standby: no SPI access while the analog rail is down or going down.
+        const bool analogOk = standby_hw_analog_enter();
+        if (!analogOk) pollDelay = pdMS_TO_TICKS(100);
+        if (s_device && analogOk) {
             uint32_t raw[AD74416H_NUM_CHANNELS];
             float    eng[AD74416H_NUM_CHANNELS];
 
@@ -443,6 +447,7 @@ static void taskAdcPoll(void* /*pvParameters*/)
             dio_poll_inputs();
             daq_trigger_poll_digital(dio_get_all());
         }
+        if (analogOk) standby_hw_analog_leave();
 
         // Add a small micro-delay even at high rates to relieve SPI bus pressure.
         if (pollDelay == 0) {
@@ -500,7 +505,8 @@ static void taskFaultMonitor(void* /*pvParameters*/)
     uint16_t prevSupplyAlertStatus = 0;
 
     for (;;) {
-        if (s_device) {
+        const bool analogOk = standby_hw_analog_enter();
+        if (s_device && analogOk) {
             // --- Read global and per-channel alert status ---
             uint16_t alertStatus = 0;
             uint16_t supplyAlertStatus = 0;
@@ -676,7 +682,8 @@ static void taskFaultMonitor(void* /*pvParameters*/)
         }
 
         // Update AD74416H GPIO status LEDs (~200 ms, throttled internally)
-        adc_leds_tick();
+        if (analogOk) adc_leds_tick();
+        if (analogOk) standby_hw_analog_leave();
 
         iteration++;
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -688,6 +695,12 @@ uint8_t tasks_logical_to_physical(uint8_t logical) {
     if (logical == 2) return 3;
     if (logical == 3) return 2;
     return logical;
+}
+
+bool tasks_read_channel_function(uint8_t logical_channel, ChannelFunction *out)
+{
+    if (!s_device || logical_channel >= AD74416H_NUM_CHANNELS) return false;
+    return s_device->readChannelFunction(tasks_logical_to_physical(logical_channel), out);
 }
 
 // -----------------------------------------------------------------------------
@@ -1131,6 +1144,14 @@ bool tasks_apply_vout_range(uint8_t logical_channel, bool bipolar)
 // Task 3: Command Processor (Core 1, Priority 2)
 // -----------------------------------------------------------------------------
 
+// True from dequeue until the command's SPI work is done (standby inhibitor).
+static volatile bool s_cmdBusy = false;
+
+bool tasks_cmd_busy(void)
+{
+    return s_cmdBusy || (g_cmdQueue != nullptr && uxQueueMessagesWaiting(g_cmdQueue) != 0);
+}
+
 static void taskCommandProcessor(void* /*pvParameters*/)
 {
     Command cmd;
@@ -1142,6 +1163,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
 
         if (!s_device) continue;
 
+        s_cmdBusy = true;
         switch (cmd.type) {
 
             // -----------------------------------------------------------------
@@ -1585,6 +1607,7 @@ static void taskCommandProcessor(void* /*pvParameters*/)
                 ESP_LOGW("cmdProc", "Unknown command type: %d", cmd.type);
                 break;
         }
+        s_cmdBusy = false;
     }
 }
 

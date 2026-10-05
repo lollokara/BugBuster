@@ -76,6 +76,9 @@ class USBTransport:
     # (bbp.cpp BBP_IDLE_TIMEOUT_MS). PING when idle this long.
     KEEPALIVE_S      = 25.0
 
+    # Called about once a second from the keepalive thread (standby presence).
+    _presence_hook: Optional[Callable[[], None]] = None
+
     def __init__(
         self,
         port:     str,
@@ -103,6 +106,7 @@ class USBTransport:
         self._clock: Callable[[], float] = time.monotonic
         self._last_tx = 0.0
         self._keepalive_thread: Optional[threading.Thread] = None
+        self._keepalive_stop = threading.Event()
         # Set when the reader thread exits unexpectedly; cleared on reconnect.
         self._link_error: Optional[BaseException] = None
         # Reconnect automatically on the next command after a reader death.
@@ -268,6 +272,7 @@ class USBTransport:
         # TR-9: lets clients drop per-connection caches after a reconnect.
         self.connect_gen = getattr(self, "connect_gen", 0) + 1
         self._last_tx = self._clock()
+        self._keepalive_stop.clear()
         if self._keepalive_thread is None or not self._keepalive_thread.is_alive():
             self._keepalive_thread = threading.Thread(
                 target=self._keepalive_loop, name="bbp-keepalive", daemon=True
@@ -289,6 +294,7 @@ class USBTransport:
     def disconnect(self) -> None:
         """Gracefully exit binary mode and close the serial port."""
         self._running = False
+        self._keepalive_stop.set()
         if self._serial and self._serial.is_open:
             try:
                 # Send DISCONNECT command (0xFF) so device returns to CLI
@@ -303,6 +309,9 @@ class USBTransport:
 
         if self._reader_thread and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=2.0)
+        keepalive = self._keepalive_thread
+        if keepalive is not None and keepalive is not threading.current_thread() and keepalive.is_alive():
+            keepalive.join(timeout=2.0)
 
     # ------------------------------------------------------------------
     # Command execution
@@ -356,11 +365,22 @@ class USBTransport:
         self._last_tx = self._clock()
         return True
 
+    def set_presence_hook(self, hook: Optional[Callable[[], None]]) -> None:
+        """Run ``hook`` from the keepalive thread about once a second (None clears)."""
+        self._presence_hook = hook
+
     def _keepalive_loop(self) -> None:
         while self._running:
-            time.sleep(1.0)
+            if self._keepalive_stop.wait(1.0):
+                break
             if self._running and self.is_healthy():
                 self.keepalive_tick()
+                hook = self._presence_hook
+                if hook is not None:
+                    try:
+                        hook()
+                    except Exception as exc:
+                        log.debug("presence hook failed: %s", exc)
 
     def _resolve_timeout(self, cmd_id: int,
                          timeout: Optional[float] = None) -> float:

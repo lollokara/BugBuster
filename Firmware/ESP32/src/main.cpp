@@ -53,6 +53,7 @@
 #include "diag/crash_util.h"
 #include "io_owner.h"
 #include "esp_timer.h"
+#include "power/standby_hw.h"
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -211,11 +212,13 @@ static void mainLoopTask(void* pvParam)
             status_led_update();
         }
 
-        // Background self-test monitoring step (~0.5 Hz, one channel per call)
+        // Background self-test monitoring step (~0.5 Hz, one channel per call).
+        // It clocks the analog bus, so it only runs while the analog rail is up.
         if (now - lastSelftestPoll >= 2000) {
             lastSelftestPoll = now;
-            if (selftest_worker_enabled()) {
+            if (selftest_worker_enabled() && standby_hw_analog_enter()) {
                 selftest_monitor_step();
+                standby_hw_analog_leave();
             }
             efuse_imon_tick(now);
         }
@@ -250,6 +253,9 @@ static void mainLoopTask(void* pvParam)
         // IO ownership lease tick — expire timed leases
         io_owner_tick((uint64_t)(esp_timer_get_time() / 1000LL));
 
+        // System standby coordinator: policy tick, HAT polling, every sleep/wake step.
+        standby_runtime_tick();
+
         // Background work: 10 ms sleep is fine — BBP/CLI urgency is now
         // handled entirely by bbpCliTask on Core 1.
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -265,11 +271,15 @@ extern "C" void app_main(void)
     // is spawned (hat_init, uart_bridge, alert task all run before bbpInit).
     bbpPreInit();
 
+    // hat_init() runs right after the I2C/IDAC/PCA bring-up (not after the web
+    // server) so a HAT loading screen can follow the real remaining boot work.
+    bool hatInitOk = false;
     // 0. Status LEDs — init early so we can show boot animation
     status_led_init();
     auth_init();
     board_profile_init();
     hub_early_init();
+    standby_runtime_init();   // gates stay open until this; needs NVS (auth_init above)
 
     // Helper: run breathing animation for N milliseconds during boot
     auto breathe_for = [](uint32_t ms) {
@@ -419,6 +429,13 @@ extern "C" void app_main(void)
         g_deviceState.i2cOk = false;
     }
 
+    // 7b. HAT link (needs the IDAC calibration for an LA HAT's 3V3_ADJ seed). The
+    //     milestones that follow are real: Wi-Fi was brought up in step 4, IO below.
+    hatInitOk = hat_init();
+    {
+        const bool wifi_up = wifi_is_connected();
+        standby_hw_boot_milestone(wifi_up ? BB_ST_BOOT_WIFI : 0, 0, wifi_up ? 0 : BB_ST_BOOT_WIFI);
+    }
     // 8a. Wait for ±15V analog supply (EN_15V_A on PCA9535 P0.5) to settle.
     //     PCA9535 just enabled the rail; the AD74416H needs stable AVDD/VDDH
     //     before any SPI access or it returns garbage on verify.
@@ -481,6 +498,9 @@ extern "C" void app_main(void)
     // 12c. Self-test / calibration module
     selftest_init();
     serial_println("[BugBuster] Self-test module initialized");
+    standby_hw_boot_milestone(g_deviceState.spiOk && g_deviceState.muxOk ? BB_ST_BOOT_IO : 0,
+                              g_deviceState.spiOk && g_deviceState.muxOk ? 0 : BB_ST_BOOT_IO, 0);
+    standby_hw_boot_check();   // failed SPI / mux / PCA9535: not ready, with the stage that failed
 
     // 13. FreeRTOS tasks — starts ADC poll, fault monitor, command processor
     //     (after MUX init so SPI bus sharing works correctly)
@@ -534,8 +554,9 @@ extern "C" void app_main(void)
     adc_leds_init();
     serial_println("[BugBuster] AD74416H status LEDs initialized");
 
-    // HAT expansion board (PCB mode only — GPIO47 ADC detect + UART0 on GPIO43/44)
-    if (hat_init()) {
+    // HAT expansion board (PCB mode only — GPIO47 ADC detect + UART0 on GPIO43/44);
+    // hat_init() already ran at step 7b.
+    if (hatInitOk) {
         const HatState *hs = hat_get_state();
         if (hs->connected) {
             serial_printf("[BugBuster] HAT: %s (fw v%d.%d, connected)\r\n",
@@ -616,6 +637,7 @@ extern "C" void app_main(void)
     log_internal_heap("after mainLoopTask");
 
     term_println("[BugBuster] Boot complete.");
+    standby_hw_activity();   // boot time is not idle time: the first timeout starts now
 
     // 18. Autorun boot check — MUST run after mainLoopTask so that CLI/BBP
     //     activity can be detected during the grace window.

@@ -27,7 +27,10 @@ be bound to WinUSB/libusb-win32 (use Zadig) before Python can claim it.
 """
 from __future__ import annotations
 
+import logging
+import secrets
 import struct
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -80,6 +83,14 @@ CMD_OTA_APPLY = 0x90
 CMD_OTA_CONFIRM = 0x91
 CMD_OTA_REBOOT = 0x92
 CMD_OTA_STATUS = 0x93
+# Client lease for system standby (standby_p4.h USB_CMD_CLIENT_LEASE). Defined in
+# standby_p4.h, not usb_proto.h, so it is not part of the pinned stream-proto copies.
+CMD_CLIENT_LEASE = 0x94
+LEASE_TTL_MS = 45_000
+LEASE_REFRESH_S = 10.0
+_LEASE_FMT = struct.Struct("<BBHII")   # op, flags, reserved, client_id, ttl_ms
+
+log = logging.getLogger(__name__)
 
 OTA_TARGET_C6 = 1
 OTA_TARGET_P4 = 3
@@ -564,16 +575,27 @@ class CaptureAccumulator:
 
 # --- USB transport ------------------------------------------------------------
 class DaqStream:
-    """Vendor-bulk connection to the P4 measurement stream."""
+    """Vendor-bulk connection to the P4 measurement stream.
+
+    While open, the stream holds a *client lease* on the P4 (``lease=True``) so
+    the system does not enter standby under an active capture even when no
+    S3 control client is attached. The lease frame is fire-and-forget: the P4
+    sends no ack, so a successful send is not proof the lease was recorded.
+    """
 
     READ_CHUNK = 65536
 
-    def __init__(self, vid: int = DAQ_VID, pid: int = DAQ_PID) -> None:
+    def __init__(self, vid: int = DAQ_VID, pid: int = DAQ_PID, *, lease: bool = True) -> None:
         self._vid = vid
         self._pid = pid
         self._dev = None
         self._rx = bytearray()
         self._seq = 0
+        self._tx_lock = threading.Lock()
+        self._lease_enabled = lease
+        self._lease_id = 0
+        self._lease_stop: Optional[threading.Event] = None
+        self._lease_thread: Optional[threading.Thread] = None
 
     # -- lifecycle ---------------------------------------------------------
     def open(self) -> "DaqStream":
@@ -609,9 +631,11 @@ class DaqStream:
             ) from exc
         self._dev = dev
         self._rx.clear()
+        self._lease_start()
         return self
 
     def close(self) -> None:
+        self._lease_stop_and_release()
         if self._dev is not None:
             try:
                 import usb.util  # type: ignore
@@ -636,8 +660,54 @@ class DaqStream:
     def send(self, cmd_type: int, payload: bytes = b"") -> None:
         if self._dev is None:
             raise DaqStreamError("DAQ stream is not open.")
-        self._seq = (self._seq + 1) & 0xFFFFFFFF
-        self._dev.write(DAQ_EP_OUT, build_frame(cmd_type, payload, self._seq), 1000)
+        with self._tx_lock:
+            self._seq = (self._seq + 1) & 0xFFFFFFFF
+            self._dev.write(DAQ_EP_OUT, build_frame(cmd_type, payload, self._seq), 1000)
+
+    # -- standby client lease ------------------------------------------------
+    @property
+    def lease_id(self) -> int:
+        """Client id of the lease this open stream holds (0 = none)."""
+        return self._lease_id
+
+    def _lease_send(self, acquire: bool) -> None:
+        self.send(CMD_CLIENT_LEASE, _LEASE_FMT.pack(1 if acquire else 0, 0, 0,
+                                                    self._lease_id, LEASE_TTL_MS))
+
+    def _lease_start(self) -> None:
+        if not self._lease_enabled:
+            return
+        self._lease_id = secrets.randbelow(0xFFFFFFFF) + 1
+        try:
+            self._lease_send(True)
+        except Exception as exc:
+            log.debug("DAQ client lease acquire failed: %s", exc)
+        stop = threading.Event()
+
+        def _run() -> None:
+            while not stop.wait(LEASE_REFRESH_S):
+                try:
+                    self._lease_send(True)
+                except Exception as exc:
+                    log.debug("DAQ client lease refresh failed: %s", exc)
+
+        self._lease_stop = stop
+        self._lease_thread = threading.Thread(target=_run, name="daq-lease", daemon=True)
+        self._lease_thread.start()
+
+    def _lease_stop_and_release(self) -> None:
+        stop, thread = self._lease_stop, self._lease_thread
+        self._lease_stop = self._lease_thread = None
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        if self._lease_id and self._dev is not None:
+            try:
+                self._lease_send(False)
+            except Exception as exc:
+                log.debug("DAQ client lease release failed: %s", exc)
+        self._lease_id = 0
 
     def read_records(self, timeout_ms: int = 200) -> List[Any]:
         """Drain whatever is available and return the decoded records."""

@@ -111,6 +111,7 @@ static uint8_t s_led_states[BB_WS2812_COUNT][4]; // [r, g, b, mode]
 static uint32_t s_ws2812_buffer[BB_WS2812_COUNT];
 static int s_ws2812_sm = -1;
 static PIO s_ws2812_pio = pio0;
+static volatile bool s_leds_dark = false;   // standby: logical state kept, LEDs shown off
 static uint8_t s_la_route = HAT_LA_ROUTE_LOW_SPEED;
 
 static bool s_ds4424_present = false;
@@ -166,8 +167,10 @@ static void ws2812_put_pixel(uint32_t grb)
 
 static void ws2812_update(void)
 {
+    // Standby keeps the buffer (the logical LED state) but shows nothing, so a status
+    // refresh while asleep can never relight an indicator.
     for (int i = 0; i < BB_WS2812_COUNT; i++) {
-        ws2812_put_pixel(s_ws2812_buffer[i]);
+        ws2812_put_pixel(s_leds_dark ? 0u : s_ws2812_buffer[i]);
     }
     // pio_sm_put_blocking() returns once the FIFO accepts the word, NOT when
     // the PIO finishes transmitting it.  With an 8-entry joined TX FIFO and
@@ -1125,6 +1128,51 @@ void bb_hat_v2_handle_reset(void)
 uint8_t bb_hat_v2_get_la_route(void)
 {
     return s_la_route;
+}
+
+void bb_hat_v2_leds_set_dark(bool dark)
+{
+    s_leds_dark = dark;
+    ws2812_update();
+}
+
+bool bb_hat_v2_busy(void)
+{
+    return s_cal_state == 1 || s_persist_pending ||
+           s_persist_state == HAT_PERSIST_PENDING || s_persist_state == HAT_PERSIST_SAVING;
+}
+
+// Wake-time readiness. The DS4424 and its I2C pull-ups do not depend on 3V3_ADJ:
+// bb_power_init() drives GPIO24 (3V3_ADJ_EN) low before bb_hat_v2_init() programs and
+// read-back-verifies the DS4424, so they work with 3V3_ADJ off (the schematic labels agree:
+// only the level shifters' B side is on 3V3_ADJ). So the trim codes should survive
+// standby. This proves the chip answers and rewrites a code that drifted.
+// It never enables a rail and never writes flash or calibration.
+bool bb_hat_v2_standby_restore(void)
+{
+    if (!s_ds4424_present) return true;
+
+    uint16_t mv[3] = {
+        s_io_voltage_mv,
+        s_flash_cal.default_voltage_mv[1],
+        s_flash_cal.default_voltage_mv[2],
+    };
+    bool ok = true;
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        if (ch != 0 && (mv[ch] == 0 || mv[ch] > 36000)) mv[ch] = DS4424_CAL_POST_TARGET_MV;
+        int8_t want = 0;
+        // No usable calibration: boot left this channel at code 0, so there is nothing to restore.
+        if (!ds4424_voltage_to_code(ch, (float)mv[ch] / 1000.0f, &want)) continue;
+
+        uint8_t reg = 0;
+        const bool read_ok = ds4424_read_raw((uint8_t)(DS4424_REG_OUT0 + ch), &reg) == 1;
+        if (read_ok) {
+            const int8_t have = (reg & 0x80) ? (int8_t)(reg & 0x7F) : (int8_t)(-(int8_t)(reg & 0x7F));
+            if (have == want) continue;
+        }
+        if (!ds4424_set_code(ch, want)) ok = false;
+    }
+    return ok;
 }
 
 void handle_get_caps(void)
