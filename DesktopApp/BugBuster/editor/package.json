@@ -1,0 +1,28 @@
+{
+  "name": "bugbuster-script-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline CodeMirror 6 script editor + shared firmware-API catalogue for the BugBuster desktop app",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "sync-catalogue": "node build.mjs --sync-catalogue",
+    "check": "node build.mjs --check",
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "node ../tests/ui-harness/editor_e2e.mjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/highlight": "1.2.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

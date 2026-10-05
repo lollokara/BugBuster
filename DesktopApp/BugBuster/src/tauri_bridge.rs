@@ -1671,6 +1671,64 @@ pub async fn la_stream_usb_status() -> Option<LaStreamRuntimeStatus> {
     serde_wasm_bindgen::from_value(result).ok()
 }
 
+// -----------------------------------------------------------------------------
+// Scripting (single `script_request {operation, args}` command)
+// -----------------------------------------------------------------------------
+
+/// One scripting request over the selected transport. The reply is the backend JSON object
+/// (`ok`, `operation`, `device`, ...); `Err` is only an unknown operation or an IPC failure.
+/// Device failures come back as `ok:false` objects, never as `Err`.
+pub async fn script_request(
+    operation: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let req = serde_json::json!({ "operation": operation, "args": args });
+    let js = js_sys::JSON::parse(&req.to_string()).map_err(|_| "request is not JSON".to_string())?;
+    match invoke("script_request", js).await {
+        Ok(v) => {
+            let text = js_sys::JSON::stringify(&v)
+                .ok()
+                .and_then(|s| s.as_string())
+                .ok_or_else(|| "script_request returned a non-JSON value".to_string())?;
+            serde_json::from_str(&text).map_err(|e| format!("script_request reply: {e}"))
+        }
+        Err(e) => Err(e
+            .as_string()
+            .unwrap_or_else(|| "script_request was rejected".to_string())),
+    }
+}
+
+/// Payload of the `script-upload-progress` event.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScriptUploadProgress {
+    pub name: String,
+    pub sent: u64,
+    pub total: u64,
+}
+
+/// Wi-Fi WebSocket REPL control (`open`/`send_line`/`interrupt`/`close`). The backend takes the
+/// host and admin token from the selected HTTP connection; neither crosses this boundary.
+/// Progress arrives as `script-repl` events.
+pub async fn script_repl_request(
+    operation: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let req = serde_json::json!({ "operation": operation, "args": args });
+    let js = js_sys::JSON::parse(&req.to_string()).map_err(|_| "request is not JSON".to_string())?;
+    match invoke("script_repl_request", js).await {
+        Ok(v) => {
+            let text = js_sys::JSON::stringify(&v)
+                .ok()
+                .and_then(|s| s.as_string())
+                .ok_or_else(|| "script_repl_request returned a non-JSON value".to_string())?;
+            serde_json::from_str(&text).map_err(|e| format!("script_repl_request reply: {e}"))
+        }
+        Err(e) => Err(e
+            .as_string()
+            .unwrap_or_else(|| "script_repl_request was rejected".to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{summarize_la_stream_status, LaStreamRuntimeStatus};

@@ -38,3 +38,19 @@ Notes
   - Trunk watches the whole project, so PNGs are written in one burst at the end of each run and
     its livereload socket is disabled inside the page; otherwise the page would reload mid-run.
   - Scope is started and the LA capture is armed by the script so those views show data.
+
+Scripting acceptance (mock evidence only: no Tauri, no CDP, no hardware)
+  scripting_mock_selftest.mjs  node --test: the stateful script_request mock, no browser.
+  scripting.mjs                Playwright interaction suite against the real UI; groups: identity,
+                               editing, lint, completion, docs, docs-failure, runs, logs, repl,
+                               autorun, matrix (light/dark x 1440/1100/800 x daq/la/none).
+    node scripting.mjs --url http://127.0.0.1:<trunk port> [--only runs,logs] [--matrix quick]
+                       [--themes light] [--sizes 1440x900] [--hats daq] [--out DIR] [--no-shots]
+  Playwright is found via BB_PLAYWRIGHT_DIR, ./node_modules, tests/e2e or a sibling worktree.
+  Screenshots go to <out>/harness-shots, the machine readable result to <out>/harness-result.json
+  (default out: the parent repo scratch/desktop-scripting, outside the Trunk watch tree).
+  Start the server with trunk serve --port <free> --no-autoreload.
+  window.__BB_SCRIPT_MOCK (set window.__BB_MOCK.scripts = {...} before mock_ipc.js): configure(),
+  scenario(), fail(op, rule), hold(op, phase), release(), commands(op), counts(), violations(),
+  snapshot(), externalRun(), reboot(), logSplitUtf8(), dropLogs(), readLogs(), setLink(), setCaps().
+  Wrong IPC shapes are rejected (kind "invalid") and listed by violations(); the suite fails on any.

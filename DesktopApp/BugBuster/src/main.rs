@@ -1,5 +1,6 @@
 mod app;
 mod components;
+mod script_state;
 mod tabs;
 mod tauri_bridge;
 mod theme;
