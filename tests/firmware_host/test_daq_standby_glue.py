@@ -320,12 +320,15 @@ int main(void) {
     assert(strstr(trace, "provision") == NULL && g_routes_held && !standby_p4_adc_available());
     g_held = false; out = standby_p4_button_filter(1900, 0);                       // first awake poll ends the old gesture
     g_held = true;  g_raw = true; out = standby_p4_button_filter(2000, 0);          // a new gesture started awake
+    trace[0] = 0;
     g_held = false; g_raw = false; out = standby_p4_button_filter(2100, 0x04);
     assert(out == 0x04);
-    // the first EXPLICIT request connects the path (once) and asks for the acquisition back
+    // a person pressing a front-panel button on the awake instrument is the first EXPLICIT request: it
+    // connects the path (once) and asks for the acquisition back, so the readout is not "---" forever
+    assert(!strcmp(trace, "provision;acq_resume_queued;") && !g_routes_held && standby_p4_adc_available());
     trace[0] = 0;
     assert(standby_p4_admit());
-    assert(!strcmp(trace, "provision;acq_resume_queued;") && !g_routes_held && standby_p4_adc_available());
+    assert(trace[0] == 0);                                                        // already connected
     standby_p4_leave();
     trace[0] = 0;
     assert(standby_p4_admit()); standby_p4_leave();
@@ -577,6 +580,16 @@ int main(void) {
     standby_p4_service(now_us / 1000 + 1500);                                       // periodic mirror
     assert(nsent == 1 && sent[0].d[1] == BB_ST_OP_POLL && (sent[0].d[8] | (sent[0].d[9] << 8)) == 300);
     puts("p4-c6");
+
+    // ---- a front-panel press on an awake instrument brings the measurement path back -------------
+    fresh();
+    g_routes_held = true; g_held = false; g_raw = false; trace[0] = 0;
+    assert(!standby_analog_measurement_available());                                // "---" until something asks
+    assert(standby_p4_button_filter(1000, 0) == 0 && g_routes_held);                // no press: nothing is connected
+    assert(standby_p4_button_filter(1100, 0x01) == 0x01);                           // a press passes through to the C6
+    assert(!g_routes_held && strstr(trace, "provision;") != NULL);                  // ... and the readout path is back
+    assert(standby_analog_measurement_available());
+    puts("p4-button-provision");
     return 0;
 }
 """

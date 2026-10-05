@@ -442,6 +442,11 @@ uint8_t standby_p4_button_filter(uint32_t t, uint8_t raw)
     if (o.start_discard) buttons_p4_discard_gesture();   // the driver itself stops emitting for this gesture
     if (!blocked && s_sb.state == BB_ST_ACTIVE) s_wake_notice_sent = false;
     if (o.activity) standby_p4_note_activity();
+    // A person pressing a front-panel button on an awake instrument is an explicit action: bring back the
+    // measurement path a wake left open, so the readout does not stay "---" until a host asks for data.
+    if (!blocked && s_sb.state == BB_ST_ACTIVE && o.events != 0u && standby_analog_routes_held()) {
+        if (standby_p4_admit()) standby_p4_leave();     // admission provisions the routes and counts the work
+    }
 
     if (o.wake_press && !s_wake_notice_sent && s_sb.state == BB_ST_ASLEEP) {
         // A button woke the P4 before the mainboard asked for anything: let the
