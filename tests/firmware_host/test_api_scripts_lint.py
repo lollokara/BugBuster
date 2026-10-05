@@ -9,7 +9,11 @@ Tests argument handling and validation with a stubbed scripting_lint_string:
 """
 
 import json
+import shutil
+import tempfile
 from pathlib import Path
+
+import pytest
 
 from tests.firmware_host.fwhost import compile_and_run, extract_function
 
@@ -157,6 +161,14 @@ bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t ma
     return g_stub_lint_ok;
 }
 """
+
+
+@pytest.fixture
+def tmp_path():
+    """script_storage builds paths in a 128-byte buffer; pytest's own tmp_path (macOS, xdist) overflows it."""
+    d = Path(tempfile.mkdtemp(prefix="bbs"))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
 
 
 def _run_test(tmp_path: Path, main_body: str) -> str:

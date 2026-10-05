@@ -18,6 +18,28 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
         || 3000,
     );
 
+    let (sb, set_sb) = signal(None::<StandbyStatus>);
+    let (sb_err, set_sb_err) = signal(String::new());
+    // Standby is absent on older firmware: the card only shows once a status has been read.
+    leptos::task::spawn_local(async move {
+        let _ = standby_presence(true).await;
+    });
+    start_tab_poll(
+        move || async move {
+            if let Ok(st) = standby_status().await {
+                set_sb.try_set(Some(st));
+            }
+        },
+        || 3000,
+    );
+    let apply = move |r: Result<StandbyStatus, String>| match r {
+        Ok(st) => {
+            set_sb_err.set(String::new());
+            set_sb.set(Some(st));
+        }
+        Err(e) => set_sb_err.set(e),
+    };
+
     view! {
         <div class="view sy-pd">
             <p class="sy-lead">
@@ -115,6 +137,43 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             }}
                         </tbody>
                     </table>
+                </div>
+            </Show>
+
+            // ── System standby ────────────────────────────────────────────
+            <Show when=move || sb.get().is_some()>
+                <div class="group sy-standby">
+                    <div class="group-header">
+                        <span class="group-title"><Icon name="power" size=15 />"System standby"</span>
+                        <span class="badge">{move || sb.get().map(|s| s.state).unwrap_or_default()}</span>
+                    </div>
+                    <div class="sy-standby-row">
+                        <label for="sb-timeout">"Sleep after inactivity"</label>
+                        <select id="sb-timeout"
+                            prop:value=move || sb.get().map(|s| s.timeout_seconds.to_string()).unwrap_or_default()
+                            on:change=move |ev| {
+                                if let Ok(secs) = event_target_value(&ev).parse::<u16>() {
+                                    leptos::task::spawn_local(async move {
+                                        apply(standby_set_timeout(secs).await);
+                                    });
+                                }
+                            }
+                        >
+                            <option value="0">"Never"</option>
+                            <option value="60">"1 minute"</option>
+                            <option value="300">"5 minutes"</option>
+                            <option value="900">"15 minutes"</option>
+                        </select>
+                        <button class="btn btn-sm btn-tinted"
+                            disabled=move || sb.get().map(|s| s.state == "active").unwrap_or(true)
+                            on:click=move |_| {
+                                leptos::task::spawn_local(async move { apply(standby_wake().await); });
+                            }
+                        >"Wake"</button>
+                    </div>
+                    <Show when=move || !sb_err.get().is_empty()>
+                        <p class="sy-lead">{move || sb_err.get()}</p>
+                    </Show>
                 </div>
             </Show>
         </div>

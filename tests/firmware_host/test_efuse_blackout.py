@@ -19,6 +19,7 @@ from tests.firmware_host.fwhost import compile_and_run
 PCA = "Firmware/ESP32/src/hal/pca9535.cpp"
 
 STUBS = {
+    "power/standby_hw.h": "#pragma once\n#include <stdbool.h>\nstatic inline bool standby_hw_bus_gate_open(void) { return true; }\nstatic inline bool standby_hw_power_transition(void) { return false; }\n",
     "config.h": r"""#pragma once
 #include <stdint.h>
 #include <stdbool.h>

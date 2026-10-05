@@ -17,7 +17,7 @@ Two transport modes are supported:
 
 ## Handler Coverage Map
 
-147 BBP commands are registered across 15 handler files.
+148 BBP commands are registered across 15 handler files.
 
 | File | Commands | Count |
 |------|----------|-------|

@@ -313,7 +313,7 @@ Constants live in `python/bugbuster_mcp/config.py`. Full matrix:
   </tr>
 </table>
 
-Tauri v2 + Leptos 0.7, 23 tabs. Build from source:
+Tauri v2 + Leptos 0.7, 24 tabs. Build from source:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -443,12 +443,12 @@ BugBuster/
 │   ├── hat-uart-protocol.md   ESP32 ↔ HAT UART framing
 │   └── la-hat-architecture.md Logic Analyzer HAT architecture
 │
-├── DesktopApp/BugBuster/      Tauri v2 + Leptos 0.7 (23 tabs)
+├── DesktopApp/BugBuster/      Tauri v2 + Leptos 0.7 (24 tabs)
 ├── iOSApp/                    Native Swift/SwiftUI app
 │
 ├── python/
 │   ├── bugbuster/             Control library (USB + HTTP)
-│   ├── bugbuster_mcp/         MCP server (146 tools, 19 groups)
+│   ├── bugbuster_mcp/         MCP server (150 tools, 19 groups)
 │   └── examples/              Annotated example scripts
 │
 ├── tests/                     pytest - unit, simulator, hardware-in-the-loop

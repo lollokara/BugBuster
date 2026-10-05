@@ -1783,6 +1783,16 @@ pub async fn standby_wake() -> Result<StandbyStatus, String> {
     standby_record("standby_wake", serde_json::json!({})).await
 }
 
+/// Explicit form of the backend's presence heartbeat: `true` refreshes now (a new session after a
+/// release), `false` releases. `Ok(None)` when the firmware has no standby.
+pub async fn standby_presence(present: bool) -> Result<Option<StandbyStatus>, String> {
+    let v = standby_call("standby_presence", serde_json::json!({ "present": present })).await?;
+    if v.is_null() || v.is_undefined() {
+        return Ok(None);
+    }
+    serde_wasm_bindgen::from_value(v).map(Some).map_err(|e| format!("standby_presence reply: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{summarize_la_stream_status, LaStreamRuntimeStatus};

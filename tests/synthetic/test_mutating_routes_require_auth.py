@@ -21,6 +21,10 @@ OPEN_ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/daq/bs"): "battsim status/list/dir/read/profile are reads; SET_EPOCH only stamps "
                              "the host clock once per run (same data class as the open GET routes)",
     ("POST", "/api/daq/bs/read"): "battsim history file read, POST only to carry the request body",
+    ("POST", "/api/standby/presence"): "logical client presence heartbeat (random id, 45 s expiry); it can only "
+                                       "keep the device awake, and policy/sleep stay admin-gated",
+    ("POST", "/api/standby/wake"): "wake is always safe to request and must work for a client that cannot "
+                                   "authenticate while the device is asleep",
     ("POST", "/api/hub/status"): "hub streaming status counters read-only, POST alias for iOS ConnectionManager",
 }
 

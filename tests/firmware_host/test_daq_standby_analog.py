@@ -428,6 +428,7 @@ int main(void) {
     // ---- twenty full cycles --------------------------------------------------------
     boot_board();
     for (int i = 0; i < 20; ++i) {
+        trace[0] = 0;                                           // the event log is a fixed buffer
         assert(standby_analog_save(&b));
         assert(standby_analog_mux_off(&b));
         assert(standby_analog_off(&b));

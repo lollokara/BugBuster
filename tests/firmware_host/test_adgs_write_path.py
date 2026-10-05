@@ -24,6 +24,7 @@ from tests.lib.srcread import REPO_ROOT
 DRV = "Firmware/ESP32/src/hal/adgs2414d.cpp"
 
 STUBS = {
+    "power/standby_hw.h": "#pragma once\n#include <stdbool.h>\nstatic inline bool standby_hw_bus_gate_open(void) { return true; }\n",
     "config.h": r"""#pragma once
 #include <stdint.h>
 #include <stdbool.h>
