@@ -706,6 +706,10 @@ void standby_hw_boot_check(void)
     if (failed != 0u) {
         ESP_LOGE(TAG, "boot check failed (stage mask 0x%04x): not ready", (unsigned)failed);
         standby_system_boot_fault(&s_sys, failed);
+        // A converter whose first verify failed at a cold power-on is repaired by the wake chain
+        // (REINITIALIZE). Run it now instead of leaving the board "not ready" until a client asks.
+        // Anything else (no PCA9535, rails not controllable) cannot be repaired by a wake.
+        if ((failed & ~STANDBY_STEP_BIT(STANDBY_REINITIALIZE)) == 0u) standby_system_wake(&s_sys);
     }
 }
 

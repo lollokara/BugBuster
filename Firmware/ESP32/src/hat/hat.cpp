@@ -472,7 +472,10 @@ static uint8_t hat_command_ex(uint8_t cmd, const uint8_t *payload, uint8_t paylo
                               bool may_retry)
 {
     if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
-        ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
+        // 0x7C is the system-standby poll: it is retried every cycle and simply loses to a long
+        // streaming / firmware transfer that owns the bus, so that contention is not an error.
+        if (cmd == 0x7Cu) ESP_LOGD(TAG, "HAT standby poll skipped: bus busy");
+        else ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
         return 0;
     }
 
@@ -987,7 +990,10 @@ HatType hat_detect(void)
     }
 
     s_state.detect_voltage = level ? 3.3f : 0.0f;
-    s_state.type = level ? HAT_TYPE_NONE : HAT_TYPE_SWD_GPIO;
+    // A connected HAT has already told us its real type (GET_INFO); only the pin level is re-read here,
+    // so a re-detect must not demote a DAQ HAT to a generic one.
+    if (level) s_state.type = HAT_TYPE_NONE;
+    else if (!s_state.connected) s_state.type = HAT_TYPE_SWD_GPIO;
     s_state.detected = (level == 0);
 
     return s_state.type;
