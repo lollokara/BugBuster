@@ -15,6 +15,13 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+// Editor shortcuts: CodeMirror's Mod is Cmd on macOS, and a bare Ctrl+A / Ctrl+Z there mean line-start / nothing.
+const MAC = process.platform === 'darwin';
+const K_ALL = MAC ? 'Meta+a' : 'Control+a';
+const K_UNDO = MAC ? 'Meta+z' : 'Control+z';
+const K_REDO = MAC ? 'Meta+Shift+z' : 'Control+y';
+const K_END = MAC ? 'Meta+ArrowDown' : 'Control+End';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '../..');
 
@@ -199,10 +206,10 @@ async function until(p, fn, arg, timeout = 8000, what = '') {
   try { return await p.waitForFunction(fn, arg, { timeout, polling: 50 }); } catch (e) { throw new Error(`timeout (${timeout} ms) waiting for ${what || String(fn).slice(0, 90)}`); }
 }
 const docText = (p) => p.evaluate(() => [...document.querySelectorAll('.cm-content .cm-line')].map((l) => l.textContent).join('\n'));
-async function focusEditor(p) { await p.click('.cm-content'); await p.keyboard.press('Control+End'); }
+async function focusEditor(p) { await p.click('.cm-content'); await p.keyboard.press(K_END); }
 async function replaceDoc(p, text) {
   await p.click('.cm-content');
-  await p.keyboard.press('Control+a');
+  await p.keyboard.press(K_ALL);
   if (text === '') await p.keyboard.press('Backspace'); else await p.keyboard.insertText(text);
 }
 async function typeText(p, t) { await p.keyboard.type(t, { delay: 12 }); }
@@ -648,11 +655,11 @@ group('editing', async (browser) => {
     await openFile(p, 'hello.py');
     await replaceDoc(p, '');
     await typeText(p, 'foo bar foo');
-    await p.keyboard.press('Control+z');
+    await p.keyboard.press(K_UNDO);
     assert((await docText(p)) !== 'foo bar foo', 'undo did nothing');
-    await p.keyboard.press('Control+y');
+    await p.keyboard.press(K_REDO);
     eq(await docText(p), 'foo bar foo', 'redo');
-    await p.keyboard.press('Control+f');
+    await p.keyboard.press(MAC ? 'Meta+f' : 'Control+f');
     const panel = p.locator('.cm-search');
     await panel.waitFor({ timeout: 4000 });
     await panel.locator('input[name="search"]').fill('foo');
@@ -661,7 +668,7 @@ group('editing', async (browser) => {
     eq(await docText(p), 'baz bar baz', 'replace all');
     await s.shot('search-replace-1440-light');
     await p.keyboard.press('Escape');
-    await p.keyboard.press('Control+z');
+    await p.keyboard.press(K_UNDO);
     assert((await docText(p)) !== 'baz bar baz', 'undo of replace did nothing');
     await p.click(T('sc-revert'));
     await p.click(`${T('sc-dialog-revert')} ${T('sc-dialog-confirm')}`);

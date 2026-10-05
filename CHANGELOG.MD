@@ -10,6 +10,12 @@
   output-safe wake, C6 milestone-based logo/progress and peripheral display standby,
   and Python/MCP/web/iOS API slices. Desktop integration, final builds and hardware
   acceptance remain open.
+- **Standby fixes found on the bench.** The C6 is darkened (panel, backlight and a latched all-off WS2812 frame) before the
+  analog rails go, because GPIO54 is both the +/-26 V enable and the C6's CHIP_PU; the idle clock no longer wraps when activity
+  lands during a blocked tick (a press could sleep the board); a C6 holding a stale generation is rebased by the P4; the S3
+  retries the AD74416H/MUX boot init (a cold power-on was shown as "Mainboard IO" failed); the C6 boot splash waits 15 s for the
+  mainboard report; a front-panel press reconnects the measurement path a wake left open; P4 warnings, errors and standby lines
+  reach the ESPFleet hub; a HAT re-detect no longer demotes a connected DAQ HAT; desktop System > USB PD gained a minimal standby card.
 - **Hourly HEALTH record to the ESPFleet hub.** Heap/PSRAM, per-task stack headroom, reset reason
   and cheap counters (HAT timeouts, hub failures, log/script drops, Wi-Fi reconnects) are queued as
   chunked `HEALTH` log lines 60 s after the hub link comes up and every hour after, buffered while the

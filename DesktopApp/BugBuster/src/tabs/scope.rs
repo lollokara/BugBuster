@@ -1104,7 +1104,8 @@ pub fn ScopeTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                     let Some((t, v)) = get_val(idx) else { continue };
                     let x = ml + ((t - t_start) / win_ms) * pw;
                     let y = band_top + ((y_max - v as f64) / y_span) * band_h;
-                    let y = y.clamp(band_top, band_top + band_h);
+                    // not f64::clamp: band_h is negative on a very short canvas, and clamp(min > max) panics
+                    let y = y.max(band_top).min((band_top + band_h).max(band_top));
                     if !started {
                         ctx.move_to(x, y);
                         started = true;

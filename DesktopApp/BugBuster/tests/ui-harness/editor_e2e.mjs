@@ -7,6 +7,13 @@ import { createServer } from "node:http";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Editor shortcuts: CodeMirror's Mod is Cmd on macOS, and a bare Ctrl+A / Ctrl+Z there mean line-start / nothing.
+const MAC = process.platform === 'darwin';
+const K_ALL = MAC ? 'Meta+a' : 'Control+a';
+const K_UNDO = MAC ? 'Meta+z' : 'Control+z';
+const K_REDO = MAC ? 'Meta+Shift+z' : 'Control+y';
+const K_END = MAC ? 'Meta+ArrowDown' : 'Control+End';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, "../..");
 const shotDir = process.env.BB_SHOT_DIR ?? resolve(appRoot, "../../../../scratch/desktop-scripting");
@@ -152,7 +159,12 @@ await step("mouse click accepts a completion; Enter also accepts", async () => {
   await fresh("import daq\ndaq.run.");
   await typeText("st");
   await openPopup();
-  await page.locator(".cm-tooltip-autocomplete li", { hasText: "status" }).click();
+  {
+    // The completion info panel can overlay the right part of the item in a narrow editor, so click the
+    // item's left edge (the label), which the panel never covers.
+    const box = await page.locator(".cm-tooltip-autocomplete li", { hasText: "status" }).boundingBox();
+    await page.mouse.click(box.x + 14, box.y + box.height / 2);
+  }
   assert.equal(await src(), "import daq\ndaq.run.status()");
   await fresh("import daq\ndaq.run.");
   await typeText("sto");
@@ -229,9 +241,9 @@ await step("onChange fires for user edits only; setSource is silent and idempote
 await step("undo/redo through keyboard and handle; setSource resets history", async () => {
   await fresh("");
   await typeText("abc");
-  await page.keyboard.press("Control+z");
+  await page.keyboard.press(K_UNDO);
   assert.equal(await src(), "");
-  await page.keyboard.press("Control+y");
+  await page.keyboard.press(K_REDO);
   assert.equal(await src(), "abc");
   await page.evaluate(() => window.h.undo());
   assert.equal(await src(), "");
@@ -249,7 +261,7 @@ await step("auto-indent after colon and Tab indents selection", async () => {
   await typeText("pass");
   assert.equal(await src(), "def f():\n    pass");
   await fresh("a\nb");
-  await page.keyboard.press("Control+a");
+  await page.keyboard.press(K_ALL);
   await page.keyboard.press("Tab");
   assert.equal(await src(), "    a\n    b");
 });

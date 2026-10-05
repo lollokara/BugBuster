@@ -14,14 +14,11 @@ Simulates the standby state machine with fake clock for testing.
 import struct
 import time
 from dataclasses import dataclass, field
-from enum import IntEnum
 
 from bugbuster.constants import CmdId, ErrorCode
 from bugbuster.standby import (
     SUBOP_STATUS, SUBOP_PRESENCE, SUBOP_POLICY, SUBOP_WAKE, SUBOP_SLEEP,
-    STATUS_SCHEMA, STATUS_LEN, _STATUS_FMT,
-    StandbyState, STATE_NAMES,
-    PRESENCE_TTL_S, PRESENCE_MAX_CLIENTS,
+    STATUS_SCHEMA, StandbyState, PRESENCE_TTL_S, PRESENCE_MAX_CLIENTS,
     TIMEOUT_CHOICES, DEFAULT_TIMEOUT_S,
 )
 

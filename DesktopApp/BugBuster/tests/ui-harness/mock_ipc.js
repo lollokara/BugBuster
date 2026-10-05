@@ -223,6 +223,11 @@
       efuses: p.ef.map(function (en, i) { return { id: i + 1, enabled: en, fault: p.efFault[i] }; }),
     };
   }
+  function standbyRecord() {
+    return { schema: 1, state: S.sbState || 'active', ready: true, stage: 0, generation: 3,
+             timeoutSeconds: S.sbTimeout == null ? 300 : S.sbTimeout, clients: 1, failedStage: 0,
+             inhibitors: 0, completed: 0, failed: 0, skipped: 0, idleRemainingMs: 120000 };
+  }
   function usbpdStatus() {
     var sel = S.pdSel, volts = [5, 9, 12, 15, 18, 20];
     var v = volts[sel - 1], a = 3.0;
@@ -742,6 +747,11 @@
       return null;
     },
     usbpd_get_status: usbpdStatus,
+    // System standby (standby_commands.rs): a status record shaped like StandbyStatus (camelCase).
+    standby_status: standbyRecord,
+    standby_presence: function (a) { return arg(a, ['present'], true) ? standbyRecord() : null; },
+    standby_set_timeout: function (a) { S.sbTimeout = arg(a, ['seconds'], 300); return standbyRecord(); },
+    standby_wake: function () { S.sbState = 'active'; return standbyRecord(); },
     usbpd_select_pdo: function (a) { var v = arg(a, ['voltage'], 6); if (S.pdPdos[v - 1] && S.pdPdos[v - 1].det) S.pdSel = v; return null; },
 
     // --- HAT

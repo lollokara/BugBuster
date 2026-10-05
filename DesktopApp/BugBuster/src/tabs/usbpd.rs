@@ -147,10 +147,9 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                         <span class="group-title"><Icon name="power" size=15 />"System standby"</span>
                         <span class="badge">{move || sb.get().map(|s| s.state).unwrap_or_default()}</span>
                     </div>
-                    <div class="sy-standby-row">
+                    <div class="sy-standby-row" style="display:flex;align-items:center;gap:12px;padding:8px 14px 12px">
                         <label for="sb-timeout">"Sleep after inactivity"</label>
                         <select id="sb-timeout"
-                            prop:value=move || sb.get().map(|s| s.timeout_seconds.to_string()).unwrap_or_default()
                             on:change=move |ev| {
                                 if let Ok(secs) = event_target_value(&ev).parse::<u16>() {
                                     leptos::task::spawn_local(async move {
@@ -159,10 +158,10 @@ pub fn UsbPdTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                                 }
                             }
                         >
-                            <option value="0">"Never"</option>
-                            <option value="60">"1 minute"</option>
-                            <option value="300">"5 minutes"</option>
-                            <option value="900">"15 minutes"</option>
+                            <option value="0" selected=move || sb.get().map(|s| s.timeout_seconds == 0).unwrap_or(false)>"Never"</option>
+                            <option value="60" selected=move || sb.get().map(|s| s.timeout_seconds == 60).unwrap_or(false)>"1 minute"</option>
+                            <option value="300" selected=move || sb.get().map(|s| s.timeout_seconds == 300).unwrap_or(false)>"5 minutes"</option>
+                            <option value="900" selected=move || sb.get().map(|s| s.timeout_seconds == 900).unwrap_or(false)>"15 minutes"</option>
                         </select>
                         <button class="btn btn-sm btn-tinted"
                             disabled=move || sb.get().map(|s| s.state == "active").unwrap_or(true)

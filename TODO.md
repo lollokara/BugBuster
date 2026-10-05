@@ -30,6 +30,17 @@ Open work only. Everything delivered has moved to `CHANGELOG.MD` under
   (ESPFleet) for wireless debugging; the C6 boot splash waits 15 s (25 s overall) for the S3 report; ADAQ calibration reads
   retry. Still open: physical check of panel/backlight/LED darkness, held-button wake (VDUT must not toggle), power
   measurement, LA HAT, degraded/no-Wi-Fi boot, WebView/CDP screenshots.
+- [VERIFIED 2026-10-05, later, DAQ HAT bench] Full pass on the final images: local CI equivalents all green (ruff, mypy,
+  3815 + 6 pytest, coverage ratchet, 4 consistency gates, 233 cargo, web typecheck + 12 vitest files, S3/P4/C6/RP2040
+  builds, P4 app-only and C6 merged image verification); device suite over HTTP 148 passed with the four RP2040-only HAT
+  pin tests now skipped on a DAQ HAT; desktop mock UI harness 46 views x 3 HAT types x 2 themes with no errors, editor
+  e2e 21/21, scripting workspace 334/335 (the autorun-reboot step is timing-sensitive). Root causes found on the way:
+  idle-clock race (activity stamped after the tick's clock read wrapped the idle time and slept the board right after a
+  press), a C6 holding a stale generation after an S3/P4 restart, the S3 cold-boot AD74416H verify failing (now retried;
+  this is what the C6 shows as "Mainboard IO"), `hat_detect()` demoting a connected DAQ HAT to a generic HAT, and the
+  standalone readout staying `---` after a wake (a front-panel press now reconnects the measurement path). Still open:
+  a power-cycle confirmation of the boot retry, the ADAQ CRC-read failures seen on earlier sleep loops (diagnostics are in),
+  physical panel/backlight/LED darkness, held-button wake, input-power measurement, LA HAT, no-Wi-Fi boot.
 
 Populated by the multi-surface audit of 2026-08-20 and its verification pass,
 then extended by the **per-feature audit of 2026-10-01** (every device feature

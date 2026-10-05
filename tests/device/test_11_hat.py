@@ -27,11 +27,25 @@ pytestmark = [
 # Skip HAT tests if --hat not passed
 # ---------------------------------------------------------------------------
 
+# These drive the RP2040 HAT's EXP_EXT pin matrix and its I/O-voltage rail over the HAT UART.
+_HAT_TYPE_DAQ_POWER = 16   # HatType::HAT_TYPE_DAQ_POWER (Firmware/ESP32/src/hat/hat.h)
+_RP2040_ONLY = {"test_hat_set_pin", "test_hat_set_pin_all_functions", "test_hat_set_all_pins",
+                "test_hat_set_io_voltage_http"}
+
+
 @pytest.fixture(autouse=True)
 def require_hat(request):
     """Auto-use fixture that skips all HAT tests unless --hat is passed."""
     if not request.config.getoption("--hat", default=False):
         pytest.skip("HAT tests require --hat flag")
+    if request.node.originalname in _RP2040_ONLY:
+        fixture = "http_device" if "http_device" in request.fixturenames else "device"
+        try:
+            status = request.getfixturevalue(fixture).hat_get_status()
+        except Exception:  # noqa: BLE001 - no usable status: let the test itself report it
+            return
+        if status.get("type") == _HAT_TYPE_DAQ_POWER or str(status.get("kind", "")).lower() == "daq":
+            pytest.skip("RP2040 SWD/GPIO HAT pin commands; a DAQ HAT (P4) does not implement them")
 
 
 # ---------------------------------------------------------------------------
