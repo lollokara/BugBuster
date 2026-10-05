@@ -37,6 +37,7 @@ static portMUX_TYPE      s_mux = portMUX_INITIALIZER_UNLOCKED;
 static daq_board_t      *s_b;
 static sb_btn_gate_t     s_gate;
 static bb_standby_request_t s_last_s3_rq;     // basis for re-forwarding a C6 stage
+static bb_standby_reply_t   s_c6_last;       // the C6's latest reply, for the stage-failure log
 static uint32_t          s_c6_reply_ms;       // 0 = the C6 never answered a standby frame
 static uint32_t          s_last_mirror_ms;
 static bool              s_wake_notice_sent;
@@ -219,6 +220,7 @@ void standby_p4_on_c6_reply(const uint8_t *payload, uint8_t len)
     memcpy(&r, payload, sizeof(r));
     uint32_t t = now_ms();
     s_c6_reply_ms = t ? t : 1u;
+    s_c6_last = r;
     taskENTER_CRITICAL(&s_mux);
     sb_p4_set_c6(&s_sb, true, true);
     sb_p4_c6_reply(&s_sb, &r, t);
@@ -395,8 +397,9 @@ void standby_p4_service(uint32_t t)
     const bool c6_failed_now = was_running != 0u && stage == 0u && s_sb.c6_failed;
     taskEXIT_CRITICAL(&s_mux);
     if (c6_failed_now) {
-        ESP_LOGW(TAG, "C6 did not confirm stage %u (last reply %lu ms ago, last hello %lu ms ago, rx frames %lu crc errors %lu)",
-                 (unsigned)was_running, (unsigned long)(s_c6_reply_ms ? t - s_c6_reply_ms : 0u),
+        ESP_LOGW(TAG, "C6 stage %u unconfirmed: C6 says state %u ready %u fail %u (reply %lu ms ago, hello %lu ms ago, rx %lu crc %lu)",
+                 (unsigned)was_running, (unsigned)s_c6_last.state, (unsigned)s_c6_last.ready, (unsigned)s_c6_last.failure,
+                 (unsigned long)(s_c6_reply_ms ? t - s_c6_reply_ms : 0u),
                  (unsigned long)(s_b->ddp.c6_info_ms ? t - s_b->ddp.c6_info_ms : 0u),
                  (unsigned long)s_b->ddp.rx_frames, (unsigned long)s_b->ddp.crc_errors);
     }

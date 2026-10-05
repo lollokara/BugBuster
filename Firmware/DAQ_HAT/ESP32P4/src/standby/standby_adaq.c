@@ -1,6 +1,9 @@
 #include "standby_adaq.h"
 
 #include <string.h>
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 esp_err_t sb_adaq_save(adaq7769_t *dev, bool usable, sb_adaq_shadow_t *s)
 {
@@ -11,11 +14,16 @@ esp_err_t sb_adaq_save(adaq7769_t *dev, bool usable, sb_adaq_shadow_t *s)
     // A single register read can fail its CRC while the converter is mid-conversion; the values are
     // static, so re-reading is safe. Only a read that keeps failing fails the stage.
     esp_err_t err = ESP_FAIL;
-    for (int attempt = 0; attempt < 3 && err != ESP_OK; ++attempt) {
+    for (int attempt = 0; attempt < 5 && err != ESP_OK; ++attempt) {
+        if (attempt != 0) vTaskDelay(pdMS_TO_TICKS(20));      // let a conversion / frame in flight finish
         err = adaq7769_get_offset_cal(dev, &s->offset24);
         if (err == ESP_OK) err = adaq7769_get_gain_cal(dev, &s->gain24);
     }
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        ESP_LOGE("standby_adaq", "cal read failed: cont_read %d crc_append %d status_append %d",
+                 (int)dev->cfg.cont_read, (int)dev->cfg.crc_append, (int)dev->cfg.status_append);
+        return err;
+    }
 
     s->cfg = dev->cfg;
     s->gpio_control = dev->gpio_control_shadow;
