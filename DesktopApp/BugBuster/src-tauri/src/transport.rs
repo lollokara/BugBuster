@@ -4,8 +4,27 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::state::DeviceState;
+
+/// One raw request to the device's REST API (HTTP transport only).
+pub struct HttpExchange {
+    pub method: &'static str,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    /// Body bytes and their content type.
+    pub body: Option<(Vec<u8>, &'static str)>,
+    pub timeout: Duration,
+}
+
+/// Raw reply: header names are lower-cased.
+pub struct HttpReply {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
 
 /// Abstraction over USB (BBP binary protocol) and HTTP (REST API) transports.
 /// Both implement the same device operations; the connection manager picks
@@ -31,5 +50,11 @@ pub trait Transport: Send + Sync {
     /// HTTP base URL (only for HTTP transport, None for USB).
     fn base_url(&self) -> Option<String> {
         None
+    }
+
+    /// Raw REST exchange for features without a BBP mapping (scripting). USB has none:
+    /// callers must tunnel over BBP instead of falling back to Wi-Fi.
+    async fn http_exchange(&self, _req: HttpExchange) -> Result<HttpReply> {
+        Err(anyhow::anyhow!("not an HTTP transport"))
     }
 }

@@ -198,6 +198,19 @@ bool daq_settings_set_i32(uint16_t key, int32_t value, daq_src_t src)
     return true;
 }
 
+bool daq_settings_shadow_set_i32(uint16_t key, int32_t value)
+{
+    int i = slot_index(key);
+    if (i < 0) return false;
+    const daq_setting_schema_t *sc = &s_schema[i];
+    if (sc->type == DAQ_T_STR || (sc->flags & DAQ_F_READONLY)) return false;
+    value = daq_config_clamp(key, value);
+    lock();
+    s_slots[i].ival = value;
+    unlock();
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // String accessors.
 // ---------------------------------------------------------------------------

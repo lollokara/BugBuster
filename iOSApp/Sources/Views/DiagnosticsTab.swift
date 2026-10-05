@@ -126,6 +126,9 @@ struct DiagnosticsTab: View {
         AnyView(internalSuppliesCard)
         AnyView(registersCard)
         AnyView(usbPdCard)
+        AnyView(
+            StandbyCard(standby: connectionManager.standby)
+        )
         AnyView(calibrationCard)
         AnyView(wifiCard)
         AnyView(otaCard)

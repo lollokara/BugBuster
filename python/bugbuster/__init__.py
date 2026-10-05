@@ -92,6 +92,7 @@ from .bus import BugBusterBusManager, BusPlanError, BusRouteEntry, BusRoutePlan
 from .discovery import DiscoveredDevice, discover, discover_mdns, resolve_local
 from .ota import OTAClient, OTAError, OTAInfo, PartitionInfo
 from .crash import BootReport, CrashSummary, PreCrash, parse_bootrpt_lines
+from .standby import StandbyStatus, StandbyUnsupportedError
 
 __all__ = [
     # Factory functions
@@ -115,6 +116,10 @@ __all__ = [
     "CrashSummary",
     "PreCrash",
     "parse_bootrpt_lines",
+
+    # System standby
+    "StandbyStatus",
+    "StandbyUnsupportedError",
 
     # Main client
     "BugBuster",

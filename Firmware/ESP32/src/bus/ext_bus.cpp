@@ -578,3 +578,16 @@ bool ext_job_get(uint32_t job_id, uint8_t *status, uint8_t *kind,
     xSemaphoreGive(s_job_mutex);
     return found;
 }
+
+bool ext_bus_jobs_pending(void)
+{
+    if (s_job_mutex == nullptr) return false;   // runtime never started: nothing queued
+    if (xSemaphoreTake(s_job_mutex, 0) != pdTRUE) return true;
+    bool pending = false;
+    for (size_t i = 0; i < EXT_JOB_CAPACITY; i++) {
+        uint8_t st = s_jq.jobs[i].status;
+        if (st == EXT_BUS_JOB_QUEUED || st == EXT_BUS_JOB_RUNNING) { pending = true; break; }
+    }
+    xSemaphoreGive(s_job_mutex);
+    return pending;
+}

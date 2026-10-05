@@ -78,6 +78,10 @@
 #include "diag/crash_report.h"
 #include "mbedtls/base64.h"
 #include "api_hub.h"
+#include <math.h>
+#include "api_standby.h"
+#include "standby_api.h"
+#include "standby_hw.h"
 
 // Drivers/symbols shared with the HTTP layer (defined elsewhere, linked in).
 extern AD74416H_SPI spiDriver;
@@ -188,7 +192,11 @@ static char *api_status(void)
         add_bool_alias(root, "i2cOk", "i2c_ok", g_deviceState.i2cOk);
         add_bool_alias(root, "muxOk", "mux_ok", g_deviceState.muxOk);
         add_bool_alias(root, "muxFaulted", "mux_faulted", adgs_is_faulted());
-        cJSON_AddNumberToObject(root, "dieTemp", g_deviceState.dieTemperature);
+        // False while standby has the analog rail down: every analog number below is
+        // then a placeholder, not a measurement (and spiOk is NOT a fault).
+        const bool analog_ok = !g_deviceState.analogUnavailable;
+        cJSON_AddBoolToObject(root, "analogAvailable", analog_ok);
+        api_add_measurement(root, "dieTemp", g_deviceState.dieTemperature, analog_ok);
         add_number_alias(root, "alertStatus", "alert_status", g_deviceState.alertStatus);
         add_number_alias(root, "alertMask", "alert_mask", g_deviceState.alertMask);
         add_number_alias(root, "supplyAlertStatus", "supply_alert_status", g_deviceState.supplyAlertStatus);
@@ -202,8 +210,8 @@ static char *api_status(void)
             cJSON_AddNumberToObject(obj, "id", ch);
             cJSON_AddStringToObject(obj, "function", channelFunctionToString(cs.function));
             add_number_alias(obj, "functionCode", "function_code", (int)cs.function);
-            add_number_alias(obj, "adcRaw", "adc_raw", cs.adcRawCode);
-            add_number_alias(obj, "adcValue", "adc_value", cs.adcValue);
+            api_add_measurement(obj, "adcRaw", cs.adcRawCode, analog_ok);
+            api_add_measurement(obj, "adcValue", cs.adcValue, analog_ok);
             add_number_alias(obj, "adcRange", "adc_range", (int)cs.adcRange);
             add_number_alias(obj, "adcRate", "adc_rate", (int)cs.adcRate);
             add_number_alias(obj, "adcMux", "adc_mux", (int)cs.adcMux);
@@ -222,8 +230,8 @@ static char *api_status(void)
         for (uint8_t d = 0; d < 4; d++) {
             cJSON *dobj = cJSON_CreateObject();
             cJSON_AddNumberToObject(dobj, "source", g_deviceState.diag[d].source);
-            cJSON_AddNumberToObject(dobj, "rawCode", g_deviceState.diag[d].rawCode);
-            cJSON_AddNumberToObject(dobj, "value", g_deviceState.diag[d].value);
+            api_add_measurement(dobj, "rawCode", g_deviceState.diag[d].rawCode, analog_ok);
+            api_add_measurement(dobj, "value", g_deviceState.diag[d].value, analog_ok);
             cJSON_AddItemToArray(diagnostics, dobj);
         }
 
@@ -470,10 +478,14 @@ static char *api_daq_vdut_status(void)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "present", st.present != 0);
     cJSON_AddBoolToObject(root, "enabled", st.enabled != 0);
-    cJSON_AddNumberToObject(root, "voltageSetpointV", st.vdut_set_v);
-    cJSON_AddNumberToObject(root, "currentLimitMa", st.ilimit_set_a * 1000.0);
-    cJSON_AddNumberToObject(root, "measuredVoltageV", st.meas_v);
-    cJSON_AddNumberToObject(root, "measuredCurrentMa", st.meas_i * 1000.0);
+    // The P4 reports NaN for what it cannot measure (analog front end down in standby):
+    // null plus an availability flag, never the invalid token "nan".
+    const bool meas_ok = isfinite(st.meas_v) && isfinite(st.meas_i);
+    cJSON_AddBoolToObject(root, "measurementAvailable", meas_ok);
+    api_add_measurement(root, "voltageSetpointV", st.vdut_set_v, true);
+    api_add_measurement(root, "currentLimitMa", st.ilimit_set_a * 1000.0, true);
+    api_add_measurement(root, "measuredVoltageV", st.meas_v, meas_ok);
+    api_add_measurement(root, "measuredCurrentMa", st.meas_i * 1000.0, meas_ok);
     cJSON_AddBoolToObject(root, "fault", st.fault != 0);
     return json_take(root);
 }
@@ -959,6 +971,10 @@ static char *api_efuse_imon(bool is_post, const cJSON *body)
 static char *api_overview(void)
 {
     cJSON *root = cJSON_CreateObject();
+    // Rail voltages come from the monitor's cache: stale numbers while the analog rail is down
+    // must read as "not measured" (voltage -1, ok:false), never as a valid reading.
+    const bool analog_ok = !g_deviceState.analogUnavailable;
+    cJSON_AddBoolToObject(root, "analogAvailable", analog_ok);
 
     const DS4424State *st = ds4424_get_state();
     cJSON *idac = cJSON_AddObjectToObject(root, "idac");
@@ -1017,7 +1033,7 @@ static char *api_overview(void)
     for (uint8_t i = 0; i < 3; i++) {
         bool rail_on = (i == 2) ? true
                        : (ps->present ? (i == 0 ? ps->vadj1_en : ps->vadj2_en) : false);
-        float voltage = (st_worker && rail_on && sv->available) ? sv->voltage[i] : -1.0f;
+        float voltage = (analog_ok && st_worker && rail_on && sv->available) ? sv->voltage[i] : -1.0f;
         cJSON *o = cJSON_CreateObject();
         cJSON_AddNumberToObject(o, "rail", i);
         cJSON_AddStringToObject(o, "name", rail_names[i]);
@@ -1780,8 +1796,10 @@ static char *api_channel_adc(int ch)
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         const ChannelState& cs = g_deviceState.channels[ch];
         cJSON_AddNumberToObject(root, "id", ch);
-        cJSON_AddNumberToObject(root, "adcRaw", cs.adcRawCode);
-        cJSON_AddNumberToObject(root, "adcValue", cs.adcValue);
+        const bool analog_ok = !g_deviceState.analogUnavailable;
+        cJSON_AddBoolToObject(root, "analogAvailable", analog_ok);
+        api_add_measurement(root, "adcRaw", cs.adcRawCode, analog_ok);
+        api_add_measurement(root, "adcValue", cs.adcValue, analog_ok);
         cJSON_AddNumberToObject(root, "adcRange", (int)cs.adcRange);
         cJSON_AddNumberToObject(root, "adcRate", (int)cs.adcRate);
         cJSON_AddNumberToObject(root, "adcMux", (int)cs.adcMux);
@@ -2012,6 +2030,16 @@ static char *api_daq_config(const cJSON *body)
 
 char *api_core_handle(const char *method, const char *path, const cJSON *body)
 {
+    if (path == NULL) return api_error("missing path");
+    if (strncmp(path, "/api/standby/", 13) == 0) return api_standby_handle(method, path, body);
+
+    // Operation barrier shared by HTTP and the BLE tunnel (which passes a NULL
+    // method): everything except cached/static reads needs an ACTIVE system. A
+    // refused request has requested the wake and is never replayed.
+    const bool is_get = method ? strcmp(method, "GET") == 0 : body == NULL;
+    StandbyWork work(standby_api_http_class(is_get ? 1 : 0, path) == STANDBY_HTTP_WORK);
+    if (!work.ok()) return api_standby_busy_json();
+
     (void)method;  // most routing is by path; method used where GET/POST share a path
     bool is_post = (method && (strcmp(method, "POST") == 0));
     if (path == NULL) return api_error("missing path");

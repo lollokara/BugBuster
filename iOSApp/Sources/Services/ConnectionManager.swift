@@ -84,6 +84,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     // MARK: - BLE
     /// CoreBluetooth control plane mirroring the WiFi API surface.
     public let ble = BLETransport()
+    /// Logical control-client session for system standby (see StandbyPresence.swift).
+    public let standby = StandbyPresence()
     /// Tunnel used for BLE control-plane requests. Defaults to `ble`; a test
     /// can swap in a fake so routing is verifiable without CoreBluetooth.
     public lazy var bleAPI: BLEAPITransport = ble
@@ -291,6 +293,63 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         
         startDiscovery()
         setupBLE()
+        setupStandby()
+    }
+
+    // MARK: - Standby presence
+    //
+    // The app is a logical control client of the device only while the selected
+    // Wi-Fi/BLE connection is `.connected`. Discovery (Bonjour/BLE scan) never
+    // registers; a disconnect releases best-effort and a lost link expires by TTL.
+
+    private func setupStandby() {
+        $connectionState
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self else { return }
+                Task { @MainActor in
+                    if state == .connected {
+                        self.openStandbyEpoch()
+                    } else {
+                        self.standby.suspend()
+                    }
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    @MainActor
+    private func openStandbyEpoch() {
+        guard !isMockActive, connectionState == .connected, let device = activeDevice else { return }
+        if transport == .wifi, device.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        let route = StandbyRoute(transport: transport, ip: device.ip, token: adminToken)
+        standby.open { [weak self] id, present in
+            guard let self else { return .failed }
+            return await self.sendStandbyPresence(route: route, id: id, present: present)
+        }
+    }
+
+    private func sendStandbyPresence(route: StandbyRoute, id: UInt32, present: Bool) async -> StandbySendResult {
+        let body: [String: Any] = ["clientId": Int(id), "present": present]
+        if route.transport == .ble {
+            let data = await bleAPI.apiRequest(path: "/api/standby/presence", body: body, timeout: 4.0)
+            return StandbyPresence.interpret(data: data, httpStatus: nil)
+        }
+        var base = route.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return .failed }
+        if !base.lowercased().hasPrefix("http://") && !base.lowercased().hasPrefix("https://") {
+            base = "http://\(base)"
+        }
+        guard let url = URL(string: "\(base)/api/standby/presence") else { return .failed }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, response) = try? await gatedData(for: request),
+              let http = response as? HTTPURLResponse else { return .failed }
+        return StandbyPresence.interpret(data: data, httpStatus: http.statusCode)
     }
 
     // MARK: - BLE wiring
@@ -791,6 +850,8 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
     }
     
     public func disconnect() {
+        let standbySession = standby
+        Task { @MainActor in standbySession.close() }
         pollTask?.cancel()
         pollTask = nil
         blePollTask?.cancel()

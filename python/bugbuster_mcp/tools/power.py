@@ -2,13 +2,15 @@
 BugBuster MCP — Power management tools.
 
 Tools: usb_pd_status, usb_pd_select, pd_ensure_for_voltage, power_control, wifi_status,
-       efuse_current_monitor, efuse_current_get
+       efuse_current_monitor, efuse_current_get, standby_status, standby_set_timeout,
+       standby_wake, standby_sleep
 """
 
 from __future__ import annotations
 from dataclasses import asdict
 
 from bugbuster.client import EfuseImonConfirmRequired
+from bugbuster.standby import StandbyRefusedError, StandbyUnsupportedError, validate_timeout
 
 from .. import session
 from ..safety import check_faults_post
@@ -29,6 +31,12 @@ _POWER_CONTROL_MAP = {
     "efuse3":  7,
     "efuse4":  8,
 }
+
+
+def _standby_result(bb, status) -> dict:
+    res = {"supported": True, **status.as_dict()}
+    res["presence_client_id"] = bb.standby_client_id   # 0 = this server holds no presence
+    return res
 
 
 def register(mcp) -> None:
@@ -246,3 +254,97 @@ def register(mcp) -> None:
         else:
             msg = "AP password updated and applied live. Reconnect using the new password."
         return {"success": bool(res), "persisted": bool(res) and res.persisted, "message": msg}
+
+    @mcp.tool()
+    def standby_status() -> dict:
+        """
+        System standby state (read-only; does not wake the device).
+
+        state: active | preparing | asleep | waking | fault_safe. ready=True means
+        hardware tools are accepted; otherwise they answer BUSY. Also returns the
+        persisted auto-standby timeout (timeout_seconds, 0 = off), the number of
+        connected control clients, an inhibitor bitmask for running work, and
+        idle_remaining_ms until automatic standby. This MCP server is itself a
+        connected client and keeps the device awake until it is detached.
+
+        Returns supported=False on firmware without system standby.
+        """
+        bb = session.get_client()
+        try:
+            return _standby_result(bb, bb.standby_status())
+        except StandbyUnsupportedError as exc:
+            return {"supported": False, "error": str(exc)}
+
+    @mcp.tool()
+    def standby_set_timeout(seconds: int) -> dict:
+        """
+        Persist the automatic standby timeout on the device mainboard.
+
+        Parameters:
+        - seconds: 0 (off), 60, 300 (default) or 900.
+
+        Only changes the policy; nothing is powered down by this call.
+        """
+        validate_timeout(seconds)
+        bb = session.get_client()
+        return _standby_result(bb, bb.standby_set_timeout(seconds))
+
+    @mcp.tool()
+    def standby_wake(wait_ready: bool = True, timeout_s: float = 10.0) -> dict:
+        """
+        Wake the device and re-attach this server's client presence.
+
+        After standby, DUT-facing supplies, e-fuses, outputs and MUX routes stay
+        OFF; nothing is restored or replayed. Hardware tools return BUSY until
+        ready=True.
+
+        Parameters:
+        - wait_ready: poll standby status until ready or timeout_s elapses.
+        - timeout_s: bound for wait_ready (seconds).
+
+        Returns the status plus ready_timeout if the device was still not ready.
+        """
+        bb = session.get_client()
+        status = bb.standby_wake()
+        extra: dict = {}
+        if wait_ready and not status.ready:
+            try:
+                status = bb.standby_wait_ready(timeout_s=timeout_s)
+            except TimeoutError as exc:
+                status = bb.standby_status()
+                extra["ready_timeout"] = str(exc)
+        return {**_standby_result(bb, status), **extra}
+
+    @mcp.tool()
+    def standby_sleep(confirm: bool = False, release_client: bool = True) -> dict:
+        """
+        Ask the device to enter system standby now.
+
+        WARNING: switches off DUT-facing supplies (VADJ1/VADJ2, VDUT, analog
+        rails), disconnects MUX routes and darkens the display. Outputs stay off
+        after wake. Do not use with a DUT attached unless it tolerates losing power.
+
+        A connected client keeps the device awake, so by default this MCP server
+        releases its own presence first and does NOT re-register until
+        standby_wake. Other clients, running scripts, captures, battery
+        simulation and other real owners still block standby; check state in the
+        result (entry is asynchronous: poll standby_status).
+
+        Parameters:
+        - confirm: must be True.
+        - release_client: release this server's presence before sleeping.
+        """
+        if not confirm:
+            raise ValueError(
+                "standby_sleep requires confirm=True. It powers down VADJ1/VADJ2, VDUT and the "
+                "analog rails and opens every MUX route; outputs are NOT restored on wake."
+            )
+        bb = session.get_client()
+        try:
+            status = bb.standby_sleep(release_client=release_client)
+        except StandbyRefusedError as exc:
+            return {**_standby_result(bb, exc.status), "entered": False, "refused": str(exc),
+                    "client_released": release_client,
+                    "note": "Not entering standby; this server stays released until standby_wake."}
+        return {**_standby_result(bb, status), "entered": True, "client_released": release_client,
+                "note": "entry is asynchronous; poll standby_status. Call standby_wake to resume."}

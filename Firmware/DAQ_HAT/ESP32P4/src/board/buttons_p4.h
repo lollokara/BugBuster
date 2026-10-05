@@ -14,6 +14,7 @@
 // =============================================================================
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,19 @@ void buttons_p4_init(void);
 // Poll once per loop with a monotonic millisecond timestamp. Returns a bitmask
 // of DDP_BTN_* events that occurred since the last poll (0 = nothing).
 uint8_t buttons_p4_poll(uint32_t now_ms);
+
+// True while any button's debounced state is pressed. Valid after a poll. Used by
+// the standby gate to consume a whole press/hold/release gesture.
+bool buttons_p4_any_held(void);
+
+// True while any pad is pulled low, including a press the debouncer has not
+// confirmed yet. Valid after a poll.
+bool buttons_p4_any_raw(void);
+
+// The standby gate claimed the gesture in progress: every button that is down (or
+// still debouncing) emits nothing - no repeat, no long-press BACK, no release-time OK -
+// until it has been fully released.
+void buttons_p4_discard_gesture(void);
 
 #ifdef __cplusplus
 }

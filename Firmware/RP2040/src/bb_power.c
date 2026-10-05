@@ -50,9 +50,12 @@ void bb_power_set(uint8_t connector, bool enable)
     gpio_put(pin, enable ? 1 : 0);
     s_conn[connector].enabled = enable;
 
-    // If disabling, clear fault
+    // If disabling, clear fault. bb_power_update() only samples enabled rails, so
+    // without this the last live reading would be reported forever.
     if (!enable) {
         s_conn[connector].fault = false;
+        s_conn[connector].current_ma = 0.0f;
+        s_conn[connector].voltage_mv = 0.0f;
     }
 }
 

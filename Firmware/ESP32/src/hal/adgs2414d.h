@@ -85,6 +85,15 @@ static const uint8_t MUX_GPIO_MAP[4][3] = {
 bool adgs_init(void);
 
 /**
+ * @brief Re-establish the switch chain after the analog supply was cycled
+ *        (standby wake): all shadows cleared, daisy-chain re-entered, every
+ *        switch written open. Keeps the SPI registration and leaves the
+ *        level-shifter OE line alone. Caller holds the SPI bus gate.
+ * @return true when the all-open frame was clocked out.
+ */
+bool adgs_reinit_after_power(void);
+
+/**
  * @brief Set all 4 devices' switch states in one SPI transaction.
  *        Does NOT enforce dead time — caller is responsible.
  *

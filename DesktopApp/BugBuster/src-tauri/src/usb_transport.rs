@@ -344,6 +344,7 @@ impl Transport for UsbTransport {
             bbp::CMD_SELFTEST_AUTO_CAL => 30000, // IDAC sweep + measurement loop
             bbp::CMD_SELFTEST_INT_SUPPLIES => 15000, // multi-phase diagnostic sampling
             bbp::CMD_OTA => 120000,         // chunked upload + final flash/reboot can be long
+            bbp::CMD_SCRIPT_AUTORUN => crate::scripts::autorun_timeout_ms(payload),
             _ => 2000,
         };
         let response = tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await;

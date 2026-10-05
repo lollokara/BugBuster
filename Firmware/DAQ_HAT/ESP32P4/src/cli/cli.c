@@ -65,6 +65,7 @@
 #include "esp_system.h"
 #include "battsim.h"
 #include "battsim_store.h"
+#include "standby_p4.h"
 
 static const char *TAG = "daq_cli";
 
@@ -240,6 +241,10 @@ static int cmd_status(int argc, char **argv)
     printf("SMU / V_DUT   : %s   Vset=%.3f V   Ilim=%.3f A\n",
            b->smu.enabled ? "ON" : "OFF", (double)b->smu.vdut_set,
            (double)b->smu.ilimit_set);
+    printf("standby       : state %u   ADC chain %s\n", (unsigned)standby_p4_state(),
+           standby_p4_adc_available() ? "available"
+           : standby_p4_adc_ready()   ? "ready, measurement routes held open until a request"
+                                      : "unavailable");
     return 0;
 }
 
@@ -250,10 +255,14 @@ static int cmd_read(int argc, char **argv)
     daq_board_t *b = s_board;
     char i_s[20], v_s[20], p_s[20];
 
-    fmt_current(i_s, sizeof i_s, power_dsp_last_i(&b->dsp));
-    fmt_voltage(v_s, sizeof v_s, power_dsp_last_v(&b->dsp));
-    fmt_power(p_s, sizeof p_s, power_dsp_last_p(&b->dsp));
-    printf("I = %s   V = %s   P = %s\n", i_s, v_s, p_s);
+    if (standby_p4_adc_available()) {
+        fmt_current(i_s, sizeof i_s, power_dsp_last_i(&b->dsp));
+        fmt_voltage(v_s, sizeof v_s, power_dsp_last_v(&b->dsp));
+        fmt_power(p_s, sizeof p_s, power_dsp_last_p(&b->dsp));
+        printf("I = %s   V = %s   P = %s\n", i_s, v_s, p_s);
+    } else {
+        printf("I = unavailable   V = unavailable   P = unavailable   (standby: no measurement path)\n");
+    }
     printf("E = %.4f mWh   Q = %.4f mAh   range = %s\n",
            power_dsp_energy_mwh(&b->dsp), power_dsp_charge_mah(&b->dsp),
            range_name(range_manager_current(&b->range)));
@@ -3802,6 +3811,21 @@ static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn)
     ESP_ERROR_CHECK(esp_console_cmd_register(&c));
 }
 
+// Commands that only print cached state and touch no ADC, output, rail, bus or
+// setting. Every other command is hardware work: it joins the standby barrier for
+// as long as it runs, and is refused while the system is not awake.
+static bool cli_command_is_passive(const char *line)
+{
+    static const char *const passive[] = { "help", "status", "read", "temp", "wifistat", "perf" };
+    while (*line == ' ') ++line;
+    size_t n = 0;
+    while (line[n] && line[n] != ' ') ++n;
+    for (size_t i = 0; i < sizeof(passive) / sizeof(passive[0]); ++i) {
+        if (strlen(passive[i]) == n && strncmp(line, passive[i], n) == 0) return true;
+    }
+    return false;
+}
+
 // Interactive REPL loop for the USB-Serial-JTAG debug port. We deliberately do
 // NOT use the stock esp_console REPL task: its loop does `linenoise() -> if
 // NULL continue;`, and on this port linenoise returns NULL immediately once the
@@ -3840,11 +3864,18 @@ static void daq_repl_task(void *arg)
             line[len] = '\0';
             if (len > 0) {
                 int cmd_ret = 0;
-                esp_err_t e = esp_console_run(line, &cmd_ret);
-                if (e == ESP_ERR_NOT_FOUND) {
-                    printf("Unrecognized command: %s\n", line);
-                } else if (e != ESP_OK && e != ESP_ERR_INVALID_ARG) {
-                    printf("Command error: %s\n", esp_err_to_name(e));
+                standby_p4_note_activity();      // a person is typing: restart the idle timer
+                const bool gated = !cli_command_is_passive(line);
+                if (gated && !standby_p4_admit()) {
+                    printf("standby: '%s' refused, wake requested - retry once the system is awake\n", line);
+                } else {
+                    esp_err_t e = esp_console_run(line, &cmd_ret);
+                    if (gated) standby_p4_leave();
+                    if (e == ESP_ERR_NOT_FOUND) {
+                        printf("Unrecognized command: %s\n", line);
+                    } else if (e != ESP_OK && e != ESP_ERR_INVALID_ARG) {
+                        printf("Command error: %s\n", esp_err_to_name(e));
+                    }
                 }
             }
             len = 0;

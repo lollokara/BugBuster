@@ -32,6 +32,9 @@
 #include "daq_settings.h"
 #include "battsim.h"
 #include "battsim_integ.h"
+#include "standby_p4.h"
+#include "standby_p4_core.h"
+#include "standby_inhibit.h"
 
 static const char *TAG = "daq_board";
 
@@ -46,7 +49,7 @@ static const char *TAG = "daq_board";
 // be enabled here BEFORE the shared ADAQ reset/probe — otherwise every SPI read
 // returns 0x00 and all three ADAQs identify as absent ("ADAQ 0/3").
 // Sequence per config.h: EN 3V3 -> wait PG -> EN +/-26V -> EN +/-24V -> settle.
-static void power_rails_up(void)
+static bool power_rails_up(void)
 {
     gpio_config_t en = {
         .pin_bit_mask = (1ULL << PWR_3V3_EN_PIN) |
@@ -84,6 +87,7 @@ static void power_rails_up(void)
     // 4) Settle before the shared ADAQ reset / first SPI access.
     esp_rom_delay_us(5000);
     ESP_LOGI(TAG, "analog rails up (3V3 EN + PG=%d, +/-26V, +/-24V)", (int)pg_ok);
+    return pg_ok;
 }
 
 // All three ADAQ *RST are tied to one GPIO. Pulse it once for a clean POR; the
@@ -130,6 +134,7 @@ static esp_err_t init_i2c_bus(daq_board_t *b)
 esp_err_t daq_board_init(daq_board_t *b)
 {
     memset(b, 0, sizeof(*b));
+    standby_p4_init(b);   // before any work path can call standby_p4_admit()
 
     // OTA bookkeeping: detect a pending-verify boot (post-update) early so the
     // caller can run a self-test and confirm (or let the bootloader roll back).
@@ -138,11 +143,12 @@ esp_err_t daq_board_init(daq_board_t *b)
 
     // Bring up the analog power rails BEFORE any ADAQ access — the ADAQs are
     // unpowered (and read 0x00) until the 3V3 analog LDO is enabled.
-    power_rails_up();
+    const bool rails_ok = power_rails_up();
 
     esp_err_t err = init_spi_buses();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(err));
+        standby_p4_boot_report(false);
         return err;
     }
 
@@ -237,6 +243,7 @@ esp_err_t daq_board_init(daq_board_t *b)
     err = init_i2c_bus(b);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(err));
+        standby_p4_boot_report(false);
         return ESP_OK;   // SPI front-end is still usable
     }
 
@@ -296,6 +303,9 @@ esp_err_t daq_board_init(daq_board_t *b)
     ESP_LOGI(TAG, "board init: ADAQ %d/%d, temp %d/2, idac %d, ODR %.0f SPS",
              (b->adaq_ok[0] + b->adaq_ok[1] + b->adaq_ok[2]), ADAQ_COUNT,
              (b->temp_ok[0] + b->temp_ok[1]), b->idac_ok, current_odr);
+    // The Analyzer boot milestone is true only when everything the instrument needs
+    // came up: the analog rails (power-good), all three converters, the DUT-supply DAC.
+    standby_p4_boot_report(rails_ok && b->adaq_ok[0] && b->adaq_ok[1] && b->adaq_ok[2] && b->idac_ok);
     return ESP_OK;
 }
 
@@ -397,7 +407,8 @@ esp_err_t daq_board_process_step(daq_board_t *b, fusion_output_t *out)
 // ---------------------------------------------------------------------------
 typedef enum { CTRL_MSG_SET_RATE, CTRL_MSG_SET_SOURCE,
                CTRL_MSG_RANGE_CAL_START, CTRL_MSG_SET_ACQ_CONFIG,
-               CTRL_MSG_SMU_APPLY, CTRL_MSG_BS_CODE } ctrl_msg_type_t;
+               CTRL_MSG_SMU_APPLY, CTRL_MSG_BS_CODE,
+               CTRL_MSG_STANDBY, CTRL_MSG_ACQ_RESUME } ctrl_msg_type_t;
 
 typedef struct {
     uint16_t key;      // DAQ_K_SOURCE_ENABLE / _DUT_VOLTAGE_MV / _DUT_ILIMIT_MA
@@ -430,8 +441,31 @@ typedef struct {
         ctrl_acq_config_t   acq_config;
         ctrl_smu_apply_t    smu;
         ctrl_bs_code_t      bs;
+        struct { uint8_t stage; uint32_t gen; } standby;   // CTRL_MSG_STANDBY: SB_STAGE_* and its transaction
     };
 } ctrl_msg_t;
+
+// Every post to and take from the ctrl queue goes through these two helpers, inside
+// ONE critical section with the counters in s_ctrl_track, so "user work queued or
+// executing" is exact and the standby sequence's own stages never count as it (see
+// standby_inhibit.h). The queue operations use a zero timeout, which is legal there.
+static portMUX_TYPE   s_ctrl_mux = portMUX_INITIALIZER_UNLOCKED;
+static sb_ctrl_track_t s_ctrl_track;
+
+static bool ctrl_post(daq_board_t *b, const ctrl_msg_t *msg, uint32_t wait_ms)
+{
+    if (!b->ctrl_queue) return false;
+    const bool standby = msg->type == CTRL_MSG_STANDBY;
+    for (uint32_t waited = 0;; waited += 10) {
+        taskENTER_CRITICAL(&s_ctrl_mux);
+        const bool ok = xQueueSend(b->ctrl_queue, msg, 0) == pdTRUE;
+        if (ok) sb_ctrl_posted(&s_ctrl_track, standby);
+        taskEXIT_CRITICAL(&s_ctrl_mux);
+        if (ok) return true;
+        if (waited >= wait_ms) return false;
+        vTaskDelay(pdMS_TO_TICKS(10) ? pdMS_TO_TICKS(10) : 1);
+    }
+}
 
 bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival)
 {
@@ -441,7 +475,7 @@ bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival)
     msg.smu.ival = ival;
     // Short wait only: a full queue falls back to the inline apply rather
     // than dropping a supply change.
-    return xQueueSend(b->ctrl_queue, &msg, pdMS_TO_TICKS(20)) == pdTRUE;
+    return ctrl_post(b, &msg, 20);
 }
 
 bool daq_board_defer_bs_code(daq_board_t *b, int8_t code, float v_hint)
@@ -450,7 +484,23 @@ bool daq_board_defer_bs_code(daq_board_t *b, int8_t code, float v_hint)
     ctrl_msg_t msg = { .type = CTRL_MSG_BS_CODE };
     msg.bs.code = code;
     msg.bs.v_hint = v_hint;
-    return xQueueSend(b->ctrl_queue, &msg, 0) == pdTRUE;
+    return ctrl_post(b, &msg, 0);
+}
+
+bool daq_board_standby_defer(daq_board_t *b, uint8_t stage, uint32_t generation)
+{
+    if (!b->ctrl_queue) return false;
+    ctrl_msg_t msg = { .type = CTRL_MSG_STANDBY };
+    msg.standby.stage = stage;
+    msg.standby.gen = generation;
+    return ctrl_post(b, &msg, 100);
+}
+
+bool daq_board_defer_acq_resume(daq_board_t *b)
+{
+    if (!b->ctrl_queue) return false;
+    ctrl_msg_t msg = { .type = CTRL_MSG_ACQ_RESUME };
+    return ctrl_post(b, &msg, 0);
 }
 
 static void daq_ctrl_task(void *arg)
@@ -458,8 +508,44 @@ static void daq_ctrl_task(void *arg)
     daq_board_t *b = (daq_board_t *)arg;
     ctrl_msg_t msg;
     while (1) {
-        if (xQueueReceive(b->ctrl_queue, &msg, portMAX_DELAY) != pdTRUE) continue;
+        // Wait for a message, then take it and mark it executing in ONE critical section
+        // with the counters (ctrl_post is the only producer path), so there is no instant
+        // at which a user message is neither queued nor busy. Standby stages are tracked
+        // separately: they are the sequence itself, not work that refuses it.
+        if (xQueuePeek(b->ctrl_queue, &msg, portMAX_DELAY) != pdTRUE) continue;
+        taskENTER_CRITICAL(&s_ctrl_mux);
+        const bool got = xQueueReceive(b->ctrl_queue, &msg, 0) == pdTRUE;
+        if (got) sb_ctrl_taken(&s_ctrl_track, msg.type == CTRL_MSG_STANDBY);
+        taskEXIT_CRITICAL(&s_ctrl_mux);
+        if (!got) { vTaskDelay(1); continue; }       // single consumer: cannot happen, but never spin
+        // Queued work only runs if the system is awake: a message that was posted
+        // before a standby barrier is dropped, never run against paused ADCs. The
+        // standby step itself is the one thing that must run while blocked.
+        bool admitted = false;
+        if (msg.type != CTRL_MSG_STANDBY) {
+            if (!standby_p4_admit_quiet()) {
+                ESP_LOGW(TAG, "ctrl message %d dropped: standby", (int)msg.type);
+                taskENTER_CRITICAL(&s_ctrl_mux);
+                sb_ctrl_done(&s_ctrl_track);
+                taskEXIT_CRITICAL(&s_ctrl_mux);
+                continue;
+            }
+            admitted = true;
+        }
         switch (msg.type) {
+
+            case CTRL_MSG_STANDBY:
+                standby_p4_run_step(msg.standby.stage, msg.standby.gen);
+                break;
+
+            case CTRL_MSG_ACQ_RESUME:
+                // The first explicit request after a wake: acquisition was running at
+                // sleep and the routes have just been connected by admission.
+                if (!b->fast_running && standby_p4_adc_ready() &&
+                    daq_board_run_fast(b, DAQ_RING_CAPACITY) != ESP_OK) {
+                    ESP_LOGW(TAG, "acquisition could not be restarted after wake");
+                }
+                break;
 
             case CTRL_MSG_SET_RATE: {
                 const usb_cmd_rate_t *c = &msg.rate;
@@ -677,12 +763,17 @@ static void daq_ctrl_task(void *arg)
                 break;
             }
         }
+        taskENTER_CRITICAL(&s_ctrl_mux);
+        sb_ctrl_done(&s_ctrl_track);
+        taskEXIT_CRITICAL(&s_ctrl_mux);
+        if (admitted) standby_p4_leave();
     }
 }
 
 // Control commands from the PC. Bound to b->usb via usb_stream_set_cmd_cb.
 static void usb_ota_enqueue(daq_board_t *b, usb_rec_type_t cmd,
                             const uint8_t *payload, uint16_t len);
+static void usb_standby_ack(daq_board_t *b, const bb_standby_reply_t *ack);
 static esp_err_t usb_ota_start(daq_board_t *b);
 
 static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
@@ -747,7 +838,7 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
             if (len >= sizeof(usb_cmd_source_t) && b->ctrl_queue) {
                 ctrl_msg_t msg = { .type = CTRL_MSG_SET_SOURCE };
                 memcpy(&msg.source, payload, sizeof(usb_cmd_source_t));
-                xQueueSend(b->ctrl_queue, &msg, 0); // non-blocking; drop if queue full
+                ctrl_post(b, &msg, 0); // non-blocking; drop if queue full
             }
             break;
         case USB_CMD_ARM:
@@ -763,7 +854,7 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
                 ctrl_msg_t msg = { .type = CTRL_MSG_RANGE_CAL_START };
                 if (len >= sizeof(usb_cmd_range_cal_t))
                     memcpy(&msg.range_cal, payload, sizeof(usb_cmd_range_cal_t));
-                xQueueSend(b->ctrl_queue, &msg, 0);
+                ctrl_post(b, &msg, 0);
             }
             break;
         case USB_CMD_RANGE_CAL_ACK:
@@ -792,12 +883,38 @@ static void usb_cmd_handler(usb_rec_type_t cmd, const uint8_t *payload,
             if (len >= sizeof(usb_cmd_rate_t) && b->ctrl_queue) {
                 ctrl_msg_t msg = { .type = CTRL_MSG_SET_RATE };
                 memcpy(&msg.rate, payload, sizeof(usb_cmd_rate_t));
-                xQueueSend(b->ctrl_queue, &msg, 0); // non-blocking; drop if queue full
+                ctrl_post(b, &msg, 0); // non-blocking; drop if queue full
             }
             break;
         default:
             break;
     }
+}
+
+// Entry point for every PC control frame (TinyUSB task and TCP stream task).
+//  - USB_CMD_CLIENT_LEASE is the only way a host declares itself present; it is
+//    never refused, and it is never an "operation".
+//  - Any other frame is real traffic: it counts as activity, and while the system
+//    is asleep/preparing/waking it is rejected (and requests a wake) instead of
+//    running against paused ADCs. A mounted USB device or an idle IN poll never
+//    reaches this function, so neither can inhibit standby.
+static void usb_cmd_entry(usb_rec_type_t cmd, const uint8_t *payload,
+                          uint16_t len, void *user)
+{
+    if (cmd == USB_CMD_CLIENT_LEASE) {
+        // Presence is declared here and nowhere else; it is answered, never refused.
+        bb_standby_reply_t ack;
+        standby_p4_usb_lease(payload, len, &ack);
+        usb_standby_ack((daq_board_t *)user, &ack);
+        return;
+    }
+    if (!standby_p4_admit()) {
+        ESP_LOGW(TAG, "usb cmd 0x%02X rejected: standby (wake requested)", (unsigned)cmd);
+        return;
+    }
+    standby_p4_note_activity();
+    usb_cmd_handler(cmd, payload, len, user);
+    standby_p4_leave();
 }
 
 esp_err_t daq_board_usb_start(daq_board_t *b)
@@ -828,7 +945,7 @@ esp_err_t daq_board_usb_start(daq_board_t *b)
             return ESP_ERR_NO_MEM;
         }
     }
-    usb_stream_set_cmd_cb(&b->usb, usb_cmd_handler, b);
+    usb_stream_set_cmd_cb(&b->usb, usb_cmd_entry, b);
     if (usb_ota_start(b) != ESP_OK) {
         ESP_LOGE(TAG, "usb ota worker start failed (vendor OTA disabled)");
     }
@@ -1290,6 +1407,7 @@ static QueueHandle_t s_uota_q;
 static uint8_t       s_uota_target;             // USB_OTA_TARGET_* or 0
 static bool          s_uota_fast_was_running;
 static uint32_t      s_uota_data_frames;
+static volatile bool s_uota_busy;               // worker is handling a message (standby inhibitor)
 
 static void usb_ota_ack(daq_board_t *b, uint8_t cmd, int8_t status)
 {
@@ -1469,9 +1587,31 @@ static void usb_ota_task(void *arg)
     static usb_ota_msg_t m;   // worker-only; keeps 512 B off the stack
     for (;;) {
         if (xQueueReceive(s_uota_q, &m, portMAX_DELAY) == pdTRUE) {
+            if (m.cmd == USB_CMD_CLIENT_LEASE) {
+                // A standby lease ack rides this queue because this task is the one
+                // writer of USB_REC_* replies; it is not OTA work.
+                if (m.len == sizeof(bb_standby_reply_t)) {
+                    (void)usb_stream_send_reply(&b->usb, USB_REC_STANDBY_ACK, m.data, m.len);
+                }
+                continue;
+            }
+            s_uota_busy = true;
             usb_ota_handle(b, &m);
+            s_uota_busy = false;
         }
     }
+}
+
+static void usb_standby_ack(daq_board_t *b, const bb_standby_reply_t *ack)
+{
+    (void)b;
+    if (!s_uota_q) return;
+    usb_ota_msg_t m;
+    m.cmd = (uint8_t)USB_CMD_CLIENT_LEASE;
+    m.len = sizeof(*ack);
+    memcpy(m.data, ack, sizeof(*ack));
+    // Never block the receive path for an ack: the host re-sends its lease anyway.
+    (void)xQueueSend(s_uota_q, &m, 0);
 }
 
 static void usb_ota_enqueue(daq_board_t *b, usb_rec_type_t cmd,
@@ -1845,7 +1985,7 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             msg.acq_config.filter  = c->filter;
             msg.acq_config.adc_dec = c->adc_dec;
             msg.acq_config.sr_mode = sr;
-            return (xQueueSend(b->ctrl_queue, &msg, 0) == pdTRUE) ? 0 : -1;
+            return ctrl_post(b, &msg, 0) ? 0 : -1;
         }
 
         // ---- DAQ WiFi streaming bring-up (BLE-driven; see daq_wifi_ident.h,
@@ -2204,14 +2344,18 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
         }
 
         case HATP_CMD_DAQ_GET_STATUS: {
+            // Without a live ADC chain (standby, analog supplies off, converters not
+            // yet reconfigured) the readings are NaN and S3LINK_AVAIL_MEAS is clear:
+            // a stale or zero value must never read as a measurement.
+            const bool live = standby_p4_adc_available();
             s3link_daq_status_t st = {
                 .range          = (uint8_t)range_manager_current(&b->range),
                 .streaming      = b->usb.streaming ? 1 : 0,
                 .source_enabled = b->smu.enabled ? 1 : 0,
-                ._pad           = 0,
-                .last_i         = power_dsp_last_i(&b->dsp),
-                .last_v         = power_dsp_last_v(&b->dsp),
-                .last_p         = power_dsp_last_p(&b->dsp),
+                ._pad           = live ? S3LINK_AVAIL_MEAS : 0,
+                .last_i         = live ? power_dsp_last_i(&b->dsp) : NAN,
+                .last_v         = live ? power_dsp_last_v(&b->dsp) : NAN,
+                .last_p         = live ? power_dsp_last_p(&b->dsp) : NAN,
                 .energy_mwh     = (float)power_dsp_energy_mwh(&b->dsp),
                 .sta_count      = wifi_ap_sta_count(),
             };
@@ -2225,15 +2369,16 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
             // Report the calibrated ADAQ measurement (same value as the C6 and
             // DAQ_MEASURE), not the SMU's own uncalibrated current sense, which
             // reads tens of mA of noise with no load.
+            const bool live = standby_p4_adc_available();
             s3link_vdut_status_t st = {
                 .present      = present ? 1 : 0,
                 .enabled      = b->smu.enabled ? 1 : 0,
                 .fault        = (!present) ? 1 : 0,
-                ._pad         = 0,
+                ._pad         = live ? S3LINK_AVAIL_MEAS : 0,
                 .vdut_set_v   = b->smu.vdut_set,
                 .ilimit_set_a = b->smu.ilimit_set,
-                .meas_v       = power_dsp_last_v(&b->dsp),
-                .meas_i       = power_dsp_last_i(&b->dsp),
+                .meas_v       = live ? power_dsp_last_v(&b->dsp) : NAN,
+                .meas_i       = live ? power_dsp_last_i(&b->dsp) : NAN,
             };
             memcpy(resp, &st, sizeof(st));
             return (int)sizeof(st);
@@ -2520,9 +2665,99 @@ static int s3_cmd_handler(uint8_t cmd, const uint8_t *payload, uint8_t len,
     }
 }
 
+uint32_t daq_board_standby_inhibitors(daq_board_t *b)
+{
+    sb_inh_inputs_t in;
+    memset(&in, 0, sizeof(in));
+
+    // A client-driven stream: a host START (USB, TCP or the S3), a connected TCP
+    // peer, or the WiFi streaming bring-up. fast_running is NOT here: the default
+    // internal acquisition runs from boot to feed the C6 and is not a client.
+    in.client_stream = b->usb.streaming || tcp_backend_connected() ||
+                       b->wifi_stream_info.state == DAQ_WIFI_STREAM_STARTING ||
+                       b->wifi_stream_info.state == DAQ_WIFI_STREAM_READY || s_bringup_alive;
+    in.trigger_armed = b->usb.armed;
+
+    // A loaded battery-sim run owns the supply in every state (paused included).
+    // It is never paused or stopped to make the system idle.
+    in.battsim_owns_supply = battsim_owns_supply();
+
+    const smu_cal_phase_t cp = b->cal.phase;
+    const range_cal_phase_t rp = b->range_cal.phase;
+    in.calibration = cp == SMU_CAL_PROMPT || cp == SMU_CAL_RUNNING ||
+                     (rp != RANGE_CAL_IDLE && rp != RANGE_CAL_SUCCESS && rp != RANGE_CAL_FAILED);
+
+    relay_status_t rs;
+    relay_stage_get_status(&rs);
+    const ota_state_t os = ota_state();
+    in.ota = os == OTA_RECEIVING || os == OTA_READY || s_ota_target != HATP_OTA_TARGET_P4 ||
+             rs.state == RELAY_STAGING || rs.state == RELAY_PUSHING || s_relay_apply_busy ||
+             s_uota_target != 0 || s_uota_busy ||
+             (s_uota_q && uxQueueMessagesWaiting(s_uota_q) > 0);
+
+    // Anything holding the C6 UART (WiFi bring-up, relay push, CLI flashing) is work;
+    // so is USER ctrl work, queued or executing. The standby stages are not (they are
+    // the sequence being asked about), and the counters are read with the queue total
+    // under the lock every post/take uses.
+    in.c6_uart_owner = s_c6_owner != NULL;
+    sb_ctrl_track_t track;
+    taskENTER_CRITICAL(&s_ctrl_mux);
+    in.ctrl_queue_total = b->ctrl_queue ? (uint32_t)uxQueueMessagesWaiting(b->ctrl_queue) : 0u;
+    track = s_ctrl_track;
+    taskEXIT_CRITICAL(&s_ctrl_mux);
+    return sb_inh_compute(&in, &track);
+}
+
+// Commands that read cached RAM state or tear something down. They touch no ADC
+// and no output, so they are served in every standby state, which keeps the
+// mainboard's telemetry and its recovery paths working while the P4 is asleep.
+static bool s3_cmd_is_passive(uint8_t cmd)
+{
+    switch (cmd) {
+        case HATP_CMD_DAQ_GET_STATUS:
+        case HATP_CMD_DAQ_CAL_STATUS:
+        case HATP_CMD_DAQ_CAL_ABORT:
+        case HATP_CMD_DAQ_TELEMETRY:
+        case HATP_CMD_DAQ_C6_VERSION:
+        case HATP_CMD_DAQ_WIFI_STREAM_INFO:
+        case HATP_CMD_DAQ_WIFI_STREAM_STOP:
+        case HATP_CMD_DAQ_WIFI_STREAM_RECYCLE:
+        case HATP_CMD_DAQ_VDUT_STATUS:
+        case HATP_CMD_DAQ_SYNC:
+        case HATP_CMD_DAQ_STOP:
+        case HATP_CMD_SET_CH_LEDS:     // the C6 ignores it while its indicators are off
+        case HATP_CMD_MB_POLL:
+        case HATP_CMD_MB_RESULT:
+        case HATP_CMD_GET_VERSION:
+        case HATP_CMD_OTA_STATUS:
+        case HATP_CMD_OTA_ABORT:
+        case HATP_CMD_OTA_CONFIRM:
+        case HATP_CMD_STAGE_READ:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Every other S3 command starts or changes hardware work. While the P4 is
+// preparing, asleep, waking or in FAULT_SAFE it is refused (RSP_ERROR) and the
+// refusal requests a wake, so nothing runs against paused ADCs.
+static int s3_cmd_entry(uint8_t cmd, const uint8_t *payload, uint8_t len,
+                        uint8_t *resp, void *user)
+{
+    if (s3_cmd_is_passive(cmd)) return s3_cmd_handler(cmd, payload, len, resp, user);
+    if (!standby_p4_admit()) {
+        ESP_LOGW(TAG, "S3 cmd 0x%02X refused: standby (wake requested)", (unsigned)cmd);
+        return -1;
+    }
+    int r = s3_cmd_handler(cmd, payload, len, resp, user);
+    standby_p4_leave();
+    return r;
+}
+
 esp_err_t daq_board_s3_start(daq_board_t *b)
 {
-    esp_err_t err = s3_link_init(&b->s3, s3_cmd_handler, b);
+    esp_err_t err = s3_link_init(&b->s3, s3_cmd_entry, b);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "S3 link init failed: %s", esp_err_to_name(err));
         return err;
@@ -2592,12 +2827,19 @@ static void daq_ui_task(void *arg)
         // The C6 link (UART2) is handed to the flasher during a C6 firmware
         // update; skip all DDP traffic while it is down.
         if (b->ddp.running) {
-            uint8_t ev = buttons_p4_poll(t);
+            standby_p4_service(t);
+            // Buttons pass through the standby gate: while the system is not ACTIVE
+            // every press is swallowed (and a wake request), and a gesture that began
+            // asleep is consumed to release so it can never toggle VDUT after wake.
+            uint8_t ev = standby_p4_button_filter(t, buttons_p4_poll(t));
             if (ev) ddp_master_button_event(&b->ddp, ev);
 
             if ((t - last_meas) >= 100) {
                 last_meas = t;
-                uint8_t mflags = DDP_FLAG_V_VALID | DDP_FLAG_I_VALID;
+                // Without a live ADC chain the readout is NaN with the validity flags
+                // clear (the C6 draws "---"), never a frozen or zero number.
+                const bool live = standby_p4_adc_available();
+                uint8_t mflags = live ? (uint8_t)(DDP_FLAG_V_VALID | DDP_FLAG_I_VALID) : 0u;
                 if (b->smu.enabled) mflags |= DDP_FLAG_SRC_ON;
                 // Pack the live current range (for the C6 home-screen badge).
                 current_range_t rng = range_manager_current(&b->range);
@@ -2606,8 +2848,8 @@ static void daq_ui_task(void *arg)
                              (rng == RANGE_LO)  ? DDP_RANGE_LO  : DDP_RANGE_UNKNOWN;
                 mflags |= (uint8_t)(rc << DDP_FLAG_RANGE_SHIFT);
                 ddp_master_set_measurement(&b->ddp,
-                                           power_dsp_last_v(&b->dsp),
-                                           power_dsp_last_i(&b->dsp),
+                                           live ? power_dsp_last_v(&b->dsp) : NAN,
+                                           live ? power_dsp_last_i(&b->dsp) : NAN,
                                            mflags);
             }
 

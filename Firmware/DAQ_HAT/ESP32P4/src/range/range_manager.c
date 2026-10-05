@@ -575,3 +575,57 @@ const char *range_manager_name(current_range_t range)
         default:        return "UNKNOWN";
     }
 }
+
+// ---------------------------------------------------------------------------
+// Analog supply standby
+// ---------------------------------------------------------------------------
+void range_manager_standby_park(range_manager_t *rm, range_standby_t *keep)
+{
+    keep->range = rm->current;
+    keep->override_active = rm->override_active;
+    gpio_intr_disable(AR_FF_HI_PIN);
+    gpio_intr_disable(AR_FF_MID_PIN);
+    // Low is the HI-range level and the only one that cannot push current into the
+    // unpowered bypass switches.
+    drive_pin(rm->bypass51_pin, 0);
+    drive_pin(rm->bypass2_pin, 0);
+    if (rm->mux_a0_pin != GPIO_NUM_NC) gpio_set_level(rm->mux_a0_pin, 0);
+    if (rm->mux_a1_pin != GPIO_NUM_NC) gpio_set_level(rm->mux_a1_pin, 0);
+    rm->fine_mux_addr = 0xFF;   // the address pins were just changed: force a rewrite
+    rm->isr_flags = 0;
+}
+
+void range_manager_standby_resume(range_manager_t *rm, const range_standby_t *keep)
+{
+    // Re-applying a range must not look like a range change to the statistics or
+    // the anti-flap logic.
+    const uint32_t changes = rm->change_count;
+    const current_range_t previous = rm->previous;
+    const uint8_t flap_level = rm->flap_level;
+    const uint32_t flap_escalations = rm->flap_escalations;
+
+    current_range_t r;
+    if (keep->override_active && keep->range < RANGE_COUNT) {
+        r = keep->range;
+    } else {
+        const int hi = gpio_get_level(AR_FF_HI_PIN);
+        const int mid = gpio_get_level(AR_FF_MID_PIN);
+        r = (!hi && !mid) ? RANGE_HI : (hi && !mid) ? RANGE_MID : RANGE_LO;
+    }
+    rm->current = RANGE_UNKNOWN;
+    rm->dwell_remaining = 0;
+    apply_range(rm, r);
+
+    rm->change_count = changes;
+    rm->previous = previous;
+    rm->flap_level = flap_level;
+    rm->flap_escalations = flap_escalations;
+    rm->override_active = keep->override_active;
+    rm->isr_flags = 0;
+    rm->pending_down = false;
+    rm->confirm_count = 0;
+    rm->lock_remaining = (int32_t)rm->lock_samples;
+    rm->dwell_remaining = (int32_t)range_manager_effective_dwell_samples(rm);
+    gpio_intr_enable(AR_FF_HI_PIN);
+    gpio_intr_enable(AR_FF_MID_PIN);
+}

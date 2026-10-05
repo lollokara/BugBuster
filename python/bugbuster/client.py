@@ -101,6 +101,12 @@ from .constants import (
     VoutRange, CurrentLimit, PowerControl, DoMode, AvddSelect,
 )
 from .protocol import ProtocolError
+from .standby import (
+    PresenceSession, StandbyRefusedError, StandbyStatus, StandbyUnsupportedError,
+    encode_policy, encode_presence, encode_sleep, encode_status_request, encode_wake,
+    is_refusal_error, is_unsupported_error, parse_standby_status, parse_standby_status_json,
+    validate_timeout,
+)
 
 log = logging.getLogger(__name__)
 
@@ -446,12 +452,19 @@ class BugBuster:
         An already-constructed (but not necessarily connected) transport
         object.  Use :func:`connect_usb` or :func:`connect_http` instead
         of calling this directly.
+    presence:
+        Register this connection with the device as a logical control client
+        (blocks automatic standby while connected). Disable only for tools
+        that must not keep the instrument awake.
     """
 
-    def __init__(self, transport: Transport):
+    def __init__(self, transport: Transport, *, presence: bool = True):
         self._t: Any                   = transport
         self._usb                      = isinstance(transport, USBTransport)
         self._connected                = False
+        self._presence_enabled         = presence
+        self._presence: Optional[PresenceSession] = None
+        self._presence_gen: Any        = None
         self._hal: Optional['BugBusterHAL'] = None
         self._bus: Optional['BugBusterBusManager'] = None
         # Cached HAT presence: None = unknown (probe on demand), bool = known
@@ -531,11 +544,13 @@ class BugBuster:
                     self.get_admin_token()
                 except Exception:
                     log.warning("Connected via USB but failed to retrieve admin token")
+            self._presence_start()
         return self
 
     def disconnect(self):
         """Close the connection cleanly."""
         if self._connected:
+            self._presence_stop()
             self._t.disconnect()
             self._connected = False
 
@@ -676,6 +691,150 @@ class BugBuster:
         _require_resp_len(resp, 8, "PING")
         tok, uptime = struct.unpack_from('<II', resp)
         return PingResult(token=tok, uptime_ms=uptime)
+
+    # ------------------------------------------------------------------
+    # ── System standby ──────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+
+    def _standby_call(self, payload: bytes, http_path: str,
+                      http_body: Optional[dict] = None, *, get: bool = False) -> StandbyStatus:
+        """One standby request over the active transport -> status record."""
+        try:
+            if self._usb:
+                return parse_standby_status(self._usb_cmd(CmdId.STANDBY, payload))
+            if get:
+                return parse_standby_status_json(self._http_get(http_path))
+            return parse_standby_status_json(self._http_post(http_path, http_body or {}))
+        except Exception as exc:
+            if is_unsupported_error(exc):
+                raise StandbyUnsupportedError(
+                    "this firmware has no system standby (BBP 0x78 / /api/standby)") from exc
+            raise
+
+    def standby_status(self) -> StandbyStatus:
+        """Standby state, readiness, policy timeout, client/inhibitor counts.
+
+        Raises :class:`StandbyUnsupportedError` on firmware without standby.
+        """
+        return self._standby_call(encode_status_request(), "/standby/status", get=True)
+
+    def standby_set_timeout(self, seconds: int) -> StandbyStatus:
+        """Persist the automatic standby timeout on the device: 0 (off), 60, 300 or 900 s.
+
+        The setting lives on the mainboard, not on this host.
+        """
+        seconds = validate_timeout(seconds)
+        return self._standby_call(encode_policy(seconds), "/standby/policy",
+                                  {"timeoutSeconds": seconds})
+
+    def standby_wake(self) -> StandbyStatus:
+        """Wake the device and re-attach this client's presence if it was detached.
+
+        Hardware commands answer BUSY until ``standby_status().ready``; nothing is
+        replayed automatically, and outputs stay off until you enable them.
+        """
+        presence = self._presence
+        if presence is not None and presence.detached:
+            presence.attach()
+        return self._standby_call(encode_wake(), "/standby/wake")
+
+    def standby_sleep(self, *, release_client: bool = True) -> StandbyStatus:
+        """Ask the device to enter standby now (DUT-facing rails are switched off).
+
+        A connected client inhibits standby, so by default this client's presence
+        is released first and stays released (no heartbeat) until
+        :meth:`standby_wake` / :meth:`standby_attach`. Real owners (scripts,
+        capture, other clients) still refuse with :class:`StandbyRefusedError`
+        (``.status`` has the current state); the release is not undone.
+        """
+        if release_client:
+            self.standby_detach()
+        try:
+            return self._standby_call(encode_sleep(), "/standby/sleep")
+        except StandbyUnsupportedError:
+            raise
+        except Exception as exc:
+            if not is_refusal_error(exc):
+                raise
+            raise StandbyRefusedError(
+                "device refused standby: a client or running work still owns it",
+                self.standby_status()) from exc
+
+    def standby_wait_ready(self, timeout_s: float = 10.0, poll_s: float = 0.25) -> StandbyStatus:
+        """Poll until the device is ready for hardware commands; ``TimeoutError`` otherwise."""
+        import time as _time
+        deadline = _time.monotonic() + timeout_s
+        while True:
+            status = self.standby_status()
+            if status.ready:
+                return status
+            if _time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"device not ready after {timeout_s:.1f}s (state={status.state_name}, stage={status.stage})")
+            _time.sleep(poll_s)
+
+    def standby_detach(self) -> None:
+        """Release this client's presence and stop its heartbeat (no reopen until attach/wake)."""
+        if self._presence is not None:
+            self._presence.detach()
+
+    def standby_attach(self) -> bool:
+        """Re-register this client's presence. A new presence wakes a sleeping device."""
+        return self._presence is not None and self._presence.attach()
+
+    @property
+    def standby_client_id(self) -> int:
+        """This connection epoch's presence id (0 when closed, detached or unsupported)."""
+        return self._presence.client_id if self._presence is not None else 0
+
+    @property
+    def standby_capability(self) -> str:
+        """'supported', 'unsupported', 'unknown', or 'disabled' (presence=False)."""
+        return self._presence.capability if self._presence is not None else "disabled"
+
+    def _standby_presence_send(self, client_id: int, present: bool) -> Optional[StandbyStatus]:
+        if self._usb:
+            is_healthy = getattr(self._t, "is_healthy", None)
+            if callable(is_healthy) and not is_healthy():
+                raise ConnectionError("USB link is down")
+            return parse_standby_status(
+                self._usb_cmd(CmdId.STANDBY, encode_presence(client_id, present)))
+        reply = self._http_post("/standby/presence", {"clientId": client_id, "present": present})
+        try:
+            return parse_standby_status_json(reply)
+        except (ValueError, TypeError):
+            return None
+
+    def _presence_start(self) -> None:
+        if not self._presence_enabled:
+            return
+        session = PresenceSession(self._standby_presence_send)
+        self._presence = session
+        self._presence_gen = getattr(self._t, "connect_gen", None)
+        session.open()
+        hook = getattr(self._t, "set_presence_hook", None)
+        if callable(hook) and session.capability != "unsupported":
+            hook(self._presence_tick)
+
+    def _presence_tick(self) -> None:
+        session = self._presence
+        if session is None:
+            return
+        gen = getattr(self._t, "connect_gen", None)
+        if gen != self._presence_gen:
+            self._presence_gen = gen
+            if session.active:
+                session.new_epoch()
+            return
+        session.tick()
+
+    def _presence_stop(self) -> None:
+        hook = getattr(self._t, "set_presence_hook", None)
+        if callable(hook):
+            hook(None)
+        session, self._presence = getattr(self, "_presence", None), None
+        if session is not None:
+            session.close()
 
     # ------------------------------------------------------------------
     # ── On-Device Scripting (USB only) ──────────────────────────────────

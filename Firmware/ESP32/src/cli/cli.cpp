@@ -25,6 +25,7 @@
 #include "serial_io.h"
 #include "bbp.h"
 #include "autorun.h"
+#include "standby_hw.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -118,6 +119,13 @@ static void handleCommand(const char* line)
 
     const CliCommand* entry = cli_cmdtab_find(cmd);
     if (entry && entry->handler) {
+        // Operation barrier: a command needs an ACTIVE system. The keystroke that
+        // submitted it already requested a wake, so a retry succeeds.
+        StandbyWork work;
+        if (!work.ok()) {
+            term_cprintf(TERM_FG_B_YELLOW, "System is waking from standby - retry in a moment.\r\n");
+            return;
+        }
         entry->handler(args);
     } else {
         term_cprintf(TERM_FG_B_RED, "Unknown command: '%s'.", cmd);
@@ -151,7 +159,10 @@ void cliProcess()
     }
 
     // Record CLI input activity so autorun_boot_check() can cancel the grace window.
-    if (serial_available()) autorun_note_inbound();
+    if (serial_available()) {
+        autorun_note_inbound();
+        standby_hw_activity();   // a keystroke is deliberate: restart the idle timer / wake
+    }
 
     // --------------------------------------------------------------
     // TUI dashboard mode

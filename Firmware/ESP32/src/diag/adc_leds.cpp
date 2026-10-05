@@ -259,3 +259,42 @@ bool adc_leds_manual_active(void)
 {
     return s_manual_override;
 }
+
+// Standby bookkeeping: what the host had before the converter lost power.
+static bool s_standby_saved_manual = false;
+static bool s_standby_active = false;
+
+void adc_leds_standby_off(void)
+{
+    if (!s_standby_active) {
+        s_standby_saved_manual = s_manual_override;
+        s_standby_active = true;
+    }
+    s_manual_override = true;   // no auto update may touch the converter while it is down
+
+    AD74416H *dev = tasks_get_device();
+    if (!dev) return;
+    for (uint8_t g = 0; g < 6; g++) dev->setGpioOutput(g, false);
+}
+
+void adc_leds_standby_restore(void)
+{
+    if (!s_standby_active) return;
+    s_standby_active = false;
+
+    AD74416H *dev = tasks_get_device();
+    if (dev) {
+        // The converter was reset: GPIO A..F are inputs again. They come back as the outputs
+        // they were configured as, dark; the saved manual / automatic mode is restored below,
+        // no output level is re-asserted from a stale shadow.
+        for (uint8_t g = 0; g < 6; g++) {
+            dev->configureGpio(g, GPIO_SEL_OUTPUT, false);
+            dev->setGpioOutput(g, false);
+        }
+    }
+    s_channel_state  = LED_STATE_UNINIT;
+    s_selftest_state = LED_STATE_UNINIT;
+    s_supply_state   = LED_STATE_UNINIT;
+    s_last_tick      = 0;
+    s_manual_override = s_standby_saved_manual;
+}

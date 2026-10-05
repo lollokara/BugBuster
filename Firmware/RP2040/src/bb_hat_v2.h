@@ -27,3 +27,8 @@ void handle_set_rail_voltage(const uint8_t *payload, uint8_t len);
 bool bb_hat_v2_set_io_voltage(uint16_t mv);
 uint16_t bb_hat_v2_get_io_voltage(void);
 bool bb_hat_v2_set_rail_voltage(uint8_t rail_id, uint16_t mv);
+
+// Standby support (bb_standby.c).
+void bb_hat_v2_leds_set_dark(bool dark);    // WS2812 shown off; logical LED state is kept
+bool bb_hat_v2_busy(void);                  // calibration running or a flash journal save pending
+bool bb_hat_v2_standby_restore(void);       // DS4424 reachable, trim codes intact (no enables)

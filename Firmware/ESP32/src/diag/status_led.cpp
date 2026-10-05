@@ -191,6 +191,9 @@ void status_led_set_now(uint8_t index, uint8_t r, uint8_t g, uint8_t b)
 // Fault blink state
 static bool s_fault_blink_active = false;
 static bool s_fault_blink_on = false;
+// Standby: normal updates are suppressed and LED 0 breathes blue.
+static bool s_standby = false;
+static uint16_t s_standby_phase = 0;
 
 void status_led_set_fault_blink(bool active)
 {
@@ -229,6 +232,7 @@ void status_led_breathe_step(void)
 void status_led_update(void)
 {
     if (!s_rmt_channel) return;
+    if (s_standby) return;
 
     // Re-sync the fault-blink flag from the LIVE PCA9535 e-fuse FLT state
     // on every tick. The event-driven setter at main.cpp::handle_pca_fault
@@ -293,5 +297,33 @@ void status_led_update(void)
         status_led_set(LED_ADC, LED_GREEN);
     }
 
+    status_led_refresh();
+}
+
+void status_led_standby(bool on)
+{
+    s_standby = on;
+    if (!s_rmt_channel) return;
+    if (on) {
+        s_standby_phase = 0;
+        for (int i = 0; i < LED_COUNT; i++) status_led_set(i, LED_OFF);
+        status_led_refresh();
+    } else {
+        status_led_update();
+    }
+}
+
+void status_led_standby_step(void)
+{
+    if (!s_standby || !s_rmt_channel) return;
+
+    // 150 steps of ~20 ms = a 3 s breath; squared sine for a soft low end.
+    s_standby_phase = (uint16_t)((s_standby_phase + 1) % 150);
+    float raw = (sinf((float)s_standby_phase / 150.0f * 2.0f * 3.14159265f) + 1.0f) / 2.0f;
+    uint8_t level = (uint8_t)(1.0f + raw * raw * 14.0f);   // max 15/255: dim
+
+    status_led_set(LED_ESP, 0, 0, level);
+    status_led_set(LED_MUX, LED_OFF);
+    status_led_set(LED_ADC, LED_OFF);
     status_led_refresh();
 }

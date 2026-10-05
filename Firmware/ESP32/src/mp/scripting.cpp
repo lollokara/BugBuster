@@ -122,6 +122,11 @@ static uint32_t     s_next_id = 1;
 // Scripting enabled flag (false if PSRAM alloc failed)
 static bool s_enabled = false;
 
+// Jobs submitted and not yet finished by taskMicroPython (queued + executing,
+// lint included) and per-source transfer lease deadlines, for scripting_has_work().
+static uint32_t s_work_cmds = 0;
+static uint32_t s_xfer_deadline[SCRIPT_XFER_COUNT] = {0};
+
 // IO-ownership session counter — incremented once per vm_do_init() so the
 // io_owner bindings can fill io_owner_t.session_id without caring about the
 // underlying script ID.  Written only from taskMicroPython; read atomically.
@@ -859,6 +864,8 @@ static void taskMicroPython(void *pvParam)
         }
 
 
+        __atomic_sub_fetch(&s_work_cmds, 1, __ATOMIC_SEQ_CST);
+
         // M05: yield at least one tick between back-to-back evals so lower-
         // priority tasks (idle, WDT feed) get CPU time even when the queue is
         // continuously saturated.  xQueueReceive with a non-zero timeout already
@@ -1024,7 +1031,9 @@ ScriptSubmitResult scripting_submit(const char *src, size_t len, const ScriptSub
     }
     cmd.len = len;
 
+    __atomic_add_fetch(&s_work_cmds, 1, __ATOMIC_SEQ_CST);
     if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
+        __atomic_sub_fetch(&s_work_cmds, 1, __ATOMIC_SEQ_CST);
         free(cmd.payload);
         if (opts->is_file) release_slot(cmd.id);
         ESP_LOGW(TAG, "scripting_submit: queue full");
@@ -1114,7 +1123,9 @@ bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t ma
     cmd.is_lint   = true;
     cmd.lint_job  = job;
 
+    __atomic_add_fetch(&s_work_cmds, 1, __ATOMIC_SEQ_CST);
     if (xQueueSend(s_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+        __atomic_sub_fetch(&s_work_cmds, 1, __ATOMIC_SEQ_CST);
         job->payload = NULL; // prevent double-free
         free(payload);
         vSemaphoreDelete(sem);
@@ -1150,6 +1161,27 @@ bool scripting_lint_string(const char *src, size_t len, char *out_err, size_t ma
 void scripting_reset_vm(void)
 {
     s_reset_requested = true;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate work predicate (standby inhibitor) — see scripting.h
+// ---------------------------------------------------------------------------
+
+bool scripting_has_work(void)
+{
+    uint32_t deadlines[SCRIPT_XFER_COUNT];
+    for (int i = 0; i < SCRIPT_XFER_COUNT; i++) {
+        deadlines[i] = __atomic_load_n(&s_xfer_deadline[i], __ATOMIC_ACQUIRE);
+    }
+    uint32_t cmds = __atomic_load_n(&s_work_cmds, __ATOMIC_SEQ_CST);
+    return sr_has_work(cmds, deadlines, SCRIPT_XFER_COUNT, now_ms());
+}
+
+void scripting_transfer_activity(ScriptXferSource src, bool active)
+{
+    if ((unsigned)src >= SCRIPT_XFER_COUNT) return;
+    __atomic_store_n(&s_xfer_deadline[src], active ? sr_xfer_deadline(now_ms()) : 0u,
+                     __ATOMIC_RELEASE);
 }
 
 // ---------------------------------------------------------------------------

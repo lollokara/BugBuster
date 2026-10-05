@@ -91,6 +91,16 @@ void status_led_set_fault_blink(bool active);
  */
 void status_led_breathe_step(void);
 
+/**
+ * @brief Enter/leave system standby. In standby LED 0 breathes a dim blue,
+ *        LEDs 1 and 2 are dark and status_led_update() does nothing. Leaving
+ *        restores the normal indication immediately.
+ */
+void status_led_standby(bool on);
+
+/** @brief One ~20 ms step of the standby breathing. No-op outside standby. */
+void status_led_standby_step(void);
+
 #ifdef __cplusplus
 }
 #endif

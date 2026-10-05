@@ -213,6 +213,20 @@ bool daq_board_defer_smu(daq_board_t *b, uint16_t key, int32_t ival);
 /** Battery sim: ramp DS4424 ch1 to @p code on the ctrl task. False if the
  *  queue is full (the caller retries on its next tick). */
 bool daq_board_defer_bs_code(daq_board_t *b, int8_t code, float v_hint);
+/** System standby: run @p stage (a SB_STAGE_* hardware stage) for @p generation on
+ *  the ctrl task; the worker drops it if that transaction is no longer current.
+ *  False if the queue stayed full. */
+bool daq_board_standby_defer(daq_board_t *b, uint8_t stage, uint32_t generation);
+/** System standby: restart the acquisition that was running at sleep, on the ctrl
+ *  task. Posted only by the first explicit request after a wake (never by a wake). */
+bool daq_board_defer_acq_resume(daq_board_t *b);
+/** System standby: BB_ST_INH_* bits from the REAL owners (client streams, armed
+ *  triggers, battery sim, calibration, OTA/relay, queued or executing USER ctrl
+ *  work, C6 UART claim). The standby stages that run on the same ctrl queue are NOT
+ *  counted - they are the sequence itself. Default internal acquisition feeding the
+ *  C6 is deliberately NOT an inhibitor; fast_running alone says nothing about a
+ *  client. Classification: standby/standby_inhibit.c. */
+uint32_t daq_board_standby_inhibitors(daq_board_t *b);
 /** DAQ-08: apply one DUT-supply setting now (ctrl task or boot). */
 void daq_settings_apply_smu(daq_board_t *b, uint16_t key, int32_t ival);
 

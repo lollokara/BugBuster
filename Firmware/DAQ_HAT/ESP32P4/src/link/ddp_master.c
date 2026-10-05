@@ -11,6 +11,7 @@
 #include "daq_settings.h"
 #include "daq_config_registry.h"
 #include "smu_cal.h"
+#include "standby_p4.h"
 
 static const char *TAG = "ddp_master";
 
@@ -116,11 +117,12 @@ static inline bool mb_req_is_write(uint8_t type)
 {
     return type == DDP_MB_SET_RAIL || type == DDP_MB_SET_EFUSE ||
            type == DDP_MB_SET_RAIL_EN || type == DDP_MB_SCRIPT_RUN ||
-           type == DDP_MB_SCRIPT_STOP || type == DDP_MB_FW_APPLY;
+           type == DDP_MB_SCRIPT_STOP || type == DDP_MB_FW_APPLY ||
+           type == DDP_MB_STANDBY_POLICY;
 }
 
-static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
-                      uint8_t len)
+static void handle_rx_work(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
+                           uint8_t len)
 {
     switch (cmd) {
         case DDP_CMD_CONFIG_SET: {
@@ -216,11 +218,41 @@ static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
                                 (const uint8_t *)&st, sizeof(st));
             }
             break;
+        case DDP_CMD_STANDBY:
+            // The C6's answer to a standby request / periodic mirror (16 B reply).
+            standby_p4_on_c6_reply(payload, len);
+            break;
         case DDP_RSP_OK:
         case DDP_RSP_ERR:
         default:
             break;   // responses to our pushes — nothing to do
     }
+}
+
+// C6-originated frames that change settings, run calibration or queue a mainboard
+// write. While the system is preparing / asleep / waking they are refused (and
+// request a wake) instead of reaching the ADCs, the DUT supply or the S3.
+static bool rx_needs_admission(uint8_t cmd)
+{
+    switch (cmd) {
+        case DDP_CMD_CONFIG_SET:
+        case DDP_CMD_SET_CONFIG:
+        case DDP_CMD_CONFIG_ACTION:
+        case DDP_CMD_CAL_CTRL:
+        case DDP_CMD_MB_REQUEST:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void handle_rx(ddp_master_t *m, uint8_t cmd, const uint8_t *payload,
+                      uint8_t len)
+{
+    const bool gated = rx_needs_admission(cmd);
+    if (gated && !standby_p4_admit()) return;
+    handle_rx_work(m, cmd, payload, len);
+    if (gated) standby_p4_leave();
 }
 
 typedef enum { ST_SYNC, ST_LEN, ST_CMD, ST_PAYLOAD, ST_CRC } parse_state_t;

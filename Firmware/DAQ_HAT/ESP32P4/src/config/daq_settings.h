@@ -66,6 +66,12 @@ void daq_settings_set_callbacks(daq_settings_apply_cb_t apply,
 bool daq_settings_get_i32(uint16_t key, int32_t *out);
 // Validate+clamp+store+persist+apply+notify. Returns true if accepted.
 bool daq_settings_set_i32(uint16_t key, int32_t value, daq_src_t src);
+// Record a value that the hardware owner has ALREADY applied (e.g. the standby
+// sequence switched the DUT supply off itself): updates the in-RAM slot only. No
+// NVS write, no apply callback, no notify, no guard - so it cannot queue work, be
+// refused by the battery-sim guard or touch calibration. Returns false for an
+// unknown / string / read-only key.
+bool daq_settings_shadow_set_i32(uint16_t key, int32_t value);
 
 // --- String accessors ------------------------------------------------------
 // Copies up to @cap-1 bytes + NUL into @buf. Returns true if the key is a string.

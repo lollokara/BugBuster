@@ -88,6 +88,21 @@ bool sr_query_get(const char *path, const char *key, char *out, size_t cap);
 /** True if `key` is present with value "1" or "true". */
 bool sr_query_flag(const char *path, const char *key);
 
+// ---------------------------------------------------------------------------
+// Aggregate work predicate (Agent standby inhibitor). Cmds are submitted jobs not yet
+// finished (queued or executing, including lint and REPL lines); a transfer lease is a
+// deadline in ms (0 = none) refreshed by each upload frame, so a vanished client cannot
+// pin the inhibitor. An idle persistent VM is deliberately NOT work.
+// ---------------------------------------------------------------------------
+#define SR_XFER_LEASE_MS 30000u
+
+/** Lease deadline for an upload frame seen at now_ms (never 0). */
+uint32_t sr_xfer_deadline(uint32_t now_ms);
+/** True while a lease deadline is still in the future (wrap-safe). */
+bool sr_xfer_live(uint32_t deadline_ms, uint32_t now_ms);
+/** cmds > 0 or any of the n lease deadlines is live. */
+bool sr_has_work(uint32_t cmds, const uint32_t *deadlines_ms, size_t n, uint32_t now_ms);
+
 #ifdef __cplusplus
 }
 #endif

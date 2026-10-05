@@ -47,6 +47,7 @@ export type {
   OtaUploadResult,
   UpdateCheckResult,
   UpdateStatus,
+  StandbyStatus,
 } from "./types";
 
 import {
@@ -77,6 +78,7 @@ import type {
   OtaUploadResult,
   UpdateCheckResult,
   UpdateStatus,
+  StandbyStatus,
 } from "./types";
 
 /* ---- Typed endpoints ---- */
@@ -758,6 +760,28 @@ export const api = {
         admin: true,
       }),
     wifiStreamStatus: () => request<any>("/api/daq/wifi_stream/status"),
+  },
+
+  /* ---- System standby (presence/status/wake are anonymous and bounded) ---- */
+  standby: {
+    status: (signal?: AbortSignal) =>
+      request<StandbyStatus>("/api/standby/status", { signal }),
+    presence: (clientId: number, present: boolean, signal?: AbortSignal) =>
+      request<StandbyStatus>("/api/standby/presence", {
+        method: "POST",
+        body: { clientId, present },
+        signal,
+      }),
+    setPolicy: (mac: string, timeoutSeconds: number) =>
+      request<StandbyStatus>("/api/standby/policy", {
+        method: "POST",
+        body: { timeoutSeconds },
+        mac,
+        admin: true,
+      }),
+    wake: () => request<StandbyStatus>("/api/standby/wake", { method: "POST", body: {} }),
+    sleep: (mac: string) =>
+      request<StandbyStatus>("/api/standby/sleep", { method: "POST", body: {}, mac, admin: true }),
   },
 };
 

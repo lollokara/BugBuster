@@ -68,6 +68,10 @@ bool ext_job_submit_spi_transfer(const uint8_t *tx_data, size_t tx_len,
 bool ext_job_get(uint32_t job_id, uint8_t *status, uint8_t *kind,
                  uint8_t *result, size_t max_result_len, size_t *result_len);
 
+// Standby inhibitor: a deferred job is queued or running. Fails closed (true)
+// when the job table cannot be inspected right now.
+bool ext_bus_jobs_pending(void);
+
 #ifdef __cplusplus
 }
 #endif

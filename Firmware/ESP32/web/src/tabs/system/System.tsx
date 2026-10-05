@@ -8,6 +8,7 @@ import { BoardCard } from "./BoardCard";
 import { OtaCard, GitOtaCard } from "./OtaCard";
 import { HatCard } from "./HatCard";
 import { UsbPdCard } from "./UsbPdCard";
+import { StandbyCard } from "./StandbyCard";
 import { UartCard } from "./UartCard";
 import { IoExpControlCard } from "./IoExpControlCard";
 import { WifiCard } from "./WifiCard";
@@ -71,6 +72,7 @@ export function System() {
         {activeSection === "power" && (
           <>
             <UsbPdCard />
+            <StandbyCard />
             <IoExpControlCard />
           </>
         )}

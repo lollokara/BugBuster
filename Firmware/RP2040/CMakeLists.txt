@@ -57,10 +57,14 @@ add_executable(bugbuster_hat
     src/bb_la_usb.c
     src/bb_hat_v2.c
     src/bb_fw_update.c
+    src/bb_standby_core.c
+    src/bb_standby.c
 )
 
 target_include_directories(bugbuster_hat PRIVATE
     src/
+    # standby_wire.h: the wire contract shared with the ESP32-S3 and the DAQ HAT. Included, never copied.
+    ${CMAKE_CURRENT_LIST_DIR}/../DAQ_HAT/common
     ${DEBUGPROBE_DIR}/CMSIS_DAP/CMSIS/DAP/Firmware/Include/
     ${DEBUGPROBE_DIR}/CMSIS_DAP/CMSIS/Core/Include/
     ${DEBUGPROBE_DIR}/include/
@@ -76,6 +80,14 @@ target_compile_definitions(bugbuster_hat PRIVATE
 )
 
 target_compile_options(bugbuster_hat PRIVATE -Wall)
+
+# Standby needs to know when a CMSIS-DAP session is open and to refuse DAP frames while
+# the HAT is powered down. The debugprobe submodule stays untouched: bb_standby.c wraps
+# the two entry points other translation units call (dap_thread, tud_hid_set_report_cb).
+target_link_options(bugbuster_hat PRIVATE
+    -Wl,--wrap=DAP_ExecuteCommand
+    -Wl,--wrap=DAP_ProcessCommand
+)
 # Our local override headers must win over debugprobe defaults.
 
 # PIO programs — debugprobe SWD (PIO 0)

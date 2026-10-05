@@ -65,6 +65,9 @@ static EXT_RAM_BSS_ATTR char s_script_names[SCRIPT_LIST_MAX][SCRIPT_NAME_MAX + 1
 #include "pd_vadj_guard.h"
 #include "update_manager.h"
 #include "api_core.h"
+#include "api_standby.h"
+#include "standby_api.h"
+#include "standby_hw.h"
 #include "esp_wifi.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
@@ -86,6 +89,13 @@ static portMUX_TYPE s_server_mux = portMUX_INITIALIZER_UNLOCKED;
 #define BUGBUSTER_TRACE_URI_REGISTRATION 0
 #endif
 
+// Original handler of a route plus the context it was registered with.
+struct StandbyRouteWrap {
+    esp_err_t (*handler)(httpd_req_t *);
+    void *ctx;
+};
+static esp_err_t standby_trampoline(httpd_req_t *req);
+
 static esp_err_t register_uri_handler_checked(httpd_handle_t server, const httpd_uri_t *uri, int line)
 {
     const char *path = (uri && uri->uri) ? uri->uri : "<null>";
@@ -93,11 +103,27 @@ static esp_err_t register_uri_handler_checked(httpd_handle_t server, const httpd
 #if BUGBUSTER_TRACE_URI_REGISTRATION
     term_printf("[webserver] register line=%d method=%d uri=%s\r\n", line, method, path);
 #endif
-    esp_err_t err = httpd_register_uri_handler(server, uri);
+    // Every route runs behind the standby operation barrier: keep the original
+    // handler/context and register the trampoline instead (see standby_trampoline).
+    if (!uri || !uri->handler) return ESP_ERR_INVALID_ARG;
+    StandbyRouteWrap *wrap = (StandbyRouteWrap *)heap_caps_malloc(sizeof(StandbyRouteWrap),
+                                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!wrap) wrap = (StandbyRouteWrap *)malloc(sizeof(StandbyRouteWrap));
+    if (!wrap) {
+        ESP_LOGE(TAG, "URI register skipped (no memory for barrier wrapper) line=%d uri=%s", line, path);
+        return ESP_ERR_NO_MEM;
+    }
+    wrap->handler = uri->handler;
+    wrap->ctx = uri->user_ctx;
+    httpd_uri_t wrapped = *uri;
+    wrapped.handler = standby_trampoline;
+    wrapped.user_ctx = wrap;
+    esp_err_t err = httpd_register_uri_handler(server, &wrapped);
 #if BUGBUSTER_TRACE_URI_REGISTRATION
     term_printf("[webserver] register result line=%d err=%d uri=%s\r\n", line, (int)err, path);
 #endif
     if (err != ESP_OK) {
+        free(wrap);   // not referenced by any route
         ESP_LOGE(TAG, "URI register failed line=%d method=%d uri=%s err=%s",
                  line, method, path, esp_err_to_name(err));
     }
@@ -286,6 +312,37 @@ static esp_err_t send_error(httpd_req_t *req, int code, const char *msg)
 // Forward declaration: defined further down alongside the DAQ handlers, but
 // used by earlier handlers that delegate to api_core_handle().
 static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *fail_msg);
+
+// 503 for a request refused by the standby barrier. The wake has already been
+// requested by the refusal; the request is NOT replayed, the client retries.
+static esp_err_t send_standby_busy(httpd_req_t *req)
+{
+    char *body = api_standby_busy_json();
+    char origin_buf[96];
+    set_cors_headers(req, origin_buf, sizeof(origin_buf));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Retry-After", "2");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    esp_err_t rc = httpd_resp_sendstr(req, body ? body : "{\"ok\":false,\"error\":\"standby\"}");
+    if (body) cJSON_free(body);
+    return rc;
+}
+
+// Operation barrier for every route registered through the checked helper.
+// Static assets and cached status reads pass untouched; the standby routes
+// manage their own admission; everything else is counted work and wakes a
+// sleeping system instead of touching unpowered hardware.
+static esp_err_t standby_trampoline(httpd_req_t *req)
+{
+    StandbyRouteWrap *wrap = (StandbyRouteWrap *)req->user_ctx;
+    req->user_ctx = wrap->ctx;
+    if (standby_api_http_class(req->method == HTTP_GET, req->uri) != STANDBY_HTTP_WORK)
+        return wrap->handler(req);
+    StandbyWork work;
+    if (!work.ok()) return send_standby_busy(req);
+    return wrap->handler(req);
+}
 
 static esp_err_t handle_http_error(httpd_req_t *req, httpd_err_code_t error)
 {
@@ -1003,6 +1060,8 @@ static esp_err_t handle_get_diagnostics(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
 
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        const bool analog_ok = !g_deviceState.analogUnavailable;
+        cJSON_AddBoolToObject(root, "analogAvailable", analog_ok);
         cJSON *slots = cJSON_AddArrayToObject(root, "slots");
         for (uint8_t i = 0; i < 4; i++) {
             const DiagState& ds = g_deviceState.diag[i];
@@ -1010,8 +1069,8 @@ static esp_err_t handle_get_diagnostics(httpd_req_t *req)
             cJSON_AddNumberToObject(obj, "slot", i);
             cJSON_AddNumberToObject(obj, "source", ds.source);
             cJSON_AddStringToObject(obj, "sourceName", diagSourceName(ds.source));
-            cJSON_AddNumberToObject(obj, "raw", ds.rawCode);
-            cJSON_AddNumberToObject(obj, "value", ds.value);
+            api_add_measurement(obj, "raw", ds.rawCode, analog_ok);
+            api_add_measurement(obj, "value", ds.value, analog_ok);
             cJSON_AddStringToObject(obj, "unit", diagSourceUnit(ds.source));
             cJSON_AddItemToArray(slots, obj);
         }
@@ -2691,6 +2750,57 @@ static esp_err_t handle_post_hub_resync(httpd_req_t *req)
 {
     if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
     return send_api_core_result(req, api_core_handle("POST", "/api/hub/resync", NULL), "hub resync failed");
+}
+
+// ----- System standby: /api/standby/* (anonymous: status, presence, wake; admin: policy, sleep) -----
+// Success is the status object; failure is {"ok":false,"error":...}: 409 when the request
+// is refused as busy (a real inhibitor, a full client table, a policy write in progress),
+// 500 when a setting could not be stored, 400 for every other rejection.
+static esp_err_t send_standby_result(httpd_req_t *req, char *resp)
+{
+    if (!resp) return send_error(req, 500, "standby request failed");
+    int code = 200;
+    if (strstr(resp, "\"ok\":false") != NULL) {
+        if (strstr(resp, "\"error\":\"busy\"") != NULL) code = 409;
+        else if (strstr(resp, "\"error\":\"storage\"") != NULL) code = 500;
+        else code = 400;
+    }
+    esp_err_t rc = send_raw_json(req, resp, code);
+    cJSON_free(resp);
+    return rc;
+}
+
+static esp_err_t handle_get_standby_status(httpd_req_t *req)
+{
+    return send_standby_result(req, api_core_handle("GET", "/api/standby/status", NULL));
+}
+
+static esp_err_t handle_post_standby_presence(httpd_req_t *req)
+{
+    cJSON *body = recv_json_body_cap(req, 128);
+    char *resp = api_core_handle("POST", "/api/standby/presence", body);
+    if (body) cJSON_Delete(body);
+    return send_standby_result(req, resp);
+}
+
+static esp_err_t handle_post_standby_wake(httpd_req_t *req)
+{
+    return send_standby_result(req, api_core_handle("POST", "/api/standby/wake", NULL));
+}
+
+static esp_err_t handle_post_standby_policy(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    cJSON *body = recv_json_body_cap(req, 128);
+    char *resp = api_core_handle("POST", "/api/standby/policy", body);
+    if (body) cJSON_Delete(body);
+    return send_standby_result(req, resp);
+}
+
+static esp_err_t handle_post_standby_sleep(httpd_req_t *req)
+{
+    if (check_admin_auth(req) != ESP_OK) return send_error(req, 401, "Admin token required");
+    return send_standby_result(req, api_core_handle("POST", "/api/standby/sleep", NULL));
 }
 
 // POST /api/daq/config  body: {"op": 0..4, "args": hex}. SET (1) and ACTION (4)
@@ -5091,7 +5201,7 @@ bool initWebServer(void)
     // 128 alone silently starved the last ~6 registrations (registry routes,
     // this file's own wildcard "/*" catch-all) with ESP_ERR_HTTPD_HANDLERS_FULL.
     // 150 gives headroom without reserving a large unused slot table from heap.
-    config.max_uri_handlers = 150;
+    config.max_uri_handlers = 160;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     // HTTPD task stack must stay in internal RAM, not PSRAM. Any handler
     // that touches flash (OTA partition reads, SPIFFS, NVS) goes through
@@ -5485,6 +5595,26 @@ bool initWebServer(void)
         .uri = "/api/hub/resync", .method = HTTP_POST, .handler = handle_post_hub_resync, .user_ctx = NULL
     };
     httpd_register_uri_handler(s_server, &uri_hub_resync);
+    httpd_uri_t uri_standby_status = {
+        .uri = "/api/standby/status", .method = HTTP_GET, .handler = handle_get_standby_status, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_standby_status);
+    httpd_uri_t uri_standby_presence = {
+        .uri = "/api/standby/presence", .method = HTTP_POST, .handler = handle_post_standby_presence, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_standby_presence);
+    httpd_uri_t uri_standby_wake = {
+        .uri = "/api/standby/wake", .method = HTTP_POST, .handler = handle_post_standby_wake, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_standby_wake);
+    httpd_uri_t uri_standby_policy = {
+        .uri = "/api/standby/policy", .method = HTTP_POST, .handler = handle_post_standby_policy, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_standby_policy);
+    httpd_uri_t uri_standby_sleep = {
+        .uri = "/api/standby/sleep", .method = HTTP_POST, .handler = handle_post_standby_sleep, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(s_server, &uri_standby_sleep);
     httpd_uri_t uri_daq_config = {
         .uri = "/api/daq/config", .method = HTTP_POST, .handler = handle_post_daq_config, .user_ctx = NULL
     };

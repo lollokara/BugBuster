@@ -21,6 +21,7 @@
 #include "script_storage.h"
 #include "update/update_manager.h"
 #include "net/api_core.h"
+#include "power/standby_hw.h"
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "driver/gpio.h"
@@ -1613,6 +1614,32 @@ void hat_daq_poll_mb(void)
 
     uint8_t type = req[0];
 
+    // -------- System standby policy (C6 Settings menu) -----------------------
+    // args: u16 LE timeout seconds (0xFFFF or no args = query); result: u16 LE
+    // seconds + u8 state. Persists the S3-authoritative policy and restarts the
+    // idle interval; served in every state, never touches hardware.
+    if (type == BB_MB_STANDBY_POLICY) {
+        uint32_t want = (req_len >= 3) ? (uint32_t)(req[1] | (req[2] << 8)) : 0xFFFFu;
+        uint8_t state = 0;
+        int secs = standby_hw_mailbox_policy(want, &state);
+        uint8_t status = HAT_MB_ST_OK;
+        if (secs < 0) {   // invalid value: refuse and report what is in force
+            status = HAT_MB_ST_ERR;
+            secs = standby_hw_mailbox_policy(0xFFFFu, &state);
+        }
+        uint8_t out[3] = { (uint8_t)(secs & 0xFF), (uint8_t)((secs >> 8) & 0xFF), state };
+        hat_mb_result_send(type, status, out, sizeof(out));
+        return;
+    }
+
+    // Every other mailbox request is a user action on the C6: it counts as
+    // activity and needs an ACTIVE system (rail/e-fuse writes, script control,
+    // firmware apply). Refused while asleep or in transition: BUSY, no replay.
+    StandbyWork standby_work;
+    if (!standby_work.ok()) {
+        hat_mb_result_send(type, HAT_MB_ST_BUSY, nullptr, 0);
+        return;
+    }
     // -------- Script requests: execute, then return the engine snapshot ------
     if (type == HAT_MB_SCRIPTS || type == HAT_MB_SCRIPT_RUN ||
         type == HAT_MB_SCRIPT_STOP) {

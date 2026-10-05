@@ -5,7 +5,9 @@
   "description": "Mock-IPC screenshot harness for the BugBuster desktop frontend",
   "type": "module",
   "scripts": {
-    "shoot": "node shoot.mjs"
+    "shoot": "node shoot.mjs",
+    "scripting": "node scripting.mjs",
+    "scripting:selftest": "node --test scripting_mock_selftest.mjs"
   },
   "devDependencies": {
     "playwright": "^1.59.1"

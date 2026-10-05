@@ -8,6 +8,7 @@
 #include "ui.h"
 #include "ddp.h"
 #include "c6_config.h"
+#include "standby_c6.h"
 #include "daq_config_registry.h"
 
 #include <math.h>
@@ -443,7 +444,7 @@ static bool alert_vadj2_en(void) { return s_mbp_valid && (s_mbp.rail_en & DDP_MB
 static const menu_t m_hat, m_screen, m_mainboard, m_wifi, m_diag, m_cal;
 static const menu_t m_bs;
 static const menu_t m_diag_temp, m_diag_power, m_diag_rails, m_diag_p4, m_diag_c6;
-static const menu_t m_srate, m_filter, m_decim;
+static const menu_t m_srate, m_filter, m_decim, m_standby;
 static void scripts_open(void);   // opens the custom MicroPython Scripts screen
 static void fw_open(void);        // opens the custom Firmware / update screen
 static void cal_open_volt(void);  // DUT source calibration wizard entry points
@@ -601,11 +602,27 @@ static const menu_item_t decim_items[] = {
 };
 static const menu_t m_decim = { "Decimation", decim_items, 6 };
 
-static const menu_item_t mainboard_items[] = {
-    { .label = "Power",   .type = IT_SUBMENU, .sub = &m_power },
-    { .label = "Scripts", .type = IT_CYCLE,   .ok = scripts_open },
+// Auto Standby timeout. The S3 owns and persists it; the C6 only mirrors it and asks
+// for a change through the P4 mailbox. The selection dot follows the mirror, so it
+// moves only once the S3 has actually accepted the new value.
+static int s_standby_sel = -1;
+static void val_standby(char *b, int n) { standby_c6_policy_text(b, n); }
+static void pick_standby(int v)         { standby_c6_policy_choose(v); }
+
+static const menu_item_t standby_items[] = {
+    { .label = "1 minute",   .type = IT_TOGGLE, .ok_arg = pick_standby, .arg = 0, .sel_ref = &s_standby_sel },
+    { .label = "5 minutes",  .type = IT_TOGGLE, .ok_arg = pick_standby, .arg = 1, .sel_ref = &s_standby_sel },
+    { .label = "15 minutes", .type = IT_TOGGLE, .ok_arg = pick_standby, .arg = 2, .sel_ref = &s_standby_sel },
+    { .label = "Off",        .type = IT_TOGGLE, .ok_arg = pick_standby, .arg = 3, .sel_ref = &s_standby_sel },
 };
-static const menu_t m_mainboard = { "Main Board Settings", mainboard_items, 2 };
+static const menu_t m_standby = { "Auto Standby", standby_items, 4 };
+
+static const menu_item_t mainboard_items[] = {
+    { .label = "Power",        .type = IT_SUBMENU, .sub = &m_power },
+    { .label = "Scripts",      .type = IT_CYCLE,   .ok = scripts_open },
+    { .label = "Auto Standby", .type = IT_SUBMENU, .sub = &m_standby, .value = val_standby },
+};
+static const menu_t m_mainboard = { "Main Board Settings", mainboard_items, 3 };
 
 static const menu_item_t wifi_items[] = {
     { .label = "WiFi",   .type = IT_TOGGLE, .value = val_wifi,     .ok = ok_wifi },
@@ -1363,6 +1380,7 @@ menu_status_t menu_update(uint32_t events, uint32_t now_ms, bool *need_render)
     scr_refresh(now_ms);
     cal_refresh(now_ms);
     fw_refresh(now_ms);
+    s_standby_sel = standby_c6_policy_selected();
     bool render = false;
 
     if (events) {

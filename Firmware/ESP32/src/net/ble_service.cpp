@@ -19,6 +19,7 @@
 
 #include "ble_service.h"
 
+#include <math.h>   // before NimBLE: its min/max macros break <cmath>
 #include <string.h>
 #include <stdio.h>
 
@@ -40,6 +41,7 @@ extern "C" void ble_store_config_init(void);
 #include "auth.h"
 #include "bbp.h"
 #include "api_core.h"
+#include "standby_hw.h"
 #include "tasks.h"
 #include "config.h"
 #include "wifi_manager.h"
@@ -159,6 +161,7 @@ static int chr_auth_access(uint16_t conn_handle, uint16_t attr_handle,
     bool ok = auth_verify_token(token);
     if (conn_handle == s_conn_handle) {
         s_authed = ok;
+        if (ok) standby_hw_activity();   // an authenticated session is a real client: wake
     }
     ESP_LOGI(TAG, "auth write: %s", ok ? "OK" : "REJECT");
     // Not INSUFFICIENT_AUTHEN: iOS reports that as a pairing failure, so a wrong token must look different.
@@ -256,6 +259,13 @@ static int chr_supply_access(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
 
+    // Supply writes drive hardware: counted by the operation barrier, refused (and
+    // a wake requested) while the system is asleep or in transition.
+    StandbyWork standby_work;
+    if (!standby_work.ok()) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
     char buf[128];
     if (ble_write_to_buf(ctxt, buf, sizeof(buf)) < 0) {
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -343,13 +353,25 @@ static int chr_sensor_access(uint16_t conn_handle, uint16_t attr_handle,
 
     char json[256];
     int p = 0;
-    p += snprintf(json + p, sizeof(json) - p, "{\"t\":%.1f,\"ch\":[", temp);
+    // Standby: the analog rail is down. The numbers stay numeric (existing
+    // decoders) but are not measurements; "na":true says so explicitly.
+    // A value that does not exist - rail down, or NaN/Inf from its source - is 0 with "na":true
+    // for the numeric decoder; the invalid JSON token "nan" is never emitted.
+    const bool rail_down = g_deviceState.analogUnavailable;
+    bool na = rail_down;
+    auto num = [&](float v) -> float {
+        if (rail_down || !isfinite(v)) { na = true; return 0.0f; }
+        return v;
+    };
+    p += snprintf(json + p, sizeof(json) - p, "{\"t\":%.1f,\"ch\":[", (double)num(temp));
     for (int i = 0; i < AD74416H_NUM_CHANNELS; i++) {
-        p += snprintf(json + p, sizeof(json) - p, "%s%.4f", i ? "," : "", chv[i]);
+        p += snprintf(json + p, sizeof(json) - p, "%s%.4f", i ? "," : "", (double)num(chv[i]));
     }
+    const float pd_v_out = isfinite(pd_v) ? pd_v : (na = true, 0.0f);
+    const float pd_a_out = isfinite(pd_a) ? pd_a : (na = true, 0.0f);
     p += snprintf(json + p, sizeof(json) - p,
                   "],\"pd\":{\"at\":%s,\"v\":%.2f,\"a\":%.2f}",
-                  pd_at ? "true" : "false", pd_v, pd_a);
+                  pd_at ? "true" : "false", (double)pd_v_out, (double)pd_a_out);
     if (hat_present) {
         p += snprintf(json + p, sizeof(json) - p, ",\"rail\":[");
         for (int i = 0; i < HAT_RAIL_COUNT; i++) {
@@ -357,6 +379,9 @@ static int chr_sensor_access(uint16_t conn_handle, uint16_t attr_handle,
                           i ? "," : "", rmv[i], rma[i], ren[i] ? "true" : "false");
         }
         p += snprintf(json + p, sizeof(json) - p, "]");
+    }
+    if (na) {
+        p += snprintf(json + p, sizeof(json) - p, ",\"na\":true");
     }
     p += snprintf(json + p, sizeof(json) - p, "}");
     if (p < 0) return BLE_ATT_ERR_UNLIKELY;
@@ -627,6 +652,7 @@ static int bb_gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGI(TAG, "central disconnected (reason %d)", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_authed = false;
+        standby_hw_activity();   // last client left: start a fresh idle interval
         bb_advertise();
         return 0;
 

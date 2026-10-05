@@ -20,6 +20,8 @@
 #include "scripting.h"
 #include "script_storage.h"
 #include "autorun.h"
+#include "api_scripts.h"
+#include "esp_heap_caps.h"
 
 // File-scope buffer — EXT_RAM_BSS_ATTR has no effect on function-scope statics
 // in the Xtensa toolchain; must be at file scope to land in .ext_ram.bss.
@@ -177,6 +179,7 @@ static int handler_script_upload(const uint8_t *payload, size_t len,
             s_transfer_total = total;
             s_transfer_received = 0;
             s_transfer_active = true;
+            scripting_transfer_activity(SCRIPT_XFER_USB, true);
         } else if (sub == 1) {
             if (!s_transfer_active || len < 5) return -CMD_ERR_BAD_ARG;
             size_t pos = 2;
@@ -187,10 +190,12 @@ static int handler_script_upload(const uint8_t *payload, size_t len,
                 return -CMD_ERR_BAD_ARG;
             memcpy(s_transfer_body + offset, payload + pos, chunk_len);
             s_transfer_received += chunk_len;
+            scripting_transfer_activity(SCRIPT_XFER_USB, true);
         } else if (sub == 2) {
             if (!s_transfer_active || len != 2 || s_transfer_received != s_transfer_total)
                 return -CMD_ERR_BAD_ARG;
             s_transfer_active = false;
+            scripting_transfer_activity(SCRIPT_XFER_USB, false);
             if (s_transfer_mode != 0) {
                 bool ok = scripting_run_string((const char *)s_transfer_body,
                                                s_transfer_total, s_transfer_mode == 2);
@@ -214,6 +219,7 @@ static int handler_script_upload(const uint8_t *payload, size_t len,
             return (int)pos;
         } else if (sub == 3 && len == 2) {
             s_transfer_active = false;
+            scripting_transfer_activity(SCRIPT_XFER_USB, false);
         } else {
             return -CMD_ERR_BAD_ARG;
         }
@@ -224,6 +230,7 @@ static int handler_script_upload(const uint8_t *payload, size_t len,
     }
 
     s_transfer_active = false;
+    scripting_transfer_activity(SCRIPT_XFER_USB, false);
     size_t rpos = 0;
     uint8_t name_len = payload[rpos++];
     if (name_len == 0 || name_len > SCRIPT_NAME_MAX) return -CMD_ERR_BAD_ARG;
@@ -341,6 +348,142 @@ static int handler_script_delete(const uint8_t *payload, size_t len,
 }
 
 // ---------------------------------------------------------------------------
+// JSON tunnel (SCRIPT_AUTORUN sub 6 CALL / sub 7 FETCH): the api_scripts routes over
+// USB, bounded to BBP frames. Wire layout (little-endian), mirrored by the desktop
+// scripts.rs `tunnel` module:
+//   CALL   req: u8 6, u8 op, u16 total, u16 off, bytes chunk   (JSON args, chunk <= 1000)
+//          rsp: u8 state, u8 token, u16 a, u16 b, bytes data
+//                state 0 MORE   a = bytes received so far
+//                state 1 DONE   a = response length, b = data length, data = first page
+//                state 2 REJECT a = reason (1 unknown op, 2 offset mismatch [b = expected],
+//                               3 too large, 4 out of memory, 5 no request, 6 stale token)
+//   FETCH  req: u8 7, u8 token, u16 off      rsp: DONE page, or REJECT 6
+// A CALL with off == 0 discards any earlier request and response. Application failures
+// are ordinary JSON replies; REJECT is only for framing problems.
+// ---------------------------------------------------------------------------
+#define TUN_REQ_CHUNK_MAX 1000
+#define TUN_RSP_CHUNK_MAX 1000
+#define TUN_TOTAL_MAX     65535
+
+enum { TUN_MORE = 0, TUN_DONE = 1, TUN_REJECT = 2 };
+enum { TUN_REJ_UNKNOWN_OP = 1, TUN_REJ_OFFSET = 2, TUN_REJ_TOO_LARGE = 3, TUN_REJ_NO_MEMORY = 4,
+       TUN_REJ_NO_REQUEST = 5, TUN_REJ_STALE = 6 };
+
+static char    *s_tun_req = NULL;
+static size_t   s_tun_req_total = 0;
+static size_t   s_tun_req_recv = 0;
+static uint8_t  s_tun_req_op = 0;
+static char    *s_tun_rsp = NULL;
+static size_t   s_tun_rsp_len = 0;
+static uint8_t  s_tun_token = 0;
+
+static void tun_drop_request(void)
+{
+    if (s_tun_req) heap_caps_free(s_tun_req);
+    s_tun_req = NULL;
+    s_tun_req_total = s_tun_req_recv = 0;
+    scripting_transfer_activity(SCRIPT_XFER_USB, false);
+}
+
+static void tun_drop_response(void)
+{
+    if (s_tun_rsp) cJSON_free(s_tun_rsp);
+    s_tun_rsp = NULL;
+    s_tun_rsp_len = 0;
+}
+
+static int tun_frame(uint8_t *resp, size_t *resp_len, uint8_t state, uint16_t a, uint16_t b,
+                     const char *data, size_t n)
+{
+    size_t pos = 0;
+    bbp_put_u8(resp, &pos, state);
+    bbp_put_u8(resp, &pos, s_tun_token);
+    bbp_put_u16(resp, &pos, a);
+    bbp_put_u16(resp, &pos, b);
+    if (n) { memcpy(resp + pos, data, n); pos += n; }
+    *resp_len = pos;
+    return (int)pos;
+}
+
+static int tun_reject(uint8_t *resp, size_t *resp_len, uint16_t reason, uint16_t detail)
+{
+    return tun_frame(resp, resp_len, TUN_REJECT, reason, detail, NULL, 0);
+}
+
+// One page of the staged response starting at off (caller checked off <= length).
+static int tun_page(uint8_t *resp, size_t *resp_len, size_t off)
+{
+    size_t n = s_tun_rsp_len - off;
+    if (n > TUN_RSP_CHUNK_MAX) n = TUN_RSP_CHUNK_MAX;
+    return tun_frame(resp, resp_len, TUN_DONE, (uint16_t)s_tun_rsp_len, (uint16_t)n, s_tun_rsp + off, n);
+}
+
+static int tunnel_call(const uint8_t *payload, size_t len, uint8_t *resp, size_t *resp_len)
+{
+    if (len < 6) return -CMD_ERR_BAD_ARG;
+    uint8_t op = payload[1];
+    size_t pos = 2;
+    size_t total = bbp_get_u16(payload, &pos);
+    size_t off = bbp_get_u16(payload, &pos);
+    size_t n = len - pos;
+    if (total == 0 || n > TUN_REQ_CHUNK_MAX) return -CMD_ERR_BAD_ARG;
+
+    if (off == 0) {
+        tun_drop_request();
+        tun_drop_response();
+        s_tun_token++;
+        s_tun_req = (char *)heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_tun_req) return tun_reject(resp, resp_len, TUN_REJ_NO_MEMORY, 0);
+        s_tun_req_total = total;
+        s_tun_req_recv = 0;
+        s_tun_req_op = op;
+    } else if (!s_tun_req) {
+        return tun_reject(resp, resp_len, TUN_REJ_NO_REQUEST, 0);
+    } else if (op != s_tun_req_op || total != s_tun_req_total || off != s_tun_req_recv) {
+        return tun_reject(resp, resp_len, TUN_REJ_OFFSET, (uint16_t)s_tun_req_recv);
+    }
+    if (n > s_tun_req_total - s_tun_req_recv) {
+        tun_drop_request();
+        return tun_reject(resp, resp_len, TUN_REJ_TOO_LARGE, 0);
+    }
+    memcpy(s_tun_req + s_tun_req_recv, payload + pos, n);
+    s_tun_req_recv += n;
+
+    if (s_tun_req_recv < s_tun_req_total) {
+        scripting_transfer_activity(SCRIPT_XFER_USB, true);
+        return tun_frame(resp, resp_len, TUN_MORE, (uint16_t)s_tun_req_recv, 0, NULL, 0);
+    }
+
+    s_tun_req[s_tun_req_total] = '\0';
+    cJSON *body = cJSON_Parse(s_tun_req);
+    tun_drop_request();
+    bool known = false;
+    char *json = api_scripts_dispatch(op, body, &known);
+    if (body) cJSON_Delete(body);
+    if (!known) return tun_reject(resp, resp_len, TUN_REJ_UNKNOWN_OP, op);
+    if (!json) return tun_reject(resp, resp_len, TUN_REJ_NO_MEMORY, 0);
+    size_t jl = strlen(json);
+    if (jl > TUN_TOTAL_MAX) {
+        cJSON_free(json);
+        return tun_reject(resp, resp_len, TUN_REJ_TOO_LARGE, 0);
+    }
+    s_tun_rsp = json;
+    s_tun_rsp_len = jl;
+    return tun_page(resp, resp_len, 0);
+}
+
+static int tunnel_fetch(const uint8_t *payload, size_t len, uint8_t *resp, size_t *resp_len)
+{
+    if (len != 4) return -CMD_ERR_BAD_ARG;
+    uint8_t token = payload[1];
+    size_t pos = 2;
+    size_t off = bbp_get_u16(payload, &pos);
+    if (!s_tun_rsp || token != s_tun_token) return tun_reject(resp, resp_len, TUN_REJ_STALE, 0);
+    if (off > s_tun_rsp_len) return tun_reject(resp, resp_len, TUN_REJ_OFFSET, (uint16_t)s_tun_rsp_len);
+    return tun_page(resp, resp_len, off);
+}
+
+// ---------------------------------------------------------------------------
 // SCRIPT_AUTORUN  payload: u8 sub [, ...]
 //   sub=0  STATUS   resp: u8 enabled, u8 has_script, u8 io12_high,
 //                         u8 last_run_ok, u32 last_run_id
@@ -348,12 +491,18 @@ static int handler_script_delete(const uint8_t *payload, size_t len,
 //                   resp: u8 ok, u8 err_len, char[err_len] err
 //   sub=2  DISABLE  resp: u8 ok, u8 err_len, char[err_len] err
 //   sub=3  RUN_NOW  resp: u8 ok, u32 script_id, u8 err_len, char[err_len] err
+//   sub=4  RESET_VM resp: u8 ok
+//   sub=5  STATUS_PERSISTED
+//   sub=6/7 JSON tunnel CALL / FETCH (above)
 // ---------------------------------------------------------------------------
 static int handler_script_autorun(const uint8_t *payload, size_t len,
                                   uint8_t *resp, size_t *resp_len)
 {
     if (len < 1) return -CMD_ERR_BAD_ARG;
     uint8_t sub = payload[0];
+
+    if (sub == 6) return tunnel_call(payload, len, resp, resp_len);
+    if (sub == 7) return tunnel_fetch(payload, len, resp, resp_len);
 
     if (sub == 0) {
         // STATUS
@@ -508,7 +657,7 @@ static const ArgSpec s_script_delete_rsp[] = {
 };
 
 static const ArgSpec s_script_autorun_args[] = {
-    { "sub",      ARG_U8,   true, 0, 5 },
+    { "sub",      ARG_U8,   true, 0, 7 },
     { "payload",  ARG_BLOB, false, 0, 0 },
 };
 static const ArgSpec s_script_autorun_rsp[] = {

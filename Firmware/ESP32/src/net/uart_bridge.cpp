@@ -31,6 +31,8 @@ struct BridgeState {
 
 static BridgeState s_bridges[CDC_BRIDGE_COUNT] = {};
 static portMUX_TYPE s_bridge_mux[CDC_BRIDGE_COUNT];
+// esp_timer ms of the last byte moved in either direction (0 = none since boot).
+static volatile uint32_t s_bridge_last_traffic_ms[CDC_BRIDGE_COUNT] = {};
 
 // ---------------------------------------------------------------------------
 // Excluded GPIO pins (in use or strapping)
@@ -333,6 +335,7 @@ static void bridge_task(void *pvParam)
             uint32_t n = usb_cdc_bridge_read(id, buf, to_read);
             if (n > 0) {
                 uart_write_bytes(port, buf, n);
+                s_bridge_last_traffic_ms[id] = (uint32_t)(esp_timer_get_time() / 1000) | 1u;
             }
         }
 
@@ -340,6 +343,7 @@ static void bridge_task(void *pvParam)
         int len = uart_read_bytes(port, buf, sizeof(buf), 0);  // non-blocking
         if (len > 0) {
             usb_cdc_bridge_write(id, buf, len);
+            s_bridge_last_traffic_ms[id] = (uint32_t)(esp_timer_get_time() / 1000) | 1u;
         }
 
         vTaskDelay(pdMS_TO_TICKS(1));  // 1ms poll
@@ -424,6 +428,16 @@ bool uart_bridge_set_config(int id, const UartBridgeConfig *cfg)
 bool uart_bridge_is_connected(int id)
 {
     return usb_cdc_bridge_dtr(id);
+}
+
+bool uart_bridge_recent_activity(uint32_t window_ms)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int id = 0; id < CDC_BRIDGE_COUNT; id++) {
+        uint32_t last = s_bridge_last_traffic_ms[id];
+        if (last != 0 && (uint32_t)(now - last) < window_ms) return true;
+    }
+    return false;
 }
 
 int uart_bridge_get_available_pins(int *out_pins, int max_pins)

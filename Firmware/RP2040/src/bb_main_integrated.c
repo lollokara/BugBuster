@@ -29,6 +29,7 @@
 #include "DAP.h"
 #include "bb_la.h"
 #include "bb_la_usb.h"
+#include "bb_standby.h"
 #include "hardware/structs/usb.h"
 
 // BugBuster command task entry point (defined in bb_main.c)
@@ -272,6 +273,8 @@ void tud_unmount_cb(void)
     // Without this, s_streaming_session stays true and the BBP poll loop is
     // blocked indefinitely → all hat_la_configure() calls time out → 0x11.
     bb_la_usb_abort_bulk();
+    // The host is gone: a logical CMSIS-DAP session ends with it (no DAP_Disconnect will come).
+    bb_standby_usb_unmounted();
 #if BB_DEBUGPROBE_CDC_UART_ENABLED
     vTaskSuspend(uart_taskhandle);
     vTaskDelete(uart_taskhandle);

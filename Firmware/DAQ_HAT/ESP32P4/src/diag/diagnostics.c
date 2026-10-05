@@ -13,6 +13,7 @@
 #include "driver/temperature_sensor.h"
 
 #include "adaq7769_regs.h"
+#include "standby_p4.h"
 
 // ESP32-P4 internal die-temperature sensor (installed in diagnostics_init).
 static temperature_sensor_handle_t s_tsens = NULL;
@@ -45,11 +46,21 @@ static int16_t adaq_die_temp_c10(daq_board_t *b, int idx)
 {
     if (idx < 0 || idx >= ADAQ_COUNT || !b->adaq_ok[idx] || b->fast_running)
         return DDP_DIAG_TEMP_NA;
+    // Standby: this is a periodic reader, so it joins the barrier QUIETLY - it may
+    // never delay the sleep sequence by more than one read, and a refusal must not
+    // count as activity or request a wake. With the analog supplies off the ADC is
+    // not read at all: unavailable, not a stale number. The die sensor is INTERNAL to
+    // the converter, so it only needs the converter itself (ready), not the DUT route.
+    if (!standby_p4_admit_quiet()) return DDP_DIAG_TEMP_NA;
+    int16_t out = DDP_DIAG_TEMP_NA;
     int32_t raw = 0;
-    if (adaq7769_read_diagnostic(&b->adaq[idx], ADAQ_DIAGMUX_TEMP, &raw) != ESP_OK)
-        return DDP_DIAG_TEMP_NA;
-    float t = 25.0f + ((float)raw - 368639.0f) * (50.0f / 61440.0f);
-    return (int16_t)lroundf(t * 10.0f);
+    if (standby_p4_adc_ready() &&
+        adaq7769_read_diagnostic(&b->adaq[idx], ADAQ_DIAGMUX_TEMP, &raw) == ESP_OK) {
+        float t = 25.0f + ((float)raw - 368639.0f) * (50.0f / 61440.0f);
+        out = (int16_t)lroundf(t * 10.0f);
+    }
+    standby_p4_leave();
+    return out;
 }
 
 void diagnostics_push(daq_board_t *b)
@@ -91,10 +102,14 @@ void diagnostics_push(daq_board_t *b)
     }
 
     // --- Fused current / voltage / power (signed micro-units) ---
-    d.i_ua = (int32_t)lroundf(power_dsp_last_i(&b->dsp) * 1e6f);
-    d.v_uv = (int32_t)lroundf(power_dsp_last_v(&b->dsp) * 1e6f);
-    d.p_uw = (int32_t)lroundf(power_dsp_last_p(&b->dsp) * 1e6f);
-    valid |= DDP_DIAG_V_IVP;
+    // Only while the ADC chain is live: otherwise the fields stay zero with the
+    // validity bit clear, so a host never reads a frozen number as a measurement.
+    if (standby_p4_adc_available()) {
+        d.i_ua = (int32_t)lroundf(power_dsp_last_i(&b->dsp) * 1e6f);
+        d.v_uv = (int32_t)lroundf(power_dsp_last_v(&b->dsp) * 1e6f);
+        d.p_uw = (int32_t)lroundf(power_dsp_last_p(&b->dsp) * 1e6f);
+        valid |= DDP_DIAG_V_IVP;
+    }
 
     // --- SMU monitor currents (LTM8056 IINMON / IOUTMON) ---
     float iin = 0.0f, iout = 0.0f;

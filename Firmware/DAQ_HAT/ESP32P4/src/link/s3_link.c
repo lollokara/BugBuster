@@ -16,6 +16,7 @@
 #include "battsim_host.h"
 #include "log_forward.h"
 #include "boot_report.h"
+#include "standby_p4.h"
 
 static const char *TAG = "s3_link";
 
@@ -73,7 +74,12 @@ static void handle_config_get(const uint8_t *payload, uint8_t len)
 
 static void handle_config_set(const uint8_t *payload, uint8_t len)
 {
-    if (daq_settings_apply_tlv(payload, len, DAQ_SRC_S3)) send_ok();
+    // A settings write can reprogram the ADCs / DUT supply: refuse it (and request
+    // a wake) unless the P4 is awake. Reads (GET / GET_ALL / SCHEMA) stay open.
+    if (!standby_p4_admit()) { send_error(); return; }
+    bool ok = daq_settings_apply_tlv(payload, len, DAQ_SRC_S3);
+    standby_p4_leave();
+    if (ok) send_ok();
     else send_error();
 }
 
@@ -158,12 +164,14 @@ static void handle_config_schema(const uint8_t *payload, uint8_t len)
 static void handle_config_action(const uint8_t *payload, uint8_t len)
 {
     if (len < 1) { send_error(); return; }
+    if (!standby_p4_admit()) { send_error(); return; }
     // Breadcrumb: if the P4 dies inside this action the next boot says which one.
     int32_t sel = 0;
     daq_settings_get_i32(DAQ_K_BS_RUN_SELECT, &sel);
     boot_report_action_begin(payload[0], (uint16_t)sel);
     bool ok = daq_settings_action(payload[0], DAQ_SRC_S3);
     boot_report_action_end();
+    standby_p4_leave();
     // Headroom check after the heaviest requests: a regression shows up in the hub log
     // before it turns into another stack-guard panic.
     UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
@@ -221,6 +229,12 @@ static void handle_frame(s3_link_t *s, uint8_t cmd, const uint8_t *payload,
             break;
 
         // Settings/config commands -> global settings store.
+        case HATP_CMD_STANDBY: {
+            uint8_t out[sizeof(bb_standby_reply_t)];
+            if (standby_p4_s3_request(payload, len, out) < 0) send_error();
+            else send_frame(HATP_RSP_STANDBY, out, sizeof(out));
+            break;
+        }
         case HATP_CMD_CONFIG_GET:     handle_config_get(payload, len);     break;
         case HATP_CMD_CONFIG_SET:     handle_config_set(payload, len);     break;
         case HATP_CMD_CONFIG_GET_ALL: handle_config_get_all(payload, len); break;

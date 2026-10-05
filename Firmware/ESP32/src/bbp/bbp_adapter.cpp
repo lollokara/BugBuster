@@ -5,6 +5,8 @@
 #include "cmd_registry.h"
 #include "cmd_errors.h"
 #include "bbp.h"
+#include "standby_api.h"
+#include "standby_hw.h"
 #include "esp_log.h"
 
 static const char *TAG = "bbp_adapter";
@@ -28,8 +30,20 @@ int bbp_adapter_dispatch(uint8_t cmd_id,
         return cmd_error_to_bbp(CMD_ERR_AUTH);
     }
 
+    // Operation barrier: anything that is not a cache/retained-logic read needs
+    // an ACTIVE system. While asleep or in transition the request is refused
+    // (a wake has been requested) and never replayed.
+    const bool counted = !standby_api_bbp_passive(cmd_id);
+    if (counted && standby_hw_admit() != STANDBY_ADMIT_OK)
+        return cmd_error_to_bbp(CMD_ERR_BUSY);
+
     size_t out_len = 0;
-    int rc = desc->handler(payload, payload_len, rsp_buf, &out_len);
+    // This adapter is the USB (BBP) transport: only here is a presence registration the
+    // USB host speaking the explicit protocol (see standby_system_usb_session).
+    int rc = (cmd_id == BBP_CMD_STANDBY)
+        ? standby_hw_bbp(STANDBY_SRC_USB, payload, payload_len, rsp_buf, &out_len)
+        : desc->handler(payload, payload_len, rsp_buf, &out_len);
+    if (counted) standby_hw_leave();
     if (rc < 0) {
         // rc is negative CmdError; map to BBP error code
         CmdError ce = (CmdError)(-rc);

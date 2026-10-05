@@ -136,6 +136,11 @@ struct DeviceState {
     PcaFaultLogEntry pcaFaultLog[PCA_FAULT_LOG_SIZE];
     uint8_t          pcaFaultLogHead;
     uint8_t          pcaFaultLogCount;
+
+    // Standby: the analog rail is (or is going) down, so every measurement
+    // above is unavailable - not zero, not stale-valid. Cleared when the
+    // coordinator has re-initialised the converter.
+    volatile bool    analogUnavailable;
 };
 
 extern DeviceState        g_deviceState;
@@ -291,6 +296,9 @@ bool sendCommand(const Command& cmd);
  */
 bool tasks_drain_command_queue(uint32_t timeout_ms);
 
+/** True while a command is queued or executing (standby inhibitor). */
+bool tasks_cmd_busy(void);
+
 /**
  * @brief adcPoll's loop interval in ms for a given ADC conversion rate.
  *        The poll loop reads over SPI once per interval, so 1000/this is the
@@ -329,6 +337,10 @@ void tasks_reset_hardware(void);
  *        internally.  Blocks for ~50 ms (ADC settling + alert clear).
  */
 void tasks_apply_channel_function(uint8_t channel, ChannelFunction func);
+
+/** Read a logical channel's function back from the converter (not the shadow).
+ *  false = the register could not be read. */
+bool tasks_read_channel_function(uint8_t logical_channel, ChannelFunction *out);
 
 /**
  * @brief Apply an AD74416H GPIO mode change synchronously.

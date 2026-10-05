@@ -55,6 +55,12 @@ bool uart_bridge_set_config(int id, const UartBridgeConfig *cfg);
 bool uart_bridge_is_connected(int id);
 
 /**
+ * @brief True when any bridge moved a byte (either direction) within the last
+ *        @p window_ms. An enabled but silent bridge is not activity.
+ */
+bool uart_bridge_recent_activity(uint32_t window_ms);
+
+/**
  * @brief Get list of GPIO pins available for UART (excludes used pins).
  * @param out_pins Array to fill with available pin numbers
  * @param max_pins Size of out_pins array

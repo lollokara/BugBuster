@@ -45,6 +45,12 @@ idf_component_register(
         "battsim/battsim_store.c"
         "battsim/battsim_host.c"
         "battsim/battsim_s1.c"
+        "standby/standby_p4_core.c"
+        "standby/standby_inhibit.c"
+        "standby/standby_p4.c"
+        "standby/standby_rails_core.c"
+        "standby/standby_adaq.c"
+        "standby/standby_analog.c"
         "../../common/daq_config_registry.c"
     INCLUDE_DIRS
         "."
@@ -67,6 +73,7 @@ idf_component_register(
         "diag"
         "config"
         "battsim"
+        "standby"
     REQUIRES
         driver
         esp_driver_spi

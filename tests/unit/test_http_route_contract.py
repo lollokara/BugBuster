@@ -38,6 +38,8 @@ WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
 ADAPTER = "Firmware/ESP32/src/web/http_adapter.cpp"
 API_CORE = "Firmware/ESP32/src/net/api_core.cpp"
 API_SCRIPTS = "Firmware/ESP32/src/net/api_scripts.cpp"
+API_STANDBY = "Firmware/ESP32/src/net/api_standby.cpp"
+STANDBY_API = "Firmware/ESP32/src/power/standby_api.c"
 CRASH_REPORT = "Firmware/ESP32/src/diag/crash_report.cpp"
 PY_PKG = REPO_ROOT / "python" / "bugbuster"
 
@@ -148,6 +150,8 @@ class Firmware:
         core = c_functions(core_src)
         # api_core_handle()'s /api/scripts/ block calls into api_scripts.cpp.
         core.update(c_functions(read_source(API_SCRIPTS)))
+        core.update(c_functions(read_source(API_STANDBY)))
+        core.update(c_functions(read_source(STANDBY_API)))
         # ...and so does its /api/system/crash block (diag/crash_report.cpp).
         core.update(c_functions(read_source(CRASH_REPORT)))
         return cls(routes, web, core, core.get("api_core_handle", ""))
@@ -183,6 +187,8 @@ def _keys_of(funcs: dict[str, str], name: str) -> set[str]:
     for callee in set(re.findall(r"\b(\w+)\s*\(", body)) - {name}:
         if callee in funcs:
             keys |= set(_KEY_READ.findall(funcs[callee]))
+            if callee.startswith("standby_api_parse_"):
+                keys |= set(re.findall(r'\{\s*"([^"]+)"\s*,\s*[01]\s*,', funcs[callee]))
     return keys
 
 

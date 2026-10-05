@@ -13,6 +13,7 @@
 
 #include "bb_la_usb.h"
 #include "bb_la.h"
+#include "bb_standby.h"
 #include "tusb.h"
 #include "pico/stdlib.h"
 
@@ -674,6 +675,17 @@ static void cdc_write_reply(const char *msg) {
 static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
     switch (cmd) {
     case LA_USB_CMD_START_STREAM:
+        // Standby gate: a START while the HAT is preparing/asleep/waking is refused like
+        // any rejected start (the refusal already counted as activity and requested a
+        // wake). No stream state is touched. Admission pairs with bb_standby_work_leave().
+        if (!bb_standby_work_enter()) {
+            if (reply_on_cdc) {
+                cdc_write_reply("ERR\n");
+            } else {
+                bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_ERROR, LA_USB_STREAM_INFO_START_REJECTED);
+            }
+            return;
+        }
         bb_la_log("[USB_START] cmd received\n");
         s_cdc_seq = 0;
         s_deferred_stop = false;   // cancel any pending deferred stop
@@ -686,6 +698,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
             } else {
                 bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_ERROR, LA_USB_STREAM_INFO_START_REJECTED);
             }
+            bb_standby_work_leave();
             return;
         }
         bb_la_log("[USB_START] streaming started\n");
@@ -695,6 +708,7 @@ static void handle_stream_command(uint8_t cmd, bool reply_on_cdc) {
         } else {
             bb_la_usb_send_stream_marker(LA_USB_STREAM_PKT_START, LA_USB_STREAM_INFO_NONE);
         }
+        bb_standby_work_leave();   // the session flag above is now the live inhibitor
         break;
 
     case LA_USB_CMD_STOP:

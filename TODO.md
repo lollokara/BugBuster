@@ -3,6 +3,19 @@
 Open work only. Everything delivered has moved to `CHANGELOG.MD` under
 `[Unreleased]` - do not re-add completed items here.
 
+## System Standby Checkpoint (2026-10-05)
+
+- [REPORTED] Firmware/host implementation is checkpointed, not release-ready.
+  Complete the integration, build and live acceptance gates in
+  [Docs/low-power-handoff.md](Docs/low-power-handoff.md).
+- [VERIFIED] Host-compiled policy/participant tests cover repeated transitions,
+  MUX-before-rail ordering, inhibitors, cancellation and failures. This does not
+  verify physical switching, display/backlight, power savings or wake latency.
+- [REPORTED] Final desktop presence/settings/P4 ACK integration, simulator parity,
+  all final firmware builds, manifests and full CI gates remain open. Only DAQ
+  hardware availability was confirmed; LA live coverage and external input-power
+  measurement are unavailable. No firmware has been flashed for this feature.
+
 Populated by the multi-surface audit of 2026-08-20 and its verification pass,
 then extended by the **per-feature audit of 2026-10-01** (every device feature
 traced end to end and given a Leave / Improve / Refactor verdict). The
