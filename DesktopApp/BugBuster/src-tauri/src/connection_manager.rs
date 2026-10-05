@@ -6,7 +6,7 @@
 // =============================================================================
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -56,6 +56,7 @@ pub struct ConnectionManager {
     // not probe the same ports at the same time and corrupt the \r\n + MAGIC
     // byte stream that probe_bbp sends.
     scanning: Arc<AtomicBool>,
+    connection_epoch: Arc<AtomicU64>,
 }
 
 pub struct OtaGuard {
@@ -81,6 +82,7 @@ impl ConnectionManager {
             ota_in_progress: Arc::new(AtomicBool::new(false)),
             connecting: Arc::new(AtomicBool::new(false)),
             scanning: Arc::new(AtomicBool::new(false)),
+            connection_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -407,6 +409,7 @@ impl ConnectionManager {
 
     /// Disconnect the current transport.
     pub async fn disconnect(&self, app: &AppHandle) -> Result<()> {
+        self.connection_epoch.fetch_add(1, Ordering::AcqRel);
         // Signal poll loop to exit immediately
         self.poll_shutdown.store(true, Ordering::Release);
 
@@ -550,7 +553,50 @@ impl ConnectionManager {
         }
     }
 
+    /// Raw REST exchange through the selected HTTP transport. Fails (never falls back to
+    /// another transport) when the selected one is USB or nothing is connected.
+    pub async fn http_exchange(
+        &self,
+        req: crate::transport::HttpExchange,
+    ) -> Result<crate::transport::HttpReply> {
+        let t = self.transport.lock().await;
+        match t.as_ref() {
+            Some(transport) if transport.is_connected() => transport.http_exchange(req).await,
+            _ => Err(anyhow!("Not connected")),
+        }
+    }
+
     /// Get current device state.
+    pub fn connection_epoch(&self) -> u64 {
+        self.connection_epoch.load(Ordering::Acquire)
+    }
+
+    pub async fn script_command(&self, epoch: u64, cmd: u8, payload: &[u8]) -> Result<Vec<u8>> {
+        let transport = self.transport.lock().await;
+        if self.connection_epoch() != epoch {
+            return Err(anyhow!("Scripting connection changed"));
+        }
+        match transport.as_ref() {
+            Some(link) if link.is_connected() => link.send_command(cmd, payload).await,
+            _ => Err(anyhow!("Not connected")),
+        }
+    }
+
+    pub async fn script_http_exchange(
+        &self,
+        epoch: u64,
+        req: crate::transport::HttpExchange,
+    ) -> Result<crate::transport::HttpReply> {
+        let transport = self.transport.lock().await;
+        if self.connection_epoch() != epoch {
+            return Err(anyhow!("Scripting connection changed"));
+        }
+        match transport.as_ref() {
+            Some(link) if link.is_connected() => link.http_exchange(req).await,
+            _ => Err(anyhow!("Not connected")),
+        }
+    }
+
     pub fn get_device_state(&self) -> DeviceState {
         self.device_state
             .lock()

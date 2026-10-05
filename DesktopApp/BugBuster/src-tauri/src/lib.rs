@@ -21,6 +21,9 @@ mod la_store;
 mod la_store_tests;
 mod la_transport;
 mod la_usb;
+mod scripts;
+#[cfg(test)]
+mod scripts_tests;
 mod state;
 mod transport;
 mod usb_transport;
@@ -243,6 +246,8 @@ pub fn run() {
             daq_commands::daq_arm,
             daq_commands::daq_get_trig_state,
             daq_commands::daq_get_markers,
+            // On-device MicroPython scripting
+            scripts::script_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

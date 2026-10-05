@@ -158,3 +158,23 @@ bool sr_query_flag(const char *path, const char *key)
     if (!sr_query_get(path, key, v, sizeof(v))) return false;
     return strcmp(v, "1") == 0 || strcmp(v, "true") == 0;
 }
+
+uint32_t sr_xfer_deadline(uint32_t now_ms)
+{
+    uint32_t d = now_ms + SR_XFER_LEASE_MS;
+    return d ? d : 1u;
+}
+
+bool sr_xfer_live(uint32_t deadline_ms, uint32_t now_ms)
+{
+    return deadline_ms != 0 && (int32_t)(deadline_ms - now_ms) > 0;
+}
+
+bool sr_has_work(uint32_t cmds, const uint32_t *deadlines_ms, size_t n, uint32_t now_ms)
+{
+    if (cmds > 0) return true;
+    for (size_t i = 0; deadlines_ms && i < n; i++) {
+        if (sr_xfer_live(deadlines_ms[i], now_ms)) return true;
+    }
+    return false;
+}

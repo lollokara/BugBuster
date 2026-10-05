@@ -9,6 +9,8 @@
 // "running":"<name>","id":n. NULL only on allocation failure.
 // =============================================================================
 
+#include <stdbool.h>
+
 #include "cJSON.h"
 
 #ifdef __cplusplus
@@ -29,6 +31,13 @@ char *api_scripts_lint(const char *path, const cJSON *body);          // name | 
 char *api_scripts_autorun_status(const char *path, const cJSON *body);
 char *api_scripts_autorun_enable(const char *path, const cJSON *body);  // name
 char *api_scripts_autorun_disable(const char *path, const cJSON *body);
+char *api_scripts_autorun_run(const char *path, const cJSON *body);     // BBP-only run-now (no HTTP route)
+char *api_scripts_reset(const char *path, const cJSON *body);           // persistent VM teardown
+
+// USB tunnel (BBP SCRIPT_AUTORUN sub 6/7): run op id `op` with the JSON args in
+// `body`. *known=false (and NULL) for an op id this firmware does not have; op 0
+// is the capability probe. Wire-stable ids: tests/firmware_host/test_script_usb_tunnel.py.
+char *api_scripts_dispatch(unsigned op, const cJSON *body, bool *known);
 
 #ifdef __cplusplus
 }
