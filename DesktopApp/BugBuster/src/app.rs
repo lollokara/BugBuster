@@ -9,7 +9,7 @@ use crate::components::icons::Icon;
 use crate::components::io_blocked_banner::IoBlockedBanner;
 use crate::tabs::{
     adc::*, battsim::*, board::*, daq::*, diag::*, din::*, dout::*, faults::*, gpio::*, hat::*, hv_io::*,
-    idac::*, iin::*, ioexp::*, la::*, overview::*, scope::*, signal_path::*, uart::*, usbpd::*,
+    idac::*, iin::*, ioexp::*, la::*, overview::*, scope::*, scripts::*, signal_path::*, uart::*, usbpd::*,
     vdac::*, voltages::*, wavegen::*,
 };
 use crate::tauri_bridge::*;
@@ -105,13 +105,14 @@ const CATEGORIES: &[(&str, &str, &[NavEntry])] = &[
             ("hat", "HAT", "cpu"),
             ("usbpd", "USB PD", "usb"),
             ("uart", "UART", "terminal"),
+            ("scripts", "Scripts", "microchip"),
         ],
     ),
 ];
 
 /// Views that own the full content area and manage their own scrolling.
 fn is_fullbleed(tab_id: &str) -> bool {
-    matches!(tab_id, "scope" | "la" | "daq" | "battsim" | "board" | "sigpath")
+    matches!(tab_id, "scope" | "la" | "daq" | "battsim" | "board" | "sigpath" | "scripts")
 }
 
 fn view_meta(tab_id: &str) -> (&'static str, &'static str) {
@@ -281,6 +282,12 @@ pub fn App() -> impl IntoView {
         }
     };
     let (conn_addr, set_conn_addr) = signal(String::new());
+    // App-wide scripting runtime: run status, log cursor, polling and per-device unsaved
+    // buffers outlive the Scripts view, disconnects and device swaps.
+    let script_store = crate::script_state::install(conn_mode, conn_addr);
+    provide_context(script_store);
+    // Scripts opened from the connection screen (docs and a scratch buffer work offline).
+    let offline_scripts = RwSignal::new(false);
     let (scanning, set_scanning) = signal(false);
     let (scan_completed, set_scan_completed) = signal(false);
     let (device_state, set_device_state) = signal(DeviceState::default());
@@ -365,6 +372,13 @@ pub fn App() -> impl IntoView {
         let tab = active_tab.get();
         if !tab_visible(&tab, kind) {
             set_active_tab.set("overview".to_string());
+        }
+    });
+    // Connecting while the offline Scripts view is open lands on the Scripts view.
+    Effect::new(move |_| {
+        if conn_mode.get() != "Disconnected" && offline_scripts.get_untracked() {
+            offline_scripts.set(false);
+            set_active_tab.set("scripts".to_string());
         }
     });
     let uart_config = RwSignal::new(UartConfigState::new());
@@ -849,7 +863,7 @@ pub fn App() -> impl IntoView {
     view! {
         <div class="app">
             // Connection / welcome screen
-            <Show when=move || !is_connected()>
+            <Show when=move || !is_connected() && !offline_scripts.get()>
                 <ConnectionPanel
                     devices=devices.into()
                     scanning=scanning.into()
@@ -866,6 +880,30 @@ pub fn App() -> impl IntoView {
                         });
                     })
                 />
+                <button class="btn btn-sm sc-offline-entry" data-testid="scripts-offline-entry"
+                    title="Browse the API docs and edit a local scratch buffer without a device"
+                    on:click=move |_| offline_scripts.set(true)>
+                    <Icon name="microchip" size=14 />"Scripts (offline)"
+                </button>
+            </Show>
+
+            <Show when=move || !is_connected() && offline_scripts.get()>
+                <div class="sc-offline-shell" data-testid="scripts-offline-shell">
+                    <header class="toolbar">
+                        <button class="btn btn-plain btn-icon" title="Back to device connection" aria-label="Back to device connection"
+                            data-testid="scripts-offline-back"
+                            on:click=move |_| offline_scripts.set(false)>
+                            <Icon name="chevron-left" size=17 />
+                        </button>
+                        <div class="toolbar-title">
+                            <h1>"Scripts"</h1>
+                            <span>"Offline - no device connected"</span>
+                        </div>
+                    </header>
+                    <div class="tab-container" data-view="scripts" data-fullbleed="">
+                        <ScriptsTab />
+                    </div>
+                </div>
             </Show>
 
             <Show when=is_connected>
@@ -955,6 +993,11 @@ pub fn App() -> impl IntoView {
                                 <span>{move || view_meta(&active_tab.get()).1}</span>
                             </div>
                             <div class="spacer"></div>
+
+                            <ScriptRunChip on_open=Callback::new(move |_| {
+                                script_store.console_open.set(true);
+                                set_active_tab.set("scripts".to_string());
+                            }) />
 
                             {move || has_update().then(|| view! {
                                 <button class="status-chip tone-blue" title="Firmware update available"
@@ -1067,6 +1110,7 @@ pub fn App() -> impl IntoView {
                                 "la" => view! { <LaTab state=device_state /> }.into_any(),
                                 "daq" => view! { <DaqTab state=device_state /> }.into_any(),
                                 "battsim" => view! { <BattSimTab state=device_state /> }.into_any(),
+                                "scripts" => view! { <ScriptsTab /> }.into_any(),
                                 _ => view! { <div>"Unknown view"</div> }.into_any(),
                             }}
                         </div>

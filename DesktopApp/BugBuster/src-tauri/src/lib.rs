@@ -22,6 +22,7 @@ mod la_store_tests;
 mod la_transport;
 mod la_usb;
 mod scripts;
+mod scripts_repl;
 #[cfg(test)]
 mod scripts_tests;
 mod state;
@@ -48,6 +49,7 @@ pub fn run() {
         .manage(LaState::new())
         .manage(DaqState::new())
         .manage(battsim::BattSimState::default())
+        .manage(scripts_repl::ReplHub::default())
         .setup(|app| {
             // Start the background USB watcher that polls Espressif ports every
             // 2 s and emits "device-found" events as boards come online.
@@ -248,6 +250,7 @@ pub fn run() {
             daq_commands::daq_get_markers,
             // On-device MicroPython scripting
             scripts::script_request,
+            scripts_repl::script_repl_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

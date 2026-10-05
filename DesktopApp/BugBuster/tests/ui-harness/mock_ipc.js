@@ -592,12 +592,15 @@
       S.connected = true;
       var st = connStatus();
       if (dev.transport === 'http') { st.mode = 'Http'; st.port_or_url = dev.address; }
+      else { st.port_or_url = dev.address; }
+      st.device_info.mac_address = SM.onConnect(dev, st);
       emit('connection-status', st);
       emit('device-state', deviceState());
       startConnTimers();
       return null;
     },
     disconnect_device: function () {
+      SM.onDisconnect();
       S.connected = false; S.scope.active = false; stopConnTimers();
       emit('connection-status', { mode: 'Disconnected', port_or_url: '', device_info: null, la_selector: null });
       return null;
@@ -887,6 +890,906 @@
       return out;
     },
   };
+
+  // ---------------------------------------------------------------------------
+  // Scripting: strict, stateful `script_request` mock + window.__BB_SCRIPT_MOCK
+  //
+  // Mirrors src-tauri/src/scripts.rs (operation set, argument shapes, reply/err shapes, name and
+  // size validation) on top of a tiny deterministic MicroPython-like interpreter. Wrong shapes are
+  // rejected and recorded in violations(); they are never answered with a generic success.
+  // Everything here is MOCK evidence: no Tauri runtime, no device.
+  // ---------------------------------------------------------------------------
+  var SM = (function () {
+    var OPS = ['files', 'get', 'save', 'delete', 'lint', 'run', 'stop', 'status', 'logs', 'eval', 'reset',
+      'autorun_status', 'autorun_enable', 'autorun_disable', 'autorun_run', 'storage'];
+    var SHAPES = {
+      files: {}, storage: {}, status: {}, stop: {}, reset: {}, autorun_status: {}, autorun_disable: {}, autorun_run: {},
+      get: { name: 'string' }, delete: { name: 'string' }, autorun_enable: { name: 'string' },
+      save: { name: 'string', source: 'string' },
+      lint: { name: 'string?', source: 'string?' },
+      run: { name: 'string', background: 'boolean?', replace: 'boolean?' },
+      logs: { since: 'uint?' },
+      eval: { source: 'string', persist: 'boolean?' },
+    };
+    var LAUNCH = { run: 1, eval: 1, reset: 1, autorun_run: 1 };
+    var UNKNOWN_OUTCOME = { run: 1, eval: 1, reset: 1, stop: 1, delete: 1, autorun_run: 1, autorun_enable: 1, autorun_disable: 1 };
+    var NAME_MAX = 32, BODY_MAX = 32768, LOG_PAGE = 4096, SAVE_CHUNK = 1536;
+    var DEFAULT_MAC = '34:85:18:A1:B2:C3', SECOND_MAC = '34:85:18:D4:E5:F6';
+    var enc = new TextEncoder(), dec = new TextDecoder('utf-8');
+
+    var M = { version: 1 };
+    var cfgS, devs, conn, cmds, counter, counts, violations, faults, holds, waiting, launchBusy, macByDeviceId, links, caps, uploadEvents, nextFaultId;
+
+    function resetConfig() {
+      cfgS = { delayMs: 24, opDelays: {}, sleepScale: 0.2, stmtMs: 3, stopMs: 120, ringCap: 16384, epochClock: false,
+        staleReplies: false, maxLoopMs: 20000, bootRunDelayMs: 250, evalDelayMs: 0 };
+    }
+    function resetAll() {
+      resetConfig();
+      devs = {}; cmds = []; counter = 0; violations = []; faults = []; holds = {}; waiting = []; launchBusy = false;
+      counts = { total: 0, byOp: {}, byTransport: { usb: 0, http: 0 }, inFlightRejected: 0, deviceChanged: 0, notConnected: 0 };
+      links = { usb: true, http: true };
+      caps = { lint: true, logCursor: true, storage: true, authorized: true };
+      uploadEvents = []; nextFaultId = 1;
+      if (!conn) conn = { mode: 'Disconnected', address: '', deviceId: '', mac: '' };
+    }
+    macByDeviceId = {};
+    resetAll();
+
+    // ---- time and ids ----------------------------------------------------------
+    function nowMs() { return Date.now(); }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, Math.max(0, ms)); }); }
+    function clone(x) { return x === undefined ? undefined : JSON.parse(JSON.stringify(x)); }
+    function utf8len(s) { return enc.encode(s).length; }
+
+    // ---- device model -----------------------------------------------------------
+    function seedFiles(mac) {
+      if (mac === SECOND_MAC) {
+        return { 'other.py': 'print("device B only")\n', 'hello.py': 'print("hello from B")\n' };
+      }
+      var long = '# ' + new Array(420).join('x') + '\nprint("long line done")\n';
+      var big = [];
+      for (var i = 1; i <= 140; i++) big.push('print("line ' + i + '")');
+      return {
+        'hello.py': 'print("hello")\n',
+        'blink.py': 'import time\nfor i in range(3):\n    print("tick", i)\n    time.sleep(1)\nprint("blink done")\n',
+        'fail.py': 'import time\nprint("start")\ntime.sleep(0.2)\nraise ValueError("boom")\n',
+        'syntax_bad.py': 'print("a")\ndef broken(\n    pass\n',
+        'unicode.py': 'print("h\u00e9llo w\u00f6rld \u2713 \u65e5\u672c\u8a9e \ud83d\ude00")\n',
+        'long.py': long,
+        'big.py': big.join('\n') + '\n',
+      };
+    }
+    function newDevice(mac) {
+      var files = {};
+      var seed = seedFiles(mac);
+      Object.keys(seed).forEach(function (n) { files[n] = { source: seed[n], lossy: false }; });
+      return {
+        mac: mac, files: files, run: null, vars: {}, ring: [], base: 0, bootAt: nowMs() - 120000, bootCount: 1,
+        nextId: 1, totalRuns: 0, totalErrors: 0, lastError: '', lastExit: 'none', state: 'idle', lastName: '', lastScriptId: 0,
+        autorun: { enabled: false, scriptName: '', ranThisBoot: false, lastOk: false, lastRunId: 0, io12High: true },
+        maxScripts: 16, totalBytes: 65536, extraUsed: 2048,
+      };
+    }
+    function dev(mac) { return devs[mac] || (devs[mac] = newDevice(mac)); }
+    function uptimeMs(d) { return Math.max(0, nowMs() - d.bootAt); }
+
+    function ringAppendText(d, str) {
+      var bytes = enc.encode(str);
+      for (var i = 0; i < bytes.length; i++) d.ring.push(bytes[i]);
+      var over = d.ring.length - cfgS.ringCap;
+      if (over > 0) { d.ring.splice(0, over); d.base += over; }
+    }
+    function logLine(d, level, src, text) {
+      String(text).split('\n').forEach(function (ln) { ringAppendText(d, uptimeMs(d) + ' ' + level + ' ' + src + ' ' + ln + '\n'); });
+    }
+    function readLogs(d, since) {
+      var total = d.base + d.ring.length, next, data = [], dropped = 0;
+      if (since > total) { next = total; }
+      else {
+        var start = Math.max(since, d.base);
+        dropped = start - since;
+        var end = Math.min(total, start + LOG_PAGE);
+        data = d.ring.slice(start - d.base, end - d.base);
+        next = end;
+      }
+      return { data: data, since: since, next: next, dropped: dropped, more: data.length >= LOG_PAGE, restarted: next < since };
+    }
+    function b64(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s); }
+
+    // ---- python-like values, expressions, statements -------------------------------
+    function PyErr(name, msg) { this.pyName = name; this.msg = msg; }
+    function PyF(v) { this.v = v; }
+    function pyStr(v) {
+      if (v instanceof PyF) return Number.isInteger(v.v) ? v.v.toFixed(1) : String(v.v);
+      if (v === true) return 'True';
+      if (v === false) return 'False';
+      if (v === null || v === undefined) return 'None';
+      return String(v);
+    }
+    function pyRepr(v) { return typeof v === 'string' ? "'" + v.replace(/'/g, "\\'") + "'" : pyStr(v); }
+    function synErr() { return new PyErr('SyntaxError', 'invalid syntax'); }
+
+    function tokenize(s) {
+      var t = [], i = 0, m;
+      while (i < s.length) {
+        var c = s[i];
+        if (/\s/.test(c)) { i++; continue; }
+        if (c === '#') break;
+        if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(s[i + 1] || ''))) {
+          m = /^(\d+\.?\d*(e[+-]?\d+)?|\.\d+)/i.exec(s.slice(i));
+          t.push({ k: 'num', v: m[0], f: /[.eE]/.test(m[0]) }); i += m[0].length; continue;
+        }
+        if (c === '"' || c === "'") {
+          var j = i + 1, out = '';
+          while (j < s.length && s[j] !== c) {
+            if (s[j] === '\\' && j + 1 < s.length) { var n = s[j + 1]; out += n === 'n' ? '\n' : n === 't' ? '\t' : n; j += 2; }
+            else out += s[j++];
+          }
+          if (j >= s.length) throw synErr();
+          t.push({ k: 'str', v: out }); i = j + 1; continue;
+        }
+        if (/[A-Za-z_]/.test(c)) { m = /^[A-Za-z_][A-Za-z_0-9]*/.exec(s.slice(i)); t.push({ k: 'name', v: m[0] }); i += m[0].length; continue; }
+        var two = s.substr(i, 2);
+        if (['==', '!=', '<=', '>=', '//', '**'].indexOf(two) >= 0) { t.push({ k: 'op', v: two }); i += 2; continue; }
+        if ('+-*/%<>(),.'.indexOf(c) >= 0) { t.push({ k: 'op', v: c }); i++; continue; }
+        throw synErr();
+      }
+      return t;
+    }
+    function toNum(v) {
+      if (v instanceof PyF) return v.v;
+      if (typeof v === 'boolean') return v ? 1 : 0;
+      if (typeof v === 'number') return v;
+      throw new PyErr('TypeError', "unsupported types for operation");
+    }
+    function arith(op, a, b) {
+      if (op === '+' && typeof a === 'string' && typeof b === 'string') return a + b;
+      if (op === '*' && typeof a === 'string' && typeof b === 'number') return new Array(Math.max(0, b) + 1).join(a);
+      if (typeof a === 'string' || typeof b === 'string') throw new PyErr('TypeError', "can't convert 'int' object to str implicitly");
+      var x = toNum(a), y = toNum(b), isF = a instanceof PyF || b instanceof PyF, r;
+      if ((op === '/' || op === '//' || op === '%') && y === 0) throw new PyErr('ZeroDivisionError', 'divide by zero');
+      if (op === '+') r = x + y; else if (op === '-') r = x - y; else if (op === '*') r = x * y;
+      else if (op === '/') { return new PyF(x / y); }
+      else if (op === '//') r = Math.floor(x / y); else if (op === '%') r = ((x % y) + y) % y; else if (op === '**') r = Math.pow(x, y);
+      return isF ? new PyF(r) : r;
+    }
+    function evalExpr(src, env) {
+      var t = tokenize(src), p = 0;
+      function peek() { return t[p]; }
+      function isOp(v) { var x = t[p]; return x && x.k === 'op' && x.v === v; }
+      function isName(v) { var x = t[p]; return x && x.k === 'name' && x.v === v; }
+      function parseOr() { var l = parseAnd(); while (isName('or')) { p++; var r = parseAnd(); l = truthy(l) ? l : r; } return l; }
+      function parseAnd() { var l = parseNot(); while (isName('and')) { p++; var r = parseNot(); l = truthy(l) ? r : l; } return l; }
+      function parseNot() { if (isName('not')) { p++; return !truthy(parseNot()); } return parseCmp(); }
+      function parseCmp() {
+        var l = parseAdd();
+        for (;;) {
+          var x = peek();
+          if (!x || x.k !== 'op' || ['==', '!=', '<', '>', '<=', '>='].indexOf(x.v) < 0) return l;
+          p++; var r = parseAdd();
+          var a = (l instanceof PyF || typeof l === 'number' || typeof l === 'boolean') ? toNum(l) : l;
+          var b = (r instanceof PyF || typeof r === 'number' || typeof r === 'boolean') ? toNum(r) : r;
+          l = x.v === '==' ? a === b : x.v === '!=' ? a !== b : x.v === '<' ? a < b : x.v === '>' ? a > b : x.v === '<=' ? a <= b : a >= b;
+        }
+      }
+      function parseAdd() { var l = parseMul(); while (isOp('+') || isOp('-')) { var o = t[p++].v; l = arith(o, l, parseMul()); } return l; }
+      function parseMul() { var l = parseUnary(); while (isOp('*') || isOp('/') || isOp('//') || isOp('%')) { var o = t[p++].v; l = arith(o, l, parseUnary()); } return l; }
+      function parseUnary() { if (isOp('-')) { p++; var v = parseUnary(); return v instanceof PyF ? new PyF(-v.v) : -toNum(v); } if (isOp('+')) { p++; return parseUnary(); } return parsePow(); }
+      function parsePow() { var b = parseAtom(); if (isOp('**')) { p++; return arith('**', b, parseUnary()); } return b; }
+      function parseArgs() {
+        var args = []; p++;
+        if (isOp(')')) { p++; return args; }
+        for (;;) { args.push(parseOr()); if (isOp(',')) { p++; continue; } if (isOp(')')) { p++; return args; } throw synErr(); }
+      }
+      function parseAtom() {
+        var x = t[p++];
+        if (!x) throw synErr();
+        if (x.k === 'num') return x.f ? new PyF(parseFloat(x.v)) : parseInt(x.v, 10);
+        if (x.k === 'str') return x.v;
+        if (x.k === 'op' && x.v === '(') { var v = parseOr(); if (!isOp(')')) throw synErr(); p++; return v; }
+        if (x.k === 'name') {
+          if (x.v === 'True') return true;
+          if (x.v === 'False') return false;
+          if (x.v === 'None') return null;
+          if (isOp('(')) return callBuiltin(x.v, parseArgs());
+          if (!Object.prototype.hasOwnProperty.call(env.vars, x.v)) throw new PyErr('NameError', "name '" + x.v + "' isn't defined");
+          return env.vars[x.v];
+        }
+        throw synErr();
+      }
+      var out = parseOr();
+      if (p < t.length) throw synErr();
+      return out;
+    }
+    function truthy(v) { if (v instanceof PyF) return v.v !== 0; return !!v; }
+    function callBuiltin(name, a) {
+      switch (name) {
+        case 'len': return String(a[0]).length;
+        case 'str': return pyStr(a[0]);
+        case 'repr': return pyRepr(a[0]);
+        case 'int': return Math.trunc(typeof a[0] === 'string' ? parseFloat(a[0]) : toNum(a[0]));
+        case 'float': return new PyF(toNum(typeof a[0] === 'string' ? parseFloat(a[0]) : a[0]));
+        case 'abs': return a[0] instanceof PyF ? new PyF(Math.abs(a[0].v)) : Math.abs(toNum(a[0]));
+        case 'bool': return truthy(a[0]);
+        case 'min': return a.reduce(function (x, y) { return toNum(y) < toNum(x) ? y : x; });
+        case 'max': return a.reduce(function (x, y) { return toNum(y) > toNum(x) ? y : x; });
+        case 'round': return Math.round(toNum(a[0]));
+        default: throw new PyErr('NameError', "name '" + name + "' isn't defined");
+      }
+    }
+    function splitTop(s) {
+      var out = [], depth = 0, q = null, cur = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s[i];
+        if (q) { cur += c; if (c === '\\') { cur += s[++i] || ''; } else if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") { q = c; cur += c; continue; }
+        if (c === '(') depth++; else if (c === ')') depth--;
+        if (c === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      if (cur.trim() !== '' || out.length) out.push(cur);
+      return out;
+    }
+    function stripComment(line) {
+      var q = null;
+      for (var i = 0; i < line.length; i++) {
+        var c = line[i];
+        if (q) { if (c === '\\') i++; else if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") q = c; else if (c === '#') return line.slice(0, i);
+      }
+      return line;
+    }
+
+    // Syntax check used by lint and by run/eval before execution.
+    function syntaxError(src) {
+      var lines = src.split('\n'), stack = [], pairs = { ')': '(', ']': '[', '}': '{' };
+      for (var ln = 0; ln < lines.length; ln++) {
+        var raw = lines[ln];
+        if (raw.indexOf('SYNTAXERR') >= 0) return { line: ln + 1 };
+        var line = stripComment(raw), q = null;
+        for (var i = 0; i < line.length; i++) {
+          var c = line[i];
+          if (q) { if (c === '\\') i++; else if (c === q) q = null; continue; }
+          if (c === '"' || c === "'") { q = c; continue; }
+          if (c === '(' || c === '[' || c === '{') stack.push({ c: c, line: ln + 1 });
+          else if (pairs[c]) { var top = stack.pop(); if (!top || top.c !== pairs[c]) return { line: ln + 1 }; }
+        }
+        if (q) return { line: ln + 1 };
+        var t = line.trim();
+        if (!stack.length && /^(def|if|elif|else|for|while|class|try|except|finally|with)\b/.test(t) && t.indexOf(':') < 0) return { line: ln + 1 };
+      }
+      if (stack.length) return { line: stack[0].line };
+      return null;
+    }
+    function syntaxMessage(err, file) {
+      return 'Traceback (most recent call last):\n  File "' + (file || '<stdin>') + '", line ' + err.line + '\nSyntaxError: invalid syntax';
+    }
+
+    function parseProgram(src) {
+      var raw = src.split('\n').map(function (l, i) {
+        var s = stripComment(l);
+        return { text: s.trim(), indent: s.length - s.replace(/^[ \t]+/, '').length, line: i + 1 };
+      }).filter(function (l) { return l.text !== ''; });
+      var idx = 0;
+      function block(indent) {
+        var out = [];
+        while (idx < raw.length && raw[idx].indent >= indent) {
+          var L = raw[idx];
+          if (L.indent > indent && out.length === 0) indent = L.indent;
+          if (L.indent > indent) throw synErr();
+          idx++;
+          out.push(stmt(L, indent));
+        }
+        return out;
+      }
+      function body(indent) {
+        if (idx < raw.length && raw[idx].indent > indent) return block(raw[idx].indent);
+        return [];
+      }
+      function stmt(L, indent) {
+        var t = L.text, m;
+        if ((m = /^for\s+([A-Za-z_]\w*)\s+in\s+range\((.*)\)\s*:$/.exec(t))) return { t: 'for', v: m[1], args: m[2], body: body(indent), line: L.line };
+        if (/^while\s+(True|1)\s*:$/.test(t)) return { t: 'while', body: body(indent), line: L.line };
+        if ((m = /^while\s+(.+):$/.exec(t))) return { t: 'whilec', cond: m[1], body: body(indent), line: L.line };
+        if ((m = /^if\s+(.+):$/.exec(t))) {
+          var node = { t: 'if', cond: m[1], body: body(indent), orelse: [], line: L.line }, tail = node;
+          while (idx < raw.length && raw[idx].indent === indent && /^(elif\s+.+|else)\s*:$/.test(raw[idx].text)) {
+            var e = raw[idx++], em = /^elif\s+(.+):$/.exec(e.text);
+            if (em) { var n2 = { t: 'if', cond: em[1], body: body(indent), orelse: [], line: e.line }; tail.orelse = [n2]; tail = n2; }
+            else tail.orelse = body(indent);
+          }
+          return node;
+        }
+        if (/^(def|class|try|except|finally|with|else|elif)\b.*:$/.test(t)) { body(indent); return { t: 'skip', line: L.line }; }
+        if (/^(if|elif|else|def|class|try|except|finally|with|for|while)\b[^:]*:\s*\S/.test(t)) return { t: 'skip', line: L.line };
+        if ((m = /^from\s+([\w.]+)\s+import\s+(.+)$/.exec(t))) return { t: 'import', mods: [m[1]], line: L.line, binds: m[2].split(',').map(function (x) { var p = x.trim().split(/\s+as\s+/); return (p[1] || p[0]).trim(); }) };
+        if ((m = /^import\s+(.+)$/.exec(t))) {
+          var items = m[1].split(',').map(function (x) { var p = x.trim().split(/\s+as\s+/); return { mod: p[0].trim(), bind: (p[1] || p[0]).trim().split('.')[0] }; });
+          return { t: 'import', mods: items.map(function (i) { return i.mod; }), binds: items.map(function (i) { return i.bind; }), line: L.line };
+        }
+        if ((m = /^print\((.*)\)$/.exec(t))) return { t: 'print', args: m[1], line: L.line };
+        if ((m = /^(?:[A-Za-z_]\w*\.)?sleep(_ms)?\((.*)\)$/.exec(t))) return { t: 'sleep', ms: !!m[1], arg: m[2], line: L.line };
+        if ((m = /^raise\s+([A-Za-z_]\w*)(?:\((.*)\))?$/.exec(t))) return { t: 'raise', name: m[1], arg: m[2] === undefined ? '' : m[2], line: L.line };
+        if ((m = /^([A-Za-z_]\w*)\s*(\+=|-=|\*=|=(?!=))\s*(.+)$/.exec(t))) return { t: 'assign', name: m[1], op: m[2], expr: m[3], line: L.line };
+        if (t === 'pass') return { t: 'skip', line: L.line };
+        if (t === 'break') return { t: 'break', line: L.line };
+        if (t === 'continue') return { t: 'continue', line: L.line };
+        if (t === 'return') return { t: 'skip', line: L.line };
+        if (/^(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*\(.*\)$/.test(t) || /^[A-Za-z_]\w*\(.*\)$/.test(t)) return { t: 'call', src: t, line: L.line };
+        return { t: 'expr', src: t, line: L.line };
+      }
+      var prog = block(raw.length ? raw[0].indent : 0);
+      if (idx < raw.length) throw synErr();
+      return prog;
+    }
+
+    function Abort() { this.abort = true; }
+    function sleepFor(run, ms) {
+      return new Promise(function (resolve) {
+        var done = false;
+        function fin() { if (done) return; done = true; run.wake = null; resolve(); }
+        run.wake = fin;
+        setTimeout(fin, Math.max(0, ms));
+      });
+    }
+    async function execBlock(stmts, ctx) {
+      for (var i = 0; i < stmts.length; i++) {
+        var s = stmts[i];
+        if (ctx.run.abort) throw new Abort();
+        ctx.line = s.line;
+        if (cfgS.stmtMs > 0) await sleepFor(ctx.run, cfgS.stmtMs);
+        if (ctx.run.abort) throw new Abort();
+        var r = await execStmt(s, ctx);
+        if (r === 'break' || r === 'continue') return r;
+      }
+      return null;
+    }
+    async function execStmt(s, ctx) {
+      var d = ctx.dev, env = ctx.env;
+      switch (s.t) {
+        case 'print': {
+          var parts = splitTop(s.args).map(function (a) { return pyStr(evalExpr(a, env)); });
+          logLine(d, 'I', 'mpy', parts.join(' '));
+          return null;
+        }
+        case 'sleep': {
+          var v = toNum(evalExpr(s.arg, env));
+          await sleepFor(ctx.run, (s.ms ? v : v * 1000) * cfgS.sleepScale);
+          return null;
+        }
+        case 'raise': {
+          var msg = s.arg === '' ? '' : pyStr(evalExpr(s.arg, env));
+          throw new PyErr(s.name, msg);
+        }
+        case 'assign': {
+          var val;
+          try { val = evalExpr(s.expr, env); } catch (e) { if (e instanceof PyErr && e.pyName === 'SyntaxError') val = null; else throw e; }
+          if (s.op === '+=') val = arith('+', env.vars[s.name], val);
+          else if (s.op === '-=') val = arith('-', env.vars[s.name], val);
+          else if (s.op === '*=') val = arith('*', env.vars[s.name], val);
+          env.vars[s.name] = val;
+          return null;
+        }
+        case 'import': {
+          s.mods.forEach(function (m) {
+            if (/^(missing|nonexistent)/.test(m)) throw new PyErr('ImportError', "no module named '" + m + "'");
+          });
+          (s.binds || []).forEach(function (b) { if (b && b !== '*') env.vars[b] = { module: true }; });
+          return null;
+        }
+        case 'call': case 'expr': evalCallOrExpr(s.src, env); return null;
+        case 'for': {
+          var rg = splitTop(s.args).map(function (a) { return toNum(evalExpr(a, env)); });
+          var lo = rg.length > 1 ? rg[0] : 0, hi = rg.length > 1 ? rg[1] : rg[0], step = rg[2] || 1;
+          for (var k = lo; step > 0 ? k < hi : k > hi; k += step) {
+            env.vars[s.v] = k;
+            var br = await execBlock(s.body, ctx);
+            if (br === 'break') break;
+          }
+          return null;
+        }
+        case 'while': {
+          var t0 = nowMs();
+          for (;;) {
+            if (nowMs() - t0 > cfgS.maxLoopMs) return null;
+            var br2 = await execBlock(s.body.length ? s.body : [{ t: 'skip', line: s.line }], ctx);
+            if (br2 === 'break') break;
+            if (!s.body.length) await sleepFor(ctx.run, 20);
+          }
+          return null;
+        }
+        case 'whilec': {
+          var guard = 0;
+          while (truthy(evalExpr(s.cond, env)) && guard++ < 100000) {
+            var br3 = await execBlock(s.body, ctx);
+            if (br3 === 'break') break;
+          }
+          return null;
+        }
+        case 'if': {
+          var branch = truthy(evalExpr(s.cond, env)) ? s.body : s.orelse;
+          return await execBlock(branch, ctx);
+        }
+        case 'break': return 'break';
+        case 'continue': return 'continue';
+        default: return null;
+      }
+    }
+    function evalCallOrExpr(src, env) {
+      var m = /^([A-Za-z_]\w*)\(/.exec(src);
+      if (m && !/\./.test(src.split('(')[0])) {
+        var known = ['len', 'str', 'int', 'float', 'abs', 'repr', 'bool', 'min', 'max', 'round'];
+        if (known.indexOf(m[1]) < 0 && !Object.prototype.hasOwnProperty.call(env.vars, m[1])) throw new PyErr('NameError', "name '" + m[1] + "' isn't defined");
+      }
+      if (/^[A-Za-z_][\w.]*\./.test(src)) return;
+      evalExpr(src, env);
+    }
+
+    // ---- runs --------------------------------------------------------------------
+    function launchRun(d, o) {
+      var run = { id: d.nextId++, name: o.name || '', source: o.source || 'manual', file: !!o.file, abort: false, wake: null, startedMs: uptimeMs(d), startedWall: nowMs(), program: null };
+      d.run = run; d.state = 'running'; d.totalRuns++; d.lastName = run.name;
+      var env = o.persist ? { vars: d.vars } : { vars: {} };
+      var ctx = { dev: d, run: run, env: env, line: 0 };
+      var src = o.src, prog = null;
+      var se = syntaxError(src);
+      if (!se) { try { prog = parseProgram(src); } catch (e) { if (e instanceof PyErr) se = { line: 1 }; else throw e; } }
+      (async function () {
+        var exit = 'ok', errText = '';
+        try {
+          if (se) { throw Object.assign(new PyErr('SyntaxError', 'invalid syntax'), { synLine: se.line }); }
+          if (cfgS.evalDelayMs && !o.file) await sleepFor(run, cfgS.evalDelayMs);
+          await execBlock(prog, ctx);
+        } catch (e) {
+          if (e instanceof Abort) { exit = 'stopped'; }
+          else if (e instanceof PyErr) {
+            exit = 'error'; errText = e.pyName + (e.msg ? ': ' + e.msg : '');
+            var file = o.file ? o.name : '<stdin>';
+            logLine(d, 'E', 'mpy', 'Traceback (most recent call last):');
+            logLine(d, 'E', 'mpy', '  File "' + file + '", line ' + (e.synLine || ctx.line) + (e.pyName === 'SyntaxError' ? '' : ', in <module>'));
+            logLine(d, 'E', 'mpy', errText);
+          } else { exit = 'error'; errText = String(e && e.message || e); logLine(d, 'E', 'mpy', errText); }
+        }
+        if (exit === 'stopped') {
+          if (!run.silentStop) { logLine(d, 'W', 'sys', "script '" + (run.name || 'eval') + "' stopped"); }
+          await wait(cfgS.stopMs);
+        }
+        finishRun(d, run, exit, errText);
+      })();
+      return run;
+    }
+    function finishRun(d, run, exit, errText) {
+      if (d.run !== run) return;
+      d.run = null; d.lastExit = exit; d.lastScriptId = run.id; d.lastName = run.name;
+      d.state = exit === 'error' ? 'error' : 'done';
+      if (exit === 'error') { d.totalErrors++; d.lastError = errText; } else if (exit === 'ok') d.lastError = '';
+      if (run.source === 'autorun') { d.autorun.lastOk = exit === 'ok'; d.autorun.lastRunId = run.id; }
+    }
+    function stopRun(d) {
+      var run = d.run;
+      if (!run) return;
+      if (run.abort) return;
+      run.abort = true; d.state = 'stopping';
+      if (run.wake) run.wake();
+    }
+    async function stopAndWait(d) {
+      var run = d.run;
+      stopRun(d);
+      var t0 = nowMs();
+      while (d.run === run && nowMs() - t0 < 4000) await wait(10);
+    }
+    function statusJson(d) {
+      var r = d.run, wall = cfgS.epochClock;
+      return {
+        running: !!r, currentScriptId: r ? r.id : 0, totalRuns: d.totalRuns, totalErrors: d.totalErrors, lastError: d.lastError,
+        mode: 'PERSISTENT', globalsBytes: 0, globalsCount: Object.keys(d.vars).length, autoResetCount: 0, lastEvalAtMs: 0, idleForMs: 0, watermarkSoftHit: false,
+        name: r ? r.name : d.lastName, source: r ? r.source : 'manual', state: r ? (r.abort ? 'stopping' : 'running') : d.state,
+        lastExit: d.lastExit, startedAt: r ? (wall ? r.startedWall / 1000 : r.startedMs / 1000) : 0, startedAtEpoch: !!(r && wall),
+        fileSlotId: r && r.file ? r.id : 0, fileSlotName: r && r.file ? r.name : '', lastScriptId: d.lastScriptId,
+      };
+    }
+    function usedBytes(d) {
+      var n = d.extraUsed;
+      Object.keys(d.files).forEach(function (k) { n += utf8len(d.files[k].source); });
+      return n;
+    }
+
+    // ---- request validation ---------------------------------------------------------
+    function nameOk(n) {
+      return typeof n === 'string' && n.length >= 1 && utf8len(n) <= NAME_MAX && n.charAt(0) !== '.' && /\.py$/.test(n) && /^[A-Za-z0-9_.\-]+$/.test(n);
+    }
+    function shapeProblem(op, a) {
+      var shape = SHAPES[op], keys = Object.keys(a);
+      for (var i = 0; i < keys.length; i++) if (!Object.prototype.hasOwnProperty.call(shape, keys[i])) return "unexpected argument '" + keys[i] + "' for " + op;
+      for (var k in shape) {
+        if (!Object.prototype.hasOwnProperty.call(shape, k)) continue;
+        var ty = shape[k], opt = ty.charAt(ty.length - 1) === '?', base = opt ? ty.slice(0, -1) : ty, v = a[k];
+        if (v === undefined || v === null) { if (!opt) return "missing argument '" + k + "' for " + op; continue; }
+        if (base === 'string' && typeof v !== 'string') return "argument '" + k + "' must be a string for " + op;
+        if (base === 'boolean' && typeof v !== 'boolean') return "argument '" + k + "' must be a boolean for " + op;
+        if (base === 'uint' && !(typeof v === 'number' && Number.isInteger(v) && v >= 0)) return "argument '" + k + "' must be an unsigned integer for " + op;
+      }
+      if (op === 'lint') {
+        var hasS = typeof a.source === 'string', hasN = typeof a.name === 'string';
+        if (!hasS && !hasN) return 'lint needs source or name';
+        if (hasS && hasN) return 'lint takes source or name, not both';
+      }
+      return null;
+    }
+
+    // ---- faults, holds, recorded commands -----------------------------------------------
+    function matchesRule(r, op, a, transport) {
+      if (r.op !== op) return false;
+      if (r.transport && r.transport !== transport) return false;
+      if (r.match) { for (var k in r.match) { if (a[k] !== r.match[k]) return false; } }
+      return true;
+    }
+    function takeFault(op, a, transport) {
+      for (var i = 0; i < faults.length; i++) {
+        var r = faults[i];
+        if (!matchesRule(r, op, a, transport)) continue;
+        r.seen++;
+        if (r.nth && r.seen !== r.nth) continue;
+        if (r.times !== undefined && r.fired >= r.times) continue;
+        r.fired++;
+        return r;
+      }
+      return null;
+    }
+    function gate(op, phase, n) {
+      var h = holds[op];
+      if (!h || h.phase !== phase || h.remaining <= 0) return Promise.resolve();
+      h.remaining--;
+      return new Promise(function (res) { waiting.push({ op: op, phase: phase, n: n, res: res }); });
+    }
+
+    function okReply(extra) { var o = { ok: true }; for (var k in extra) o[k] = extra[k]; return o; }
+    function errReply(kind, msg, extra) { var o = { ok: false, kind: kind, error: msg }; for (var k in (extra || {})) o[k] = extra[k]; return o; }
+
+    // ---- per-operation behaviour (runs against one device) ---------------------------------
+    async function perform(op, a, d, transport, rec, fault) {
+      if (!links[transport]) return errReply('transport', transport.toUpperCase() + ' link is down: no response from the device');
+      if (transport === 'http' && !caps.authorized) return errReply('unauthorized', 'admin token rejected');
+      switch (op) {
+        case 'files': return okReply({ files: Object.keys(d.files).sort() });
+        case 'storage': {
+          if (!caps.storage) return errReply('unsupported', 'storage: firmware has no storage route: update the firmware');
+          var used = usedBytes(d);
+          return okReply({ totalBytes: d.totalBytes, usedBytes: used, freeBytes: Math.max(0, d.totalBytes - used), scriptCount: Object.keys(d.files).length, maxScriptBytes: BODY_MAX, maxScripts: d.maxScripts });
+        }
+        case 'status': return okReply(statusJson(d));
+        case 'get': {
+          if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+          var f = d.files[a.name];
+          if (!f) return errReply('not_found', 'script not found');
+          return okReply({ name: a.name, size: utf8len(f.source), source: f.source, lossy: !!f.lossy });
+        }
+        case 'save': {
+          if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+          if (a.source === '') return errReply('invalid', "A script can't be empty");
+          var bytes = utf8len(a.source);
+          if (bytes > BODY_MAX) return errReply('too_large', 'Script is ' + bytes + ' bytes; the device keeps at most ' + BODY_MAX, { bytes: bytes });
+          var isNew = !d.files[a.name];
+          if (isNew && Object.keys(d.files).length >= d.maxScripts) return errReply('firmware', 'storage full: too many scripts');
+          var old = d.files[a.name] ? utf8len(d.files[a.name].source) : 0;
+          if (usedBytes(d) - old + bytes > d.totalBytes) return errReply('firmware', 'storage full: no space left on the device');
+          var chunks = transport === 'usb' ? Math.max(1, Math.ceil(bytes / SAVE_CHUNK)) : 1, per = Math.max(5, lat('save') / chunks), sent = 0;
+          for (var c = 1; c <= chunks; c++) {
+            await wait(per);
+            sent = Math.min(bytes, c * SAVE_CHUNK);
+            if (c === chunks) sent = bytes;
+            uploadEvents.push({ name: a.name, sent: sent, total: bytes, n: rec.n });
+            emit('script-upload-progress', { name: a.name, sent: sent, total: bytes });
+            if (fault && fault.atChunk === c && c < chunks + 1) return errReply('transport', 'upload interrupted after chunk ' + c + ' (temp file discarded)');
+          }
+          d.files[a.name] = { source: a.source, lossy: false };
+          return okReply({ name: a.name, bytes: bytes });
+        }
+        case 'delete': {
+          if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+          if (!d.files[a.name]) return errReply('not_found', 'script not found');
+          if (d.run && d.run.file && d.run.name === a.name) return errReply('busy', 'script is running', { running: d.run.name, id: d.run.id });
+          delete d.files[a.name];
+          return okReply({ name: a.name });
+        }
+        case 'lint': {
+          if (!caps.lint) return errReply('unsupported', 'lint: firmware has no compile-only check route: update the firmware');
+          var src;
+          if (typeof a.source === 'string') src = a.source;
+          else {
+            if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+            if (!d.files[a.name]) return errReply('not_found', 'script not found');
+            src = d.files[a.name].source;
+          }
+          if (utf8len(src) > BODY_MAX) return errReply('too_large', 'Script is too large to check');
+          if (d.run) return errReply('busy', 'Interpreter is busy running a script', { running: d.run.name, id: d.run.id });
+          var se = syntaxError(src);
+          return se ? okReply({ valid: false, message: syntaxMessage(se, a.name) }) : okReply({ valid: true });
+        }
+        case 'run': {
+          if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+          if (!d.files[a.name]) return errReply('not_found', 'script not found');
+          if (d.run && !a.replace) return errReply('busy', 'a script is running; pass replace=1 to stop it', { running: d.run.file ? d.run.name : '', id: d.run.id });
+          if (d.run) await stopAndWait(d);
+          var run = launchRun(d, { name: a.name, file: true, source: 'manual', src: d.files[a.name].source, persist: false });
+          run.background = !!a.background;
+          return okReply({ id: run.id, name: a.name, background: !!a.background });
+        }
+        case 'stop': stopRun(d); return okReply({});
+        case 'reset': {
+          if (d.run) { d.run.silentStop = true; await stopAndWait(d); }
+          d.vars = {};
+          logLine(d, 'I', 'sys', 'interpreter reset');
+          return okReply({});
+        }
+        case 'eval': {
+          if (a.source === '') return errReply('invalid', "A script can't be empty");
+          if (utf8len(a.source) > BODY_MAX) return errReply('too_large', 'Script is too large', { bytes: utf8len(a.source) });
+          if (d.run) return errReply('busy', 'a script is running; eval is refused until it ends', { running: d.run.file ? d.run.name : '', id: d.run.id });
+          var ev = launchRun(d, { name: '', file: false, source: 'manual', src: a.source, persist: a.persist !== false });
+          return okReply({ id: ev.id });
+        }
+        case 'logs': {
+          if (!caps.logCursor) return errReply('unsupported', 'logs: no X-BugBuster-Log-Next header (firmware predates log cursors): update the firmware');
+          var pg = readLogs(d, a.since === undefined ? 0 : a.since);
+          return okReply({ data: b64(pg.data), n: pg.data.length, since: pg.since, next: pg.next, dropped: pg.dropped, more: pg.more, restarted: pg.restarted });
+        }
+        case 'autorun_status': {
+          var ar = d.autorun, hasScript = !!(ar.scriptName && d.files[ar.scriptName]);
+          return okReply({ enabled: ar.enabled, has_script: hasScript, io12_high: ar.io12High, last_run_ok: ar.lastOk, last_run_id: ar.lastRunId,
+            scriptName: ar.scriptName, ranThisBoot: ar.ranThisBoot, running: !!(d.run && d.run.source === 'autorun') });
+        }
+        case 'autorun_enable': {
+          if (!nameOk(a.name)) return errReply('invalid', "'" + a.name + "' is not a valid script name (1-32 of A-Z a-z 0-9 _ . -, ending in .py)");
+          if (!d.files[a.name]) return errReply('not_found', 'script not found');
+          d.autorun.enabled = true; d.autorun.scriptName = a.name;
+          return okReply({});
+        }
+        case 'autorun_disable': d.autorun.enabled = false; return okReply({});
+        case 'autorun_run': {
+          if (transport === 'http') return errReply('unsupported', 'Run now needs a USB connection: the device has no Wi-Fi route for it');
+          if (!d.autorun.scriptName || !d.files[d.autorun.scriptName]) return errReply('not_found', 'no autorun script selected');
+          if (d.run) return errReply('busy', 'a script is running', { running: d.run.file ? d.run.name : '', id: d.run.id });
+          var ap = launchRun(d, { name: d.autorun.scriptName, file: true, source: 'autorun', src: d.files[d.autorun.scriptName].source, persist: false });
+          d.autorun.ranThisBoot = true;
+          return okReply({ id: ap.id });
+        }
+        default: return errReply('protocol', 'unhandled operation ' + op);
+      }
+    }
+    function lat(op) { return cfgS.opDelays[op] !== undefined ? cfgS.opDelays[op] : cfgS.delayMs; }
+    function identOf() { return { transport: conn.mode.toLowerCase(), address: conn.address, mac: conn.mac }; }
+    function identKey(i) { return i.transport + '|' + i.address + '|' + i.mac; }
+
+    async function handler(args) {
+      args = args || {};
+      var top = Object.keys(args), op = args.operation, a = args.args;
+      var rec = { n: ++counter, t: nowMs(), op: op, args: clone(a === undefined ? null : a), mac: conn.mac, transport: conn.mode.toLowerCase(), reply: null, ms: 0, device: null };
+      cmds.push(rec); if (cmds.length > 4000) cmds.shift();
+      counts.total++; counts.byOp[op] = (counts.byOp[op] || 0) + 1;
+      var t0 = nowMs();
+      function done(reply, ident) {
+        reply.operation = op;
+        if (ident) { reply.device = { transport: ident.transport, address: ident.address, mac: ident.mac }; rec.device = reply.device; }
+        rec.reply = { ok: !!reply.ok, kind: reply.kind || null, error: reply.error || null };
+        rec.ms = nowMs() - t0;
+        return reply;
+      }
+      function violate(kind, msg) { violations.push({ n: rec.n, op: op, kind: kind, message: msg, args: rec.args }); }
+
+      // Tauri command shape: { operation: string, args?: object }.
+      for (var i = 0; i < top.length; i++) if (top[i] !== 'operation' && top[i] !== 'args') violate('shape', "unexpected top-level key '" + top[i] + "'");
+      if (typeof op !== 'string') { violate('shape', 'operation must be a string'); throw 'invalid args for command `script_request`: missing field `operation`'; }
+      if (OPS.indexOf(op) < 0) { violate('shape', "unknown operation '" + op + "'"); throw "unknown script operation '" + op + "'"; }
+      if (a !== undefined && a !== null && (typeof a !== 'object' || Array.isArray(a))) {
+        violate('shape', 'args must be an object');
+        return done(errReply('invalid', 'mock contract: args must be a JSON object'), null);
+      }
+      a = a || {};
+      var problem = shapeProblem(op, a);
+      if (problem) { violate('shape', problem); return done(errReply('invalid', 'mock contract: ' + problem), null); }
+      if (conn.mode === 'Disconnected') { counts.notConnected++; return done(errReply('not_connected', 'No device connected'), null); }
+      var ident0 = identOf(), transport = ident0.transport;
+      counts.byTransport[transport] = (counts.byTransport[transport] || 0) + 1;
+      if (LAUNCH[op]) {
+        if (launchBusy) { counts.inFlightRejected++; return done(errReply('in_flight', 'Another run or evaluation request is still in progress'), null); }
+        launchBusy = true;
+      }
+      try {
+        // Soft validation the real backend also does (answered ok:false, recorded for the harness).
+        if ((op === 'get' || op === 'save' || op === 'delete' || op === 'run' || op === 'autorun_enable' || (op === 'lint' && a.name !== undefined)) && !nameOk(a.name)) violate('validation', 'invalid script name ' + JSON.stringify(a.name));
+        if (op === 'save' && (a.source === '' || utf8len(a.source) > BODY_MAX)) violate('validation', 'save of an empty or oversized script');
+        var fault = takeFault(op, a, transport);
+        await gate(op, 'before', rec.n);
+        await wait((fault && fault.hangMs ? fault.hangMs : 0));
+        var d = dev(ident0.mac), reply;
+        if (fault && fault.phase !== 'after' && fault.reply) {
+          await wait(lat(op));
+          reply = errReply(fault.reply.kind || 'transport', fault.reply.error || 'injected fault', fault.reply);
+          if (reply.kind === 'transport' && UNKNOWN_OUTCOME[op] && reply.outcomeUnknown === undefined) reply.outcomeUnknown = true;
+        } else {
+          if (op !== 'save') await wait(lat(op) / 2);
+          reply = await perform(op, a, d, transport, rec, fault);
+          if (op !== 'save') await wait(lat(op) / 2);
+          if (fault && fault.phase === 'after' && fault.reply) {
+            reply = errReply(fault.reply.kind || 'transport', fault.reply.error || 'reply lost', fault.reply);
+          } else if (fault && fault.atChunk && reply.ok === false && reply.kind === 'transport') { /* upload failure already built */ }
+          if (reply.ok === false && reply.kind === 'transport' && UNKNOWN_OUTCOME[op] && reply.outcomeUnknown === undefined) reply.outcomeUnknown = true;
+        }
+        await gate(op, 'after', rec.n);
+        if (identKey(identOf()) !== identKey(ident0) && !cfgS.staleReplies) {
+          counts.deviceChanged++;
+          return done(errReply('device_changed', 'The connection changed while the request was running'), null);
+        }
+        return done(reply, ident0);
+      } finally {
+        if (LAUNCH[op]) launchBusy = false;
+      }
+    }
+
+    // ---- connection hooks (called from the connect/disconnect handlers) ----------------------
+    M.onConnect = function (device, st) {
+      var mac = macByDeviceId[device.id] || (device.id === 'usb:COM7' ? SECOND_MAC : DEFAULT_MAC);
+      conn = { mode: st.mode, address: st.port_or_url, deviceId: device.id, mac: mac };
+      M.connectedAt = nowMs();
+      dev(mac);
+      return mac;
+    };
+    M.onDisconnect = function () { conn = { mode: 'Disconnected', address: '', deviceId: '', mac: '' }; };
+
+    // ---- public control surface -------------------------------------------------------------
+    M.handler = handler;
+    M.configure = function (o) {
+      o = o || {};
+      Object.keys(o).forEach(function (k) {
+        if (k === 'opDelays') { Object.keys(o.opDelays).forEach(function (op) { cfgS.opDelays[op] = o.opDelays[op]; }); }
+        else if (k === 'links') { Object.keys(o.links).forEach(function (t) { links[t] = !!o.links[t]; }); }
+        else if (k === 'caps') { Object.keys(o.caps).forEach(function (t) { caps[t] = !!o.caps[t]; }); }
+        else if (k === 'scenario' || k === 'secondDevice') { /* handled by init */ }
+        else if (k in cfgS) cfgS[k] = o[k];
+        else throw new Error('unknown script mock option ' + k);
+      });
+      return clone(cfgS);
+    };
+    M.config = function () { return clone({ cfg: cfgS, links: links, caps: caps }); };
+    M.reset = function () {
+      Object.keys(holds).forEach(function (op) { M.release(op); });
+      var keep = conn; resetAll(); conn = keep;
+      if (conn.mode !== 'Disconnected') dev(conn.mac);
+      return true;
+    };
+    M.connection = function () { return clone(conn); };
+    M.addDevice = function (id, name, address, mac) {
+      var existing = devices.filter(function (x) { return x.id === id; })[0];
+      if (!existing) devices.push({ id: id, name: name || ('BugBuster (' + address + ')'), transport: id.indexOf('http') === 0 ? 'http' : 'usb', address: address, serial_number: null });
+      macByDeviceId[id] = mac || SECOND_MAC;
+      return true;
+    };
+    M.bindMac = function (deviceId, mac) { macByDeviceId[deviceId] = mac; return true; };
+    M.connect = function (deviceId) { return H.connect_device({ deviceId: deviceId }); };
+    M.disconnect = function () { return H.disconnect_device({}); };
+    M.setLink = function (o) { Object.keys(o).forEach(function (t) { links[t] = !!o[t]; }); return clone(links); };
+    M.setCaps = function (o) { Object.keys(o).forEach(function (t) { caps[t] = !!o[t]; }); return clone(caps); };
+    M.devices = function () { return Object.keys(devs).map(function (m) { return M.snapshot(m); }); };
+    M.snapshot = function (mac) {
+      var d = dev(mac || conn.mac || DEFAULT_MAC), files = {}, lossy = {};
+      Object.keys(d.files).forEach(function (n) { files[n] = d.files[n].source; if (d.files[n].lossy) lossy[n] = true; });
+      return { mac: d.mac, files: files, lossy: lossy, status: statusJson(d), autorun: clone(d.autorun), logTotal: d.base + d.ring.length, logBase: d.base,
+        vars: Object.keys(d.vars), bootCount: d.bootCount, uptimeMs: uptimeMs(d), runId: d.run ? d.run.id : 0, storageUsed: usedBytes(d) };
+    };
+    M.setFiles = function (mac, map, replaceAll) {
+      var d = dev(mac || conn.mac || DEFAULT_MAC);
+      if (replaceAll) d.files = {};
+      Object.keys(map).forEach(function (n) {
+        var v = map[n];
+        if (v === null) delete d.files[n];
+        else d.files[n] = typeof v === 'string' ? { source: v, lossy: false } : { source: v.source, lossy: !!v.lossy };
+      });
+      return Object.keys(d.files).length;
+    };
+    M.setStorage = function (mac, o) { var d = dev(mac || conn.mac || DEFAULT_MAC); if (o.maxScripts !== undefined) d.maxScripts = o.maxScripts; if (o.totalBytes !== undefined) d.totalBytes = o.totalBytes; if (o.extraUsed !== undefined) d.extraUsed = o.extraUsed; return true; };
+    M.setAutorun = function (mac, o) { var d = dev(mac || conn.mac || DEFAULT_MAC); Object.keys(o).forEach(function (k) { d.autorun[k] = o[k]; }); return clone(d.autorun); };
+    M.commands = function (op) { return clone(op ? cmds.filter(function (c) { return c.op === op; }) : cmds); };
+    M.counts = function () { return clone(counts); };
+    M.violations = function (kind) { return clone(kind ? violations.filter(function (v) { return v.kind === kind; }) : violations); };
+    M.clearViolations = function () { violations = []; };
+    M.uploads = function () { return clone(uploadEvents); };
+    M.fail = function (op, rule) {
+      if (OPS.indexOf(op) < 0) throw new Error('unknown op ' + op);
+      var r = Object.assign({ times: 1, phase: 'before' }, rule || {}, { op: op, seen: 0, fired: 0, id: nextFaultId++ });
+      faults.push(r); return r.id;
+    };
+    M.clearFaults = function () { faults = []; };
+    M.hold = function (op, phase, count) { holds[op] = { phase: phase || 'before', remaining: count === undefined ? 1 : count }; return true; };
+    M.held = function () { return waiting.map(function (w) { return { op: w.op, phase: w.phase, n: w.n }; }); };
+    M.release = function (op) {
+      delete holds[op];
+      var keep = [];
+      waiting.forEach(function (w) { if (!op || w.op === op) w.res(); else keep.push(w); });
+      waiting = keep;
+      return true;
+    };
+    M.log = function (mac, level, src, text) { logLine(dev(mac || conn.mac), level || 'I', src || 'mpy', text); return dev(mac || conn.mac).base + dev(mac || conn.mac).ring.length; };
+    M.writeRaw = function (mac, text) { var d = dev(mac || conn.mac); ringAppendText(d, text); return d.base + d.ring.length; };
+    // Pads the ring so a multi-byte character straddles a 4096-byte page when read from `fromCursor`.
+    M.logSplitUtf8 = function (mac, ch, fromCursor) {
+      var d = dev(mac || conn.mac), total = d.base + d.ring.length, from = fromCursor === undefined ? total : fromCursor;
+      var chBytes = enc.encode(ch).length, prefix = uptimeMs(d) + ' I mpy ';
+      var boundary = from + LOG_PAGE, padLen = boundary - 1 - total - utf8len(prefix);
+      if (padLen < 1) padLen += LOG_PAGE;
+      ringAppendText(d, prefix + new Array(padLen + 1).join('p') + ch + ' tail-after-split\n');
+      return { total: d.base + d.ring.length, charBytes: chBytes, boundary: boundary };
+    };
+    M.dropLogs = function (mac, bytes) {
+      var d = dev(mac || conn.mac), n = Math.min(bytes, d.ring.length);
+      d.ring.splice(0, n); d.base += n; return d.base;
+    };
+    M.fillLogs = function (mac, lines, text) { for (var i = 0; i < lines; i++) logLine(dev(mac || conn.mac), 'I', 'mpy', (text || 'fill') + ' ' + i); return M.snapshot(mac).logTotal; };
+    M.readLogs = function (mac, since) {
+      var p = readLogs(dev(mac || conn.mac), since || 0);
+      return { text: dec.decode(new Uint8Array(p.data)), n: p.data.length, since: p.since, next: p.next, dropped: p.dropped, more: p.more, restarted: p.restarted };
+    };
+    M.reboot = function (mac, o) {
+      o = o || {};
+      var d = dev(mac || conn.mac);
+      if (d.run) { d.run.silentStop = true; d.run.abort = true; if (d.run.wake) d.run.wake(); d.run = null; }
+      d.ring = []; d.base = 0; d.vars = {}; d.bootAt = nowMs(); d.bootCount++; d.nextId = 1; d.totalRuns = 0; d.totalErrors = 0;
+      d.lastError = ''; d.lastExit = 'none'; d.state = 'idle'; d.lastScriptId = 0; d.lastName = ''; d.autorun.ranThisBoot = false;
+      if (o.bootLog) logLine(d, 'I', 'sys', 'boot #' + d.bootCount);
+      if (d.autorun.enabled && d.autorun.io12High && d.files[d.autorun.scriptName] && o.autorun !== false) {
+        setTimeout(function () {
+          if (d.run) return;
+          launchRun(d, { name: d.autorun.scriptName, file: true, source: 'autorun', src: d.files[d.autorun.scriptName].source, persist: false });
+          d.autorun.ranThisBoot = true;
+        }, cfgS.bootRunDelayMs);
+      }
+      return d.bootCount;
+    };
+    // Started by another client / the device itself, not by this app.
+    M.externalRun = function (mac, name, o) {
+      o = o || {};
+      var d = dev(mac || conn.mac);
+      if (d.run) throw new Error('device already running ' + d.run.name);
+      var src = o.source !== undefined ? o.source : (d.files[name] ? d.files[name].source : null);
+      if (src === null) throw new Error('no such file ' + name);
+      var run = launchRun(d, { name: name, file: o.file !== false, source: o.kind || 'manual', src: src, persist: false });
+      if (o.kind === 'autorun') d.autorun.ranThisBoot = true;
+      return run.id;
+    };
+    M.stopDevice = function (mac) { var d = dev(mac || conn.mac); stopRun(d); return true; };
+    M.setIo12 = function (mac, high) { dev(mac || conn.mac).autorun.io12High = !!high; return true; };
+    M.parse = function (src) { var se = syntaxError(src); return se ? syntaxMessage(se) : null; };
+    M.scenario = function (name, o) {
+      var presets = {
+        default: function () { M.reset(); },
+        'slow-link': function () { M.configure({ delayMs: (o && o.delayMs) || 450 }); },
+        'usb-only': function () { M.setLink({ http: false, usb: true }); },
+        'wifi-only': function () { M.setLink({ usb: false, http: true }); },
+        'old-firmware': function () { M.setCaps({ lint: false, logCursor: false, storage: false }); },
+        'full-storage': function () { M.setStorage(null, { maxScripts: Object.keys(dev(conn.mac || DEFAULT_MAC).files).length }); },
+        'epoch-clock': function () { M.configure({ epochClock: true }); },
+        'stale-replies': function () { M.configure({ staleReplies: true }); },
+      };
+      if (!presets[name]) throw new Error('unknown script mock scenario ' + name);
+      presets[name]();
+      return name;
+    };
+    M.OPERATIONS = OPS.slice();
+    M.limits = { nameMax: NAME_MAX, bodyMax: BODY_MAX, logPage: LOG_PAGE, saveChunk: SAVE_CHUNK, defaultMac: DEFAULT_MAC, secondMac: SECOND_MAC };
+    M._internal = { syntaxError: syntaxError, parseProgram: parseProgram, evalExpr: evalExpr, newDevice: newDevice };
+
+    var cfgScripts = (cfg && cfg.scripts) || null;
+    if (cfgScripts) {
+      if (cfgScripts.secondDevice) M.addDevice('usb:COM7', 'BugBuster (COM7)', 'COM7', SECOND_MAC);
+      if (cfgScripts.scenario) M.scenario(cfgScripts.scenario);
+      var rest = Object.assign({}, cfgScripts); delete rest.secondDevice; delete rest.scenario;
+      M.configure(rest);
+    }
+    return M;
+  })();
+  H.script_request = SM.handler;
+  window.__BB_SCRIPT_MOCK = SM;
 
   // ---------------------------------------------------------------------------
   // invoke
