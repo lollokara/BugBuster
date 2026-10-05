@@ -60,6 +60,7 @@ REC_MARKER = 0x05
 REC_STATUS = 0x06
 REC_WAVE_V = 0x07
 REC_OTA_ACK = 0x08   # reply to every CMD_OTA_* (C6-26)
+REC_CLIENT_LEASE_ACK = 0x09  # reply to CMD_CLIENT_LEASE (standby P4 ACK)
 
 # Control commands (PC -> device)
 CMD_START = 0x80
@@ -240,7 +241,24 @@ class OtaAckRecord:
         return f"{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}.{v & 0xFF}"
 
 
+@dataclass
+class ClientLeaseAckRecord:
+    """bb_standby_reply_t: the device's answer to a CMD_CLIENT_LEASE (P4 ACK).
+
+    Sent by the P4 in response to every USB_CMD_CLIENT_LEASE frame. Indicates
+    whether the lease was accepted and whether the system is ready to sleep.
+    """
+    schema: int          # always 1
+    state: int           # 0 ACTIVE, 1 PREPARING, 2 ASLEEP, 3 WAKING, 4 FAULT_SAFE
+    ready: bool          # 1 if lease accepted and system is ACTIVE + settled
+    failure: int         # 0 ok, 1 BUSY/not ready, 3 malformed, 7 table full
+    generation: int      # monotonic generation tag (u32)
+    inhibitors: int      # bitmask of active presence leases (u32)
+    activity: int        # activity counter / heartbeat (u32)
+
+
 _OTA_ACK = struct.Struct("<BbBBIIIIB3x")      # 24 bytes
+_CLIENT_LEASE_ACK = struct.Struct("<BBBBIII")  # 16 bytes (bb_standby_reply_t)
 
 
 _WAVE_HDR = struct.Struct("<QQIHBB")          # 24 bytes
@@ -397,6 +415,12 @@ def parse_frame(buf, off: int = 0) -> Tuple[Optional[Any], int]:
         if len(p) < _OTA_ACK.size:
             return None, total
         return OtaAckRecord(*_OTA_ACK.unpack_from(p, 0)), total
+
+    if rec_type == REC_CLIENT_LEASE_ACK:
+        if len(p) < _CLIENT_LEASE_ACK.size:
+            return None, total
+        schema, state, ready, failure, gen, inh, act = _CLIENT_LEASE_ACK.unpack_from(p, 0)
+        return ClientLeaseAckRecord(schema, state, bool(ready), failure, gen, inh, act), total
 
     return None, total
 

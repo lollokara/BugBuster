@@ -23,9 +23,31 @@ use tokio::sync::{mpsc, Mutex as TokioMutex};
 use crate::bbp::{self, Message};
 use crate::discovery;
 use crate::http_transport::HttpTransport;
+use crate::standby_commands::PresenceSlot;
 use crate::state::*;
 use crate::transport::Transport;
 use crate::usb_transport::UsbTransport;
+
+/// The connection a call was issued for has been replaced or closed; its result is void.
+#[derive(Debug)]
+pub struct EpochChanged;
+
+impl std::fmt::Display for EpochChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("connection changed")
+    }
+}
+
+impl std::error::Error for EpochChanged {}
+
+/// Scripting keeps its historical message for a replaced connection.
+fn scripting_epoch_error(e: anyhow::Error) -> anyhow::Error {
+    if e.is::<EpochChanged>() {
+        anyhow!("Scripting connection changed")
+    } else {
+        e
+    }
+}
 
 #[derive(Clone)]
 pub struct ConnectionManager {
@@ -57,6 +79,8 @@ pub struct ConnectionManager {
     // byte stream that probe_bbp sends.
     scanning: Arc<AtomicBool>,
     connection_epoch: Arc<AtomicU64>,
+    // Logical standby presence of the current connection epoch (see standby_commands.rs).
+    presence: Arc<StdMutex<PresenceSlot>>,
 }
 
 pub struct OtaGuard {
@@ -83,7 +107,37 @@ impl ConnectionManager {
             connecting: Arc::new(AtomicBool::new(false)),
             scanning: Arc::new(AtomicBool::new(false)),
             connection_epoch: Arc::new(AtomicU64::new(0)),
+            presence: Arc::new(StdMutex::new(PresenceSlot::default())),
         }
+    }
+
+    /// The presence record of the current connection epoch.
+    pub fn presence(&self) -> &Arc<StdMutex<PresenceSlot>> {
+        &self.presence
+    }
+
+    /// Test seam: install `transport` as a new connection epoch, as `_connect` does.
+    #[cfg(test)]
+    pub(crate) async fn attach_for_test(
+        &self,
+        transport: Box<dyn Transport>,
+        mode: ConnectionMode,
+        addr: &str,
+    ) -> u64 {
+        self.connection_epoch.fetch_add(1, Ordering::AcqRel);
+        *self.transport.lock().await = Some(transport);
+        let mut s = self.connection_status.lock().unwrap();
+        s.mode = mode;
+        s.port_or_url = addr.to_string();
+        self.connection_epoch()
+    }
+
+    /// Test seam: tear the link down, as `disconnect` does after presence is released.
+    #[cfg(test)]
+    pub(crate) async fn detach_for_test(&self) {
+        self.connection_epoch.fetch_add(1, Ordering::AcqRel);
+        *self.transport.lock().await = None;
+        *self.connection_status.lock().unwrap() = ConnectionStatus::default();
     }
 
     /// Set whether an OTA update is currently in progress.
@@ -123,8 +177,10 @@ impl ConnectionManager {
         app: &AppHandle,
     ) -> Result<()> {
         self.disconnect(app).await?;
+        // Every connect is a new epoch (disconnect just bumped it), even to the same port or URL.
+        let epoch = self.connection_epoch();
 
-        if device_id.starts_with("usb:") {
+        let result = if device_id.starts_with("usb:") {
             let port_name = &device_id[4..];
             self.connect_usb(port_name, la_selector, app).await
         } else if device_id.starts_with("http:") {
@@ -132,7 +188,11 @@ impl ConnectionManager {
             self.connect_http(base_url, app).await
         } else {
             Err(anyhow!("Unknown device ID format: {}", device_id))
+        };
+        if result.is_ok() {
+            crate::standby_commands::start_presence(self.clone(), epoch);
         }
+        result
     }
 
     async fn connect_usb(
@@ -409,6 +469,9 @@ impl ConnectionManager {
 
     /// Disconnect the current transport.
     pub async fn disconnect(&self, app: &AppHandle) -> Result<()> {
+        // Release this epoch's standby presence while its transport is still up (best effort;
+        // the device expires the lease on its own), then retire the epoch.
+        crate::standby_commands::close_presence(self).await;
         self.connection_epoch.fetch_add(1, Ordering::AcqRel);
         // Signal poll loop to exit immediately
         self.poll_shutdown.store(true, Ordering::Release);
@@ -571,10 +634,12 @@ impl ConnectionManager {
         self.connection_epoch.load(Ordering::Acquire)
     }
 
-    pub async fn script_command(&self, epoch: u64, cmd: u8, payload: &[u8]) -> Result<Vec<u8>> {
+    /// BBP command on the selected link, refused with `EpochChanged` if the connection
+    /// is no longer the one `epoch` names (checked under the transport lock).
+    pub async fn epoch_command(&self, epoch: u64, cmd: u8, payload: &[u8]) -> Result<Vec<u8>> {
         let transport = self.transport.lock().await;
         if self.connection_epoch() != epoch {
-            return Err(anyhow!("Scripting connection changed"));
+            return Err(anyhow::Error::new(EpochChanged));
         }
         match transport.as_ref() {
             Some(link) if link.is_connected() => link.send_command(cmd, payload).await,
@@ -582,19 +647,36 @@ impl ConnectionManager {
         }
     }
 
-    pub async fn script_http_exchange(
+    /// Raw REST exchange on the selected HTTP link, guarded like `epoch_command`.
+    pub async fn epoch_http_exchange(
         &self,
         epoch: u64,
         req: crate::transport::HttpExchange,
     ) -> Result<crate::transport::HttpReply> {
         let transport = self.transport.lock().await;
         if self.connection_epoch() != epoch {
-            return Err(anyhow!("Scripting connection changed"));
+            return Err(anyhow::Error::new(EpochChanged));
         }
         match transport.as_ref() {
             Some(link) if link.is_connected() => link.http_exchange(req).await,
             _ => Err(anyhow!("Not connected")),
         }
+    }
+
+    pub async fn script_command(&self, epoch: u64, cmd: u8, payload: &[u8]) -> Result<Vec<u8>> {
+        self.epoch_command(epoch, cmd, payload)
+            .await
+            .map_err(scripting_epoch_error)
+    }
+
+    pub async fn script_http_exchange(
+        &self,
+        epoch: u64,
+        req: crate::transport::HttpExchange,
+    ) -> Result<crate::transport::HttpReply> {
+        self.epoch_http_exchange(epoch, req)
+            .await
+            .map_err(scripting_epoch_error)
     }
 
     pub fn get_device_state(&self) -> DeviceState {
@@ -831,6 +913,13 @@ impl ConnectionManager {
                             *ds = state.clone();
                         }
                         let _ = app.emit("device-state", &state);
+                    }
+                    Err(e) if crate::standby_commands::is_busy_refusal(&e.to_string()) => {
+                        // BUSY is a reply: the link is alive and the device is not ready
+                        // (standby, waking). Not a failure and not a state update.
+                        consecutive_failures = 0;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
                     }
                     Err(e) => {
                         consecutive_failures += 1;

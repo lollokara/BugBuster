@@ -41,6 +41,7 @@ _HANDLER_MODULES = [
     "tests.mock.handlers.quicksetup",
     "tests.mock.handlers.daq",
     "tests.mock.handlers.system",
+    "tests.mock.handlers.standby",
 ]
 
 from tests.mock import http_routes as _http_routes

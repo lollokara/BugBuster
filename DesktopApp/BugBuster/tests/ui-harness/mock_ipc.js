@@ -1789,6 +1789,201 @@
     return M;
   })();
   H.script_request = SM.handler;
+
+  // ---------------------------------------------------------------------------
+  // WebSocket REPL mock: script_repl_request command handler
+  // Stateful mock for Wi-Fi WebSocket REPL operations (open, send_line, interrupt, close)
+  // ---------------------------------------------------------------------------
+  var ReplMock = (function () {
+    var sessions = {}; // per-device WebSocket REPL sessions: { sessionId: { session, generation, deviceId, mac, seq, state, msgQueue, closeReason } }
+    var lastSessionByMac = {}; // track lastSession per mac for stale detection
+    var M = {};
+
+    // Config scenarios for test knobs
+    var replConfig = { noToken: false, unauthorized: false, busy: false, timeout: false, connect_failed: false, remoteClose: false, remoteCloseDelayMs: 50, protocol: false };
+
+    function replErr(kind, error) { return { ok: false, kind: kind, error: error, operation: 'unknown' }; }
+    function replOk(op, extra) { return Object.assign({ ok: true, operation: op }, extra || {}); }
+
+    function emitReplEvent(type, payload) {
+      payload = payload || {};
+      // Never emit events with token in payload
+      setTimeout(function () {
+        emit('script-repl', Object.assign({ kind: type }, payload));
+      }, 5);
+    }
+
+    M.configure = function (o) {
+      Object.assign(replConfig, o || {});
+      return clone(replConfig);
+    };
+
+    // Handler for script_repl_request(operation, args)
+    var handler = function (payload) {
+      var op = payload && payload.operation;
+      var args = payload && payload.args || {};
+      var top = Object.keys(args);
+
+      // Shape validation
+      if (typeof op !== 'string') return replErr('invalid', 'operation must be a string');
+      if (typeof args !== 'object' || Array.isArray(args)) return replErr('invalid', 'args must be a JSON object');
+
+      // Check for unexpected keys in args
+      var validKeys = { session: 1, line: 1 };
+      for (var i = 0; i < top.length; i++) {
+        if (!(top[i] in validKeys)) return replErr('invalid', "unexpected key in args: '" + top[i] + "'");
+      }
+
+      // Per-operation handling
+      if (op === 'open') {
+        return handleReplOpen(args);
+      } else if (op === 'send_line') {
+        return handleReplSendLine(args);
+      } else if (op === 'interrupt') {
+        return handleReplInterrupt(args);
+      } else if (op === 'close') {
+        return handleReplClose(args);
+      } else {
+        return replErr('invalid', "unknown operation '" + op + "'");
+      }
+    };
+
+    function handleReplOpen(args) {
+      var session = args.session;
+      if (typeof session !== 'number' || session <= 0) return replErr('invalid', 'session must be a positive integer');
+      if (conn.mode === 'Disconnected') return replErr('not_connected', 'No device connected');
+
+      var mac = conn.mac;
+      var lastSession = lastSessionByMac[mac] || 0;
+      if (session <= lastSession) return replErr('stale', 'session id must be greater than previous session');
+
+      if (replConfig.noToken) return replErr('no_token', 'No authentication token available');
+      if (replConfig.unauthorized) return replErr('unauthorized', 'Authentication failed');
+      if (replConfig.busy) {
+        setTimeout(function () { emitReplEvent('closed', { session: session, reason: 'busy', code: 4002, message: 'Device busy' }); }, 10);
+        return replOk('open', { session: session, generation: Math.floor(Math.random() * 0x100000000), device: { transport: conn.mode.toLowerCase(), address: conn.address, mac: mac } });
+      }
+      if (replConfig.timeout) {
+        setTimeout(function () { emitReplEvent('state', { session: session, state: 'authenticating' }); }, 50);
+        setTimeout(function () { emitReplEvent('closed', { session: session, reason: 'timeout', code: null, message: 'No response from device' }); }, 100);
+        return replOk('open', { session: session, generation: Math.floor(Math.random() * 0x100000000), device: { transport: conn.mode.toLowerCase(), address: conn.address, mac: mac } });
+      }
+      if (replConfig.connect_failed) {
+        setTimeout(function () { emitReplEvent('closed', { session: session, reason: 'connect_failed', code: null, message: 'Connection failed' }); }, 10);
+        return replOk('open', { session: session, generation: Math.floor(Math.random() * 0x100000000), device: { transport: conn.mode.toLowerCase(), address: conn.address, mac: mac } });
+      }
+
+      var generation = Math.floor(Math.random() * 0x100000000);
+      var sess = { session: session, generation: generation, deviceId: conn.deviceId, mac: mac, seq: 0, state: 'connecting', msgQueue: [] };
+      sessions[mac + ':' + session] = sess;
+      lastSessionByMac[mac] = session;
+
+      // Emit state transitions and banner
+      setTimeout(function () {
+        if (!sessions[mac + ':' + session]) return; // session was closed
+        emitReplEvent('state', { session: session, generation: generation, state: 'authenticating' });
+      }, 10);
+
+      if (replConfig.remoteClose) {
+        setTimeout(function () {
+          if (!sessions[mac + ':' + session]) return;
+          emitReplEvent('closed', { session: session, generation: generation, reason: 'remote', code: null, message: 'Device closed connection' });
+          delete sessions[mac + ':' + session];
+        }, Math.max(50, replConfig.remoteCloseDelayMs || 50));
+      } else if (replConfig.protocol) {
+        setTimeout(function () {
+          if (!sessions[mac + ':' + session]) return;
+          emitReplEvent('closed', { session: session, generation: generation, reason: 'protocol', code: null, message: 'Protocol error' });
+          delete sessions[mac + ':' + session];
+        }, 40);
+      } else {
+        setTimeout(function () {
+          if (!sessions[mac + ':' + session]) return;
+          emitReplEvent('state', { session: session, generation: generation, state: 'connected' });
+          emitReplEvent('output', { session: session, generation: generation, seq: ++sess.seq, data: 'MicroPython REPL ready. Type and press Enter.\r\n>>> ', dropped: 0 });
+        }, 40);
+      }
+
+      return replOk('open', { session: session, generation: generation, device: { transport: conn.mode.toLowerCase(), address: conn.address, mac: mac } });
+    }
+
+    function handleReplSendLine(args) {
+      var session = args.session;
+      var line = args.line;
+
+      if (typeof session !== 'number') return replErr('invalid', 'session must be a number');
+      if (typeof line !== 'string') return replErr('invalid', 'line must be a string');
+
+      // Validate line: printable ASCII + tab, no CR/LF, <= 511 bytes
+      if (line.indexOf('\r') >= 0 || line.indexOf('\n') >= 0) return replErr('invalid', 'line must not contain CR or LF');
+      if (line.length === 0 || line.length > 511) return replErr('invalid', 'line must be 1-511 characters');
+      for (var i = 0; i < line.length; i++) {
+        var ch = line.charCodeAt(i);
+        if (ch < 32 && ch !== 9) return replErr('invalid', 'line must contain only printable ASCII and tab');
+        if (ch > 126) return replErr('invalid', 'line must contain only ASCII');
+      }
+
+      var mac = conn.mac;
+      var sessKey = mac + ':' + session;
+      var sess = sessions[sessKey];
+
+      if (!sess) return replErr('stale', 'Session not found or expired');
+      if (conn.mode === 'Disconnected') return replErr('not_connected', 'Device disconnected');
+
+      // Check if another script holds the REPL slot
+      if (dev(mac).run && dev(mac).run.name) {
+        emitReplEvent('output', { session: session, generation: sess.generation, seq: ++sess.seq, data: '[read-only: a script is running, output only]\r\n>>> ', dropped: 0 });
+        return replOk('send_line');
+      }
+
+      // Echo and response
+      emitReplEvent('output', { session: session, generation: sess.generation, seq: ++sess.seq, data: line + '\r\n', dropped: 0 });
+      setTimeout(function () {
+        if (!sessions[sessKey]) return;
+        emitReplEvent('output', { session: session, generation: sess.generation, seq: ++sess.seq, data: 'result\r\n>>> ', dropped: 0 });
+      }, 15);
+
+      return replOk('send_line');
+    }
+
+    function handleReplInterrupt(args) {
+      var session = args.session;
+      if (typeof session !== 'number') return replErr('invalid', 'session must be a number');
+
+      var mac = conn.mac;
+      var sessKey = mac + ':' + session;
+      var sess = sessions[sessKey];
+
+      if (!sess) return replErr('stale', 'Session not found or expired');
+
+      emitReplEvent('output', { session: session, generation: sess.generation, seq: ++sess.seq, data: '\r\n>>> ', dropped: 0 });
+      return replOk('interrupt');
+    }
+
+    function handleReplClose(args) {
+      var session = args.session;
+      if (typeof session !== 'number') return replErr('invalid', 'session must be a number');
+
+      var mac = conn.mac;
+      var sessKey = mac + ':' + session;
+      var sess = sessions[sessKey];
+
+      if (sess) {
+        delete sessions[sessKey];
+      }
+      return replOk('close');
+    }
+
+    M.handler = handler;
+    M.session = function (mac, session) { return sessions[(mac || conn.mac) + ':' + session]; };
+    M.sessions = function (mac) { var prefix = (mac || conn.mac) + ':'; return Object.keys(sessions).filter(function (k) { return k.indexOf(prefix) === 0; }).map(function (k) { return sessions[k]; }); };
+    M.reset = function () { sessions = {}; lastSessionByMac = {}; return true; };
+
+    return M;
+  })();
+
+  H.script_repl_request = ReplMock.handler;
+  window.__BB_REPL_MOCK = ReplMock;
   window.__BB_SCRIPT_MOCK = SM;
 
   // ---------------------------------------------------------------------------

@@ -1729,6 +1729,60 @@ pub async fn script_repl_request(
     }
 }
 
+// -----------------------------------------------------------------------------
+// System standby (src-tauri/src/standby_commands.rs; BBP 0x78 schema 1)
+// -----------------------------------------------------------------------------
+
+/// Backend error text for firmware that has no system standby (an old build, nothing else).
+pub const STANDBY_UNSUPPORTED_PREFIX: &str = "standby unsupported";
+
+/// The status record every standby reply carries. `state` is
+/// active | preparing | asleep | waking | fault_safe (or `unknown(N)`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandbyStatus {
+    pub schema: u8,
+    pub state: String,
+    pub ready: bool,
+    pub stage: u8,
+    pub generation: u32,
+    pub timeout_seconds: u16,
+    pub clients: u8,
+    pub failed_stage: u8,
+    pub inhibitors: u32,
+    pub completed: u16,
+    pub failed: u16,
+    pub skipped: u16,
+    pub idle_remaining_ms: u32,
+}
+
+async fn standby_call(command: &str, args: serde_json::Value) -> Result<JsValue, String> {
+    let js = js_sys::JSON::parse(&args.to_string()).map_err(|_| "request is not JSON".to_string())?;
+    invoke(command, js)
+        .await
+        .map_err(|e| e.as_string().unwrap_or_else(|| format!("{command} was rejected")))
+}
+
+async fn standby_record(command: &str, args: serde_json::Value) -> Result<StandbyStatus, String> {
+    let v = standby_call(command, args).await?;
+    serde_wasm_bindgen::from_value(v).map_err(|e| format!("{command} reply: {e}"))
+}
+
+/// Read-only: neither registers presence nor resets the idle timer.
+pub async fn standby_status() -> Result<StandbyStatus, String> {
+    standby_record("standby_status", serde_json::json!({})).await
+}
+
+/// Persist the automatic standby timeout on the mainboard (0 = off, 60, 300 or 900 s).
+pub async fn standby_set_timeout(seconds: u16) -> Result<StandbyStatus, String> {
+    standby_record("standby_set_timeout", serde_json::json!({ "seconds": seconds })).await
+}
+
+/// Ask the device to wake. Work stays refused until the status reports `ready`.
+pub async fn standby_wake() -> Result<StandbyStatus, String> {
+    standby_record("standby_wake", serde_json::json!({})).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{summarize_la_stream_status, LaStreamRuntimeStatus};

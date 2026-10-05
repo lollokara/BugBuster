@@ -11,12 +11,16 @@
 // =============================================================================
 
 use crate::daq_proto::{
-    self, DaqRecord, EnergyRecord, FftRecord, MarkerRecord, StatBlock, StatsRecord, StatusRecord,
-    WaveIRecord, WaveVRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER, META_SATURATED, META_SETTLING,
-    RANGE_HI, RANGE_LO, RANGE_MID, SRC_BLEND, SRC_COARSE, SRC_FINE,
+    self, DaqRecord, EnergyRecord, FftRecord, MarkerRecord, StandbyAckRecord, StatBlock,
+    StatsRecord, StatusRecord, WaveIRecord, WaveVRecord, MARK_KIND_FLAG, MARK_KIND_TRIGGER,
+    META_SATURATED, META_SETTLING, RANGE_HI, RANGE_LO, RANGE_MID, SRC_BLEND, SRC_COARSE,
+    SRC_FINE,
 };
 use anyhow::{anyhow, Result};
 use nusb::transfer::{Queue, RequestBuffer};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const DAQ_VID: u16 = 0x303A;
@@ -54,17 +58,298 @@ const DAQ_READ_SLICE_MS: u64 = 50;
 /// Total silence on bulk IN before `read_records` reports a timeout (DESK-7).
 const DAQ_IDLE_TIMEOUT_MS: u64 = 1000;
 
+// -----------------------------------------------------------------------------
+// Logical client presence (system standby lease)
+// -----------------------------------------------------------------------------
+//
+// A mounted P4 or an idle IN poll is NOT a host. Only an opened data plane that sends
+// USB_CMD_CLIENT_LEASE declares one. Each `connect()` is a new lease epoch with a new
+// random non-zero client id; the lease is refreshed every LEASE_REFRESH (device TTL is
+// LEASE_TTL_MS) and released best-effort on `close()`/drop.
+//
+// The ACK (usb_proto.h `bb_standby_reply_t`) does not name the client it answers, so
+// the exchanges are strictly serialized: at most one lease frame awaits its ACK, and
+// an ACK is applied only to that exchange of the epoch that read it. An ACK with no
+// exchange outstanding (late duplicate, or one from a previous epoch whose bytes were
+// still in flight) is ignored. Honest limit: a delayed duplicate that lands while a
+// later exchange is outstanding is indistinguishable from its ACK.
+
+pub const LEASE_REFRESH: Duration = Duration::from_secs(10);
+pub const LEASE_TTL_MS: u32 = 45_000;
+/// A lease exchange with no ACK this long is considered lost.
+pub const LEASE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+/// Resends of the SAME lease frame after a lost ACK (never an acquisition command).
+pub const LEASE_MAX_RESENDS: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeasePhase {
+    /// Acquire sent (or about to be), nothing answered yet.
+    Opening,
+    /// Accepted and the system is ACTIVE.
+    Held,
+    /// Accepted, but the system is not ACTIVE yet (failure 1): a wake is already requested.
+    /// Nothing is replayed or auto-started on this.
+    Waking,
+    /// Table full (failure 7): refused, nobody evicted; retried every period.
+    Full,
+    /// Malformed frame (failure 3): a bug, not retried.
+    Rejected,
+    /// Another failure code from a newer firmware; retried every period.
+    Failed(u8),
+    /// The exchange got no ACK after its bounded resends; retried next period.
+    AckLost,
+    Released,
+}
+
+/// What the transport must put on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseSend {
+    pub op: u8,
+    pub client_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckOutcome {
+    Applied(LeasePhase),
+    /// No outstanding exchange for this epoch: the ACK changed nothing.
+    Ignored,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingLease {
+    op: u8,
+    client_id: u32,
+    sent_at: Instant,
+    resends: u8,
+}
+
+#[derive(Debug)]
+pub struct LeaseCore {
+    epoch: u64,
+    client_id: u32,
+    phase: LeasePhase,
+    last_ack: Option<StandbyAckRecord>,
+    pending: Option<PendingLease>,
+    /// Ids of earlier epochs the device may still hold, released before this one acquires.
+    owed_release: VecDeque<u32>,
+    next_due: Instant,
+    /// The device may hold this epoch's lease.
+    sent_acquire: bool,
+    closed: bool,
+}
+
+impl LeaseCore {
+    pub fn new(epoch: u64, client_id: u32, now: Instant, owed_release: Vec<u32>) -> Self {
+        Self {
+            epoch,
+            client_id,
+            phase: LeasePhase::Opening,
+            last_ack: None,
+            pending: None,
+            owed_release: owed_release.into(),
+            next_due: now,
+            sent_acquire: false,
+            closed: false,
+        }
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub fn client_id(&self) -> u32 {
+        self.client_id
+    }
+
+    pub fn phase(&self) -> LeasePhase {
+        self.phase
+    }
+
+    pub fn last_ack(&self) -> Option<StandbyAckRecord> {
+        self.last_ack
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// The next frame due at `now`, if any. Marks it outstanding.
+    pub fn poll(&mut self, now: Instant) -> Option<LeaseSend> {
+        if self.closed {
+            return None;
+        }
+        if let Some(p) = &mut self.pending {
+            if now.duration_since(p.sent_at) < LEASE_ACK_TIMEOUT {
+                return None;
+            }
+            if p.resends < LEASE_MAX_RESENDS {
+                p.resends += 1;
+                p.sent_at = now;
+                return Some(LeaseSend { op: p.op, client_id: p.client_id });
+            }
+            let lost = self.pending.take();
+            if lost.is_some_and(|p| p.op == daq_proto::LEASE_OP_ACQUIRE) {
+                self.phase = LeasePhase::AckLost;
+                self.next_due = now + LEASE_REFRESH;
+            }
+            return None;
+        }
+        if let Some(id) = self.owed_release.pop_front() {
+            self.pending = Some(PendingLease {
+                op: daq_proto::LEASE_OP_RELEASE,
+                client_id: id,
+                sent_at: now,
+                resends: 0,
+            });
+            return Some(LeaseSend { op: daq_proto::LEASE_OP_RELEASE, client_id: id });
+        }
+        if self.phase == LeasePhase::Rejected || now < self.next_due {
+            return None;
+        }
+        self.pending = Some(PendingLease {
+            op: daq_proto::LEASE_OP_ACQUIRE,
+            client_id: self.client_id,
+            sent_at: now,
+            resends: 0,
+        });
+        self.sent_acquire = true;
+        Some(LeaseSend { op: daq_proto::LEASE_OP_ACQUIRE, client_id: self.client_id })
+    }
+
+    /// Apply an ACK read while epoch `read_epoch` was current.
+    pub fn on_ack(&mut self, read_epoch: u64, ack: StandbyAckRecord, now: Instant) -> AckOutcome {
+        if self.closed || read_epoch != self.epoch {
+            return AckOutcome::Ignored;
+        }
+        let Some(p) = self.pending.take() else {
+            return AckOutcome::Ignored;
+        };
+        self.last_ack = Some(ack);
+        if p.op == daq_proto::LEASE_OP_RELEASE {
+            // An owed release of an earlier epoch says nothing about this one.
+            return AckOutcome::Applied(self.phase);
+        }
+        self.phase = match ack.failure {
+            daq_proto::LEASE_FAIL_NONE if ack.ready => LeasePhase::Held,
+            daq_proto::LEASE_FAIL_NONE | daq_proto::LEASE_FAIL_NOT_READY => LeasePhase::Waking,
+            daq_proto::LEASE_FAIL_TABLE_FULL => LeasePhase::Full,
+            daq_proto::LEASE_FAIL_MALFORMED => LeasePhase::Rejected,
+            other => LeasePhase::Failed(other),
+        };
+        self.next_due = now + LEASE_REFRESH;
+        AckOutcome::Applied(self.phase)
+    }
+
+    /// End this epoch. Returns the single release frame owed to the device, if it may hold
+    /// our lease. Nothing is polled afterwards and no ACK is applied.
+    pub fn close(&mut self) -> Option<LeaseSend> {
+        if self.closed {
+            return None;
+        }
+        self.closed = true;
+        self.pending = None;
+        let held = self.sent_acquire
+            && !matches!(
+                self.phase,
+                LeasePhase::Full | LeasePhase::Rejected | LeasePhase::Released
+            );
+        self.phase = LeasePhase::Released;
+        held.then_some(LeaseSend {
+            op: daq_proto::LEASE_OP_RELEASE,
+            client_id: self.client_id,
+        })
+    }
+}
+
+/// Snapshot of the lease for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseSnapshot {
+    pub epoch: u64,
+    pub client_id: u32,
+    pub phase: LeasePhase,
+    pub last_ack: Option<StandbyAckRecord>,
+}
+
+static LEASE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// The interface the lease keeper may send on. The connection clears it on close; `users`
+/// lets `connect()` wait for a keeper send still in flight before it claims the interface again.
+#[derive(Default)]
+struct LeaseLink {
+    iface: Mutex<Option<nusb::Interface>>,
+    users: AtomicUsize,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Background task of one lease epoch: sends whatever `poll` says is due. It reads no
+/// records (the ingest path owns bulk IN) and exits when the core is closed.
+async fn lease_keeper(
+    core: Arc<Mutex<LeaseCore>>,
+    link: Arc<LeaseLink>,
+    out_seq: Arc<AtomicU32>,
+) {
+    loop {
+        let (send, closed) = {
+            let mut c = lock(&core);
+            let send = c.poll(Instant::now());
+            (send, c.is_closed())
+        };
+        if closed {
+            break;
+        }
+        if let Some(s) = send {
+            let ttl = if s.op == daq_proto::LEASE_OP_ACQUIRE { LEASE_TTL_MS } else { 0 };
+            let frame = daq_proto::encode_command(
+                out_seq.fetch_add(1, Ordering::Relaxed),
+                daq_proto::CMD_CLIENT_LEASE,
+                &daq_proto::lease_payload(s.op, s.client_id, ttl),
+            );
+            link.users.fetch_add(1, Ordering::AcqRel);
+            {
+                let iface = lock(&link.iface).clone();
+                if let Some(iface) = iface {
+                    let sent = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        iface.bulk_out(DAQ_EP_OUT, frame),
+                    )
+                    .await;
+                    match sent {
+                        Ok(c) => {
+                            if let Err(e) = c.into_result() {
+                                log::debug!("DAQ lease frame not sent: {e}");
+                            }
+                        }
+                        Err(_) => log::debug!("DAQ lease frame timed out"),
+                    }
+                }
+            }
+            link.users.fetch_sub(1, Ordering::AcqRel);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 pub struct DaqUsbConnection {
     interface: Option<nusb::Interface>,
     queue: Option<Queue<RequestBuffer>>,
     connected: bool,
     rx: Vec<u8>,
-    out_seq: u32,
+    out_seq: Arc<AtomicU32>,
     /// Timestamp of the last "update firmware" warning emitted for a run of
     /// BadVersion frames, so we don't spam the log every drained byte.
     last_bad_version_warn: Option<Instant>,
     /// Start of the current run of empty read slices (DESK-24).
     idle_since: Option<Instant>,
+    /// Standby lease of the current open (one epoch per `connect()`).
+    lease: Option<Arc<Mutex<LeaseCore>>>,
+    lease_link: Arc<LeaseLink>,
+    /// Runtime the lease keeper runs on (captured at `connect()`).
+    lease_rt: Option<tokio::runtime::Handle>,
+    /// Lease epoch the bytes in `rx` were read under.
+    rx_epoch: u64,
 }
 
 impl Default for DaqUsbConnection {
@@ -80,13 +365,20 @@ impl DaqUsbConnection {
             queue: None,
             connected: false,
             rx: Vec::new(),
-            out_seq: 0,
+            out_seq: Arc::new(AtomicU32::new(0)),
             last_bad_version_warn: None,
             idle_since: None,
+            lease: None,
+            lease_link: Arc::new(LeaseLink::default()),
+            lease_rt: None,
+            rx_epoch: 0,
         }
     }
 
     pub fn connect(&mut self) -> Result<()> {
+        // End the previous open's lease first: a keeper send still in flight must not hold
+        // the interface when it is claimed again, and the device may still hold that id.
+        let owed = self.retire_lease();
         let devices =
             nusb::list_devices().map_err(|e| anyhow!("USB enumeration failed: {}", e))?;
         for info in devices {
@@ -102,10 +394,11 @@ impl DaqUsbConnection {
                 for _ in 0..QUEUE_DEPTH {
                     queue.submit(RequestBuffer::new(QUEUE_BUF_LEN));
                 }
-                self.interface = Some(iface);
+                self.interface = Some(iface.clone());
                 self.queue = Some(queue);
                 self.connected = true;
                 self.rx.clear();
+                self.start_lease(iface, owed);
                 return Ok(());
             }
         }
@@ -116,11 +409,111 @@ impl DaqUsbConnection {
         ))
     }
 
+    /// A new lease epoch for the open that just succeeded.
+    fn start_lease(&mut self, iface: nusb::Interface, owed: Vec<u32>) {
+        let epoch = LEASE_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
+        let core = Arc::new(Mutex::new(LeaseCore::new(
+            epoch,
+            crate::standby_commands::new_client_id(),
+            Instant::now(),
+            owed,
+        )));
+        self.rx_epoch = epoch;
+        self.lease = Some(core.clone());
+        self.lease_rt = tokio::runtime::Handle::try_current().ok();
+        let Some(rt) = &self.lease_rt else {
+            log::warn!("DAQ lease: no async runtime, presence is not announced");
+            return;
+        };
+        *lock(&self.lease_link.iface) = Some(iface);
+        rt.spawn(lease_keeper(core, self.lease_link.clone(), self.out_seq.clone()));
+    }
+
+    /// Close the current epoch and wait (bounded) for the keeper to let go of the interface.
+    /// Returns the id of that epoch if the device may still hold it.
+    fn retire_lease(&mut self) -> Vec<u32> {
+        let owed = self
+            .lease
+            .take()
+            .and_then(|core| lock(&core).close())
+            .map(|s| s.client_id);
+        *lock(&self.lease_link.iface) = None;
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while self.lease_link.users.load(Ordering::Acquire) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        owed.into_iter().collect()
+    }
+
+    /// Best-effort release of the current lease on the way out (bounded, ACK not awaited).
+    fn release_lease(&mut self) {
+        let iface = self.interface.clone();
+        let rt = self.lease_rt.clone();
+        let owed = self.retire_lease();
+        let (Some(iface), Some(rt), Some(id)) = (iface, rt, owed.first().copied()) else {
+            return; // nothing held, or no way to speak: the device expires the lease
+        };
+        let frame = daq_proto::encode_command(
+            self.out_seq.fetch_add(1, Ordering::Relaxed),
+            daq_proto::CMD_CLIENT_LEASE,
+            &daq_proto::lease_payload(daq_proto::LEASE_OP_RELEASE, id, 0),
+        );
+        // A short-lived thread: never `block_on` on the caller's (possibly async) thread, and
+        // the interface clone is gone before this returns, so a quick reconnect can claim it.
+        let _ = std::thread::spawn(move || {
+            rt.block_on(async {
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(500),
+                    iface.bulk_out(DAQ_EP_OUT, frame),
+                )
+                .await;
+            });
+        })
+        .join();
+    }
+
+    /// Current lease state (None before the first open or after close).
+    #[allow(dead_code)]
+    pub fn lease_snapshot(&self) -> Option<LeaseSnapshot> {
+        let core = lock(self.lease.as_ref()?);
+        Some(LeaseSnapshot {
+            epoch: core.epoch(),
+            client_id: core.client_id(),
+            phase: core.phase(),
+            last_ack: core.last_ack(),
+        })
+    }
+
+    fn apply_ack(&mut self, ack: Result<StandbyAckRecord, String>) {
+        let Some(core) = &self.lease else { return };
+        let ack = match ack {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("DAQ lease: undecodable standby ACK: {e}");
+                return;
+            }
+        };
+        let mut c = lock(core);
+        let before = c.phase();
+        if let AckOutcome::Applied(now) = c.on_ack(self.rx_epoch, ack, Instant::now()) {
+            if now != before {
+                log::info!(
+                    "DAQ lease {:?} (state {}, ready {}, {} client(s))",
+                    now,
+                    ack.state,
+                    ack.ready,
+                    ack.inhibitors
+                );
+            }
+        }
+    }
+
     pub fn is_connected(&self) -> bool {
         self.connected
     }
 
     pub fn close(&mut self) {
+        self.release_lease();
         self.interface = None;
         self.queue = None;
         self.connected = false;
@@ -131,10 +524,15 @@ impl DaqUsbConnection {
     fn drain_frames(&mut self) -> Vec<DaqRecord> {
         let mut out = Vec::new();
         loop {
-            match daq_proto::parse_frame(&self.rx) {
-                Ok((rec, consumed)) => {
+            match daq_proto::split_frame(&self.rx) {
+                Ok((rec_type, payload, consumed)) => {
+                    if rec_type == daq_proto::REC_STANDBY_ACK {
+                        let ack = daq_proto::decode_standby_ack(payload);
+                        self.apply_ack(ack);
+                    } else {
+                        out.push(daq_proto::decode_payload(rec_type, payload));
+                    }
                     self.rx.drain(0..consumed);
-                    out.push(rec);
                 }
                 Err(daq_proto::FrameError::Truncated { .. })
                 | Err(daq_proto::FrameError::ShortHeader(_)) => break,
@@ -172,6 +570,12 @@ impl DaqUsbConnection {
             }
         }
         out
+    }
+}
+
+impl Drop for DaqUsbConnection {
+    fn drop(&mut self) {
+        self.release_lease();
     }
 }
 
@@ -223,8 +627,8 @@ impl DaqTransport for DaqUsbConnection {
     }
 
     fn send(&mut self, cmd_type: u8, payload: &[u8]) -> Result<()> {
-        let frame = daq_proto::encode_command(self.out_seq, cmd_type, payload);
-        self.out_seq = self.out_seq.wrapping_add(1);
+        let seq = self.out_seq.fetch_add(1, Ordering::Relaxed);
+        let frame = daq_proto::encode_command(seq, cmd_type, payload);
         let rt = tokio::runtime::Handle::current();
 
         // DESK-8 FIX: Escalate recovery instead of jumping straight to re-enumeration.
@@ -796,5 +1200,196 @@ mod mock_tests {
         // a handful of ~30ms iterations, so it isn't expected to fire here;
         // this just documents the invariant checked above when it does.
         let _ = saw_skip;
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use crate::daq_proto::{
+        LEASE_FAIL_MALFORMED, LEASE_FAIL_NONE, LEASE_FAIL_NOT_READY, LEASE_FAIL_TABLE_FULL,
+        LEASE_OP_ACQUIRE as ACQ, LEASE_OP_RELEASE as REL,
+    };
+
+    fn ack(failure: u8, ready: bool) -> StandbyAckRecord {
+        StandbyAckRecord {
+            schema: 1,
+            state: if ready { 0 } else { 3 },
+            ready,
+            failure,
+            generation: 4,
+            inhibitors: 2,
+            activity: 0,
+        }
+    }
+
+    fn s(op: u8, client_id: u32) -> Option<LeaseSend> {
+        Some(LeaseSend { op, client_id })
+    }
+
+    fn at(t0: Instant, secs: u64) -> Instant {
+        t0 + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn acquire_goes_out_once_and_waits_for_its_ack() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        assert_eq!(c.poll(t0), s(ACQ, 77));
+        assert_eq!(c.poll(at(t0, 1)), None, "one exchange at a time");
+        assert_eq!(c.phase(), LeasePhase::Opening);
+    }
+
+    #[test]
+    fn a_held_lease_is_refreshed_every_ten_seconds_with_the_same_id() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        c.poll(t0);
+        assert_eq!(c.on_ack(1, ack(LEASE_FAIL_NONE, true), t0), AckOutcome::Applied(LeasePhase::Held));
+        assert_eq!(c.poll(at(t0, 9)), None);
+        assert_eq!(c.poll(at(t0, 10)), s(ACQ, 77));
+        c.on_ack(1, ack(LEASE_FAIL_NONE, true), at(t0, 10));
+        assert_eq!(c.poll(at(t0, 19)), None);
+        assert_eq!(c.poll(at(t0, 20)), s(ACQ, 77));
+        assert_eq!(c.last_ack().map(|a| a.inhibitors), Some(2));
+    }
+
+    #[test]
+    fn accepted_but_waking_is_a_lease_not_a_retry_trigger() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        c.poll(t0);
+        let out = c.on_ack(1, ack(LEASE_FAIL_NOT_READY, false), t0);
+        assert_eq!(out, AckOutcome::Applied(LeasePhase::Waking));
+        // Nothing is re-sent early because the system is not ready yet.
+        assert_eq!(c.poll(at(t0, 3)), None);
+        assert_eq!(c.poll(at(t0, 10)), s(ACQ, 77));
+        // failure 0 with ready 0 is also "accepted, not ready", never "held".
+        c.on_ack(1, ack(LEASE_FAIL_NONE, false), at(t0, 10));
+        assert_eq!(c.phase(), LeasePhase::Waking);
+        assert!(!c.last_ack().unwrap().ready);
+    }
+
+    #[test]
+    fn a_full_table_refuses_without_evicting_and_holds_nothing() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        c.poll(t0);
+        let out = c.on_ack(1, ack(LEASE_FAIL_TABLE_FULL, false), t0);
+        assert_eq!(out, AckOutcome::Applied(LeasePhase::Full));
+        assert_eq!(c.poll(at(t0, 10)), s(ACQ, 77), "retried per period, never forced");
+        assert_eq!(c.close(), None, "no lease was granted, so nothing to release");
+    }
+
+    #[test]
+    fn a_malformed_rejection_is_an_error_and_is_not_retried() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        c.poll(t0);
+        assert_eq!(
+            c.on_ack(1, ack(LEASE_FAIL_MALFORMED, false), t0),
+            AckOutcome::Applied(LeasePhase::Rejected)
+        );
+        assert_eq!(c.poll(at(t0, 100)), None);
+    }
+
+    #[test]
+    fn a_lost_ack_resends_the_lease_frame_a_bounded_number_of_times() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        assert_eq!(c.poll(t0), s(ACQ, 77));
+        assert_eq!(c.poll(at(t0, 1)), None);
+        assert_eq!(c.poll(at(t0, 2)), s(ACQ, 77), "resend 1");
+        assert_eq!(c.poll(at(t0, 4)), s(ACQ, 77), "resend 2");
+        assert_eq!(c.poll(at(t0, 6)), None, "gives up; no third resend");
+        assert_eq!(c.phase(), LeasePhase::AckLost);
+        assert_eq!(c.poll(at(t0, 15)), None, "next attempt waits a full period");
+        assert_eq!(c.poll(at(t0, 16)), s(ACQ, 77));
+    }
+
+    #[test]
+    fn an_ack_after_the_exchange_gave_up_changes_nothing() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        c.poll(t0);
+        c.poll(at(t0, 2));
+        c.poll(at(t0, 4));
+        c.poll(at(t0, 6));
+        assert_eq!(c.on_ack(1, ack(LEASE_FAIL_NONE, true), at(t0, 7)), AckOutcome::Ignored);
+        assert_eq!(c.phase(), LeasePhase::AckLost);
+    }
+
+    #[test]
+    fn an_ack_read_under_another_epoch_cannot_update_this_one() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(5, 77, t0, vec![]);
+        c.poll(t0);
+        assert_eq!(c.on_ack(4, ack(LEASE_FAIL_NONE, true), t0), AckOutcome::Ignored);
+        assert_eq!(c.phase(), LeasePhase::Opening, "still waiting for its own ACK");
+        assert_eq!(c.on_ack(5, ack(LEASE_FAIL_NONE, true), t0), AckOutcome::Applied(LeasePhase::Held));
+    }
+
+    #[test]
+    fn an_unsolicited_ack_is_ignored() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(1, 77, t0, vec![]);
+        assert_eq!(c.on_ack(1, ack(LEASE_FAIL_NONE, true), t0), AckOutcome::Ignored);
+        c.poll(t0);
+        c.on_ack(1, ack(LEASE_FAIL_NONE, true), t0);
+        assert_eq!(c.on_ack(1, ack(LEASE_FAIL_TABLE_FULL, false), t0), AckOutcome::Ignored);
+        assert_eq!(c.phase(), LeasePhase::Held);
+    }
+
+    #[test]
+    fn earlier_epoch_ids_are_released_one_at_a_time_before_acquiring() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(2, 77, t0, vec![5, 6]);
+        assert_eq!(c.poll(t0), s(REL, 5));
+        assert_eq!(c.poll(t0), None, "serialized behind the first exchange");
+        c.on_ack(2, ack(LEASE_FAIL_NONE, true), t0);
+        assert_eq!(c.phase(), LeasePhase::Opening, "an owed release says nothing about this lease");
+        assert_eq!(c.poll(t0), s(REL, 6));
+        c.on_ack(2, ack(LEASE_FAIL_NONE, true), t0);
+        assert_eq!(c.poll(t0), s(ACQ, 77));
+    }
+
+    #[test]
+    fn a_lost_owed_release_is_abandoned_and_the_new_lease_still_starts() {
+        let t0 = Instant::now();
+        let mut c = LeaseCore::new(2, 77, t0, vec![5]);
+        assert_eq!(c.poll(t0), s(REL, 5));
+        assert_eq!(c.poll(at(t0, 2)), s(REL, 5));
+        assert_eq!(c.poll(at(t0, 4)), s(REL, 5));
+        assert_eq!(c.poll(at(t0, 6)), None, "gives up (the device TTL covers it)");
+        assert_eq!(c.poll(at(t0, 6)), s(ACQ, 77));
+    }
+
+    #[test]
+    fn closing_releases_only_a_lease_the_device_may_hold() {
+        let t0 = Instant::now();
+        let mut never = LeaseCore::new(1, 77, t0, vec![]);
+        assert_eq!(never.close(), None, "nothing was ever sent");
+        assert!(never.is_closed());
+
+        let mut c = LeaseCore::new(1, 78, t0, vec![]);
+        c.poll(t0);
+        c.on_ack(1, ack(LEASE_FAIL_NONE, true), t0);
+        assert_eq!(c.close(), s(REL, 78));
+        assert_eq!(c.close(), None, "once");
+        assert_eq!(c.poll(at(t0, 100)), None);
+        assert_eq!(c.on_ack(1, ack(LEASE_FAIL_NONE, true), t0), AckOutcome::Ignored);
+        assert_eq!(c.phase(), LeasePhase::Released);
+
+        // Acquire in flight (ACK not seen yet) may already be granted: release it too.
+        let mut inflight = LeaseCore::new(1, 79, t0, vec![]);
+        inflight.poll(t0);
+        assert_eq!(inflight.close(), s(REL, 79));
+    }
+
+    #[test]
+    fn the_new_lease_epochs_never_reuse_the_counter() {
+        let a = LEASE_EPOCH.fetch_add(1, Ordering::AcqRel);
+        let b = LEASE_EPOCH.fetch_add(1, Ordering::AcqRel);
+        assert!(b > a);
     }
 }

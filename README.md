@@ -85,9 +85,8 @@ AI:    *reads all 4 channels*
 
 More worked examples: [Docs/scenarios.md](Docs/scenarios.md)
 
-System standby is an unreleased implementation checkpoint. Integration status,
-remaining acceptance gates and hardware limitations are recorded in
-[Docs/low-power-handoff.md](Docs/low-power-handoff.md).
+System standby is an unreleased implementation checkpoint. Final integration,
+firmware builds and hardware acceptance are not yet complete.
 
 ## Quick start
 

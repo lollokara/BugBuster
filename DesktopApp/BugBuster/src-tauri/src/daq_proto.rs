@@ -40,6 +40,8 @@ pub const REC_WAVE_V: u8 = 0x07;
 /// Reply to every CMD_OTA_* (C6-26); not decoded by the desktop yet.
 #[allow(dead_code)]
 pub const REC_OTA_ACK: u8 = 0x08;
+/// Reply to every CMD_CLIENT_LEASE: a 16-byte `bb_standby_reply_t` (decode_standby_ack).
+pub const REC_STANDBY_ACK: u8 = 0x09;
 
 pub const CMD_START: u8 = 0x80;
 pub const CMD_STOP: u8 = 0x81;
@@ -62,6 +64,71 @@ pub mod ota {
     pub const CMD_OTA_CONFIRM: u8 = 0x91;
     pub const CMD_OTA_REBOOT: u8 = 0x92;
     pub const CMD_OTA_STATUS: u8 = 0x93;
+}
+
+/// Direct-USB client presence for the system standby (usb_proto.h `USB_CMD_CLIENT_LEASE`).
+/// Only this frame declares a host present; a mounted device or an idle IN poll never does.
+pub const CMD_CLIENT_LEASE: u8 = 0x94;
+pub const LEASE_OP_RELEASE: u8 = 0;
+pub const LEASE_OP_ACQUIRE: u8 = 1;
+/// `usb_cmd_lease_t` is 12 bytes; the device keeps at most 4 distinct clients.
+pub const LEASE_PAYLOAD_LEN: usize = 12;
+/// `bb_standby_reply_t.failure` values of a lease ACK.
+pub const LEASE_FAIL_NONE: u8 = 0;
+/// Lease recorded, but the system is not ACTIVE yet (a wake is already requested).
+pub const LEASE_FAIL_NOT_READY: u8 = 1;
+/// Malformed frame (flags/reserved/op/id rejected).
+pub const LEASE_FAIL_MALFORMED: u8 = 3;
+/// All lease slots are live; the new client is refused and nobody is evicted.
+pub const LEASE_FAIL_TABLE_FULL: u8 = 7;
+
+/// `usb_cmd_lease_t`: `<BBHII>` op, flags (0), reserved (0), client id (non-zero), ttl ms.
+pub fn lease_payload(op: u8, client_id: u32, ttl_ms: u32) -> Vec<u8> {
+    let mut p = Vec::with_capacity(LEASE_PAYLOAD_LEN);
+    p.push(op);
+    p.push(0);
+    p.extend_from_slice(&0u16.to_le_bytes());
+    p.extend_from_slice(&client_id.to_le_bytes());
+    p.extend_from_slice(&ttl_ms.to_le_bytes());
+    p
+}
+
+/// `bb_standby_reply_t` (common/standby_wire.h), 16 bytes, schema 1. The ACK does NOT
+/// name the client it answers: pair it with the one outstanding lease exchange.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StandbyAckRecord {
+    pub schema: u8,
+    /// 0 active, 1 preparing, 2 asleep, 3 waking, 4 fault_safe.
+    pub state: u8,
+    /// Accepted AND the system is ACTIVE.
+    pub ready: bool,
+    /// `LEASE_FAIL_*`.
+    pub failure: u8,
+    pub generation: u32,
+    /// On a lease ACK this is the number of live leases (clients).
+    pub inhibitors: u32,
+    pub activity: u32,
+}
+
+pub const STANDBY_ACK_LEN: usize = 16;
+pub const STANDBY_ACK_SCHEMA: u8 = 1;
+
+pub fn decode_standby_ack(p: &[u8]) -> Result<StandbyAckRecord, String> {
+    if p.len() != STANDBY_ACK_LEN {
+        return Err(format!("standby ACK is {} bytes, need {STANDBY_ACK_LEN}", p.len()));
+    }
+    if p[0] != STANDBY_ACK_SCHEMA {
+        return Err(format!("unsupported standby ACK schema {}", p[0]));
+    }
+    Ok(StandbyAckRecord {
+        schema: p[0],
+        state: p[1],
+        ready: p[2] != 0,
+        failure: p[3],
+        generation: rd_u32(p, 4),
+        inhibitors: rd_u32(p, 8),
+        activity: rd_u32(p, 12),
+    })
 }
 
 // MARKER kind codes (usb_marker_payload_t.kind).
@@ -260,6 +327,13 @@ pub fn crc16(data: &[u8], init: u16) -> u16 {
 /// + crc). `Truncated` means more bytes are needed; the caller should keep the
 /// buffer and read more from USB.
 pub fn parse_frame(buf: &[u8]) -> Result<(DaqRecord, usize), FrameError> {
+    let (rec_type, payload, total) = split_frame(buf)?;
+    Ok((decode_payload(rec_type, payload), total))
+}
+
+/// Validate one frame at the front of `buf` and return (record type, payload, total
+/// bytes consumed) without decoding the payload.
+pub fn split_frame(buf: &[u8]) -> Result<(u8, &[u8], usize), FrameError> {
     if buf.len() < FRAME_HEADER_LEN {
         return Err(FrameError::ShortHeader(buf.len()));
     }
@@ -296,8 +370,7 @@ pub fn parse_frame(buf: &[u8]) -> Result<(DaqRecord, usize), FrameError> {
             });
         }
     }
-    let record = decode_payload(rec_type, payload);
-    Ok((record, total))
+    Ok((rec_type, payload, total))
 }
 
 fn rd_u16(p: &[u8], o: usize) -> u16 {
@@ -320,7 +393,7 @@ fn rd_f64(p: &[u8], o: usize) -> f64 {
     ])
 }
 
-fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
+pub fn decode_payload(rec_type: u8, p: &[u8]) -> DaqRecord {
     match rec_type {
         REC_WAVE_I => {
             if p.len() < 24 {
@@ -881,5 +954,66 @@ mod tests {
             DaqRecord::Fft(f) => assert_eq!(f.bins, vec![1.0, 2.0]),
             _ => panic!("wrong record"),
         }
+    }
+
+    #[test]
+    fn lease_command_matches_usb_proto_h() {
+        // usb_cmd_lease_t <BBHII>: op=1, flags=0, reserved=0, id=0x11223344, ttl=45000.
+        let p = lease_payload(LEASE_OP_ACQUIRE, 0x1122_3344, 45_000);
+        assert_eq!(p.len(), LEASE_PAYLOAD_LEN);
+        assert_eq!(p, [1, 0, 0, 0, 0x44, 0x33, 0x22, 0x11, 0xC8, 0xAF, 0, 0]);
+        assert_eq!(lease_payload(LEASE_OP_RELEASE, 7, 0)[0], 0);
+        // As a control frame it carries 0x94 and a valid CRC.
+        let f = encode_command(3, CMD_CLIENT_LEASE, &p);
+        assert_eq!(f[3], 0x94);
+        assert_eq!(f.len(), FRAME_OVERHEAD + LEASE_PAYLOAD_LEN);
+        let (t, payload, n) = split_frame(&f).unwrap();
+        assert_eq!((t, payload, n), (0x94, &p[..], f.len()));
+    }
+
+    fn ack_bytes(state: u8, ready: u8, failure: u8, generation: u32, leases: u32) -> Vec<u8> {
+        let mut p = vec![STANDBY_ACK_SCHEMA, state, ready, failure];
+        p.extend_from_slice(&generation.to_le_bytes());
+        p.extend_from_slice(&leases.to_le_bytes());
+        p.extend_from_slice(&99u32.to_le_bytes()); // activity
+        p
+    }
+
+    #[test]
+    fn standby_ack_decodes_every_field() {
+        let a = decode_standby_ack(&ack_bytes(3, 0, LEASE_FAIL_NOT_READY, 0x0A0B_0C0D, 2)).unwrap();
+        assert_eq!(
+            a,
+            StandbyAckRecord {
+                schema: 1,
+                state: 3,
+                ready: false,
+                failure: LEASE_FAIL_NOT_READY,
+                generation: 0x0A0B_0C0D,
+                inhibitors: 2,
+                activity: 99
+            }
+        );
+        assert!(decode_standby_ack(&ack_bytes(0, 1, 0, 1, 1)).unwrap().ready);
+    }
+
+    #[test]
+    fn standby_ack_rejects_wrong_size_or_schema() {
+        let mut p = ack_bytes(0, 1, 0, 1, 1);
+        assert!(decode_standby_ack(&p[..15]).is_err());
+        p.push(0);
+        assert!(decode_standby_ack(&p).is_err());
+        let mut q = ack_bytes(0, 1, 0, 1, 1);
+        q[0] = 2;
+        assert!(decode_standby_ack(&q).unwrap_err().contains("schema"));
+    }
+
+    #[test]
+    fn standby_ack_frame_splits_and_does_not_pass_as_a_measurement_record() {
+        let body = ack_bytes(0, 1, 0, 5, 1);
+        let f = data_frame(REC_STANDBY_ACK, &body);
+        let (t, payload, n) = split_frame(&f).unwrap();
+        assert_eq!((t, payload, n), (REC_STANDBY_ACK, &body[..], f.len()));
+        assert_eq!(parse_frame(&f).unwrap().0, DaqRecord::Other(REC_STANDBY_ACK));
     }
 }

@@ -207,6 +207,9 @@ pub fn is_unsupported_sub(msg: &str) -> bool {
 }
 
 pub const WIRE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The device refused work before running it; the caller retries explicitly once it is ready.
+const STANDBY_REFUSED: &str =
+    "The device is not ready (standby or waking) and refused the request; nothing was executed";
 const LINT_TIMEOUT: Duration = Duration::from_secs(12);
 /// Raw bytes per USB `files/chunk` request (base64 stays under the 4096-char firmware cap).
 const USB_SAVE_CHUNK: usize = 1536;
@@ -241,6 +244,8 @@ pub enum WireError {
     Transport(String),
     TooLarge(String),
     Protocol(String),
+    /// The device refused the request before running it (standby barrier / BUSY).
+    Standby(String),
 }
 
 impl From<WireError> for OpErr {
@@ -250,6 +255,7 @@ impl From<WireError> for OpErr {
             WireError::Transport(m) => OpErr::new("transport", m),
             WireError::TooLarge(m) => OpErr::new("too_large", m),
             WireError::Protocol(m) => OpErr::new("protocol", m),
+            WireError::Standby(m) => OpErr::new("standby", m),
         }
     }
 }
@@ -318,6 +324,8 @@ pub async fn tunnel_exchange(
                     WireError::Unsupported(
                         "firmware has no USB scripting tunnel (SCRIPT_AUTORUN sub 6): update the firmware".into(),
                     )
+                } else if off == 0 && bbp_error_code(&m) == Some(bbp::ERR_BUSY) {
+                    WireError::Standby(STANDBY_REFUSED.into())
                 } else {
                     WireError::Transport(m)
                 }
@@ -481,6 +489,14 @@ fn failure(raw: &Raw, obj: &Option<Map<String, Value>>, allow_not_ok: bool) -> O
         return Some(OpErr::new("unauthorized", "The device rejected the admin token"));
     }
     if let Some(o) = obj {
+        // The standby barrier answers 503 {"error":"standby","state":...} and never ran the request.
+        if raw.status == 503 && o.get("error").and_then(Value::as_str) == Some("standby") {
+            let state = o.get("state").and_then(Value::as_str).unwrap_or("not ready");
+            return Some(
+                OpErr::new("standby", format!("{STANDBY_REFUSED} (device state: {state})."))
+                    .with("state", json!(state)),
+            );
+        }
         if let Some(running) = o.get("running").and_then(Value::as_str) {
             let id = o.get("id").cloned().unwrap_or(json!(0));
             return Some(

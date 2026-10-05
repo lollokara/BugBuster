@@ -9,7 +9,7 @@
   MUX-before-rail shutdown, P4 analog rail-off with ADAQ reset/configuration restore,
   output-safe wake, C6 milestone-based logo/progress and peripheral display standby,
   and Python/MCP/web/iOS API slices. Desktop integration, final builds and hardware
-  acceptance remain open; see `Docs/low-power-handoff.md`.
+  acceptance remain open.
 - **Hourly HEALTH record to the ESPFleet hub.** Heap/PSRAM, per-task stack headroom, reset reason
   and cheap counters (HAT timeouts, hub failures, log/script drops, Wi-Fi reconnects) are queued as
   chunked `HEALTH` log lines 60 s after the hub link comes up and every hour after, buffered while the
