@@ -456,6 +456,15 @@ extern "C" void app_main(void)
     // 9. AD74416H device init (after supply bring-up and reset pulse)
     serial_println("[BugBuster] Initialising AD74416H...");
     bool spiOk = device.begin();
+    // A cold power-on can fail the first verify even after the settle above (the part is not always responsive
+    // yet). Re-run the same reset + verify + enable the wake chain uses, with a longer settle each time, before
+    // calling the converter failed: a false failure is shown on the C6 as "Mainboard IO" and holds the system
+    // "not ready" until a wake repairs it.
+    for (int retry = 1; !spiOk && retry <= 3; ++retry) {
+        serial_printf("[BugBuster] AD74416H verify failed - retry %d/3 after a longer settle\r\n", retry);
+        delay_ms(200 * retry);
+        spiOk = device.reinitialize();
+    }
     serial_printf("[BugBuster] AD74416H SPI: %s\r\n", spiOk ? "OK" : "VERIFY FAILED");
     g_deviceState.spiOk = spiOk;
 
@@ -477,6 +486,10 @@ extern "C" void app_main(void)
     //     (the ADC poll task uses the SPI bus continuously; MUX init needs
     //      exclusive SPI access for the first write-verify to succeed)
     bool muxOk = adgs_init();
+    if (!muxOk) {                       // one more try: the first write-verify can lose to a still-settling bus
+        delay_ms(100);
+        muxOk = adgs_init();
+    }
     g_deviceState.muxOk = muxOk;
     if (muxOk) {
         serial_println("[BugBuster] MUX matrix initialized");
