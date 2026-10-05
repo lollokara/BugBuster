@@ -15,6 +15,13 @@ Open work only. Everything delivered has moved to `CHANGELOG.MD` under
   all final firmware builds, manifests and full CI gates remain open. Only DAQ
   hardware availability was confirmed; LA live coverage and external input-power
   measurement are unavailable. No firmware has been flashed for this feature.
+- [VERIFIED 2026-10-05, macOS] Integrated gates on current main: unit/firmware-host/synthetic
+  3526 passed, simulator/device `--sim` 289 passed, `--sim-full` integration 6 passed, Tauri
+  backend 233 passed, editor 56 passed, wasm UI `cargo check`, proto/sdkconfig/doc-count gates;
+  S3, P4, C6 (PlatformIO) and RP2040 (CMake) all build. A minimal System standby card
+  (timeout select, state, Wake) now lives in the existing USB PD tab. Still open: actual
+  WebView/CDP screenshots, live USB/Wi-Fi/MCP, GPIO54 conflict check, flashing, physical
+  and input-power measurement.
 
 Populated by the multi-surface audit of 2026-08-20 and its verification pass,
 then extended by the **per-feature audit of 2026-10-01** (every device feature
