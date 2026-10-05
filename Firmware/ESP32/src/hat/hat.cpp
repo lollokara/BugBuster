@@ -7,6 +7,7 @@
 // =============================================================================
 
 #include "hat.h"
+#include "hat_action_policy.h"
 #include "tasks.h"
 #include "pca9535.h"
 #include "dio.h"
@@ -79,8 +80,12 @@ static void hat_note_uart_success(void)
     s_state.degraded = false;
 }
 
+static uint32_t s_timeout_total;
+uint32_t hat_timeout_total(void) { return s_timeout_total; }
+
 static void hat_note_uart_timeout(void)
 {
+    s_timeout_total++;
     s_state.last_timeout_ms = hat_now_ms();
     if (s_state.consecutive_timeouts < UINT8_MAX) {
         s_state.consecutive_timeouts++;
@@ -461,8 +466,9 @@ static uint8_t hat_command_internal(uint8_t cmd, const uint8_t *payload, uint8_t
     return final_rsp;
 }
 
-uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
-                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+static uint8_t hat_command_ex(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                              uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len,
+                              bool may_retry)
 {
     if (s_hat_mutex && xSemaphoreTake(s_hat_mutex, pdMS_TO_TICKS(timeout_ms + 100)) != pdTRUE) {
         ESP_LOGE(TAG, "HAT command 0x%02X: failed to take mutex", cmd);
@@ -484,7 +490,7 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     //   received but corrupted -> retry promptly with minimal backoff
     // - Timeout (rsp == 0 with s_last_error == 0) means the peer may be gone
     //   or unresponsive -> retry with connection reset and longer backoff
-    if (rsp == 0 && !s_commit_in_progress) {
+    if (rsp == 0 && !s_commit_in_progress && may_retry) {
         bool is_crc_error = (s_last_error != 0 && s_last_error != 0xFF && s_last_error != 0xFE);
         
         if (is_crc_error) {
@@ -533,6 +539,12 @@ uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     }
 
     return rsp;
+}
+
+uint8_t hat_command(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
+                     uint8_t *rsp_payload, uint8_t *rsp_len, uint32_t timeout_ms, uint8_t max_rsp_len)
+{
+    return hat_command_ex(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len, true);
 }
 
 // -----------------------------------------------------------------------------
@@ -2534,7 +2546,12 @@ uint8_t hat_request(uint8_t cmd, const uint8_t *payload, uint8_t payload_len,
     // CONFIG_VALUE 0x93 / CONFIG_SCHEMA 0x94) and not just OK/ERROR. Returns 0
     // on timeout.
     if (!s_state.connected) return 0;
-    return hat_command(cmd, payload, payload_len, rsp_payload, rsp_len, timeout_ms, max_rsp_len);
+    // CONFIG_ACTION runs to completion on the P4 (see hat_action_policy.h): long
+    // budget, single send. Other callers wait on the HAT mutex meanwhile and give
+    // up quietly (a failed mutex take does not count as a link timeout).
+    return hat_command_ex(cmd, payload, payload_len, rsp_payload, rsp_len,
+                          hat_request_timeout_ms(cmd, timeout_ms), max_rsp_len,
+                          hat_request_may_retry(cmd) != 0);
 }
 
 bool hat_setup_swd(uint16_t target_voltage_mv, HatConnector connector)

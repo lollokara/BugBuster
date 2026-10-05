@@ -32,6 +32,8 @@ struct BatterySimTab: View {
     @State private var hubTask: Task<Void, Never>?
     @State private var hubClient = HubClient()
     @State private var showHub = false
+    @StateObject private var hubStatus = HubStatusModel.live()
+    @Environment(\.scenePhase) private var scenePhase
 
     private var wide: Bool { sizeClass == .regular }
     /// iPad / landscape: full-height chart with a header bar, stat strip and navigator;
@@ -54,11 +56,13 @@ struct BatterySimTab: View {
         }
         .onAppear { startPolling() }
         .onDisappear { pollTask?.cancel() }
+        // Light hub probe every 30 s while the tab is on screen and the app is active; cancelled otherwise.
+        .task(id: scenePhase == .active) { if scenePhase == .active { hubStatus.reloadFromSettings(); await hubStatus.poll() } }
         .sheet(isPresented: $showNew) {
             NewBatteryRunSheet { cfg in await createRun(cfg) }
         }
         .sheet(isPresented: $showParams) { paramsSheet }
-        .sheet(isPresented: $showHub) { HubSettingsView().environmentObject(connectionManager) }
+        .sheet(isPresented: $showHub, onDismiss: { hubStatus.reloadFromSettings() }) { hubSheet }
         .confirmationDialog("Delete run from the device?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
             Button("Delete run #\(pendingDelete ?? 0)", role: .destructive) {
@@ -449,11 +453,20 @@ struct BatterySimTab: View {
             chip("Log I", "Log scale", "waveform.path.ecg", $logCurrent, hint: "Plot current on a logarithmic axis")
             chip("Clock", "Wall clock", "clock", $wallClock, hint: "Label the time axis with the wall-clock time")
             chip("Follow", "Follow live", "arrow.right.to.line", $follow, hint: "Keep the window on the newest data while the run is active")
-            Button { showHub = true } label: { controlLabel("Hub", "network", on: false) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Hub settings")
+            HubTile(model: hubStatus) { showHub = true }
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var hubSheet: some View {
+        let local = runs.compactMap { r in
+            r.meta.map { HubLocalRun(runId: r.runId, createdEpoch: $0.createdEpoch, bytes: r.bytes, name: $0.name) }
+        }
+        return HubView(model: hubStatus, mac: HubIdentity.mac(), localRuns: local, onOpenRun: { id in
+            showParams = false
+            Task { await open(id) }
+        })
+        .environmentObject(connectionManager)
     }
 
     private func controlLabel(_ caption: String, _ icon: String, on: Bool) -> some View {
@@ -774,6 +787,7 @@ struct BatterySimTab: View {
             window = history!.bounds
         }
         showParams = env["BB_BS_PARAMS"] == "1"
+        showHub = env["BB_BS_HUB"] != nil
         openFromDevice = false
         let mockState = ProcessInfo.processInfo.environment["BB_MOCK_STATE"].flatMap(Int.init) ?? 4
         status = BsStatus(state: mockState, runId: 7, chem: 0, cells: 2, capacityMah: 2500, socPct: 71.3, elapsedS: 14_340,
@@ -891,9 +905,12 @@ struct BatterySimTab: View {
             return
         }
         #endif
+        let long = BattSim.isLongAction(a)
+        if long { busy = "\(BattSim.actionName(a))\(run.map { " #\($0)" } ?? "")..." }
+        defer { if long { busy = nil } }
         do {
-            if a == .reopen {
-                try await client.reopen(run: run)
+            if long {
+                try await client.runAction(a, run: run)
             } else {
                 try await client.action(a, run: run)
             }
@@ -904,18 +921,23 @@ struct BatterySimTab: View {
             }
             if [.newRun, .delete, .stop, .unload, .load, .reopen].contains(a) { await refreshRuns() }
         } catch {
-            if let s = try? await client.status(), s.lastError != 0 {
+            if let s = try? await client.status() {
                 status = s
-                message = BattSim.errorText[safe: s.lastError] ?? "error \(s.lastError)"
-            } else {
-                message = error.localizedDescription
+                if case BattSimError.rejected = error, s.lastError != 0 {
+                    message = BattSim.refusalText(a, lastError: s.lastError)
+                    return
+                }
             }
+            message = error.localizedDescription
         }
     }
 
     private func createRun(_ c: NewBatteryRunSheet.Config) async {
         let cl = client
         do {
+            busy = "Preparing new run..."
+            defer { busy = nil }
+            try await cl.prepareForNewRun()
             try await cl.cfgSet(0x0801, .enumV, c.chem)
             try await cl.cfgSet(0x0802, .u8, c.cells)
             try await cl.cfgSet(0x0803, .u32, c.capacityMah)
@@ -925,8 +947,16 @@ struct BatterySimTab: View {
             try await cl.cfgSet(0x080A, .bool, c.externalLoad ? 1 : 0)
             try await cl.cfgSet(0x080B, .u32, c.externalLoadUa)
             try await cl.cfgSetString(0x080F, c.name)
+            busy = nil
             await act(.newRun)
-        } catch { message = "New run: \(error.localizedDescription)" }
+        } catch {
+            if case BattSimError.rejected = error, let st = try? await cl.status(), st.lastError != 0 {
+                status = st
+                message = "New run: \(BattSim.refusalText(.newRun, lastError: st.lastError))"
+            } else {
+                message = "New run: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func preset(_ secs: Double) {

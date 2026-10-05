@@ -219,8 +219,8 @@ esp_err_t relay_stage_end(void)
     }
 
     // Read-back buffer: this function runs synchronously on the s3_link
-    // dispatcher task, which has only a 4096-byte FreeRTOS stack (see
-    // s3_link.c's xTaskCreatePinnedToCore(service_task, "s3_link", 4096, ...)).
+    // dispatcher task, which has a small FreeRTOS stack (S3LINK_TASK_STACK
+    // in s3_link.h; it was 4096 when this was written).
     // A 4096-byte LOCAL array here was a guaranteed stack overflow the
     // instant this function ran (a "Stack protection fault" panic on real
     // hardware, confirmed on the P4 console). Heap-allocate instead of

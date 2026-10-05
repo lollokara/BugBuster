@@ -18,6 +18,7 @@
 //  * crash_report_dump_*()        raw coredump access for the HTTP binary download.
 // =============================================================================
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -33,6 +34,8 @@ void crash_report_init(void);
 void crash_report_phase(uint8_t phase);          /* CRASH_PHASE_* in crash_util.h */
 void crash_report_tick(uint32_t now_ms);         /* cheap; call from mainLoopTask */
 void crash_report_boot_complete(void);
+/* Boot counter and last reset (name, raw code, abnormal) for the hub health record. */
+void crash_report_boot_info(uint32_t *boot, const char **reason, int *code, bool *abnormal);
 
 /* GET /api/system/crash[?report=1 | ?offset=N&len=M]. Returns cJSON_free()-able JSON. */
 char *crash_report_api_get(const char *path);

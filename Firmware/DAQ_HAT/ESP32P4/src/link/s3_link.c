@@ -8,11 +8,14 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "config.h"
 #include "daq_settings.h"
 #include "daq_config_registry.h"
 #include "battsim_host.h"
 #include "log_forward.h"
+#include "boot_report.h"
 
 static const char *TAG = "s3_link";
 
@@ -155,7 +158,17 @@ static void handle_config_schema(const uint8_t *payload, uint8_t len)
 static void handle_config_action(const uint8_t *payload, uint8_t len)
 {
     if (len < 1) { send_error(); return; }
-    if (daq_settings_action(payload[0], DAQ_SRC_S3)) send_ok();
+    // Breadcrumb: if the P4 dies inside this action the next boot says which one.
+    int32_t sel = 0;
+    daq_settings_get_i32(DAQ_K_BS_RUN_SELECT, &sel);
+    boot_report_action_begin(payload[0], (uint16_t)sel);
+    bool ok = daq_settings_action(payload[0], DAQ_SRC_S3);
+    boot_report_action_end();
+    // Headroom check after the heaviest requests: a regression shows up in the hub log
+    // before it turns into another stack-guard panic.
+    UBaseType_t hwm = uxTaskGetStackHighWaterMark(NULL);
+    if (hwm < 1024) LOG_IMPORTANT(TAG, "s3_link stack low after action %u: %u B free", (unsigned)payload[0], (unsigned)hwm);
+    if (ok) send_ok();
     else send_error();
 }
 
@@ -410,7 +423,7 @@ esp_err_t s3_link_start(s3_link_t *s, int task_core, int task_prio)
 {
     if (s->running) return ESP_OK;
     s->running = true;
-    BaseType_t ok = xTaskCreatePinnedToCore(service_task, "s3_link", 4096, s,
+    BaseType_t ok = xTaskCreatePinnedToCore(service_task, "s3_link", S3LINK_TASK_STACK, s,
                                              task_prio, &s->task, task_core);
     if (ok != pdPASS) {
         s->running = false;

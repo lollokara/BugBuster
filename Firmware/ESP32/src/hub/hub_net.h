@@ -35,6 +35,8 @@ bool        hub_run_uid(char *out, size_t cap, uint16_t run_id, uint32_t created
 /** One blocking HTTP exchange (4 s timeout, plain HTTP). True if a response arrived, whatever its status. */
 bool hub_http(const char *method, const char *base, const char *path, const char *device_id,
               const char *body, size_t body_len, char *resp, size_t resp_cap, int *status);
+/** Hub exchanges that failed (no response or 5xx) since boot. */
+uint32_t hub_http_fail_count(void);
 /** Browse _espfleet._tcp for the hub (TXT api present, no id). Writes "http://a.b.c.d:port". */
 bool hub_discover(char *url_out, size_t cap);
 /** POST /api/v1/agent/heartbeat. Sets the wall clock from the reply when it is invalid and says so. */

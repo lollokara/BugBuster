@@ -25,15 +25,17 @@
 #define SHIP_BYTES      4096u
 #define SHIP_PERIOD_MS  5000u
 #define P4_PULL_MS      5000u
+#define LOG_LINE_MAX    512u                // must hold a full BOOTRPT line: "W (ms) bootrpt: BOOTRPT <boot> <sec> i/n " + 360 B part
 #define REC_MAX         (9u + HUB_LOG_TAG_MAX + HUB_LOG_MSG_MAX)
 
 static hub_ring_t s_ring;
 static SemaphoreHandle_t s_lock;
 static vprintf_like_t s_prev_vprintf;
 static volatile char s_level = 'W';
-static char s_line[192];                    // esp_log line scratch, used only under s_lock
+static char s_line[LOG_LINE_MAX];           // esp_log line scratch, used only under s_lock
 static uint8_t s_rec[REC_MAX];              // packed record scratch, used only under s_lock
 static volatile uint32_t s_hook_dropped;
+static volatile uint32_t s_hook_total;     // cumulative, for the health record
 static uint32_t s_reported_overflow;
 static uint32_t s_last_ship_ms;
 static uint32_t s_p4_seq, s_p4_last_now, s_last_p4_pull_ms;
@@ -74,7 +76,7 @@ void hub_logs_push(uint8_t src, char level, const char *tag, const char *msg, si
 {
     if (!s_lock) return;
     if (src == HUB_LOGSRC_S3 && !hub_level_enabled(level, s_level)) return;
-    if (xSemaphoreTake(s_lock, 0) != pdTRUE) { s_hook_dropped = s_hook_dropped + 1; return; }
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) { s_hook_dropped = s_hook_dropped + 1; s_hook_total = s_hook_total + 1; return; }
     push_rate_limited_locked(hub_uptime_ms(), src, level, tag, msg, len);
     xSemaphoreGive(s_lock);
 }
@@ -93,7 +95,7 @@ static int hub_vprintf(const char *fmt, va_list ap)
             push_rate_limited_locked(hub_uptime_ms(), HUB_LOGSRC_S3, level, tag, msg, ml);
         xSemaphoreGive(s_lock);
     } else if (s_lock) {
-        s_hook_dropped = s_hook_dropped + 1;
+        s_hook_dropped = s_hook_dropped + 1; s_hook_total = s_hook_total + 1;
     }
     va_end(copy);
     return n;
@@ -135,6 +137,16 @@ void hub_logs_set_level(char level)
 }
 
 uint32_t hub_logs_backlog(void) { return s_ring.count; }
+
+uint32_t hub_logs_dropped_total(void) { return s_ring.dropped + s_hook_total; }
+
+// A HEALTH line must not be dropped by the S3 level threshold or the per-message rate limiter.
+void hub_logs_push_health(const char *msg, size_t len)
+{
+    if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) { s_hook_total = s_hook_total + 1; return; }
+    push_locked(hub_uptime_ms(), HUB_LOGSRC_S3, 'I', "health", msg, len);
+    xSemaphoreGive(s_lock);
+}
 
 void hub_logs_pull_p4(void)
 {

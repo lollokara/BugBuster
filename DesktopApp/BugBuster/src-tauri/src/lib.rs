@@ -235,6 +235,7 @@ pub fn run() {
             battsim::bs_set_epoch,
             battsim::bs_configure,
             battsim::bs_action,
+            battsim::bs_prepare_new_run,
             daq_commands::daq_vdut_set_enable,
             daq_commands::daq_vdut_set_setpoint,
             daq_commands::daq_set_io_role,

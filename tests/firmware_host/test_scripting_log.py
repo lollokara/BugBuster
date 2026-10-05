@@ -83,6 +83,7 @@ def _build_and_run(main_body: str) -> str:
     fn_log = extract_function(SCRIPTING, r"^void scripting_log\(")
     full_src = f"""{HARNESS_PREAMBLE}
 static uint32_t s_log_dropped = 0;
+static uint32_t s_log_dropped_total = 0;
 {fn_drop}
 {fn_log}
 int main(void) {{

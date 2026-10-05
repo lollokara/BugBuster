@@ -25,6 +25,10 @@ void     hub_logs_pull_p4(void);
 /** Hub task: ship one batch if one is due (4 KB or 5 s) or `force`. RETRY = hub unreachable / 5xx. */
 hub_step_t hub_logs_ship(const char *base, bool force);
 uint32_t hub_logs_backlog(void);
+/** Ring overwrites + producer-busy drops since boot. */
+uint32_t hub_logs_dropped_total(void);
+/** Hub task: queue one "HEALTH ..." line (hub_health.h) regardless of the level threshold / rate limiter. */
+void     hub_logs_push_health(const char *msg, size_t len);
 
 #ifdef __cplusplus
 }

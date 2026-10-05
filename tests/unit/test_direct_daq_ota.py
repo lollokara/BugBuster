@@ -1363,11 +1363,17 @@ def _local_stack_array_sizes(code: str):
 
 def _s3_link_task_stack_size() -> int:
     m = re.search(
-        r'xTaskCreatePinnedToCore\(\s*service_task\s*,\s*"s3_link"\s*,\s*(\d+)',
+        r'xTaskCreatePinnedToCore\(\s*service_task\s*,\s*"s3_link"\s*,\s*(\w+)',
         S3LINK_C,
     )
     assert m, "could not find the s3_link service_task stack size"
-    return int(m.group(1))
+    size = m.group(1)
+    if not size.isdigit():  # named macro, e.g. S3LINK_TASK_STACK in s3_link.h
+        h = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
+        d = re.search(r"#define\s+" + re.escape(size) + r"\s+(\d+)", h)
+        assert d, f"could not resolve {size} in s3_link.h"
+        size = d.group(1)
+    return int(size)
 
 
 def test_relay_stage_end_has_no_multikb_stack_array():

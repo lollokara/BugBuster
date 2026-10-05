@@ -13,6 +13,8 @@
 #include "freertos/task.h"
 
 #include "hub_config.h"
+#include "hub_health.h"
+#include "hub_health_glue.h"
 #include "hub_live.h"
 #include "hub_logs.h"
 #include "hub_net.h"
@@ -40,6 +42,8 @@ static void hub_task(void *)
     bool need_resolve = true, registered = false, was_connected = false;
     int fails = 0;
     uint32_t next_register = 0, backoff = 0, next_ok = 0, next_epoch = 0;
+    hub_health_sched_t health = {};
+    bool health_first = true;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(250));
@@ -52,6 +56,12 @@ static void hub_task(void *)
             hub_logs_set_level(cfg.log_level);
             need_resolve = true; registered = false; discovered[0] = '\0';
             hub_sync_reset();
+        }
+        // HEALTH record: queued in the log ring (buffered while the hub is unreachable), so it runs
+        // before the link checks. First one 60 s after the first successful register, then hourly.
+        if (cfg.hub_enabled && hub_health_sched_due(&health, hub_uptime_ms(), registered)) {
+            hub_health_emit(health_first);
+            health_first = false;
         }
         if (!cfg.hub_enabled || !up) { hub_status_note_push(false, 0, cfg.hub_enabled ? "no WiFi" : "disabled"); continue; }
         uint32_t now = hub_uptime_ms();
