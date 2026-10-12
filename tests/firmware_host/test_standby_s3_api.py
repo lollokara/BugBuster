@@ -151,7 +151,13 @@ int main(void) {
     assert(standby_api_http_class(1, "/api/status?x=1") == STANDBY_HTTP_PASSIVE);
     assert(standby_api_http_class(1, "/api/statusx") == STANDBY_HTTP_WORK);
     assert(standby_api_http_class(0, "/api/status") == STANDBY_HTTP_WORK);
-    assert(standby_api_http_class(1, "/api/device/info") == STANDBY_HTTP_WORK);
+    assert(standby_api_http_class(1, "/api/device/info") == STANDBY_HTTP_PASSIVE);   /* cached identity */
+    assert(standby_api_http_class(1, "/api/device/version") == STANDBY_HTTP_PASSIVE);
+    assert(standby_api_http_class(1, "/api/pairing/info") == STANDBY_HTTP_PASSIVE);
+    assert(standby_api_http_class(1, "/api/hat") == STANDBY_HTTP_PASSIVE);
+    assert(standby_api_http_class(1, "/api/daq") == STANDBY_HTTP_PASSIVE);
+    assert(standby_api_http_class(1, "/api/hat/v2/rails") == STANDBY_HTTP_WORK);        /* talks to the HAT */
+    assert(standby_api_http_class(0, "/api/hat") == STANDBY_HTTP_WORK);                  /* only GETs are passive */
     assert(standby_api_http_class(1, "/api/standby/status") == STANDBY_HTTP_STANDBY);
     assert(standby_api_http_class(0, "/api/standby/presence") == STANDBY_HTTP_STANDBY);
     assert(standby_api_http_class(1, "/api/scope") == STANDBY_HTTP_WORK);

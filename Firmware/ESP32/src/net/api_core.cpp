@@ -153,10 +153,19 @@ static void add_bool_alias(cJSON *obj, const char *camel, const char * /*retired
 // ---------------------------------------------------------------------------
 static char *api_device_info(void)
 {
-    uint16_t rev = 0, id0 = 0, id1 = 0;
-    spiDriver.readRegister(REG_SILICON_REV, &rev);
-    spiDriver.readRegister(REG_SILICON_ID0, &id0);
-    spiDriver.readRegister(REG_SILICON_ID1, &id1);
+    // The silicon identity never changes, so read it once and serve the cache: this route is passive for
+    // standby (a poller must not clock the converter, or wake it from sleep). Until a read succeeds the
+    // values stay 0 and spiOk reports the cached driver state.
+    static uint16_t s_rev, s_id0, s_id1;
+    static bool     s_id_cached = false;
+    if (!s_id_cached) {
+        uint16_t rev = 0, id0 = 0, id1 = 0;
+        bool ok = spiDriver.readRegister(REG_SILICON_REV, &rev);
+        ok = spiDriver.readRegister(REG_SILICON_ID0, &id0) && ok;
+        ok = spiDriver.readRegister(REG_SILICON_ID1, &id1) && ok;
+        if (ok) { s_rev = rev; s_id0 = id0; s_id1 = id1; s_id_cached = true; }
+    }
+    const uint16_t rev = s_rev, id0 = s_id0, id1 = s_id1;
 
     bool spiOk = false;
     if (xSemaphoreTake(g_stateMutex, pdMS_TO_TICKS(100)) == pdTRUE) {

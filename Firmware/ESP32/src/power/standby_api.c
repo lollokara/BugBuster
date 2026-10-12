@@ -123,11 +123,16 @@ StandbyHttpClass standby_api_http_class(int is_get, const char *uri)
     if (strncmp(uri, "/api/standby", 12) == 0) return STANDBY_HTTP_STANDBY;
     if (strncmp(uri, "/api/", 5) != 0) return STANDBY_HTTP_PASSIVE;   /* UI shell and assets */
     if (!is_get) return STANDBY_HTTP_WORK;
-    /* /api/status stays passive: it carries analogAvailable and null for every analog value.
-     * /api/device/info clocks the converter's identity registers, so it is real work. */
+    /* Passive = answered from cached or static state, never touches powered-down hardware, so a poller
+     * (the fleet hub probes these once a minute) neither resets the idle timer nor wakes a sleeping
+     * board. /api/status carries analogAvailable and null for every analog value. /api/device/info
+     * serves the silicon identity cached on its first successful read (the converter is not clocked
+     * again), /api/hat and /api/daq are the S3's HAT cache, the others are static. */
     static const char *const passive[] = {
         "/api/status", "/api/system/memory", "/api/wifi",
         "/api/hub/status", "/api/hub/config", "/api/update/status",
+        "/api/device/info", "/api/device/version", "/api/pairing/info",
+        "/api/hat", "/api/daq",
     };
     for (size_t i = 0; i < sizeof(passive) / sizeof(passive[0]); ++i) {
         size_t n = strlen(passive[i]);
