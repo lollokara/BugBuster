@@ -77,6 +77,7 @@ static void cdc_line_state_callback(int itf, cdcacm_event_t *event)
         // will reset state cleanly if the host really did disconnect.
         // Rising DTR signals a new host connection — bump USB session counter
         // so stale IO ownership from a prior host is invalidated.
+        bbpCdcDtrChanged(dtr);
         if (dtr) {
             bbpCdcNewConnection();
         }

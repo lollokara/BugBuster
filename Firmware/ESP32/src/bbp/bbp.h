@@ -462,6 +462,13 @@ bool bbpCdcClaimed(void);
 void bbpCdcNewConnection(void);
 
 /**
+ * @brief CDC #0 DTR edge (usb_cdc event context; only sets flags). A real close/reopen of the port (DTR low for
+ *        >= 500 ms, then high) while in binary mode arms a 3 s check: if the new opener sends no BBP frame or
+ *        handshake in that time it is a terminal, and bbpProcess() reverts the port to the serial CLI.
+ */
+void bbpCdcDtrChanged(bool dtr);
+
+/**
  * @brief Push an ADC sample into the stream ring buffer.
  *        Called from the ADC poll task (Core 1). Lock-free.
  */

@@ -105,6 +105,8 @@ static BbpAdcSample s_adcBatch[ADC_BATCH_MAX];
 
 // Timeout: if no valid frame within 5s after handshake, revert
 static uint32_t s_lastFrameMs = 0;
+static volatile uint32_t s_dtrFellMs = 0;
+static volatile uint32_t s_dtrReopenDeadlineMs = 0;   // 0 = not armed
 #define BBP_IDLE_TIMEOUT_MS  60000   // 60s — pytest + LA captures can pause longer than 5s
 
 // -----------------------------------------------------------------------------
@@ -364,6 +366,7 @@ static void dispatchMessage(const uint8_t *msg, size_t msgLen)
     size_t  rsp_len = 0;
 
     s_lastFrameMs = millis_now();
+    s_dtrReopenDeadlineMs = 0;   // the opener speaks BBP
     autorun_note_inbound();
 
     // Set BBP caller context so registry handlers can discover the session.
@@ -579,6 +582,21 @@ void bbpCdcNewConnection(void)
     // diagnostics can hang off it without breaking ownership.
 }
 
+#define BBP_DTR_REOPEN_MIN_LOW_MS  500    // shorter low pulses are macOS glitches, not a port close
+#define BBP_DTR_TERMINAL_GRACE_MS  3000   // a BBP host talks within this long of opening the port
+
+void bbpCdcDtrChanged(bool dtr)
+{
+    uint32_t now = millis_now();
+    if (!dtr) {
+        s_dtrFellMs = now ? now : 1;
+    } else if (s_active && s_dtrFellMs && now - s_dtrFellMs >= BBP_DTR_REOPEN_MIN_LOW_MS) {
+        uint32_t d = now + BBP_DTR_TERMINAL_GRACE_MS;
+        s_dtrReopenDeadlineMs = d ? d : 1;
+        s_dtrFellMs = 0;
+    }
+}
+
 bool bbpDetectHandshake(uint8_t byte)
 {
     if (byte == s_magic[s_magic_idx]) {
@@ -627,6 +645,7 @@ bool bbpDetectHandshake(uint8_t byte)
             s_rxLen = 0;
             s_evtSeq = 0;
             s_lastFrameMs = millis_now();
+            s_dtrReopenDeadlineMs = 0;
             adcStreamEnd();
             s_scopeStreamActive = false;
 
@@ -682,6 +701,16 @@ void bbpRestoreCdcCli(void)
 void bbpProcess(void)
 {
     if (!s_active) return;
+
+    // The port was closed and reopened and the new opener never spoke BBP: a terminal. Give it the CLI.
+    uint32_t dl = s_dtrReopenDeadlineMs;
+    if (dl && (int32_t)(millis_now() - dl) >= 0) {
+        s_dtrReopenDeadlineMs = 0;
+        ESP_LOGW(TAG, "Port reopened without a BBP frame, reverting to CLI");
+        bbpExitBinaryMode();
+        bbpRestoreCdcCli();
+        return;
+    }
 
     // Check idle timeout
     if (millis_now() - s_lastFrameMs > BBP_IDLE_TIMEOUT_MS) {
