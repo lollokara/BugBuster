@@ -15,6 +15,7 @@
 #include "bbp.h"
 #include "ds4424.h"
 #include "ws_stream.h"
+#include "hub/hub_logs.h"
 #include "selftest.h"
 #include "husb238.h"
 #include "scripting.h"
@@ -2934,6 +2935,7 @@ bool hat_la_done_consume(void)
 void hat_log_ring_push(const char *line)
 {
     if (!line || !s_log_mutex) return;
+    hub_logs_push_rp2040(line, strlen(line));   // tunnel to the hub (non-blocking)
     // Lazy alloc: only LA-capable HATs (RP2040) ever relay logs; the DAQ HAT
     // never does, so its 8 KB is never spent. Allocated on first log line.
     if (!s_log_ring && s_state.type != HAT_TYPE_DAQ_POWER) {

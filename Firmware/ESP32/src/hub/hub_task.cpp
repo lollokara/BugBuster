@@ -66,6 +66,7 @@ static void hub_task(void *)
         if (!cfg.hub_enabled || !up) { hub_status_note_push(false, 0, cfg.hub_enabled ? "no WiFi" : "disabled"); continue; }
         uint32_t now = hub_uptime_ms();
         hub_logs_pull_p4();
+        hub_logs_rp2040_relay_tick();
         hub_status_set_backlog(hub_logs_backlog(), hub_live_backlog());
         if (hub_resync_take()) hub_sync_reset();
         if ((int32_t)(now - next_ok) < 0) continue;                // backing off after a failure

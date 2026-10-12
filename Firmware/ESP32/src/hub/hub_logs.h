@@ -22,6 +22,11 @@ void     hub_logs_set_level(char level);
 void     hub_logs_push(uint8_t src, char level, const char *tag, const char *msg, size_t len);
 /** Hub task: pull the P4's ERROR/important records into the ring (no HTTP). */
 void     hub_logs_pull_p4(void);
+/** HAT RX path, non-blocking. One RP2040 `bb_la_log` line (relayed over the HAT UART) goes to the hub as an I-level
+ *  record tagged "rp2040"; it bypasses the S3 level threshold so the HAT's own logs are always visible. */
+void     hub_logs_push_rp2040(const char *line, size_t len);
+/** Hub task: (re)enable the RP2040 log relay whenever an LA HAT is connected and the relay is not yet on. */
+void     hub_logs_rp2040_relay_tick(void);
 /** Hub task: ship one batch if one is due (4 KB or 5 s) or `force`. RETRY = hub unreachable / 5xx. */
 hub_step_t hub_logs_ship(const char *base, bool force);
 uint32_t hub_logs_backlog(void);

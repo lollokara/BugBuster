@@ -47,6 +47,8 @@ static inline int hat_fail_code(void)
         case 0xFE:  // wrong HAT type for this command
         case 0xFF:  // no HAT attached
             return -(int)CMD_ERR_UNSUPPORTED_HAT;
+        case HAT_ERR_BUSY:  // the HAT answered and refused (standby gate, or LA not idle): not a timeout
+            return -(int)CMD_ERR_BUSY;
         default:
             return timeout_code;
     }

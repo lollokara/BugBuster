@@ -14,6 +14,7 @@
 #include "freertos/semphr.h"
 
 #include "hat.h"
+#include "esp_timer.h"
 #include "hub_json.h"
 #include "hub_policy.h"
 #include "hub_ratelimit.h"
@@ -146,6 +147,29 @@ void hub_logs_push_health(const char *msg, size_t len)
     if (!s_lock || xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) { s_hook_total = s_hook_total + 1; return; }
     push_locked(hub_uptime_ms(), HUB_LOGSRC_S3, 'I', "health", msg, len);
     xSemaphoreGive(s_lock);
+}
+
+void hub_logs_push_rp2040(const char *line, size_t len)
+{
+    if (!s_lock || !line) return;
+    while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) len--;
+    if (!len) return;
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) { s_hook_dropped = s_hook_dropped + 1; s_hook_total = s_hook_total + 1; return; }
+    push_rate_limited_locked(hub_uptime_ms(), HUB_LOGSRC_S3, 'I', "rp2040", line, len);
+    xSemaphoreGive(s_lock);
+}
+
+// The relay is off after every RP2040 boot (`s_la_log_enabled` is RAM-only), so re-assert it periodically while an
+// LA HAT is present. A repeat enable is idempotent; every 30 s keeps a hot-plugged or rebooted HAT covered.
+void hub_logs_rp2040_relay_tick(void)
+{
+    static uint32_t s_last_ms;
+    uint32_t now = hub_uptime_ms();
+    if (!hub_pace_due(now, s_last_ms, 30000u)) return;
+    s_last_ms = now;
+    const HatState *st = hat_get_state();
+    if (!st || !st->connected || st->type != HAT_TYPE_SWD_GPIO) return;
+    hat_la_log_enable(true);
 }
 
 void hub_logs_pull_p4(void)
