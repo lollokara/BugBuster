@@ -25,6 +25,8 @@
 #include "auth.h"
 #include "esp_mac.h"
 #include "esp_system.h"
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 #include "esp_core_dump.h"
 #include "esp_partition.h"
 #include "esp_app_desc.h"
@@ -1131,6 +1133,23 @@ extern "C" void cli_cmd_update(const char* args)
     }
 
     term_println("Usage: update [check|status|apply [all|rp2040|esp32]]");
+}
+
+// Reboot the S3 into the ROM serial download mode (esptool). Sets the
+// FORCE_DOWNLOAD_BOOT latch in RTC_CNTL_OPTION1, which the ROM honours after a
+// software reset, then restarts. Power-cycle or `esptool ... run` to leave it.
+extern "C" void cli_cmd_download(const char* args)
+{
+    if (!args || strcmp(args, "now") != 0) {
+        term_println("download: reboots the ESP32-S3 into ROM download mode (esptool).");
+        term_println("The firmware stops running and USB re-enumerates as the ROM loader.");
+        term_println("Run 'download now' to proceed; power-cycle to return to the app.");
+        return;
+    }
+    term_println("Rebooting into ROM download mode...");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+    esp_restart();
 }
 
 extern "C" void cli_cmd_rstinfo(const char* args)

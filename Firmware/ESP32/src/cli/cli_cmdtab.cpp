@@ -59,6 +59,8 @@ const CliCommand g_cliCommands[] = {
       "reset",              "Hardware reset (pulse RESET pin)", NULL },
     { "rstinfo",  NULL,     cli_cmd_rstinfo,       CAT_GENERAL,
       "rstinfo",            "Show last ESP reset reason code", NULL },
+    { "download", NULL,     cli_cmd_download,      CAT_GENERAL,
+      "download now",       "Reboot the S3 into ROM download mode (esptool)", NULL },
     { "coredump", "cdump",   cli_cmd_coredump,      CAT_GENERAL,
       "coredump [info|dump|clear]", "Show, dump, or clear saved ESP panic coredump", NULL },
     { "version",  "ver",     cli_cmd_version,       CAT_GENERAL,
