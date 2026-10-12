@@ -8,6 +8,7 @@ All tests in this file require USB transport.
 HTTP transport does not support streaming — that is tested separately.
 """
 
+import contextlib
 import time
 import threading
 import pytest
@@ -24,6 +25,25 @@ pytestmark = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+@contextlib.contextmanager
+def _converting(dev, channels):
+    """
+    Put *channels* in VIN so the AD74416H actually converts, then restore HIGH_IMP.
+
+    ADC and scope samples are only produced on a fresh conversion; a HIGH_IMP
+    channel yields none (the supply monitor no longer keeps one converting, IO-25).
+    """
+    from bugbuster.constants import ChannelFunction
+    for ch in channels:
+        dev.set_channel_function(ch, ChannelFunction.VIN)
+    time.sleep(0.3)
+    try:
+        yield
+    finally:
+        for ch in channels:
+            dev.set_channel_function(ch, ChannelFunction.HIGH_IMP)
+
+
 def _collect_adc_events(dev, channels, n_events, timeout_s=5.0):
     """
     Start ADC stream, collect *n_events* callbacks, stop and return data.
@@ -37,9 +57,10 @@ def _collect_adc_events(dev, channels, n_events, timeout_s=5.0):
         if len(events) >= n_events:
             event_ready.set()
 
-    dev.start_adc_stream(channels, divider=1, callback=on_data)
-    event_ready.wait(timeout=timeout_s)
-    dev.stop_adc_stream()
+    with _converting(dev, channels):
+        dev.start_adc_stream(channels, divider=1, callback=on_data)
+        event_ready.wait(timeout=timeout_s)
+        dev.stop_adc_stream()
     return events
 
 
@@ -150,8 +171,9 @@ def test_scope_stream_starts_and_stops(usb_device):
         if len(events) >= 1:
             event_ready.set()
 
-    usb_device.on_scope_data(on_scope)
-    event_ready.wait(timeout=2.0)
+    with _converting(usb_device, [0, 1, 2, 3]):
+        usb_device.on_scope_data(on_scope)
+        event_ready.wait(timeout=2.0)
 
     assert event_ready.is_set(), "Scope stream did not start within 2s"
     assert len(events) >= 1, (
@@ -173,8 +195,9 @@ def test_scope_data_format(usb_device):
         if len(events) >= 3:
             event_ready.set()
 
-    usb_device.on_scope_data(on_scope)
-    event_ready.wait(timeout=2.0)
+    with _converting(usb_device, [0, 1, 2, 3]):
+        usb_device.on_scope_data(on_scope)
+        event_ready.wait(timeout=2.0)
 
     assert event_ready.is_set(), "Scope stream did not start within 2s"
     assert len(events) >= 1, "No scope events received"
@@ -222,6 +245,12 @@ def test_adc_stream_restart(usb_device):
     Start, stop, and restart ADC streaming multiple times.
     Verifies the firmware handles repeated start/stop without getting stuck.
     """
+    with _converting(usb_device, [0]):
+        _adc_restart_cycles(usb_device)
+    assert_no_faults(usb_device)
+
+
+def _adc_restart_cycles(usb_device):
     for cycle in range(3):
         events = []
         done = threading.Event()
@@ -239,7 +268,6 @@ def test_adc_stream_restart(usb_device):
         time.sleep(0.05)
 
         assert len(events) >= 1, f"Cycle {cycle}: no events received"
-    assert_no_faults(usb_device)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ def test_vdut_status_shape(daq_http, daq_http_base):
     r = daq_http.get(daq_http_base + "/api/daq/vdut/status", timeout=10)
     assert r.status_code == 200, "HTTP %d: %s" % (r.status_code, r.text[:200])
     j = r.json()
+    if j.get("ok") is False and "not a DAQ HAT" in str(j.get("error", "")):
+        pytest.skip("no DAQ HAT on this board: %s" % j["error"])
     for field in ("present", "enabled", "voltageSetpointV", "currentLimitMa"):
         assert field in j, "missing %r in %r" % (field, j)
     assert j["present"] is True, "no DAQ HAT reported present"
