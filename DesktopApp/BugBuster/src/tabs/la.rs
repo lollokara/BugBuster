@@ -2003,8 +2003,8 @@ pub fn LaTab(state: ReadSignal<DeviceState>) -> impl IntoView {
                             title="Continuous live capture (limited sample rate)"
                             on:click=move |_| {
                                 set_stream_mode.set(true);
-                                set_rle_enabled.set(true);
-                                show_toast("RLE enabled by default on Stream mode", "ok");
+                                // The live stream is raw-only (the HAT refuses RLE on stream start).
+                                set_rle_enabled.set(false);
                                 // Limit rate to stream-safe values
                                 let r = rate.get_untracked();
                                 let r_hz: u32 = r.parse().unwrap_or(1000000);

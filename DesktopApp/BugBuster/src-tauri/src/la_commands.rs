@@ -932,7 +932,9 @@ pub async fn la_stream_usb(
     let mut cfg_buf = vec![channels];
     cfg_buf.extend_from_slice(&sample_rate_hz.to_le_bytes());
     cfg_buf.extend_from_slice(&depth.to_le_bytes());
-    cfg_buf.push(if rle_enabled { 1 } else { 0 });
+    // The RP2040 live stream is raw-only: bb_la_start_stream() refuses an RLE config with BUSY.
+    let _ = rle_enabled;
+    cfg_buf.push(0);
     mgr.send_command(bbp::CMD_HAT_LA_CONFIG, &cfg_buf)
         .await
         .map_err(map_err)?;
