@@ -117,10 +117,10 @@ struct OverviewTab: View {
             updateSlidersFromModel()
             updateHatSlidersFromModel()
         }
-        .onChange(of: connectionManager.lastOverview?.idac) { _ in
+        .onChange(of: connectionManager.lastOverview?.idac) { _, _ in
             updateSlidersFromModel()
         }
-        .onChange(of: connectionManager.lastHatRails) { _ in
+        .onChange(of: connectionManager.lastHatRails) { _, _ in
             updateHatSlidersFromModel()
         }
         .sheet(item: $selectedChannel) { channel in
@@ -219,10 +219,7 @@ struct OverviewTab: View {
                                         Text("RESERVED")
                                             .font(.system(size: 18, weight: .bold, design: .monospaced))
                                     } else {
-                                        Text(String(format: "%.4f", ch.adcValue))
-                                            .foregroundColor(.white)
-                                        + Text("V")
-                                            .foregroundColor(.secondary)
+                                        Text("\(Text(String(format: "%.4f", ch.adcValue)).foregroundColor(.white))\(Text("V").foregroundColor(.secondary))")
                                     }
                                 }
                                 .font(.system(size: 18, weight: .bold, design: .monospaced))

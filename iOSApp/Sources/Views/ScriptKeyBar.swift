@@ -22,6 +22,8 @@ final class ScriptKeyBar: UIInputView {
 
     var actions = Actions()
 
+    private lazy var hairlineHeight = hairline.heightAnchor.constraint(equalToConstant: 1 / max(traitCollection.displayScale, 1))
+    private let hairline = UIView()
     private let undoButton = ScriptKeyBar.iconButton("arrow.uturn.backward", label: "Undo")
     private let redoButton = ScriptKeyBar.iconButton("arrow.uturn.forward", label: "Redo")
     private let nextButton = ScriptKeyBar.iconButton("chevron.forward.2", label: "Next placeholder")
@@ -34,6 +36,11 @@ final class ScriptKeyBar: UIInputView {
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let scale = window?.windowScene?.screen.scale { hairlineHeight.constant = 1 / scale }
+    }
 
     override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: Self.height) }
 
@@ -96,7 +103,6 @@ final class ScriptKeyBar: UIInputView {
         pinned.spacing = 0
         pinned.translatesAutoresizingMaskIntoConstraints = false
 
-        let hairline = UIView()
         hairline.backgroundColor = UIColor(white: 1, alpha: 0.10)
         hairline.translatesAutoresizingMaskIntoConstraints = false
 
@@ -107,7 +113,7 @@ final class ScriptKeyBar: UIInputView {
             hairline.topAnchor.constraint(equalTo: topAnchor),
             hairline.leadingAnchor.constraint(equalTo: leadingAnchor),
             hairline.trailingAnchor.constraint(equalTo: trailingAnchor),
-            hairline.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale),
+            hairlineHeight,
 
             pinned.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
             pinned.centerYAnchor.constraint(equalTo: centerYAnchor),

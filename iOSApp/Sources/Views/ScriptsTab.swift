@@ -76,7 +76,7 @@ private struct ScriptsTabContent: View {
         .padding(.bottom, keyboardOverlap)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let hidden = frame.minY >= UIScreen.main.bounds.height - 0.5
+            let hidden = frame.minY >= ScriptsKeyboard.screenHeight - 0.5
             // No animation: measuring a half-animated layout would feed wrong numbers back in.
             keyboardTop = hidden ? nil : ScriptsKeyboard.topEdge(of: frame)
             if hidden {
@@ -203,6 +203,13 @@ enum ScriptsKeyboard {
 
     static func editorGap(editorBottom: CGFloat, keyboardTop: CGFloat) -> CGFloat {
         keyboardTop - (editorBottom + editorChrome)
+    }
+
+    /// Height of the key window's screen, the coordinate space of keyboard frames.
+    @MainActor static var screenHeight: CGFloat {
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first { $0.isKeyWindow }
+        return window?.screen.bounds.height ?? 0
     }
 
     /// Top edge of a keyboard frame (screen coordinates) in the key window's coordinates.

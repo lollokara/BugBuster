@@ -524,15 +524,15 @@ struct EFuseImonCard: View {
         .padding()
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .onAppear { selection = deviceEfuse }
-        .onChange(of: selection) { newValue in
+        .onChange(of: selection) { _, newValue in
             if newValue != deviceEfuse && !isBusy && !showConfirm {
                 apply(newValue, confirm: false)
             }
         }
-        .onChange(of: connectionManager.efuseImon?.efuse) { _ in
+        .onChange(of: connectionManager.efuseImon?.efuse) { _, _ in
             if !isBusy && !showConfirm { selection = deviceEfuse }
         }
-        .onChange(of: showConfirm) { shown in
+        .onChange(of: showConfirm) { _, shown in
             if !shown, pendingTarget != nil {
                 pendingTarget = nil
                 selection = deviceEfuse

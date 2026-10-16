@@ -115,7 +115,7 @@ struct ScriptLogFilter: Equatable {
 /// The app's copy of the device log ring: the resumable cursor plus parsed lines.
 @MainActor
 final class ScriptLogStore: ObservableObject {
-    static let defaultCapacity = 5000
+    nonisolated static let defaultCapacity = 5000
 
     @Published private(set) var lines: [ScriptLogLine] = []
     /// Pause auto-scroll (the console keeps receiving lines).

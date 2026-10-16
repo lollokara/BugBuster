@@ -1238,7 +1238,7 @@ struct DiagnosticsTab: View {
         
         isNegotiatingPd = true
         Task {
-            let success = await connectionManager.setUsbPdVoltage(v)
+            _ = await connectionManager.setUsbPdVoltage(v)
             DispatchQueue.main.async {
                 self.isNegotiatingPd = false
             }
@@ -1717,7 +1717,7 @@ struct StorageInfoDiag: Codable {
 
 // MARK: - Card style modifier
 
-private extension View {
+extension View {
     func cardStyle() -> some View {
         self
             .padding()

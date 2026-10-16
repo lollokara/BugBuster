@@ -118,7 +118,8 @@ public final class StandbyPresence: ObservableObject {
     private var sender: StandbyPresenceSender?
     private var loop: Task<Void, Never>?
     private let interval: TimeInterval
-    private let makeId: () -> UInt32
+    // Only read on the main actor; nonisolated so the nonisolated init can store it.
+    nonisolated(unsafe) private let makeId: () -> UInt32
 
     nonisolated public init(refreshInterval: TimeInterval = 10,
                             makeId: @escaping () -> UInt32 = StandbyPresence.randomClientId) {

@@ -33,6 +33,12 @@ struct ScriptLogExport: Transferable, Equatable {
     let fileName: String
     let textProvider: @Sendable () -> String
 
+    /// Reads main-actor state from the exporter's arbitrary thread.
+    static func mainActorText(_ read: @MainActor () -> String?) -> String {
+        if Thread.isMainThread { return MainActor.assumeIsolated { read() } ?? "" }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated { read() } ?? "" }
+    }
+
     static func == (lhs: ScriptLogExport, rhs: ScriptLogExport) -> Bool {
         lhs.fileName == rhs.fileName
     }
@@ -136,7 +142,7 @@ struct ScriptLogConsoleView: View {
             .accessibilityIdentifier("console_copy_button")
             ShareLink(item: ScriptLogExport(
                 fileName: ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()),
-                textProvider: { [weak store] in store?.plainText ?? "" }
+                textProvider: { [weak store] in ScriptLogExport.mainActorText { store?.plainText } }
             ),
             preview: SharePreview(ScriptLogStyle.shareFileName(device: "bugbuster", date: Date()))) {
                 Image(systemName: "square.and.arrow.up")

@@ -28,7 +28,7 @@ struct HubSettingsView: View {
             Section {
                 Toggle("Use the hub", isOn: $hubEnabled)
                     .frame(minHeight: 44)
-                    .onChange(of: hubEnabled) { _ in applyAndRefresh() }
+                    .onChange(of: hubEnabled) { _, _ in applyAndRefresh() }
                 if hubEnabled {
                     TextField(HubSettings.defaultURL, text: $draft)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)

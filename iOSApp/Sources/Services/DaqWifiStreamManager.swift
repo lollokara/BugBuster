@@ -1602,9 +1602,9 @@ final class DaqWifiStreamManager: NSObject, ObservableObject {
         // be detected.
         extendWatchdogGrace()
         Task {
-            let pinger = Task { [weak self] in
+            let pinger = Task { [self] in
                 while !Task.isCancelled {
-                    self?.extendWatchdogGrace()
+                    self.extendWatchdogGrace()
                     try? await Task.sleep(nanoseconds: 500_000_000)
                 }
             }

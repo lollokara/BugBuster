@@ -164,7 +164,7 @@ struct MainTabView: View {
                 // without this the system also squeezes content and the tab bar
                 // rides up above the keyboard.
                 .ignoresSafeArea(.keyboard)
-                .onChange(of: selectedTab) { _ in
+                .onChange(of: selectedTab) { _, _ in
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 .sheet(isPresented: $scripts.consoleVisible) {

@@ -95,8 +95,8 @@ final class ScriptsTabModel: ObservableObject {
         uploadProgress = 0
         defer { uploadProgress = nil }
         do {
-            try await client.writeFile(name, text: text) { progress in
-                Task { @MainActor [weak self] in
+            try await client.writeFile(name, text: text) { [weak self] progress in
+                Task { @MainActor in
                     if self?.uploadProgress != nil { self?.uploadProgress = progress }
                 }
             }

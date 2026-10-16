@@ -121,6 +121,11 @@
 
 ### Fixed
 
+- **iOS build warnings cleared.** Unused Keychain results, `weak self` capture mismatches, Swift 6 actor-isolation
+  diagnostics (`ScriptLogStore.defaultCapacity`, `StandbyPresence.makeId`, log export), the missing `Combine` import in
+  `ScriptREPLView`, and deprecated `onChange(of:perform:)`, `Text +` and `UIScreen.main` uses.
+- **iOS build error in `StandbyCard`.** `View.cardStyle()` was declared in a `private extension` in `DiagnosticsTab.swift`, so
+  `StandbyCard.swift` could not use it; the extension is now internal.
 - **Scripts tab over BLE.** `/api/scripts/storage` was HTTP-only, so over BLE it
   answered `unknown path` and the whole file list failed to load; it now lives in
   `api_scripts.cpp` and is dispatched by `api_core_handle` (HTTP delegates to it).

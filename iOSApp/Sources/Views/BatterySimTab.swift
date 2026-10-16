@@ -443,7 +443,7 @@ struct BatterySimTab: View {
         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 1))
         .animation(.easeOut(duration: 0.15), value: window)
-        .onChange(of: window) { _ in
+        .onChange(of: window) { _, _ in
             if !scrubbing { refreshHub() }
         }
     }

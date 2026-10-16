@@ -118,18 +118,18 @@ public class ConnectionManager: NSObject, ObservableObject, NetServiceBrowserDel
         set {
             // Delete all existing tokens
             for mac in KeychainHelper.allStoredMACs() {
-                KeychainHelper.deleteToken(forMAC: mac)
+                _ = KeychainHelper.deleteToken(forMAC: mac)
             }
             // Store new tokens
             for (mac, token) in newValue {
-                KeychainHelper.saveToken(token, forMAC: mac)
+                _ = KeychainHelper.saveToken(token, forMAC: mac)
             }
         }
     }
     
     // Helper methods for single-token access
     public func saveToken(_ token: String, forMAC mac: String) {
-        KeychainHelper.saveToken(token, forMAC: mac)
+        _ = KeychainHelper.saveToken(token, forMAC: mac)
     }
     
     public func loadToken(forMAC mac: String) -> String? {
