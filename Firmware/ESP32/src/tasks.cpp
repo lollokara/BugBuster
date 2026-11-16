@@ -12,6 +12,7 @@
 #include "husb238.h"
 #include "pca9535.h"
 #include "hat.h"
+#include "adgs_mux_map.h"
 #include "adgs2414d.h"   // PCB mode uses adgs_get_selftest / adgs_set_selftest (ADGS_HAS_SELFTEST=1)
 #include "diag/selftest.h" // selftest_is_supply_monitor_active for ADC poll suppression
 #include "diag/efuse_imon.h"
@@ -865,19 +866,11 @@ void tasks_apply_channel_function(uint8_t logical_channel, ChannelFunction func)
     //   logical 2 (C) -> AD74416H phys 3, MUX 3 (IO9 / IO_Block 3)
     //   logical 3 (D) -> AD74416H phys 2, MUX 2 (IO12 / IO_Block 4)
     //
-    // SYNC: python/bugbuster/hal.py DEFAULT_ROUTING, bus_planner.cpp
-    // IO_ROUTES, hat.cpp block_to_mux_dev, DesktopApp signal_path.rs and web
-    // SignalPath.tsx MUX_DEVICE_BY_LOGICAL all encode this same swap.
-    // tests/unit/test_mux_device_parity.py enforces it.
-    uint8_t physical_ch = logical_channel;
-    uint8_t mux_dev = logical_channel;
-    if (logical_channel == 2) {
-        physical_ch = 3;
-        mux_dev = 3;
-    } else if (logical_channel == 3) {
-        physical_ch = 2;
-        mux_dev = 2;
-    }
+    // The MUX half lives in hal/adgs_mux_map.h (host copies are held to it by
+    // tests/unit/test_mux_device_parity.py).
+    static const uint8_t mux_dev_by_logical[4] = ADGS_MUX_DEV_BY_IO_BLOCK;
+    uint8_t physical_ch = tasks_logical_to_physical(logical_channel);
+    uint8_t mux_dev = mux_dev_by_logical[logical_channel];
 
     if (!s_device->setChannelFunction(physical_ch, func)) {
         ESP_LOGE("tasks", "Failed to set physical channel %u function %u", physical_ch, (unsigned)func);

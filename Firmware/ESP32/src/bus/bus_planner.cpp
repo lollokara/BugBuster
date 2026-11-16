@@ -1,7 +1,8 @@
 // =============================================================================
 // bus_planner.cpp — On-device IO-terminal bus routing engine (Phase 4).
 //
-// SYNC: keep aligned with python/bugbuster/hal.py DEFAULT_ROUTING +
+// MUX device column comes from adgs_mux_map.h. SYNC the rest with
+// python/bugbuster/hal.py DEFAULT_ROUTING +
 //       bus.py _plan/_apply_route.  When the PCB routing table or host-side
 //       planner logic changes, update this file to match.
 //
@@ -24,6 +25,7 @@
 #include "pca9535.h"      // pca9535_set_control, PcaControl
 #include "ds4424.h"       // ds4424_set_voltage
 #include "adgs2414d.h"    // adgs_set_api_all_safe, ADGS_API_MAIN_DEVICES
+#include "adgs_mux_map.h"
 #include "ext_bus.h"      // ext_i2c_setup, ext_spi_setup
 #include "esp_log.h"
 
@@ -91,24 +93,24 @@ typedef struct {
 static const BusRouteEntry IO_ROUTES[12] = {
     // ── BLOCK 1, IO_BLOCK 1 — device 0 (U10), VADJ1, EFUSE1 ────────────
     // IO 1: position 3 (Group C), ESP GPIO 4
-    { 1,  3, 0,  4, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 1,  3, ADGS_MUX_DEV_IO_BLOCK1, 4, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 2: position 2 (Group B), ESP GPIO 2
-    { 2,  2, 0,  2, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 2,  2, ADGS_MUX_DEV_IO_BLOCK1, 2, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 3: position 1 (Group A analog), ESP GPIO 1
-    { 3,  1, 0,  1, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 3,  1, ADGS_MUX_DEV_IO_BLOCK1, 1, PCA_CTRL_EFUSE1_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
     // ── BLOCK 1, IO_BLOCK 2 — device 1 (U11), VADJ1, EFUSE2 ────────────
     // IO 4: position 3 (Group C), ESP GPIO 7
-    { 4,  3, 1,  7, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 4,  3, ADGS_MUX_DEV_IO_BLOCK2, 7, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 5: position 2 (Group B), ESP GPIO 6
-    { 5,  2, 1,  6, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 5,  2, ADGS_MUX_DEV_IO_BLOCK2, 6, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 6: position 1 (Group A analog), ESP GPIO 5
-    { 6,  1, 1,  5, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
+    { 6,  1, ADGS_MUX_DEV_IO_BLOCK2, 5, PCA_CTRL_EFUSE2_EN, PCA_CTRL_VADJ1_EN, IDAC_CH_VADJ1,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
     // ── BLOCK 2, IO_BLOCK 3 — MUX device 3, VADJ2, EFUSE3 ──────────────
@@ -117,26 +119,26 @@ static const BusRouteEntry IO_ROUTES[12] = {
     // physically swapped between IO_Block 3 and 4 (confirmed by hardware
     // probing: IO_Block 3's switches live on MUX device 3).
     // IO 7: position 3 (Group C), ESP GPIO 8
-    { 7,  3, 3,  8, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 7,  3, ADGS_MUX_DEV_IO_BLOCK3, 8, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 8: position 2 (Group B), ESP GPIO 9
-    { 8,  2, 3,  9, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 8,  2, ADGS_MUX_DEV_IO_BLOCK3, 9, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 9: position 1 (Group A analog), ESP GPIO 10
-    { 9,  1, 3, 10, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 9,  1, ADGS_MUX_DEV_IO_BLOCK3, 10, PCA_CTRL_EFUSE3_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 
     // ── BLOCK 2, IO_BLOCK 4 — MUX device 2, VADJ2, EFUSE4 ──────────────
     // See the IO_Block 3 note above — MUX device index swapped to match the
     // confirmed physical wiring.
     // IO 10: position 3 (Group C), ESP GPIO 11
-    { 10, 3, 2, 11, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 10, 3, ADGS_MUX_DEV_IO_BLOCK4, 11, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_C_ESP_HIGH, GROUP_CLEAR_3 },
     // IO 11: position 2 (Group B), ESP GPIO 12
-    { 11, 2, 2, 12, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 11, 2, ADGS_MUX_DEV_IO_BLOCK4, 12, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_B_ESP_HIGH, GROUP_CLEAR_2 },
     // IO 12: position 1 (Group A analog), ESP GPIO 13
-    { 12, 1, 2, 13, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
+    { 12, 1, ADGS_MUX_DEV_IO_BLOCK4, 13, PCA_CTRL_EFUSE4_EN, PCA_CTRL_VADJ2_EN, IDAC_CH_VADJ2,
       SW_A_ESP_HIGH, GROUP_CLEAR_1 },
 };
 

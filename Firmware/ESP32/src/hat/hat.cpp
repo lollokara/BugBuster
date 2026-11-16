@@ -6,6 +6,7 @@
 // PCB mode only.
 // =============================================================================
 
+#include "adgs_mux_map.h"
 #include "hat.h"
 #include "hat_action_policy.h"
 #include "tasks.h"
@@ -1425,9 +1426,7 @@ static void hat_compute_ch_codes(uint8_t out[4])
 {
     const DioState *dio = dio_get_all();
     const PCA9535State *pca = pca9535_present() ? pca9535_get_state() : nullptr;
-    // IO_Block 3/4 sit on swapped ADGS2414D device indices -- see the
-    // logical->physical note in tasks.cpp. SYNC: hal.py DEFAULT_ROUTING.
-    static const uint8_t block_to_mux_dev[4] = { 0, 1, 3, 2 };
+    static const uint8_t block_to_mux_dev[4] = ADGS_MUX_DEV_BY_IO_BLOCK;
     for (int j = 0; j < 4; j++) {
         bool fault  = pca && pca->efuse_flt[j];
         bool supply = pca && pca->efuse_en[j];

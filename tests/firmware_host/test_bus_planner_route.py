@@ -117,6 +117,9 @@ def _run(tmp_path: Path) -> list[str]:
         p = tmp_path / name
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+    # adgs_mux_map.h is the real header (constants only); the rest of hal/ stays stubbed.
+    (tmp_path / "adgs_mux_map.h").write_text(
+        Path("Firmware/ESP32/src/hal/adgs_mux_map.h").read_text(encoding="utf-8"), encoding="utf-8")
     out = compile_and_run(MAIN, sources=[PLANNER], cxx=True,
                           include_dirs=[tmp_path, "Firmware/ESP32/src/bus"])
     return out.strip().splitlines()

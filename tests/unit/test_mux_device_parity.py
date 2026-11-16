@@ -2,7 +2,8 @@
 
 The MUX device index for IO_Block 3/4 is physically swapped (IO_Block 3's
 switches live on device 3, IO_Block 4's on device 2).  That fact is currently
-duplicated by hand in six places across four languages.  It has already drifted
+duplicated by hand in four places across four languages (the three firmware
+sites share hal/adgs_mux_map.h since 2026-11-16).  It has already drifted
 once: it was flipped in the web UI (2026-06-04), reverted there (2026-06-13),
 then flipped in hal.py alone (2026-07-21, commit 435de28), leaving the Python
 client disagreeing with the firmware, the desktop app and the web UI for two
@@ -51,57 +52,44 @@ def test_python_hal_routing_matches_expected():
         )
 
 
-def test_firmware_bus_planner_matches_hal():
-    """Firmware/ESP32/src/bus/bus_planner.cpp IO_ROUTES vs hal.py."""
+def _firmware_mux_map() -> list[int]:
+    """Firmware/ESP32/src/hal/adgs_mux_map.h, the firmware's only copy."""
+    src = _read("Firmware/ESP32/src/hal/adgs_mux_map.h")
+    got = dict(re.findall(r"#define\s+ADGS_MUX_DEV_IO_BLOCK(\d)\s+(\d+)", src))
+    assert sorted(got) == ["1", "2", "3", "4"], f"adgs_mux_map.h defines blocks {sorted(got)}"
+    return [int(got[str(b)]) for b in range(1, 5)]
+
+
+def test_firmware_mux_map_matches_hal():
+    assert _firmware_mux_map() == EXPECTED_BY_LOGICAL
+
+
+def test_firmware_bus_planner_uses_the_mux_map():
+    """bus_planner.cpp IO_ROUTES takes each IO's device from its IO_Block macro."""
     src = _read("Firmware/ESP32/src/bus/bus_planner.cpp")
     table = re.search(r"IO_ROUTES\[12\]\s*=\s*\{(.*?)\n\};", src, re.S)
     assert table, "could not locate IO_ROUTES table in bus_planner.cpp"
 
-    # Entries look like:  { 9,  1, 3, 10, PCA_CTRL_EFUSE3_EN, ...
-    #                       io  pos dev gpio
-    entries = re.findall(r"\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),", table.group(1))
-    assert len(entries) == 12, f"expected 12 IO_ROUTES entries, found {len(entries)}"
+    # Entries look like:  { 9,  1, ADGS_MUX_DEV_IO_BLOCK3, 10, PCA_CTRL_EFUSE3_EN, ...
+    #                       io  pos dev                    gpio
+    entries = re.findall(r"\{\s*(\d+),\s*\d+,\s*ADGS_MUX_DEV_IO_BLOCK(\d),\s*\d+,", table.group(1))
+    assert len(entries) == 12, f"expected 12 IO_ROUTES entries using the macro, found {len(entries)}"
 
-    for io_str, _pos, dev_str, _gpio in entries:
-        io_num, dev = int(io_str), int(dev_str)
-        expected = DEFAULT_ROUTING[io_num].mux_device
-        assert dev == expected, (
-            f"bus_planner.cpp IO {io_num} mux_device={dev}, "
-            f"hal.py says {expected}"
+    for io_str, block_str in entries:
+        io_num = int(io_str)
+        assert int(block_str) == DEFAULT_ROUTING[io_num].io_block, (
+            f"bus_planner.cpp IO {io_num} uses IO_BLOCK{block_str}, "
+            f"hal.py says io_block {DEFAULT_ROUTING[io_num].io_block}"
         )
 
 
-def test_firmware_tasks_logical_to_physical_matches_hal():
-    """tasks.cpp maps logical channel -> mux device for the analog IOs."""
-    src = _read("Firmware/ESP32/src/tasks.cpp")
-    # Only IO_Block 3 (logical 2) and 4 (logical 3) are remapped; the function
-    # defaults mux_dev = logical_channel for A/B.
-    block = re.search(
-        r"if\s*\(logical_channel\s*==\s*2\)\s*\{(.*?)\}\s*else\s+if\s*"
-        r"\(logical_channel\s*==\s*3\)\s*\{(.*?)\}",
-        src,
-        re.S,
-    )
-    assert block, "could not locate logical->physical remap in tasks.cpp"
-
-    for logical, body in ((2, block.group(1)), (3, block.group(2))):
-        m = re.search(r"mux_dev\s*=\s*(\d+)\s*;", body)
-        assert m, f"no mux_dev assignment for logical channel {logical}"
-        assert int(m.group(1)) == EXPECTED_BY_LOGICAL[logical], (
-            f"tasks.cpp logical {logical} -> mux_dev {m.group(1)}, "
-            f"expected {EXPECTED_BY_LOGICAL[logical]}"
-        )
-
-
-def test_firmware_hat_block_to_mux_dev_matches_hal():
-    """hat.cpp block_to_mux_dev drives the per-block status LEDs."""
-    src = _read("Firmware/ESP32/src/hat/hat.cpp")
-    m = re.search(r"block_to_mux_dev\[4\]\s*=\s*\{([^}]*)\}", src)
-    assert m, "could not locate block_to_mux_dev in hat.cpp"
-    got = [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
-    assert got == EXPECTED_BY_LOGICAL, (
-        f"hat.cpp block_to_mux_dev={got}, expected {EXPECTED_BY_LOGICAL}"
-    )
+@pytest.mark.parametrize("rel, pattern", [
+    ("Firmware/ESP32/src/tasks.cpp", r"mux_dev_by_logical\[4\]\s*=\s*ADGS_MUX_DEV_BY_IO_BLOCK;"),
+    ("Firmware/ESP32/src/hat/hat.cpp", r"block_to_mux_dev\[4\]\s*=\s*ADGS_MUX_DEV_BY_IO_BLOCK;"),
+])
+def test_firmware_site_uses_the_mux_map(rel, pattern):
+    """No hand-written device list may come back in tasks.cpp or hat.cpp."""
+    assert re.search(pattern, _read(rel)), f"{rel} no longer takes its MUX devices from adgs_mux_map.h"
 
 
 def test_desktop_signal_path_matches_hal():
