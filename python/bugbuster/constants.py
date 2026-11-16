@@ -285,217 +285,169 @@ class MsgType(IntEnum):
 # ---------------------------------------------------------------------------
 
 class CmdId(IntEnum):
-    # Status & information
-    GET_STATUS       = 0x01
-    GET_DEVICE_INFO  = 0x02
-    GET_FAULTS       = 0x03
-    GET_DIAGNOSTICS  = 0x04
+    # Command IDs are generated from bbp.h by Firmware/tools/gen_error_tables.py - do not edit.
+    # BEGIN GENERATED: bbp-commands
+    GET_STATUS                      = 0x01
+    GET_DEVICE_INFO                 = 0x02
+    GET_FAULTS                      = 0x03
+    GET_DIAGNOSTICS                 = 0x04
+    SELFTEST_STATUS                 = 0x05  # Get boot self-test result + cal status
+    SELFTEST_MEASURE_SUPPLY         = 0x06  # Measure a supply rail via U23
+    SELFTEST_SUPPLY_VOLTAGES_CACHED = 0x07  # Get cached supply rail voltages
+    SELFTEST_AUTO_CAL               = 0x08  # Start automatic IDAC calibration
+    SELFTEST_INT_SUPPLIES           = 0x09  # Measure internal ADC supplies (AVDD, DVCC, etc.)
+    SELFTEST_WORKER                 = 0x0B  # Enable/disable/query supply monitor worker
+    WIFI_FORGET                     = 0x0A  # Erase saved STA credentials from NVS and disconnect
+    MEM_STATUS                      = 0x0C  # Heap + per-task stack telemetry (see MEM_STATUS_SCHEMA)
+    EFUSE_IMON_SET                  = 0x0D  # Select monitored e-fuse (0=off,1..4) via U23 IMON path
+    EFUSE_IMON_GET                  = 0x0E  # Read monitored e-fuse current
+    SET_CHANNEL_FUNC                = 0x10
+    SET_DAC_CODE                    = 0x11
+    SET_DAC_VOLTAGE                 = 0x12
+    SET_DAC_CURRENT                 = 0x13
+    SET_ADC_CONFIG                  = 0x14
+    SET_DIN_CONFIG                  = 0x15
+    SET_DO_CONFIG                   = 0x16
+    SET_DO_STATE                    = 0x17
+    SET_VOUT_RANGE                  = 0x18
+    SET_CURRENT_LIMIT               = 0x19
+    SET_AVDD_SELECT                 = 0x1A
+    GET_ADC_VALUE                   = 0x1B
+    GET_DAC_READBACK                = 0x1C
+    SET_RTD_CONFIG                  = 0x1D
+    CLEAR_ALL_ALERTS                = 0x20
+    CLEAR_CHAN_ALERT                = 0x21
+    SET_ALERT_MASK                  = 0x22
+    SET_CH_ALERT_MASK               = 0x23
+    SET_DIAG_CONFIG                 = 0x30
+    GET_GPIO_STATUS                 = 0x40
+    SET_GPIO_CONFIG                 = 0x41
+    SET_GPIO_VALUE                  = 0x42
+    ADC_LEDS_SET_MODE               = 0x47  # 1-byte payload: 0=auto, 1=manual
+    DIO_GET_ALL                     = 0x43  # Read all 12 IO states
+    DIO_CONFIG                      = 0x44  # Configure IO direction (input/output/disabled)
+    DIO_WRITE                       = 0x45  # Set output level (high/low)
+    DIO_READ                        = 0x46  # Read single IO input level
+    GET_UART_CONFIG                 = 0x50
+    SET_UART_CONFIG                 = 0x51
+    GET_UART_PINS                   = 0x52
+    START_ADC_STREAM                = 0x60
+    STOP_ADC_STREAM                 = 0x61
+    START_SCOPE_STREAM              = 0x62
+    STOP_SCOPE_STREAM               = 0x63
+    START_ADC_DSP_STREAM            = 0x64
+    STOP_ADC_DSP_STREAM             = 0x65
+    MUX_SET_ALL                     = 0x90
+    MUX_GET_ALL                     = 0x91
+    MUX_SET_SWITCH                  = 0x92
+    RAIL_POWER_UP                   = 0x93  # Sequenced VADJ rail + e-fuse power-up (power/rail_power.h)
+    IDAC_GET_STATUS                 = 0xA0  # Get all IDAC channel states
+    IDAC_SET_CODE                   = 0xA1  # Set raw DAC code
+    IDAC_SET_VOLTAGE                = 0xA2  # Set target voltage
+    IDAC_CALIBRATE                  = 0xA3  # Run auto-calibration (unused, UI-driven)
+    IDAC_CAL_ADD_POINT              = 0xA4  # Add a single calibration point
+    IDAC_CAL_CLEAR                  = 0xA5  # Clear calibration for a channel
+    IDAC_CAL_SAVE                   = 0xA6  # Save calibration to NVS
+    IO_CLAIM                        = 0xA7  # Claim one or more IO/CH slots
+    IO_RELEASE                      = 0xA8  # Release previously claimed slots
+    IO_OWNER_STATUS                 = 0xA9  # Query ownership table (all 16 slots)
+    IO_FORCE_RELEASE                = 0xAA  # Admin: force-release any slot
+    PCA_GET_STATUS                  = 0xB0  # Get all PCA9535 state
+    PCA_SET_CONTROL                 = 0xB1  # Set named control output
+    PCA_SET_PORT                    = 0xB2  # Set raw port value
+    PCA_SET_FAULT_CFG               = 0xB3  # Configure fault auto-disable + logging
+    PCA_GET_FAULT_LOG               = 0xB4  # Get recent PCA fault events
+    EXT_I2C_SETUP                   = 0xB8  # Configure external I2C peripheral pins/frequency
+    EXT_I2C_SCAN                    = 0xB9  # Scan external I2C bus
+    EXT_I2C_WRITE                   = 0xBA  # Write bytes to external I2C device
+    EXT_I2C_READ                    = 0xBB  # Read bytes from external I2C device
+    EXT_I2C_WRITE_READ              = 0xBC  # Register-style write then repeated-start read
+    EXT_SPI_SETUP                   = 0xBD  # Configure external SPI peripheral pins/frequency
+    EXT_SPI_TRANSFER                = 0xBE  # Full-duplex SPI transfer
+    START_WAVEGEN                   = 0xD0  # Start waveform generation
+    STOP_WAVEGEN                    = 0xD1  # Stop waveform generation
+    HAT_GET_STATUS                  = 0xC5  # Get HAT state (detect, type, pin config, power)
+    HAT_SET_PIN                     = 0xC6  # Set single EXP_EXT pin function
+    HAT_SET_ALL_PINS                = 0xC7  # Set all 4 EXP_EXT pin functions
+    HAT_RESET                       = 0xC8  # Reset HAT to default
+    HAT_DETECT                      = 0xC9  # Re-run HAT detection
+    HAT_SET_POWER                   = 0xCA  # Enable/disable connector (A/B)
+    HAT_GET_POWER                   = 0xCB  # Get power status (both connectors)
+    HAT_SET_IO_VOLT                 = 0xCC  # Set I/O voltage (mV)
+    HAT_SETUP_SWD                   = 0xCD  # One-call SWD quick-setup
+    HAT_GET_CAPS                    = 0xC3
+    HAT_GET_RAIL_STATUS             = 0xC4
+    HAT_SET_RAIL_VOLTAGE            = 0xB5
+    HAT_SET_RAIL_ENABLE             = 0xD2
+    HAT_SET_LED_STATE               = 0xD3
+    HAT_CALIBRATE_START             = 0xAB
+    HAT_CALIBRATE_STATUS            = 0xAC
+    HAT_CALIBRATE_IMPORT            = 0xAD
+    HAT_SET_IO_BANK                 = 0xAE
+    HAT_SET_LEVEL_SHIFT             = 0xAF
+    HAT_LA_CONFIG                   = 0xCF  # Configure LA capture
+    HAT_LA_ARM                      = 0xD5  # Arm trigger / start capture
+    HAT_LA_FORCE                    = 0xD6  # Force trigger
+    HAT_LA_STATUS                   = 0xD7  # Get capture status
+    HAT_LA_READ                     = 0xD8  # Read captured data chunk
+    HAT_LA_SET_ROUTE                = 0xD4
+    HAT_LA_STOP                     = 0xD9  # Stop capture
+    HAT_LA_TRIGGER                  = 0xDA  # Set trigger condition
+    HAT_DETECT_TARGET               = 0xDB  # Actively probe SWD DPIDR (target detect)
+    USBPD_GET_STATUS                = 0xC0  # Get USB PD contract status
+    USBPD_SELECT_PDO                = 0xC1  # Select PDO voltage
+    USBPD_GO                        = 0xC2  # Trigger re-negotiation
+    SET_LSHIFT_OE                   = 0xE0  # Set level shifter output enable
+    WIFI_GET_STATUS                 = 0xE1  # Get WiFi status
+    WIFI_CONNECT                    = 0xE2  # Connect to WiFi network
+    WIFI_SCAN                       = 0xE4  # Scan for WiFi networks
+    WIFI_SET_AP_PASSWORD            = 0xEF  # Set SoftAP password (persist to NVS, apply live)
+    HAT_LA_LOG_ENABLE               = 0xEB  # Enable/disable RP2040 log relay
+    HAT_LA_USB_RESET                = 0xED  # Reinitialize vendor bulk endpoint
+    HAT_LA_STREAM_START             = 0xEE  # Start LA streaming over vendor bulk
+    QS_LIST                         = 0xF0  # List quick setup slots
+    QS_GET                          = 0xF1  # Get quick setup JSON
+    QS_SAVE                         = 0xF2  # Save current state to slot
+    QS_APPLY                        = 0xF3  # Apply slot
+    QS_DELETE                       = 0xF4  # Delete slot
+    SCRIPT_EVAL                     = 0xF5  # Submit Python source for eval (max 32 KB)
+    SCRIPT_STATUS                   = 0xF6  # Get script engine status
+    SCRIPT_LOGS                     = 0xF7  # Drain script log ring (up to 1020 bytes)
+    SCRIPT_STOP                     = 0xF8  # Request cooperative stop
+    SCRIPT_UPLOAD                   = 0xF9  # Upload script file to SPIFFS
+    SCRIPT_LIST                     = 0xFA  # List stored script files
+    SCRIPT_RUN_FILE                 = 0xFB  # Run a stored script file
+    SCRIPT_DELETE                   = 0xFC  # Delete a stored script file
+    SCRIPT_AUTORUN                  = 0xFD  # Autorun control (sub-byte multiplex)
+    SET_SPI_CLOCK                   = 0xE3  # Set SPI clock speed (Hz, u32)
+    DAQ_CONFIG                      = 0xB6  # sub-op multiplexed (see BBP_DAQ_CFG_*)
+    DAQ_CAL                         = 0xB7  # sub-op multiplexed (see BBP_DAQ_CAL_*)
+    DAQ_MEASURE                     = 0xBF  # no payload -> s3link_daq_status_t
+    DAQ_TRIG                        = 0xCE  # sub-op multiplexed (see BBP_DAQ_TRIG_*)
+    DEVICE_RESET                    = 0x70
+    REGISTER_READ                   = 0x71
+    REGISTER_WRITE                  = 0x72
+    SET_WATCHDOG                    = 0x73  # Enable/disable AD74416H watchdog timer
+    GET_ADMIN_TOKEN                 = 0x74  # Retrieve derived admin token (USB only)
+    EXT_JOB_SUBMIT                  = 0x75  # Queue deferred external I2C/SPI operation
+    EXT_JOB_GET                     = 0x76  # Poll deferred external I2C/SPI operation
+    OTA                             = 0x77  # USB OTA info/upload/rollback control
+    STANDBY                         = 0x78
+    PING                            = 0xFE
+    DISCONNECT                      = 0xFF
+    # END GENERATED: bbp-commands
 
-    # Self-test / calibration / cached supply-voltage monitoring
-    SELFTEST_STATUS         = 0x05
-    SELFTEST_MEASURE_SUPPLY = 0x06
-    SELFTEST_SUPPLY_VOLTAGES_CACHED = 0x07
+    # Older name for the same opcode.
     SELFTEST_EFUSE_CURRENTS = SELFTEST_SUPPLY_VOLTAGES_CACHED
-    SELFTEST_AUTO_CAL       = 0x08
-    SELFTEST_INT_SUPPLIES   = 0x09
-    SELFTEST_WORKER         = 0x0B  # enable/disable/query supply-monitor worker
-    MEM_STATUS              = 0x0C  # heap + per-task stack telemetry
-    EFUSE_IMON_SET          = 0x0D  # select monitored e-fuse (0=off, 1..4)
-    EFUSE_IMON_GET          = 0x0E  # read monitored e-fuse current
 
-    # Channel configuration
-    SET_CHANNEL_FUNC = 0x10
-    SET_DAC_CODE     = 0x11
-    SET_DAC_VOLTAGE  = 0x12
-    SET_DAC_CURRENT  = 0x13
-    SET_ADC_CONFIG   = 0x14
-    SET_DIN_CONFIG   = 0x15
-    SET_DO_CONFIG    = 0x16
-    SET_DO_STATE     = 0x17
-    SET_VOUT_RANGE   = 0x18
-    SET_CURRENT_LIMIT= 0x19
-    SET_AVDD_SELECT  = 0x1A
-    GET_ADC_VALUE    = 0x1B
-    GET_DAC_READBACK = 0x1C
-    SET_RTD_CONFIG   = 0x1D
-
-    # Fault management
-    CLEAR_ALL_ALERTS  = 0x20
-    CLEAR_CHAN_ALERT  = 0x21
-    SET_ALERT_MASK    = 0x22
-    SET_CH_ALERT_MASK = 0x23
-
-    # Diagnostics
-    SET_DIAG_CONFIG  = 0x30
-
-    # GPIO (AD74416H on-chip GPIO pins A-F)
-    GET_GPIO_STATUS  = 0x40
-    SET_GPIO_CONFIG  = 0x41
-    SET_GPIO_VALUE   = 0x42
-
-    # Digital IO (ESP32 GPIO-based, 12 logical IOs through MUX)
-    DIO_GET_ALL      = 0x43
-    DIO_CONFIG       = 0x44
-    DIO_WRITE        = 0x45
-    DIO_READ         = 0x46
-    ADC_LEDS_SET_MODE = 0x47  # 0=auto, 1=manual (SET_GPIO_VALUE forces manual)
-
-    # UART bridge
-    GET_UART_CONFIG  = 0x50
-    SET_UART_CONFIG  = 0x51
-    GET_UART_PINS    = 0x52
-
-    # ADC streaming
-    START_ADC_STREAM      = 0x60
-    STOP_ADC_STREAM       = 0x61
-    START_SCOPE_STREAM    = 0x62
-    STOP_SCOPE_STREAM     = 0x63
-    START_ADC_DSP_STREAM  = 0x64
-    STOP_ADC_DSP_STREAM   = 0x65
-
-    # System
-    DEVICE_RESET     = 0x70
-    REGISTER_READ    = 0x71
-    REGISTER_WRITE   = 0x72
-    SET_WATCHDOG     = 0x73
-    GET_ADMIN_TOKEN  = 0x74
-    EXT_JOB_SUBMIT   = 0x75
-    EXT_JOB_GET      = 0x76
-
-    # Unsolicited events
+    # Events (device -> host) share this enum; BBP_EVT_* in bbp.h.
     ADC_DATA_EVT     = 0x80
     SCOPE_DATA_EVT   = 0x81
     ALERT_EVT        = 0x82
     DIN_EVT          = 0x83
     PCA_FAULT_EVT    = 0x84
     ADC_DSP_EVT      = 0x88
-
-    # MUX switch matrix
-    MUX_SET_ALL      = 0x90
-    MUX_GET_ALL      = 0x91
-    MUX_SET_SWITCH   = 0x92
-    RAIL_POWER_UP    = 0x93
-
-    # DS4424 IDAC
-    IDAC_GET_STATUS   = 0xA0
-    IDAC_SET_CODE     = 0xA1
-    IDAC_SET_VOLTAGE  = 0xA2
-    IDAC_CALIBRATE    = 0xA3
-    IDAC_CAL_ADD_POINT= 0xA4
-    IDAC_CAL_CLEAR    = 0xA5
-    IDAC_CAL_SAVE     = 0xA6
-
-    # IO Ownership (BBP v5+)
-    IO_CLAIM          = 0xA7
-    IO_RELEASE        = 0xA8
-    IO_OWNER_STATUS   = 0xA9
-    IO_FORCE_RELEASE  = 0xAA
-
-    # PCA9535 I/O expander
-    PCA_GET_STATUS     = 0xB0
-    PCA_SET_CONTROL    = 0xB1
-    PCA_SET_PORT       = 0xB2
-    PCA_SET_FAULT_CFG  = 0xB3
-    PCA_GET_FAULT_LOG  = 0xB4
-
-    # External target bus engine (routed IO pins)
-    EXT_I2C_SETUP      = 0xB8
-    EXT_I2C_SCAN       = 0xB9
-    EXT_I2C_WRITE      = 0xBA
-    EXT_I2C_READ       = 0xBB
-    EXT_I2C_WRITE_READ = 0xBC
-    EXT_SPI_SETUP      = 0xBD
-    EXT_SPI_TRANSFER   = 0xBE
-
-    # HAT Expansion Board — Core
-    HAT_GET_STATUS   = 0xC5
-    HAT_SET_PIN      = 0xC6
-    HAT_SET_ALL_PINS = 0xC7
-    HAT_RESET        = 0xC8
-    HAT_DETECT       = 0xC9
-    # HAT — Power Management
-    HAT_SET_POWER    = 0xCA
-    HAT_GET_POWER    = 0xCB
-    HAT_SET_IO_VOLT  = 0xCC
-    HAT_SETUP_SWD    = 0xCD
-    HAT_DETECT_TARGET = 0xDB
-    # HAT — Logic Analyzer
-    HAT_LA_CONFIG    = 0xCF
-    HAT_LA_ARM       = 0xD5
-    HAT_LA_FORCE     = 0xD6
-    HAT_LA_STATUS    = 0xD7
-    HAT_LA_READ      = 0xD8
-    HAT_LA_STOP      = 0xD9
-    HAT_LA_TRIGGER   = 0xDA
-
-    # USB PD
-    USBPD_GET_STATUS = 0xC0
-    USBPD_SELECT_PDO = 0xC1
-    USBPD_GO         = 0xC2
-    HAT_GET_CAPS        = 0xC3
-    HAT_GET_RAIL_STATUS = 0xC4
-
-    # Waveform generator
-    START_WAVEGEN    = 0xD0
-    STOP_WAVEGEN     = 0xD1
-    HAT_SET_RAIL_ENABLE = 0xD2
-    HAT_SET_LED_STATE   = 0xD3
-    HAT_LA_SET_ROUTE    = 0xD4
-    HAT_CALIBRATE_START  = 0xAB
-    HAT_CALIBRATE_STATUS = 0xAC
-    HAT_CALIBRATE_IMPORT = 0xAD
-    HAT_SET_IO_BANK      = 0xAE
-    HAT_SET_LEVEL_SHIFT  = 0xAF
-    HAT_SET_RAIL_VOLTAGE = 0xB5
-
-    # HAT — LA Log Relay
-    HAT_LA_LOG_ENABLE    = 0xEB
-    HAT_LA_LOG_EVT       = 0xEC
-    HAT_LA_USB_RESET     = 0xED
-    HAT_LA_STREAM_START  = 0xEE
-
-    # Misc hardware
-    SET_LSHIFT_OE         = 0xE0
-    WIFI_GET_STATUS       = 0xE1
-    WIFI_CONNECT          = 0xE2
-    WIFI_FORGET           = 0x0A  # Erase saved STA credentials and disconnect
-    SET_SPI_CLOCK         = 0xE3
-    WIFI_SCAN             = 0xE4
-    WIFI_SET_AP_PASSWORD  = 0xEF  # Set SoftAP password (persist NVS, apply live)
-    OTA                   = 0x77  # USB OTA info/upload/rollback control
-    STANDBY               = 0x78  # system standby: status / presence / policy / wake / sleep (sub-op byte 0)
-
-    # DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
-    DAQ_CONFIG            = 0xB6
-    # DAQ HAT SMU factory calibration — sub-op multiplexed, forwarded to the P4.
-    DAQ_CAL               = 0xB7
-    # DAQ HAT live measurement readback (I/V/P/energy) — forwarded to the P4.
-    DAQ_MEASURE           = 0xBF
-    # DAQ trigger / flag configuration — handled locally on the S3 (the 12 IO
-    # event sources live on the mainboard). Sub-op multiplexed; payload[0] = op.
-    DAQ_TRIG              = 0xCE
-
-    # Quick Setup slots (NVS-backed snapshot store, 4 slots: 0..3)
-    QS_LIST          = 0xF0  # list slots (returns occupied bitmap + per-slot summary hash)
-    QS_GET           = 0xF1  # read slot JSON
-    QS_SAVE          = 0xF2  # snapshot current state into slot
-    QS_APPLY         = 0xF3  # apply slot to live device state
-    QS_DELETE        = 0xF4  # erase slot
-
-    # On-Device Scripting
-    SCRIPT_EVAL      = 0xF5  # submit Python source for eval (max 32 KB)
-    SCRIPT_STATUS    = 0xF6  # get script engine status
-    SCRIPT_LOGS      = 0xF7  # drain script log ring
-    SCRIPT_STOP      = 0xF8  # request cooperative stop
-    SCRIPT_UPLOAD    = 0xF9  # upload script file to SPIFFS
-    SCRIPT_LIST      = 0xFA  # list stored script files
-    SCRIPT_RUN_FILE  = 0xFB  # run a stored script file
-    SCRIPT_DELETE    = 0xFC  # delete a stored script file
-    SCRIPT_AUTORUN   = 0xFD  # autorun control (sub-byte multiplex)
-
-    # Session control
-    PING             = 0xFE
-    DISCONNECT       = 0xFF
+    HAT_LA_LOG_EVT   = 0xEC
 
 
 # ---------------------------------------------------------------------------

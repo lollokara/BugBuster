@@ -37,13 +37,22 @@ pub const MSG_ERR: u8 = 0x04;
 // Command IDs
 // -----------------------------------------------------------------------------
 
-// Status & Info
+// Generated from bbp.h by Firmware/tools/gen_error_tables.py - do not edit.
+// BEGIN GENERATED: bbp-commands
 pub const CMD_GET_STATUS: u8 = 0x01;
 pub const CMD_GET_DEVICE_INFO: u8 = 0x02;
 pub const CMD_GET_FAULTS: u8 = 0x03;
 pub const CMD_GET_DIAGNOSTICS: u8 = 0x04;
-
-// Channel Configuration
+pub const CMD_SELFTEST_STATUS: u8 = 0x05; // Get boot self-test result + cal status
+pub const CMD_SELFTEST_MEASURE_SUPPLY: u8 = 0x06; // Measure a supply rail via U23
+pub const CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED: u8 = 0x07; // Get cached supply rail voltages
+pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08; // Start automatic IDAC calibration
+pub const CMD_SELFTEST_INT_SUPPLIES: u8 = 0x09; // Measure internal ADC supplies (AVDD, DVCC, etc.)
+pub const CMD_SELFTEST_WORKER: u8 = 0x0B; // Enable/disable/query supply monitor worker
+pub const CMD_WIFI_FORGET: u8 = 0x0A; // Erase saved STA credentials from NVS and disconnect
+pub const CMD_MEM_STATUS: u8 = 0x0C; // Heap + per-task stack telemetry (see MEM_STATUS_SCHEMA)
+pub const CMD_EFUSE_IMON_SET: u8 = 0x0D; // Select monitored e-fuse (0=off,1..4) via U23 IMON path
+pub const CMD_EFUSE_IMON_GET: u8 = 0x0E; // Read monitored e-fuse current
 pub const CMD_SET_CH_FUNC: u8 = 0x10;
 pub const CMD_SET_DAC_CODE: u8 = 0x11;
 pub const CMD_SET_DAC_VOLTAGE: u8 = 0x12;
@@ -58,151 +67,134 @@ pub const CMD_SET_AVDD_SEL: u8 = 0x1A;
 pub const CMD_GET_ADC_VALUE: u8 = 0x1B;
 pub const CMD_GET_DAC_READBACK: u8 = 0x1C;
 pub const CMD_SET_RTD_CONFIG: u8 = 0x1D;
-
-// Faults
 pub const CMD_CLEAR_ALL_ALERTS: u8 = 0x20;
 pub const CMD_CLEAR_CH_ALERT: u8 = 0x21;
 pub const CMD_SET_ALERT_MASK: u8 = 0x22;
 pub const CMD_SET_CH_ALERT_MASK: u8 = 0x23;
-
-// Self-Test / Calibration
-pub const CMD_SELFTEST_STATUS: u8 = 0x05;
-pub const CMD_SELFTEST_MEASURE_SUPPLY: u8 = 0x06;
-pub const CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED: u8 = 0x07;
-pub const CMD_SELFTEST_EFUSE_CURRENTS: u8 = CMD_SELFTEST_SUPPLY_VOLTAGES_CACHED;
-pub const CMD_SELFTEST_AUTO_CAL: u8 = 0x08;
-pub const CMD_SELFTEST_INT_SUPPLIES: u8 = 0x09;
-pub const CMD_SELFTEST_WORKER: u8 = 0x0B;
-pub const CMD_EFUSE_IMON_SET: u8 = 0x0D;
-pub const CMD_EFUSE_IMON_GET: u8 = 0x0E;
-
-// Diagnostics
 pub const CMD_SET_DIAG_CONFIG: u8 = 0x30;
-
-// GPIO (AD74416H on-chip GPIO pins A–F)
 pub const CMD_GET_GPIO_STATUS: u8 = 0x40;
 pub const CMD_SET_GPIO_CONFIG: u8 = 0x41;
 pub const CMD_SET_GPIO_VALUE: u8 = 0x42;
-
-// Digital IO (ESP32 GPIO-based, routed through MUX)
-pub const CMD_DIO_GET_ALL: u8 = 0x43;
-pub const CMD_DIO_CONFIG: u8 = 0x44;
-pub const CMD_DIO_WRITE: u8 = 0x45;
-pub const CMD_DIO_READ: u8 = 0x46;
-
-// UART Bridge
+pub const CMD_ADC_LEDS_SET_MODE: u8 = 0x47; // 1-byte payload: 0=auto, 1=manual
+pub const CMD_DIO_GET_ALL: u8 = 0x43; // Read all 12 IO states
+pub const CMD_DIO_CONFIG: u8 = 0x44; // Configure IO direction (input/output/disabled)
+pub const CMD_DIO_WRITE: u8 = 0x45; // Set output level (high/low)
+pub const CMD_DIO_READ: u8 = 0x46; // Read single IO input level
 pub const CMD_GET_UART_CONFIG: u8 = 0x50;
 pub const CMD_SET_UART_CONFIG: u8 = 0x51;
 pub const CMD_GET_UART_PINS: u8 = 0x52;
-
-// Streaming
 pub const CMD_START_ADC_STREAM: u8 = 0x60;
 pub const CMD_STOP_ADC_STREAM: u8 = 0x61;
 pub const CMD_START_SCOPE_STREAM: u8 = 0x62;
 pub const CMD_STOP_SCOPE_STREAM: u8 = 0x63;
-
-// MUX Switch Matrix
+pub const CMD_START_ADC_DSP_STREAM: u8 = 0x64;
+pub const CMD_STOP_ADC_DSP_STREAM: u8 = 0x65;
 pub const CMD_MUX_SET_ALL: u8 = 0x90;
 pub const CMD_MUX_GET_ALL: u8 = 0x91;
 pub const CMD_MUX_SET_SWITCH: u8 = 0x92;
-
-// DS4424 IDAC
-pub const CMD_IDAC_GET_STATUS: u8 = 0xA0;
-pub const CMD_IDAC_SET_CODE: u8 = 0xA1;
-pub const CMD_IDAC_SET_VOLTAGE: u8 = 0xA2;
-pub const CMD_IDAC_CALIBRATE: u8 = 0xA3;
-pub const CMD_IDAC_CAL_ADD_POINT: u8 = 0xA4;
-pub const CMD_IDAC_CAL_CLEAR: u8 = 0xA5;
-pub const CMD_IDAC_CAL_SAVE: u8 = 0xA6;
-
-// IO Ownership
-pub const CMD_IO_CLAIM: u8 = 0xA7;
-pub const CMD_IO_RELEASE: u8 = 0xA8;
-pub const CMD_IO_OWNER_STATUS: u8 = 0xA9;
-pub const CMD_IO_FORCE_RELEASE: u8 = 0xAA;
-
-// PCA9535 GPIO Expander
-pub const CMD_PCA_GET_STATUS: u8 = 0xB0;
-pub const CMD_PCA_SET_CONTROL: u8 = 0xB1;
-pub const CMD_PCA_SET_PORT: u8 = 0xB2;
-pub const CMD_PCA_SET_FAULT_CFG: u8 = 0xB3;
-pub const CMD_PCA_GET_FAULT_LOG: u8 = 0xB4;
-
-// External target bus engine (routed IO pins)
-pub const CMD_EXT_I2C_SETUP: u8 = 0xB8;
-pub const CMD_EXT_I2C_SCAN: u8 = 0xB9;
-pub const CMD_EXT_I2C_WRITE: u8 = 0xBA;
-pub const CMD_EXT_I2C_READ: u8 = 0xBB;
-pub const CMD_EXT_I2C_WRITE_READ: u8 = 0xBC;
-pub const CMD_EXT_SPI_SETUP: u8 = 0xBD;
-pub const CMD_EXT_SPI_TRANSFER: u8 = 0xBE;
-
-// HAT Expansion Board
-pub const CMD_HAT_GET_STATUS: u8 = 0xC5;
+pub const CMD_RAIL_POWER_UP: u8 = 0x93; // Sequenced VADJ rail + e-fuse power-up (power/rail_power.h)
+pub const CMD_IDAC_GET_STATUS: u8 = 0xA0; // Get all IDAC channel states
+pub const CMD_IDAC_SET_CODE: u8 = 0xA1; // Set raw DAC code
+pub const CMD_IDAC_SET_VOLTAGE: u8 = 0xA2; // Set target voltage
+pub const CMD_IDAC_CALIBRATE: u8 = 0xA3; // Run auto-calibration (unused, UI-driven)
+pub const CMD_IDAC_CAL_ADD_POINT: u8 = 0xA4; // Add a single calibration point
+pub const CMD_IDAC_CAL_CLEAR: u8 = 0xA5; // Clear calibration for a channel
+pub const CMD_IDAC_CAL_SAVE: u8 = 0xA6; // Save calibration to NVS
+pub const CMD_IO_CLAIM: u8 = 0xA7; // Claim one or more IO/CH slots
+pub const CMD_IO_RELEASE: u8 = 0xA8; // Release previously claimed slots
+pub const CMD_IO_OWNER_STATUS: u8 = 0xA9; // Query ownership table (all 16 slots)
+pub const CMD_IO_FORCE_RELEASE: u8 = 0xAA; // Admin: force-release any slot
+pub const CMD_PCA_GET_STATUS: u8 = 0xB0; // Get all PCA9535 state
+pub const CMD_PCA_SET_CONTROL: u8 = 0xB1; // Set named control output
+pub const CMD_PCA_SET_PORT: u8 = 0xB2; // Set raw port value
+pub const CMD_PCA_SET_FAULT_CFG: u8 = 0xB3; // Configure fault auto-disable + logging
+pub const CMD_PCA_GET_FAULT_LOG: u8 = 0xB4; // Get recent PCA fault events
+pub const CMD_EXT_I2C_SETUP: u8 = 0xB8; // Configure external I2C peripheral pins/frequency
+pub const CMD_EXT_I2C_SCAN: u8 = 0xB9; // Scan external I2C bus
+pub const CMD_EXT_I2C_WRITE: u8 = 0xBA; // Write bytes to external I2C device
+pub const CMD_EXT_I2C_READ: u8 = 0xBB; // Read bytes from external I2C device
+pub const CMD_EXT_I2C_WRITE_READ: u8 = 0xBC; // Register-style write then repeated-start read
+pub const CMD_EXT_SPI_SETUP: u8 = 0xBD; // Configure external SPI peripheral pins/frequency
+pub const CMD_EXT_SPI_TRANSFER: u8 = 0xBE; // Full-duplex SPI transfer
+pub const CMD_START_WAVEGEN: u8 = 0xD0; // Start waveform generation
+pub const CMD_STOP_WAVEGEN: u8 = 0xD1; // Stop waveform generation
+pub const CMD_HAT_GET_STATUS: u8 = 0xC5; // Get HAT state (detect, type, pin config, power)
+pub const CMD_HAT_SET_PIN: u8 = 0xC6; // Set single EXP_EXT pin function
+pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7; // Set all 4 EXP_EXT pin functions
+pub const CMD_HAT_RESET: u8 = 0xC8; // Reset HAT to default
+pub const CMD_HAT_DETECT: u8 = 0xC9; // Re-run HAT detection
+pub const CMD_HAT_SET_POWER: u8 = 0xCA; // Enable/disable connector (A/B)
+pub const CMD_HAT_GET_POWER: u8 = 0xCB; // Get power status (both connectors)
+pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC; // Set I/O voltage (mV)
+pub const CMD_HAT_SETUP_SWD: u8 = 0xCD; // One-call SWD quick-setup
 pub const CMD_HAT_GET_CAPS: u8 = 0xC3;
 pub const CMD_HAT_GET_RAIL_STATUS: u8 = 0xC4;
 pub const CMD_HAT_SET_RAIL_VOLTAGE: u8 = 0xB5;
-pub const CMD_HAT_SET_PIN: u8 = 0xC6;
-pub const CMD_HAT_SET_ALL_PINS: u8 = 0xC7;
-pub const CMD_HAT_RESET: u8 = 0xC8;
-pub const CMD_HAT_DETECT: u8 = 0xC9;
-pub const CMD_HAT_SET_POWER: u8 = 0xCA;
-pub const CMD_HAT_GET_POWER: u8 = 0xCB;
-pub const CMD_HAT_SET_IO_VOLTAGE: u8 = 0xCC;
-pub const CMD_HAT_SETUP_SWD: u8 = 0xCD;
-pub const CMD_HAT_DETECT_TARGET: u8 = 0xDB;
-// HAT Logic Analyzer
-pub const CMD_HAT_LA_CONFIG: u8 = 0xCF;
 pub const CMD_HAT_SET_RAIL_ENABLE: u8 = 0xD2;
 pub const CMD_HAT_SET_LED_STATE: u8 = 0xD3;
-pub const CMD_HAT_LA_SET_ROUTE: u8 = 0xD4;
 pub const CMD_HAT_CALIBRATE_START: u8 = 0xAB;
 pub const CMD_HAT_CALIBRATE_STATUS: u8 = 0xAC;
 pub const CMD_HAT_CALIBRATE_IMPORT: u8 = 0xAD;
 pub const CMD_HAT_SET_IO_BANK: u8 = 0xAE;
 pub const CMD_HAT_SET_LEVEL_SHIFT: u8 = 0xAF;
-pub const CMD_HAT_LA_ARM: u8 = 0xD5;
-pub const CMD_HAT_LA_FORCE: u8 = 0xD6;
-pub const CMD_HAT_LA_STATUS: u8 = 0xD7;
-pub const CMD_HAT_LA_READ: u8 = 0xD8;
-pub const CMD_HAT_LA_STOP: u8 = 0xD9;
-pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA;
+pub const CMD_HAT_LA_CONFIG: u8 = 0xCF; // Configure LA capture
+pub const CMD_HAT_LA_ARM: u8 = 0xD5; // Arm trigger / start capture
+pub const CMD_HAT_LA_FORCE: u8 = 0xD6; // Force trigger
+pub const CMD_HAT_LA_STATUS: u8 = 0xD7; // Get capture status
+pub const CMD_HAT_LA_READ: u8 = 0xD8; // Read captured data chunk
+pub const CMD_HAT_LA_SET_ROUTE: u8 = 0xD4;
+pub const CMD_HAT_LA_STOP: u8 = 0xD9; // Stop capture
+pub const CMD_HAT_LA_TRIGGER: u8 = 0xDA; // Set trigger condition
+pub const CMD_HAT_DETECT_TARGET: u8 = 0xDB; // Actively probe SWD DPIDR (target detect)
+pub const CMD_USBPD_GET_STATUS: u8 = 0xC0; // Get USB PD contract status
+pub const CMD_USBPD_SELECT_PDO: u8 = 0xC1; // Select PDO voltage
+pub const CMD_USBPD_GO: u8 = 0xC2; // Trigger re-negotiation
+pub const CMD_SET_LSHIFT_OE: u8 = 0xE0; // Set level shifter output enable
+pub const CMD_WIFI_GET_STATUS: u8 = 0xE1; // Get WiFi status
+pub const CMD_WIFI_CONNECT: u8 = 0xE2; // Connect to WiFi network
+pub const CMD_WIFI_SCAN: u8 = 0xE4; // Scan for WiFi networks
+pub const CMD_WIFI_SET_AP_PASSWORD: u8 = 0xEF; // Set SoftAP password (persist to NVS, apply live)
+pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB; // Enable/disable RP2040 log relay
+pub const CMD_HAT_LA_USB_RESET: u8 = 0xED; // Reinitialize vendor bulk endpoint
+pub const CMD_HAT_LA_STREAM_START: u8 = 0xEE; // Start LA streaming over vendor bulk
+pub const CMD_QS_LIST: u8 = 0xF0; // List quick setup slots
+pub const CMD_QS_GET: u8 = 0xF1; // Get quick setup JSON
+pub const CMD_QS_SAVE: u8 = 0xF2; // Save current state to slot
+pub const CMD_QS_APPLY: u8 = 0xF3; // Apply slot
+pub const CMD_QS_DELETE: u8 = 0xF4; // Delete slot
+pub const CMD_SCRIPT_EVAL: u8 = 0xF5; // Submit Python source for eval (max 32 KB)
+pub const CMD_SCRIPT_STATUS: u8 = 0xF6; // Get script engine status
+pub const CMD_SCRIPT_LOGS: u8 = 0xF7; // Drain script log ring (up to 1020 bytes)
+pub const CMD_SCRIPT_STOP: u8 = 0xF8; // Request cooperative stop
+pub const CMD_SCRIPT_UPLOAD: u8 = 0xF9; // Upload script file to SPIFFS
+pub const CMD_SCRIPT_LIST: u8 = 0xFA; // List stored script files
+pub const CMD_SCRIPT_RUN_FILE: u8 = 0xFB; // Run a stored script file
+pub const CMD_SCRIPT_DELETE: u8 = 0xFC; // Delete a stored script file
+pub const CMD_SCRIPT_AUTORUN: u8 = 0xFD; // Autorun control (sub-byte multiplex)
+pub const CMD_SET_SPI_CLOCK: u8 = 0xE3; // Set SPI clock speed (Hz, u32)
+pub const CMD_DAQ_CONFIG: u8 = 0xB6; // sub-op multiplexed (see BBP_DAQ_CFG_*)
+pub const CMD_DAQ_CAL: u8 = 0xB7; // sub-op multiplexed (see BBP_DAQ_CAL_*)
+pub const CMD_DAQ_MEASURE: u8 = 0xBF; // no payload -> s3link_daq_status_t
+pub const CMD_DAQ_TRIG: u8 = 0xCE; // sub-op multiplexed (see BBP_DAQ_TRIG_*)
+pub const CMD_DEVICE_RESET: u8 = 0x70;
+pub const CMD_REG_READ: u8 = 0x71;
+pub const CMD_REG_WRITE: u8 = 0x72;
+pub const CMD_SET_WATCHDOG: u8 = 0x73; // Enable/disable AD74416H watchdog timer
+pub const CMD_GET_ADMIN_TOKEN: u8 = 0x74; // Retrieve derived admin token (USB only)
+pub const CMD_EXT_JOB_SUBMIT: u8 = 0x75; // Queue deferred external I2C/SPI operation
+pub const CMD_EXT_JOB_GET: u8 = 0x76; // Poll deferred external I2C/SPI operation
+pub const CMD_OTA: u8 = 0x77; // USB OTA info/upload/rollback control
+pub const CMD_STANDBY: u8 = 0x78;
+pub const CMD_PING: u8 = 0xFE;
+pub const CMD_DISCONNECT: u8 = 0xFF;
+// END GENERATED: bbp-commands
 
-// Waveform Generator
-pub const CMD_START_WAVEGEN: u8 = 0xD0;
-pub const CMD_STOP_WAVEGEN: u8 = 0xD1;
+// HTTP-only: drain buffered RP2040 log lines from the ESP32 ring buffer.
+// Same byte as EVT_LA_LOG (0xEC) but safe — commands are host→device,
+// events are device→host; they never collide in the protocol state machine.
+pub const CMD_HAT_LA_LOG_GET: u8 = 0xEC;
 
-// HUSB238 USB PD
-pub const CMD_USBPD_GET_STATUS: u8 = 0xC0;
-pub const CMD_USBPD_SELECT_PDO: u8 = 0xC1;
-pub const CMD_USBPD_GO: u8 = 0xC2;
-
-// Level Shifter
-pub const CMD_SET_LSHIFT_OE: u8 = 0xE0;
-
-// WiFi Management
-pub const CMD_WIFI_GET_STATUS: u8 = 0xE1;
-pub const CMD_WIFI_CONNECT: u8 = 0xE2;
-pub const CMD_SET_SPI_CLOCK: u8 = 0xE3;
-pub const CMD_WIFI_SCAN: u8 = 0xE4;
-pub const CMD_WIFI_FORGET: u8 = 0x0A;
-pub const CMD_WIFI_SET_AP_PASSWORD: u8 = 0xEF; // DESK-9: WiFi AP password change
-
-/// DAQ HAT (ESP32-P4) settings — sub-op multiplexed, forwarded to the P4.
-/// payload[0] selects the op (0=get,1=set,2=get_all,3=schema,4=action).
-pub const CMD_DAQ_CONFIG: u8 = 0xB6;
-
-/// DAQ HAT SMU factory calibration — sub-op multiplexed, forwarded to the P4.
-/// payload[0] selects the op (0=start,1=ack,2=status,3=abort).
-pub const CMD_DAQ_CAL: u8 = 0xB7;
-
-/// DAQ HAT live measurement readback (I/V/P/energy) — forwarded to the P4.
-/// No payload; returns s3link_daq_status_t.
-pub const CMD_DAQ_MEASURE: u8 = 0xBF;
-
-/// DAQ trigger / flag configuration — handled locally on the S3 (the 12 IO
-/// event sources live on the mainboard). Sub-op multiplexed; payload[0] = op.
-pub const CMD_DAQ_TRIG: u8 = 0xCE;
+// CMD_DAQ_TRIG sub-ops (payload[0]); BBP_DAQ_TRIG_* in bbp.h.
 pub const DAQ_TRIG_SET_IO: u8 = 0x00;
 pub const DAQ_TRIG_GET_IO: u8 = 0x01;
 pub const DAQ_TRIG_SET_LOGIC: u8 = 0x02;
@@ -210,71 +202,23 @@ pub const DAQ_TRIG_ARM: u8 = 0x03;
 pub const DAQ_TRIG_STATUS: u8 = 0x04;
 pub const DAQ_TRIG_GET_ALL: u8 = 0x05;
 
-// HAT LA extended
-pub const CMD_HAT_LA_LOG_ENABLE: u8 = 0xEB;
-// HTTP-only: drain buffered RP2040 log lines from the ESP32 ring buffer.
-// Same byte as EVT_LA_LOG (0xEC) but safe — commands are host→device,
-// events are device→host; they never collide in the protocol state machine.
-pub const CMD_HAT_LA_LOG_GET: u8 = 0xEC;
-pub const CMD_HAT_LA_USB_RESET: u8 = 0xED;
-// LA stream start via BBP — forwards HAT_CMD_LA_STREAM_START (0x37) to RP2040.
-// Routing START/STOP via BBP avoids the EP_OUT vendor-bulk path which becomes
-// unresponsive after the first stop/rearm cycle on RP2040 TinyUSB.
-// See tests/mock/la_usb_host.py:344, BBP_CMD_HAT_LA_STREAM_START in esp32 bbp.h.
-pub const CMD_HAT_LA_STREAM_START: u8 = 0xEE;
-
-// Quick Setups
-pub const CMD_QS_LIST: u8 = 0xF0;
-pub const CMD_QS_GET: u8 = 0xF1;
-pub const CMD_QS_SAVE: u8 = 0xF2;
-pub const CMD_QS_APPLY: u8 = 0xF3;
-pub const CMD_QS_DELETE: u8 = 0xF4;
-
-// System
-pub const CMD_DEVICE_RESET: u8 = 0x70;
-pub const CMD_REG_READ: u8 = 0x71;
-pub const CMD_REG_WRITE: u8 = 0x72;
-pub const CMD_SET_WATCHDOG: u8 = 0x73;
-pub const CMD_GET_ADMIN_TOKEN: u8 = 0x74;
-pub const CMD_EXT_JOB_SUBMIT: u8 = 0x75;
-pub const CMD_EXT_JOB_GET: u8 = 0x76;
-pub const CMD_OTA: u8 = 0x77;
-/// System standby (status, presence, policy, wake); mirrors `BBP_CMD_STANDBY` in bbp.h.
-pub const CMD_STANDBY: u8 = 0x78;
-pub const CMD_PING: u8 = 0xFE;
-pub const CMD_DISCONNECT: u8 = 0xFF;
-
-// PROTO-4: opcodes the firmware defines that the desktop table lacked
-// (tests/unit/test_bbp_command_parity_rust.py keeps this in sync with bbp.h).
-pub const CMD_MEM_STATUS: u8 = 0x0C;
-pub const CMD_ADC_LEDS_SET_MODE: u8 = 0x47;
-pub const CMD_START_ADC_DSP_STREAM: u8 = 0x64;
-pub const CMD_STOP_ADC_DSP_STREAM: u8 = 0x65;
-pub const CMD_RAIL_POWER_UP: u8 = 0x93;
-pub const CMD_SCRIPT_EVAL: u8 = 0xF5;
-pub const CMD_SCRIPT_STATUS: u8 = 0xF6;
-pub const CMD_SCRIPT_LOGS: u8 = 0xF7;
-pub const CMD_SCRIPT_STOP: u8 = 0xF8;
-pub const CMD_SCRIPT_UPLOAD: u8 = 0xF9;
-pub const CMD_SCRIPT_LIST: u8 = 0xFA;
-pub const CMD_SCRIPT_RUN_FILE: u8 = 0xFB;
-pub const CMD_SCRIPT_DELETE: u8 = 0xFC;
-pub const CMD_SCRIPT_AUTORUN: u8 = 0xFD;
-
 // -----------------------------------------------------------------------------
 // Event IDs
 // -----------------------------------------------------------------------------
 
+// Generated from bbp.h by Firmware/tools/gen_error_tables.py - do not edit.
+// BEGIN GENERATED: bbp-events
 pub const EVT_ADC_DATA: u8 = 0x80;
 pub const EVT_SCOPE_DATA: u8 = 0x81;
 pub const EVT_ALERT: u8 = 0x82;
 pub const EVT_DIN: u8 = 0x83;
-pub const EVT_PCA_FAULT: u8 = 0x84;
-pub const EVT_LA_DONE: u8 = 0x85;
-pub const EVT_IO_PREEMPTED: u8 = 0x86; // IO slot preempted by selftest/internal (mirrors firmware BBP_EVT_IO_PREEMPTED)
-pub const EVT_IO_OWNER_REJECT: u8 = 0x87; // IO claim rejected because slot held by another owner
-pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
+pub const EVT_PCA_FAULT: u8 = 0x84; // PCA9535 fault event (e-fuse trip, PG change)
+pub const EVT_LA_DONE: u8 = 0x85; // Logic analyzer capture complete
+pub const EVT_IO_PREEMPTED: u8 = 0x86; // IO slot preempted by selftest/internal
+pub const EVT_IO_OWNER_REJECT: u8 = 0x87; // IO claim rejected: (cmd_id u8, slot u8, owner_kind u8)
 pub const EVT_ADC_DSP: u8 = 0x88; // DSP stream window (stats + FFT peaks + spikes)
+pub const EVT_LA_LOG: u8 = 0xEC; // RP2040 log message relay
+// END GENERATED: bbp-events
 pub const EVT_DISCONNECT: u8 = 0xFE; // Synthetic: USB reader thread detected serial error
 
 // -----------------------------------------------------------------------------
