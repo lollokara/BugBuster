@@ -159,3 +159,6 @@ yarn-error.log*
 # been removed. Nothing in CI needs it — no build reads .mex.
 .mex/
 .superpowers/
+
+# Per-user Xcode state
+xcuserdata/
