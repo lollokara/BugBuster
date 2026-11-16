@@ -12,11 +12,11 @@ import pytest
 
 import bugbuster as bb
 from bugbuster.constants import WaveformType
-from tests.lib.srcread import REPO_ROOT
+from tests.lib.srcread import read_source
 
 
 def _src(rel: str) -> str:
-    return (REPO_ROOT / rel).read_text(encoding="utf-8")
+    return read_source(rel)
 
 
 def test_firmware_bbp_minimum_is_0_1_hz():
@@ -24,7 +24,7 @@ def test_firmware_bbp_minimum_is_0_1_hz():
 
 
 def test_http_route_rejects_below_0_1_hz():
-    body = _src("Firmware/ESP32/src/web/webserver.cpp")
+    body = _src("Firmware/ESP32/src/web/webserver*.cpp")
     assert re.search(r"freq\s*<\s*0\.1\s*\|\|\s*freq\s*>\s*100", body)
 
 

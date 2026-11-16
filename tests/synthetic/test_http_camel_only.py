@@ -7,9 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.lib.srcread import read_source
+
 ROOT = Path(__file__).resolve().parents[2]
 API_CORE = ROOT / "Firmware" / "ESP32" / "src" / "net" / "api_core.cpp"
-WEBSERVER = ROOT / "Firmware" / "ESP32" / "src" / "web" / "webserver.cpp"
+WEBSERVER = ROOT / "Firmware" / "ESP32" / "src" / "web" / "webserver*.cpp"
 IOS_MODELS = ROOT / "iOSApp" / "Sources" / "Models" / "DeviceModels.swift"
 
 # Snake twins (and the /api/channel/N/adc plain aliases) that must be gone.
@@ -21,20 +23,20 @@ RETIRED = [
 
 
 def _alias_body(src: str, name: str) -> str:
-    start = src.index(f"static void {name}(")
+    start = src.index(f"void {name}(")   # static in api_core.cpp, shared in webserver.cpp
     return src[start: src.index("\n}", start)]
 
 
 @pytest.mark.parametrize("path", [API_CORE, WEBSERVER], ids=["api_core", "webserver"])
 def test_alias_helpers_emit_camel_only(path):
-    src = path.read_text(encoding="utf-8")
+    src = read_source(path)
     for helper in ("add_number_alias", "add_bool_alias"):
         body = _alias_body(src, helper)
         assert "snake" not in body.split("{", 1)[1], f"{helper} still emits the snake twin"
 
 
 def test_explicit_snake_twins_removed():
-    src = API_CORE.read_text(encoding="utf-8") + WEBSERVER.read_text(encoding="utf-8")
+    src = read_source(API_CORE) + read_source(WEBSERVER)
     left = [k for k in RETIRED if re.search(rf'cJSON_Add\w+ToObject\(\w+, "{k}"', src)]
     assert left == []
 

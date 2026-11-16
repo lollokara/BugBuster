@@ -13,7 +13,7 @@ from tests.lib.srcread import read_source
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 API_CORE = REPO / "Firmware/ESP32/src/net/api_core.cpp"
-WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver*.cpp"
 
 # Routes api_core_handle() dispatches on (reachable over BLE) but with no
 # matching URI handler registered in webserver.cpp (404 over HTTP). Confirmed
@@ -64,7 +64,7 @@ def _webserver_routes(text):
 
 def test_source_files_exist():
     assert API_CORE.is_file(), "missing %s" % API_CORE
-    assert WEBSERVER.is_file(), "missing %s" % WEBSERVER
+    assert read_source(WEBSERVER), "missing %s" % WEBSERVER
 
 
 def test_every_api_core_route_is_reachable_over_http():

@@ -524,7 +524,7 @@ def test_push_local_relay_poll_checks_timeout_before_status_continue():
         "failure continue, or a stuck HAT link can spin this loop forever"
 
 
-WEB_C = read_source("Firmware/ESP32/src/web/webserver.cpp")
+WEB_C = read_source("Firmware/ESP32/src/web/webserver*.cpp")
 
 
 def test_both_upload_routes_are_registered():

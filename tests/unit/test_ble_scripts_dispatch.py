@@ -35,8 +35,8 @@ def test_storage_is_served_by_the_shared_implementation():
     fw = read_source("Firmware/ESP32/src/net/api_scripts.cpp")
     assert "char *api_scripts_storage(" in fw
     assert 'strcmp(sfx, "storage") == 0' in read_source(CORE)
-    web = read_source("Firmware/ESP32/src/web/webserver.cpp")
-    body = web.split("static esp_err_t handle_get_scripts_storage", 1)[1].split("\n}\n", 1)[0]
+    web = read_source("Firmware/ESP32/src/web/webserver*.cpp")
+    body = web.split("\nesp_err_t handle_get_scripts_storage", 1)[1].split("\n}\n", 1)[0]
     assert 'api_core_handle("GET", "/api/scripts/storage"' in body, "HTTP must delegate, not duplicate"
 
 

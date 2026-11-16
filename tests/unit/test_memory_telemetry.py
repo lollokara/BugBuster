@@ -400,7 +400,6 @@ _PSRAM_BUFFERS = [
     ("Firmware/ESP32/src/mp/repl_ws.cpp", "s_tx_ring"),
     ("Firmware/ESP32/src/mp/repl_ws.cpp", "s_tx_frame"),
     ("Firmware/ESP32/src/bbp/cmds/cmd_script.cpp", "s_script_names"),
-    ("Firmware/ESP32/src/web/webserver.cpp", "s_script_names"),
 ]
 
 

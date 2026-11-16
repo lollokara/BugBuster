@@ -10,7 +10,7 @@ from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
 API_SCRIPTS = "Firmware/ESP32/src/net/api_scripts.cpp"
-WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = "Firmware/ESP32/src/web/webserver*.cpp"
 BLE = "Firmware/ESP32/src/net/ble_service.cpp"
 
 

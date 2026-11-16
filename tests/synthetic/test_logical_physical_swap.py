@@ -29,7 +29,7 @@ SITES = [
     # (file, body anchor, raw-access regex that must NOT see a bare logical index)
     ("tasks.cpp", "case CMD_SET_RTD_CONFIG:", r"AD74416H_REG_RTD_CONFIG\(cmd\.channel\)"),
     ("bbp/bbp.cpp", "bool bbp_dac_read_active(", r"getDacActive\(ch\)"),
-    ("web/webserver.cpp", "static esp_err_t handle_get_dac_readback(", r"AD74416H_REG_DAC_ACTIVE\(ch\)"),
+    ("web/webserver_core.cpp", "static esp_err_t handle_get_dac_readback(", r"AD74416H_REG_DAC_ACTIVE\(ch\)"),
     ("cli/cli_cmds_dev.cpp", "extern \"C\" void cli_cmd_dac(", r"getDacActive\(\(uint8_t\)ch\)"),
     ("cli/cli_cmds_dev.cpp", "extern \"C\" void cli_cmd_status(", r"(getChannelFunction|readAdcResult|getDacActive|readChannelAlertStatus)\(ch[,)]|dinComp >> ch\b"),
 ]

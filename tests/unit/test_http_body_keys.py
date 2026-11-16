@@ -7,15 +7,14 @@ ignored (``set_alert_mask`` over HTTP used to write zero masks).
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 import bugbuster as bb
+from tests.lib.srcread import WEBSERVER_SOURCES, read_source
 
-_WEBSERVER = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src" / "web" / "webserver.cpp"
-_FW_KEYS = set(re.findall(r'cJSON_GetObjectItem\(\s*doc\s*,\s*"([^"]+)"\s*\)', _WEBSERVER.read_text(encoding="utf-8")))
+_FW_KEYS = set(re.findall(r'cJSON_GetObjectItem\(\s*doc\s*,\s*"([^"]+)"\s*\)', read_source(WEBSERVER_SOURCES)))
 
 
 def _http_client() -> bb.BugBuster:

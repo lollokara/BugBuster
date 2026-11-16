@@ -151,5 +151,5 @@ def test_unavailable_analog_is_null_never_nan():
     assert 'cJSON_AddNumberToObject(root, "adcValue"' not in core
     ble = _code(_read(S3 / "net" / "ble_service.cpp"))
     assert "isfinite" in ble and '"na\\":true' in ble.replace("\\\\", "\\")
-    web = _read(S3 / "web" / "webserver.cpp")   # raw: its string literals defeat comment stripping
+    web = "".join(_read(p) for p in sorted((S3 / "web").glob("webserver*.cpp")))   # raw: its string literals defeat comment stripping
     assert 'api_add_measurement(obj, "value"' in web

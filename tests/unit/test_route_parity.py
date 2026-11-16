@@ -36,8 +36,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.lib.srcread import read_source
+
 REPO = Path(__file__).resolve().parents[2]
-WEBSERVER = REPO / "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = "Firmware/ESP32/src/web/webserver*.cpp"
 API_CORE = REPO / "Firmware/ESP32/src/net/api_core.cpp"
 
 # Routes that are implemented independently in both files and have NOT yet been
@@ -89,7 +91,7 @@ def _read(path: Path) -> str:
 def _handler_bodies(src: str) -> dict[str, str]:
     """Extract each `static esp_err_t name(httpd_req_t *req)` body by brace match."""
     bodies: dict[str, str] = {}
-    for m in re.finditer(r"static esp_err_t (\w+)\(httpd_req_t \*req\)\s*\n\{", src):
+    for m in re.finditer(r"^(?:static )?esp_err_t (\w+)\(httpd_req_t \*req\)\s*\n\{", src, re.M):
         name = m.group(1)
         i = m.end()
         depth = 1
@@ -117,7 +119,7 @@ def _api_core_routes(src: str) -> set[str]:
 
 def test_route_tables_are_parseable():
     """Guard the guard: if the parse breaks, the test must fail loudly, not vacuously pass."""
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     ac = _read(API_CORE)
     regs = _registrations(ws)
     bodies = _handler_bodies(ws)
@@ -130,7 +132,7 @@ def test_route_tables_are_parseable():
 
 def test_shared_routes_delegate_to_api_core():
     """Any route in BOTH tables must have its HTTP handler call api_core_handle()."""
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     ac = _read(API_CORE)
     bodies = _handler_bodies(ws)
     ac_routes = _api_core_routes(ac)
@@ -155,7 +157,7 @@ def test_shared_routes_delegate_to_api_core():
 
 def test_aliased_routes_delegate_to_api_core():
     """Same operation under two names -- the case exact matching cannot see."""
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     ac = _read(API_CORE)
     bodies = _handler_bodies(ws)
     ac_routes = _api_core_routes(ac)
@@ -189,7 +191,7 @@ def test_known_divergences_are_still_real():
     silently keep excusing a route that no longer needs it -- and would go on
     excusing it if it regressed.
     """
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     ac = _read(API_CORE)
     bodies = _handler_bodies(ws)
     ac_routes = _api_core_routes(ac)
@@ -245,7 +247,7 @@ SCRIPTS_HTTP_ONLY: dict[tuple[str, str], str] = {
 @pytest.mark.parametrize("sfx", SCRIPTS_ROUTES)
 def test_scripts_route_is_served_by_api_core_and_delegated_over_http(sfx):
     ac = _read(API_CORE)
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     block = ac[ac.index('strncmp(path, "/api/scripts/", 13) == 0'):]
     block = block[:block.index("return api_error(\"unknown path\")")]
     assert f'strcmp(sfx, "{sfx}") == 0' in block, f"/api/scripts/{sfx} not dispatched by api_core_handle()"
@@ -262,7 +264,7 @@ def test_scripts_route_is_served_by_api_core_and_delegated_over_http(sfx):
 
 
 def test_scripts_http_only_allowlist_is_still_real():
-    ws = _read(WEBSERVER)
+    ws = read_source(WEBSERVER)
     bodies = _handler_bodies(ws)
     for (uri, method), _why in SCRIPTS_HTTP_ONLY.items():
         handler = next((h for u, m, h in _registrations(ws) if u == uri and m == method), None)

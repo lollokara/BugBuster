@@ -36,7 +36,7 @@ def test_ios_post_decoded_accepts_4xx_bodies():
 def test_firmware_maps_ok_false_to_400_for_actions():
     src = WS.read_text(encoding="utf-8")
     assert "logical_failure_status" in src
-    for fn in ("static esp_err_t send_json(", "static esp_err_t send_raw_json("):
+    for fn in ("esp_err_t send_json(", "esp_err_t send_raw_json("):
         start = src.index(fn)
         body = src[start: src.index("\n}\n", start)]
         assert "logical_failure_status" in body, fn

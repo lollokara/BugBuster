@@ -14,6 +14,10 @@
   `client_system.py`, `client_scripting.py`, `client_channels.py`, `client_bus.py`, `client_power.py` and
   `client_hat.py`; `client.py` keeps the core, the result types and the factories. No method body changed and
   `bugbuster.client.BugBuster` exposes the same API.
+- **`web/webserver.cpp` split by area.** Handlers moved to `webserver_core/hat/io/power/scripts/system/update.cpp`;
+  `webserver.cpp` keeps the helpers and the route table (registration order unchanged), `webserver_internal.h`
+  declares what they share. Function bodies are unchanged; 160 handlers and helpers lost `static`. S3 image grows
+  152 bytes. Built, not flashed.
 
 ### Fixed
 

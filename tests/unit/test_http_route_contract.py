@@ -34,7 +34,7 @@ import pytest
 
 from tests.lib.srcread import REPO_ROOT, read_source
 
-WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = "Firmware/ESP32/src/web/webserver*.cpp"
 ADAPTER = "Firmware/ESP32/src/web/http_adapter.cpp"
 API_CORE = "Firmware/ESP32/src/net/api_core.cpp"
 API_SCRIPTS = "Firmware/ESP32/src/net/api_scripts.cpp"

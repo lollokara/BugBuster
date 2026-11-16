@@ -10,7 +10,7 @@ import re
 
 from tests.lib.srcread import read_source
 
-WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = "Firmware/ESP32/src/web/webserver*.cpp"
 ADAPTER = "Firmware/ESP32/src/web/http_adapter.cpp"
 # WebSocket endpoints registered outside webserver.cpp.
 WS_SOURCES = ("Firmware/ESP32/src/mp/repl_ws.cpp", "Firmware/ESP32/src/web/ws_stream.cpp")

@@ -8,7 +8,7 @@ from tests.lib.srcread import read_source
 
 API = "Firmware/ESP32/src/net/api_core.cpp"
 HAT = "Firmware/ESP32/src/hat/hat.cpp"
-WEB = "Firmware/ESP32/src/web/webserver.cpp"
+WEB = "Firmware/ESP32/src/web/webserver*.cpp"
 P4 = "Firmware/DAQ_HAT/ESP32P4/src/board/daq_board.c"
 
 
@@ -40,6 +40,6 @@ def test_p4_refusal_is_the_condition_being_probed():
 
 def test_http_maps_it_to_409():
     src = read_source(WEB)
-    start = src.index("static esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *fail_msg)\n{")
+    start = src.index("esp_err_t send_api_core_result(httpd_req_t *req, char *resp, const char *fail_msg)\n{")
     body = src[start:src.index("\n}\n", start)]
     assert '"runId"' in body and "409" in body

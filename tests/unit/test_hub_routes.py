@@ -6,7 +6,7 @@ from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
 CORE = "Firmware/ESP32/src/net/api_core.cpp"
-WEB = "Firmware/ESP32/src/web/webserver.cpp"
+WEB = "Firmware/ESP32/src/web/webserver*.cpp"
 ROUTES = ("/api/hub/status", "/api/hub/config", "/api/hub/resync")
 HANDLERS = {
     "handle_get_hub_status": "/api/hub/status",
@@ -17,7 +17,7 @@ HANDLERS = {
 
 
 def _handler(name):
-    return extract_function(WEB, rf"static esp_err_t {name}\(httpd_req_t \*req\)")
+    return extract_function(WEB, rf"^esp_err_t {name}\(httpd_req_t \*req\)")
 
 
 def test_routes_are_dispatched_by_api_core_handle():

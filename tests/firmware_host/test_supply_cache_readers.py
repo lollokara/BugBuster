@@ -23,7 +23,7 @@ def _code(t):
 
 @pytest.mark.parametrize("path,sig", [
     ("bbp/cmds/cmd_selftest.cpp", r"static int handler_selftest_supply_voltages_cached\("),
-    ("web/webserver.cpp", r"static esp_err_t handle_get_selftest_supplies_cached\("),
+    ("web/webserver_io.cpp", r"esp_err_t handle_get_selftest_supplies_cached\("),
 ])
 def test_cached_supply_readers_do_not_measure(path, sig):
     assert "selftest_monitor_step" not in _code(extract_function(SRC / path, sig))

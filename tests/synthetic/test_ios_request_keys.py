@@ -60,7 +60,7 @@ def test_firmware_still_expects_these_keys():
     """Control: re-derive the expectations so the test fails if the firmware
     changes instead of silently passing."""
     api = read_source("Firmware/ESP32/src/net/api_core.cpp")
-    web = read_source("Firmware/ESP32/src/web/webserver.cpp")
+    web = read_source("Firmware/ESP32/src/web/webserver*.cpp")
     assert 'body_get(body, "bipolar")' in api
     assert '"mux, range, rate required"' in api
     assert 'body_get(body, "excitation_ua")' in api

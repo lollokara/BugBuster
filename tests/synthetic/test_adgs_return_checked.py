@@ -14,8 +14,8 @@ import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "Firmware" / "ESP32" / "src"
-FILES = ["bbp/cmds/cmd_status.cpp", "web/webserver.cpp", "tasks.cpp",
-         "bus/bus_planner.cpp", "web/quicksetup.cpp"]
+FILES = ["bbp/cmds/cmd_status.cpp", "tasks.cpp", "bus/bus_planner.cpp", "web/quicksetup.cpp",
+         *sorted(p.relative_to(SRC).as_posix() for p in (SRC / "web").glob("webserver*.cpp"))]
 CALL = re.compile(r"\badgs_set_(api_)?(switch|all)_safe\s*\(")
 
 
@@ -49,6 +49,6 @@ def test_refusals_map_to_route_rejected():
     for fn in ("handler_mux_set_all", "handler_mux_set_switch"):
         body = status.split(f"static int {fn}(", 1)[1].split("\n}\n", 1)[0]
         assert "CMD_ERR_ROUTE_REJECTED" in body, fn
-    web = (SRC / "web" / "webserver.cpp").read_text(encoding="utf-8")
+    web = (SRC / "web" / "webserver_io.cpp").read_text(encoding="utf-8")
     body = web.split("static esp_err_t handle_post_mux_switch(", 1)[1].split("\n}\n", 1)[0]
     assert "send_error(req, 409" in body

@@ -53,7 +53,7 @@ int main(void) {
 def test_http_fault_config_starts_from_current_config():
     """The HTTP twin had the same bare struct, and a missing key forced the
     flag to false instead of keeping it."""
-    handler = extract_function("Firmware/ESP32/src/web/webserver.cpp",
+    handler = extract_function("Firmware/ESP32/src/web/webserver*.cpp",
                                r"^static esp_err_t handle_post_ioexp_fault_config\(")
     assert "pca9535_get_fault_config(" in handler
     assert "PcaFaultConfig cfg;" not in handler

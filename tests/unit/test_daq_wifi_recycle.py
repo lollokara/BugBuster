@@ -32,7 +32,7 @@ S3LINK = read_source("Firmware/DAQ_HAT/ESP32P4/src/link/s3_link.h")
 HAT_H = read_source("Firmware/ESP32/src/hat/hat.h")
 HAT_CPP = read_source("Firmware/ESP32/src/hat/hat.cpp")
 API = read_source("Firmware/ESP32/src/net/api_core.cpp")
-WEB = read_source("Firmware/ESP32/src/web/webserver.cpp")
+WEB = read_source("Firmware/ESP32/src/web/webserver*.cpp")
 
 
 def test_recycle_command_byte_matches_on_both_sides_of_the_hat_link():

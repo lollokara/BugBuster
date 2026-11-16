@@ -16,11 +16,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def read_source(path: str | Path) -> str:
-    """Read a repository source file as UTF-8, resolved against the repo root."""
+    """Read a repository source file as UTF-8, resolved against the repo root.
+
+    A path containing ``*`` is a glob: the matching files are returned joined in
+    sorted order (see :data:`WEBSERVER_SOURCES`)."""
     p = Path(path)
     if not p.is_absolute():
         p = REPO_ROOT / p
+    if "*" in p.name:
+        files = sorted(p.parent.glob(p.name))
+        if not files:
+            raise FileNotFoundError(str(p))
+        return "\n".join(f.read_text(encoding="utf-8") for f in files)
     return p.read_text(encoding="utf-8")
+
+
+# The S3 HTTP server: webserver.cpp (helpers, route table) plus the
+# webserver_*.cpp handler files it was split into.
+WEBSERVER_SOURCES = "Firmware/ESP32/src/web/webserver*.cpp"
 
 
 def client_source_files() -> list[Path]:

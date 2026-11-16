@@ -8,7 +8,7 @@ import re
 
 from tests.lib.srcread import read_source
 
-FILES = ("Firmware/ESP32/src/web/webserver.cpp", "Firmware/ESP32/src/net/api_core.cpp")
+FILES = ("Firmware/ESP32/src/web/webserver*.cpp", "Firmware/ESP32/src/net/api_core.cpp")
 _DEREF = re.compile(r'cJSON_GetObjectItem\w*\(\s*(\w+)\s*,\s*"(\w+)"\s*\)\s*->\s*value')
 
 

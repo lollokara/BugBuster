@@ -12,7 +12,7 @@ from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
 SOURCES = (
-    "Firmware/ESP32/src/web/webserver.cpp",
+    "Firmware/ESP32/src/web/webserver*.cpp",
     "Firmware/ESP32/src/web/http_adapter.cpp",
 )
 
@@ -46,7 +46,7 @@ def _routes():
 def _protected(path: str, handler: str, seen: frozenset = frozenset()) -> bool:
     if handler in seen:
         return False
-    body = extract_function(path, rf"^static esp_err_t {handler}\(")
+    body = extract_function(path, rf"^(?:static )?esp_err_t {handler}\(")
     if "check_admin_auth" in body:
         return True
     callees = set(re.findall(r"\b(handle_\w+)\s*\(", body)) - {handler}

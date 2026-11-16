@@ -9,20 +9,20 @@ import re
 from tests.firmware_host.fwhost import extract_function
 from tests.lib.srcread import read_source
 
-WEBSERVER = "Firmware/ESP32/src/web/webserver.cpp"
+WEBSERVER = "Firmware/ESP32/src/web/webserver*.cpp"
 # recv_json_body() treats any recv error, including a timeout, as fatal.
 DIRECT_RECV_ALLOWED = {"recv_json_body"}
 
 
 def test_upload_recv_is_bounded():
-    body = extract_function(WEBSERVER, r"^static int upload_recv\(")
+    body = extract_function(WEBSERVER, r"^int upload_recv\(")
     assert "recv_timeout_retry(&timeouts)" in body
     assert re.search(r"#define UPLOAD_RECV_MAX_TIMEOUTS\s+\d+", read_source(WEBSERVER))
 
 
 def test_no_unbounded_timeout_retry():
     src = read_source(WEBSERVER)
-    helper = extract_function(WEBSERVER, r"^static int upload_recv\(")
+    helper = extract_function(WEBSERVER, r"^int upload_recv\(")
     outside = src.replace(helper, "")
     assert "HTTPD_SOCK_ERR_TIMEOUT" not in outside
 
