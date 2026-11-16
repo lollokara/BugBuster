@@ -3,44 +3,17 @@
 Open work only. Everything delivered has moved to `CHANGELOG.MD` under
 `[Unreleased]` - do not re-add completed items here.
 
-## System Standby Checkpoint (2026-10-05)
+## System standby (2026-10-05/06)
 
-- [REPORTED] Firmware/host implementation is checkpointed, not release-ready.
-  Complete the integration, build and live acceptance gates in
-  [Docs/low-power-handoff.md](Docs/low-power-handoff.md).
-- [VERIFIED] Host-compiled policy/participant tests cover repeated transitions,
-  MUX-before-rail ordering, inhibitors, cancellation and failures. This does not
-  verify physical switching, display/backlight, power savings or wake latency.
-- [REPORTED] Final desktop presence/settings/P4 ACK integration, simulator parity,
-  all final firmware builds, manifests and full CI gates remain open. Only DAQ
-  hardware availability was confirmed; LA live coverage and external input-power
-  measurement are unavailable. No firmware has been flashed for this feature.
-- [VERIFIED 2026-10-05, macOS] Integrated gates on current main: unit/firmware-host/synthetic
-  3526 passed, simulator/device `--sim` 289 passed, `--sim-full` integration 6 passed, Tauri
-  backend 233 passed, editor 56 passed, wasm UI `cargo check`, proto/sdkconfig/doc-count gates;
-  S3, P4, C6 (PlatformIO) and RP2040 (CMake) all build. A minimal System standby card
-  (timeout select, state, Wake) now lives in the existing USB PD tab. Still open: actual
-  WebView/CDP screenshots, live USB/Wi-Fi/MCP, GPIO54 conflict check, flashing, physical
-  and input-power measurement.
-- [VERIFIED 2026-10-05, DAQ HAT bench, DUT/IO detached] OTA of S3/P4/C6 and 10 consecutive sleep/wake cycles over HTTP
-  (sleep ~0.4-0.8 s, wake ~1.5-1.9 s, no P4 failure lines). Root cause of the first sleep failure: GPIO54 is both
-  `26V_EN` and the C6's CHIP_PU, so analog-off reset the C6 before it could confirm stage 6. Fixed by darkening the C6
-  (panel, backlight, latched all-off WS2812 frame) inside stage 5 before the rails go; stage 6 completes from that, the C6
-  stages of a wake are skipped while the rails are off. Also: P4 `W`/`E` and `standby*` log lines now reach the hub
-  (ESPFleet) for wireless debugging; the C6 boot splash waits 15 s (25 s overall) for the S3 report; ADAQ calibration reads
-  retry. Still open: physical check of panel/backlight/LED darkness, held-button wake (VDUT must not toggle), power
-  measurement, LA HAT, degraded/no-Wi-Fi boot, WebView/CDP screenshots.
-- [VERIFIED 2026-10-05, later, DAQ HAT bench] Full pass on the final images: local CI equivalents all green (ruff, mypy,
-  3815 + 6 pytest, coverage ratchet, 4 consistency gates, 233 cargo, web typecheck + 12 vitest files, S3/P4/C6/RP2040
-  builds, P4 app-only and C6 merged image verification); device suite over HTTP 148 passed with the four RP2040-only HAT
-  pin tests now skipped on a DAQ HAT; desktop mock UI harness 46 views x 3 HAT types x 2 themes with no errors, editor
-  e2e 21/21, scripting workspace 334/335 (the autorun-reboot step is timing-sensitive). Root causes found on the way:
-  idle-clock race (activity stamped after the tick's clock read wrapped the idle time and slept the board right after a
-  press), a C6 holding a stale generation after an S3/P4 restart, the S3 cold-boot AD74416H verify failing (now retried;
-  this is what the C6 shows as "Mainboard IO"), `hat_detect()` demoting a connected DAQ HAT to a generic HAT, and the
-  standalone readout staying `---` after a wake (a front-panel press now reconnects the measurement path). Still open:
-  a power-cycle confirmation of the boot retry, the ADAQ CRC-read failures seen on earlier sleep loops (diagnostics are in),
-  physical panel/backlight/LED darkness, held-button wake, input-power measurement, LA HAT, no-Wi-Fi boot.
+Bench-verified on the DAQ HAT (10+ sleep/wake cycles, auto idle sleep) and on the LA HAT
+(2026-10-12); details in `CHANGELOG.MD`. Still open:
+
+- Power-cycle confirmation of the AD74416H boot retry.
+- Cause of the intermittent ADAQ `reg 0x21` CRC read failures after sleep loops (diagnostics are in).
+- Physical check of panel/backlight/LED darkness; held-button wake (VDUT must not toggle).
+- Input-power and current measurement asleep vs awake.
+- LA HAT inhibitors (script, OTA, LA stream, DAP); degraded / no-Wi-Fi boot.
+- A real WebView/CDP run of the desktop standby card.
 
 Populated by the multi-surface audit of 2026-08-20 and its verification pass,
 then extended by the **per-feature audit of 2026-10-01** (every device feature
@@ -128,122 +101,77 @@ one read-only check on hardware. Line numbers drift - another agent was editing
 
 Nothing in this audit was built, flashed, or run on hardware.
 
-## Execution plan for the next agent
+## Audit remediation status (M1-M10): what is not yet proven
 
-Ordered by risk-to-user over effort. Inside a wave, items are independent unless
-noted. **Every wave ends with:** ruff + mypy (scope in AGENTS.md), unit +
-`--sim` suites, the firmware build for every target touched, the manifest
-update (non-negotiable #12), and a `CHANGELOG.MD` `[Unreleased]` entry.
+Rows proven on hardware were removed (see `CHANGELOG.MD` `[3.0.0]`). What remains is fixed in
+source but not provoked on a board, or still open. The per-item text for fixed items was
+removed from the wave sections below; `git log -S<ID> -- TODO.md` recovers it.
 
-1. **Wave A - host-only correctness (no flashing).** Python, MCP, web UI, iOS,
-   desktop. Cheapest, highest value: several MCP tools return wrong numbers or
-   report success on failure today. Items: AN-01, AN-02, MCP-20, MCP-21,
-   MCP-22, MCP-23, PLT-02, LA-04, DAQ-01, DAQ-02, IO-11, WEB-KEYS, IOS-KEYS,
-   PWR-06, BUS-012, DESK-20, PY-20.
+**Wave A status (2026-10-01, branch `audit/2026-10-m1-host-fixes`).**
 
-   **Wave A status (2026-10-01, branch `audit/2026-10-m1-host-fixes`).** Each
-   fix is a `test(ID)` commit that fails on the old code followed by a
-   `fix(ID)` commit. Verified in unit / `--sim` / vitest / `cargo test` only -
-   **not yet on hardware**, so the per-item tags below stay as they were.
+| Status | Items |
+|---|---|
+| Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2, DESK-21 (BBSC v2 scope buckets) |
+| Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
+| Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
 
-   | Status | Items |
-   |---|---|
-   | Fixed (host tests) | AN-01, AN-02, MCP-20, MCP-21, MCP-22, MCP-23, MCP-24, PLT-02, LA-04, DAQ-01 (decoder half), DAQ-02, PWR-06, PWR-08, BUS-012 (client half), PY-20, PROTO-8, WEB-KEYS, TEST-2, DESK-21 (BBSC v2 scope buckets) |
-   | Fixed, unbuilt | IOS-KEYS (static source test only; no Swift toolchain on Windows - needs an Xcode build) |
-   | Moved to Wave B | IO-11, DESK-20 (the firmware `/api/io/owner` handlers must derive kind/session from the token first) |
+**Plan M2 status (2026-10-01, branch `audit/2026-10-m2-s3-firmware`, S3 flashed by OTA).**
 
-   **Plan M2 status (2026-10-01, branch `audit/2026-10-m2-s3-firmware`, S3 flashed by OTA).**
+| Status | Items |
+|---|---|
+| Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; iOS now displays the derived passkey and waits for pairing, but needs a phone handshake) |
 
-   | Status | Items |
-   |---|---|
-   | Fixed, verified on hardware | TR-2, PLT-01, PLT-06, PLT-10, WEB-25, WEB-24 (idle state only - READY state needs the DAQ WiFi stream up), BBP-TXQ, BBP-STDOUT, HAT-RESET (last three found on hardware during M2) |
-  | Fixed, host tests only | PLT-03 (T1; 30-run soak clean), PWR-01 (T2; HTTP check needs an NVS-free path - fault config is RAM-only, but not exercised on the board), PLT-04 (flags + passkey; iOS now displays the derived passkey and waits for pairing, but needs a phone handshake) |
-   | Refuted | WEB-NULL - all 17 dereferences already guarded; gate added |
-   | Fixed, verified on hardware (measured) | PLT-07 - uPython stack had 1964 B left after one HTTPS `bugbuster.http_get`; now 8 KiB, 4060 B left. The task is now in stack telemetry |
+**Plan M3 status (2026-10-01, branch `audit/2026-10-m3-routing`, S3 flashed by OTA, BBP PROTO 12).**
 
-   **Plan M3 status (2026-10-01, branch `audit/2026-10-m3-routing`, S3 flashed by OTA, BBP PROTO 12).**
+| Status | Items |
+|---|---|
+| Fixed, host tests only | IO-2 (break-before-make transient needs a scope), LA-03 (needs the LA HAT, M8), PLT-05 (owner chose no WiFi changes on the board), FEAT-6, PROTO-4, DESK-31 |
+| Open (needs a bench decision) | IO-12 / AN-14: after `configure_io` on analog IO9 the device has **S3** closed (firmware auto-route) while the HAL shadow says **S2**; the next HAL MUX write flips it. Which switch is electrically correct needs a wired stimulus. IO-3 label: U17's daisy-chain slot is not recoverable from the binary PCB files - device 2 stays guarded until confirmed |
 
-   | Status | Items |
-   |---|---|
-   | Fixed, verified on hardware | IO-1, IO-3 (refusal on device 3 S3 checked live), IO-5, IO-8 + MUX-4, IO-9 (functional MUX checks; transient proof is T2), IO-25 (new, found on hardware), AN-03, AN-04 (299 -> 103 ms median), AN-05, BUS-003, BUS-005, BUS-012, PWR-03 (B only), PWR-02 (B only: no short fixture; T2 proves the trip), PWR-REFAC + PWR-11, PROTO bump |
-   | Fixed, host tests only | IO-2 (break-before-make transient needs a scope), LA-03 (needs the LA HAT, M8), PLT-05 (owner chose no WiFi changes on the board), FEAT-6, PROTO-4, DESK-31 |
-   | Open (needs a bench decision) | IO-12 / AN-14: after `configure_io` on analog IO9 the device has **S3** closed (firmware auto-route) while the HAL shadow says **S2**; the next HAL MUX write flips it. Which switch is electrically correct needs a wired stimulus. IO-3 label: U17's daisy-chain slot is not recoverable from the binary PCB files - device 2 stays guarded until confirmed |
-   | Read-only, settled | C6-20 caller classification (input to M4) |
+**Plan M4 status (2026-10-01, branch `audit/2026-10-m4-daq`, P4/C6/S3 flashed over HTTP, USB stream 2 / DDP 9 unchanged).**
 
-   **Plan M4 status (2026-10-01, branch `audit/2026-10-m4-daq`, P4/C6/S3 flashed over HTTP, USB stream 2 / DDP 9 unchanged).**
+| Status | Items |
+|---|---|
+| Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
+| Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
 
-   | Status | Items |
-   |---|---|
-   | Fixed, verified on hardware | DAQ-05 + P4-8 (missed_conversions = expected - received within 0.12 % across 8k-512k), DAQ-06 (8k/64k/128k within 0.5 %; 256k/512k ODR correct, capture loses 19 %/54 % and now reports it), DAQ-08 + P4-9 (full-span V_DUT write 56-100 ms, A timed out at ~740 ms), DAQ-04 (5 STOP/START cycles, no index gaps; marker race itself is T1), C6-20 |
-   | Fixed, host tests + build only | DAQ-03 (no IO loopback to measure marker timing), DAQ-16 / P4-7 (iOS path not covered), C6-21 (no C6 reboot / factory reset on the board), C6-22 (visual check not done), C6-23, C6-25 (board kill test inconclusive: staging finished before the S3 reset landed) |
-   | Open | DAQ capture throughput above 128 kSPS (19 % lost at 256k, 54 % at 512k) - now measured and reported, not fixed |
+**Plan M5 status (2026-10-02, branch `audit/2026-10-m5-latency`, S3 + SPIFFS flashed by OTA). M5 complete.**
 
-   **Plan M5 status (2026-10-02, branch `audit/2026-10-m5-latency`, S3 + SPIFFS flashed by OTA). M5 complete.**
+| Status | Items |
+|---|---|
+| Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12, WEB-28 (UI redeployed, vitest), DESK-22, DESK-23 (ADC tab only), DESK-24, DESK-25, DESK-28, DESK-DIAG-RAW (new) |
+| Not verified on a client | iOS camelCase decode (IOS-23): T1 only, needs a macOS build by the owner. Desktop UI changes: `cargo check` + tests, no UI run |
+| Carried over | DESK-23 for the other tabs (Overview, Diag, Faults rebuild per tick); AN-11 faster path (fewer SPI transactions per sample) |
 
-   | Status | Items |
-   |---|---|
-   | Fixed, measured on hardware | USB-RX-LAT (new; PING 107 -> 1.0 ms), TR-3 (70 s idle: timeout -> 5 ms), WEB-23 (status with SSE open 0/10 -> 10/10), AN-06 (PING p95 during wave 4.1 -> 1.2 ms), TR-6 (11 -> 5 frames, 761 -> 405 ms; time target -60 % missed at -47 %), IO-13, AN-10/AN-11 (9.6 kSPS stream 16 -> ~1180 samples/s, reported rate now matches; plan target "within 2 % of 9.6 k" missed - SPI cost per sample is the ceiling), IOS-23 (`/api/status` -42 %) |
-   | Fixed, host tests + smoke | TR-7, TR-9, PWR-16, PWR-10 (worker off on this board), AN-07, AN-12, WEB-28 (UI redeployed, vitest), DESK-22, DESK-23 (ADC tab only), DESK-24, DESK-25, DESK-28, DESK-DIAG-RAW (new) |
-   | Not verified on a client | iOS camelCase decode (IOS-23): T1 only, needs a macOS build by the owner. Desktop UI changes: `cargo check` + tests, no UI run |
-   | Refuted / closed | TR-1 (fixed by BBP-TXQ in M2; device test added) |
-   | Carried over | DESK-23 for the other tabs (Overview, Diag, Faults rebuild per tick); AN-11 faster path (fewer SPI transactions per sample) |
+**Plan M6 status (2026-10-02, branch `audit/2026-10-m6-refactor`; S3, P4, C6 flashed).**
 
-   **Plan M6 status (2026-10-02, branch `audit/2026-10-m6-refactor`; S3, P4, C6 flashed).**
+| Status | Items |
+|---|---|
+| Fixed, host tests | DESK-REFAC (25 dead commands removed), DESK-33, FEAT-4 |
+| Gate added, refactor carried over | PY-21 (public API golden snapshot; mixin split not done), TR-11 (USB/HTTP equivalence test, 7 on the board; service layer not done) |
+| Not verified on a client | iOS TR-11b changes (T1 only) |
+| Open, found here | `tests/http_api` mutating tests send no admin token (401 on the board) |
 
-   | Status | Items |
-   |---|---|
-   | Fixed, measured on hardware | C6-26 (kept + fixed; offline OTA for C6, P4, S3 app, SPIFFS all verified), TR-11b (3 invalid actions 200 -> 400), BBP-DEVINFO (new, found by the TR-11 gate) |
-   | Fixed, host tests | DESK-REFAC (25 dead commands removed), DESK-33, FEAT-4 |
-   | Gate added, refactor carried over | PY-21 (public API golden snapshot; mixin split not done), TR-11 (USB/HTTP equivalence test, 7 on the board; service layer not done) |
-   | Not verified on a client | iOS TR-11b changes (T1 only) |
-   | Open, found here | `tests/http_api` mutating tests send no admin token (401 on the board) |
+**Plan M7 status (2026-10-02, branch `audit/2026-10-m7-parity`).**
 
-   **Plan M7 status (2026-10-02, branch `audit/2026-10-m7-parity`).**
+| Status | Items |
+|---|---|
+| Done, host tests | BUS-011, BUS-016, MCP-4, DESK-9 |
+| Carried over | DESK-3, DESK-4 / WEB-3, IOS-5, DAQ-13 |
 
-   | Status | Items |
-   |---|---|
-   | Done, measured on hardware | MCP-5 / PLT-08 (all logs returned), DAQ-10 (current trigger on the live stream) |
-   | Done, host tests | BUS-011, BUS-016, MCP-4, DESK-9 |
-   | Already done | PY-4 (M1) |
-   | Carried over | DESK-3, DESK-4 / WEB-3, IOS-5, DAQ-13 |
+**Plan M10 / M9 status (2026-10-02, branch `audit/2026-10-m9-closeout`).**
 
-   **Plan M10 / M9 status (2026-10-02, branch `audit/2026-10-m9-closeout`).**
+| Status | Items |
+|---|---|
+| Done, host tests | IO-23, DAQ-07 (MCP half), MCP-34, MCP-25 (OTA/cal tools), IO-19 |
+| Still open | AN-15 firmware voltage clamp for raw codes (needs calibrated prediction + bench), DAQ-07 USB range lock through the registry (P4), MCP-25 rest (`daq_set_source`/`daq_power_setup`/`daq_set_setting` bounds, `require_hat` HAT type), MCP-26, IO-14/15/16, IO-24, PWR-12/13/15, BUS-007/008/013/014/015, C6-5/24/30/31/35/38/40, PLT-11/18, IOS-22, DESK-29/30, LA-13/14, TEST-3/5/6/7 |
 
-   | Status | Items |
-   |---|---|
-   | Done, measured on hardware | IO-17, AN-08, AN-15 (ch3 + MCP), BUS-017 |
-   | Done, host tests | IO-23, DAQ-07 (MCP half), MCP-34, MCP-25 (OTA/cal tools), IO-19 |
-   | Still open | AN-15 firmware voltage clamp for raw codes (needs calibrated prediction + bench), DAQ-07 USB range lock through the registry (P4), MCP-25 rest (`daq_set_source`/`daq_power_setup`/`daq_set_setting` bounds, `require_hat` HAT type), MCP-26, IO-14/15/16, IO-24, PWR-12/13/15, BUS-007/008/013/014/015, C6-5/24/30/31/35/38/40, PLT-11/18, IOS-22, DESK-29/30, LA-13/14, TEST-3/5/6/7 |
+**Final hardware run (2026-10-02, `tests/device --daq --skip-destructive`, USB + HTTP + DAQ HAT, no DUT wired):**
 
-   **Final hardware run (2026-10-02, `tests/device --daq --skip-destructive`,
-   USB + HTTP + DAQ HAT, no DUT wired):** 282 passed, 10 failed, 3 errors in
-   15m48s. Triage:
-
-   | Result | Tests | Cause / action |
-   |---|---|---|
-   | Test bug, fixed (96ff623), passes on the board | 3 equivalence errors | session-scoped `daq_bbp` held COM6 for every later module; now module-scoped |
-   | Test bug, fixed, passes | `test_mux_round_trip[http]`, `test_mux_device2_interlock_reports_correctly`, `test_mux_per_device_control` | since IO-25 the supply monitor holds U23 only for a window every 5 s; tests now wait out / hunt for that window |
-   | Test bug, fixed, passes | `test_vout_set_and_readback[usb]`, `test_vout_range_unipolar[usb]` | 50 ms fixed sleep raced the queued DAC write; now polls |
-   | Test bug, fixed, passes | `test_adc_stream_sample_rate` | streamed a HIGH_IMP channel; samples are pushed only on a conversion (passed before IO-25 by accident) |
-   | Flaky, passed on rerun | `test_large_response_intact`, `test_spectrum_keeps_updating_over_thousands_of_ffts` | open; watch |
-   | Needs a DUT load | `test_source_enable_produces_current_and_disable_removes_it`, `test_current_is_linear_in_vdut`, `test_current_is_monotonic_in_vdut` | bench had nothing on the DUT terminals; should skip without `--daq-load-ohms` |
-2. **Wave B - S3 firmware safety and correctness.** One build, one OTA flash,
-   then the live checks listed per item. Items: TR-2, PLT-03, PLT-01, WEB-24,
-   PWR-01, PWR-02, IO-1, IO-5, AN-04, IO-8 (+ MUX-4), PLT-06, WEB-23, BUS-003,
-   BUS-005, PLT-10, WEB-25, WEB-NULL, PWR-03.
-3. **Wave C - DAQ HAT firmware (P4 + C6, build both).** C6-20, C6-23, C6-22,
-   DAQ-04, DAQ-05, DAQ-06, DAQ-03, C6-25, P4-8. DAQ-01's protocol half (widen
-   the drop counters) goes here and bumps `usb_proto.h` in all four copies
-   (`.mex/patterns/daq-usb-proto-change.md`).
-4. **Wave D - latency.** TR-1 (confirm first), TR-3, AN-07, AN-06, AN-10/AN-11,
-   IO-13, TR-6 / MCP-31, TR-9, DESK-22..26, WEB-28, IOS-23, PWR-09, PWR-10.
-5. **Wave E - refactors.** TR-11 (one service layer for BBP + HTTP), FEAT-6
-   (generated error tables), PY-21 (split `client.py`), IO-2 (MUX
-   break-before-make), the three power-up sequences (PWR-REFAC), DESK-REFAC.
-6. **Wave F - parity features.** DESK-3, DESK-4 / WEB-3, MCP-5, MCP-4, BUS-011,
-   DAQ-13, DAQ-10, IOS-5, BUS-016.
-7. **Wave G - RP2040 (blocked until the LA HAT is attached).** LA-01, LA-02,
-   LA-03 (the S3 half can go in Wave B), LA-05..LA-12.
+| Result | Tests | Cause / action |
+|---|---|---|
+| Flaky, passed on rerun | `test_large_response_intact`, `test_spectrum_keeps_updating_over_thousands_of_ffts` | open; watch |
+| Needs a DUT load | `test_source_enable_produces_current_and_disable_removes_it`, `test_current_is_linear_in_vdut`, `test_current_is_monotonic_in_vdut` | bench had nothing on the DUT terminals; should skip without `--daq-load-ohms` |
 
 ## Feature verdict matrix
 
@@ -323,67 +251,6 @@ what to build, how to prove it. Effort S/M/L.
 
 ### Wave A - host-only correctness
 
-- **AN-01** · P1 · BUG · `[VERIFIED]` - Python over HTTP posts `{"limit_8mA": ...}`
-  (`python/bugbuster/client.py:1223`) but the handler reads `"limit8mA"`
-  (`Firmware/ESP32/src/web/webserver.cpp:1169`). The 8 mA current limit is
-  silently never applied over WiFi. **Do:** send `limit8mA`. **Prove:** sim
-  test asserting the posted key; on device, read back `limit8mA` in the
-  response. S.
-- **AN-02** · P1 · BUG · `[VERIFIED]` - `PortHAL.read_current()`
-  (`python/bugbuster/hal.py:569-573`) returns `(adc.value / 12.0) * 1000.0`,
-  but firmware already converts to mA (`tasks.cpp` `convertAdcCode()`,
-  `adcCodeToCurrent(...) * 1000.0f` for every `CH_FUNC_IIN_*`). Result is about
-  83x too large, and MCP `read_current` inherits it. **Do:** return
-  `adc.value`. **Prove:** unit test with a simulated 12.0 mA reading. S.
-- **MCP-20** (IO-4) · P1 · BUG · `[VERIFIED]` - MCP `io_claim`
-  (`python/bugbuster_mcp/tools/io_owner.py:123`) calls
-  `bb.io_claim(slots, lease_seconds, purpose)`; the real method is
-  `io_claim(self, slots, *, lease_ms=0, purpose="")` and is a
-  `@contextmanager` (`client.py:4381`). Always `TypeError`; even if fixed
-  positionally it would claim and release immediately. **Do:** call
-  `bb._io_claim_raw(slots, lease_seconds*1000, purpose)` or add a public
-  non-context `io_claim_lease()`; fix `tests/unit/test_mcp_io_owner.py:56`,
-  which locks in the wrong call, and use `create_autospec(BugBuster)` there.
-  **Prove:** the tool test passes against an autospec'd client. S.
-- **MCP-21** (IO-6, IO-7, IO-18) · P1 · BUG · `[REPORTED]` - MCP `selftest`
-  returned `all_pass: true` with boot test failed and supplies at 0 V (the
-  agent executed this against the simulator); it reads keys the library does
-  not return (`boot_ok`, supply names). `check_faults` reads `channel_alerts`
-  (`discovery.py:188`) but the key is `channels`, and reports "No active
-  faults" after an e-fuse auto-disable cleared `efuse_flt`
-  (`pca9535.cpp:100,554`). **Do:** align keys with `_parse_status` /
-  `_parse_faults`; include the auto-disable latch in the fault report.
-  **Prove:** sim tests that inject a failed boot test and a tripped e-fuse. S.
-- **MCP-22** (IO-10, PWR-04, PWR-05) · P1 · SAFETY · `[VERIFIED]` -
-  `target_power_up`, `enter_bootloader`, `release_bootloader`
-  (`python/bugbuster_mcp/tools/target.py:47,130,243`) map rail 2 to `EFUSE2`.
-  Per `bus_planner.cpp:92-139`, VADJ1 feeds EFUSE1+EFUSE2 (IO 1-6) and VADJ2
-  feeds EFUSE3+EFUSE4 (IO 7-12). Rail 1 also leaves EFUSE2 off. The
-  post-check reads `get_status()["power"]` (`target.py:67,202`), a key
-  `get_status()` never returns (`client.py:1009-1015`), so `success` is
-  always true. No `validate_vadj_voltage` either. **Do:** map rail -> both
-  e-fuses of its rail, read faults from `get_faults()` / PCA status, validate
-  voltage with the board profile. Ideally replace all three sequences with one
-  firmware-side sequence (see PWR-REFAC). **Prove:** sim test on rail 2
-  asserting EFUSE3/4 toggled and a tripped fuse yields `success: false`. S.
-- **MCP-23** (BUS-006) · P1 · BUG · `[VERIFIED]` - MCP `uart_config`
-  `_PARITY_MAP = {"none": 0, "even": 1, "odd": 2}`
-  (`tools/debug.py:189`); firmware maps 1 = ODD, 2 = EVEN
-  (`net/uart_bridge.cpp:189-190`). `parity="even"` configures odd. **Do:** use
-  the existing `UART_PARITY_MAP` from `bugbuster_mcp/config.py`. S.
-- **PLT-02** · P1 · BUG · `[VERIFIED]` - `WIFI_SET_AP_PASSWORD` replies
-  `0x00` = applied+persisted, `0x01` = applied not persisted, `0x02` = failed
-  (`bbp/cmds/cmd_wifi.cpp:195-198`). Python returns `bool(resp[0])`
-  (`client.py:4216`), i.e. success reads as False and failure as True. The
-  mock (`tests/mock/handlers/misc.py`) encodes the inverted meaning too.
-  **Do:** return a small result (`applied`, `persisted`) or `resp[0] != 0x02`;
-  fix the mock. S.
-- **LA-04** · P1 · BUG · `[VERIFIED]` - `capture_logic_analyzer`
-  (`tools/waveform.py:~375-393`) treats `hat_la_decode()` output as edges, but
-  it returns one 0/1 per **sample** (`client.py:3546-3561`). `transitions` is
-  the sample count, so `frequency_hz` is always rate/2 and the protocol hints
-  are wrong; `edges[:100]` is raw samples. **Do:** count level changes and emit
-  real edge timestamps. **Prove:** unit test with a synthetic square wave. S.
 - **DAQ-01** · P1 · BUG · `[VERIFIED]` - Rust STATUS decoder
   (`DesktopApp/BugBuster/src-tauri/src/daq_proto.rs:~453-466`) reads
   `drop_fine`/`drop_coarse` as u32 at 30/34 and `frames_tx` at 40; firmware
@@ -394,38 +261,17 @@ what to build, how to prove it. Effort S/M/L.
   parses the struct comment offsets in all four copies, or a golden STATUS
   frame shared by Python, Rust and iOS tests. The Rust test
   `status_perf_extension` encodes the wrong layout and must change with it. S/M.
-- **DAQ-02** · P1 · BUG · `[REPORTED]`, mechanism `[VERIFIED]` -
-  `_drain_voltage()` (`python/bugbuster/daq_stream.py:~445-460`) compares
-  voltage-stream indices (`rec.start_index + k`) with current-timebase indices
-  (`cap.start_index + len(cap.voltage)`) with no rate ratio. With current at
-  8 kSPS and voltage at 64 kSPS the agent reproduced 1.25 V reported for a true
-  3.0 V. **Do:** scale by the V/I rate ratio from the stream header, or
-  timestamp both. **Prove:** unit test with mismatched rates. S.
 - **IO-11** · P1 · BUG · `[VERIFIED]` - web `io_lease.ts:130,148` call
   `/api/io/owner/claim` and `/api/io/owner/release`; firmware registers
   `POST /api/io/owner` and `DELETE /api/io/owner` (`webserver.cpp:5695-5710`).
   The lease banner 404s every 2 s and never claims. **Do:** call the real
   routes, surface errors. S.
-- **WEB-KEYS** (DAQ-11, WEB report) · P1 · BUG · `[REPORTED]` - web UI reads
-  JSON keys the firmware does not send: DAQ tab `voltage_v` / `current_a` /
-  `cal_have_*` / `type` (firmware: `measuredVoltageV`, `measuredCurrentMa`,
-  `typeName`, `fwMajor/fwMinor`) so V/I/P show 0 and "UNCALIBRATED" is
-  permanent; GitHub update card `.newer` (firmware `updateAvailable`); Voltages
-  tab `c.voltage` (firmware `targetV`); RTD posts `current_uA` (firmware reads
-  `current` or `excitation_ua`). Full list with handler lines in
-  `CLIENTS-WEB-IOS.md`. **Do:** fix each, then add a TS type per route
-  generated from or checked against one JSON fixture per handler. S each.
 - **IOS-KEYS** (AN-17, IOS report) · P1 · BUG · `[REPORTED]` - iOS sends
   `range` (firmware wants `bipolar`) to `vout/range`; omits `mux` on
   `adc/config` (rejected); sends `excitationUa` for RTD; decodes Quick Setup
   list as a bare array (firmware returns `{slots:[...]}`); autorun enable omits
   `?name=` (always 400). `OverviewTab.swift:1018-1046` and others. Read-verify
   only (cannot build on Windows). S each.
-- **PWR-06** · P1 · BUG · `[REPORTED]`, Python half `[VERIFIED]` - over USB
-  `usbpd_select_voltage()` sends only `USBPD_SELECT_PDO`
-  (`client.py:4133-4147`), and MCP `usb_pd_select` (`tools/power.py:70`) never
-  calls `usbpd_go()`. Desktop and HTTP send select + go. **Do:** confirm the
-  HTTP handler does both, then commit over USB too. S.
 - **BUS-012** · P2 · BUG · `[REPORTED]` - Python ext I2C masks addresses with
   `& 0x7F`, so an 8-bit address 0xA0 silently becomes 0x20; firmware does not
   validate either. **Do:** reject > 0x7F with a message naming the 7-bit form;
@@ -436,39 +282,8 @@ what to build, how to prove it. Effort S/M/L.
   transport", `:2143`). Reported effect: over WiFi, GPIO/DIN/DOUT/WaveGen
   writes are refused. **Do:** map to `/api/io/owner` GET/POST/DELETE and
   `/api/io/owner/force`. S.
-- **PY-20** (PY-4) · P2 · PROTOCOL · `[REPORTED]` - the constants parity test
-  only checks Python `CmdId` -> firmware, never firmware -> Python, so
-  `ADC_LEDS_SET_MODE` 0x47 and `WIFI_FORGET` 0x0A have no `CmdId` and nothing
-  fails. **Do:** make the test bidirectional with an explicit allow-list for
-  intentionally unbound IDs. S.
-
 ### Wave B - S3 firmware safety and correctness
 
-- **TR-2** · P1 · BUG · `[VERIFIED]` - `BBP_COBS_MAX` is
-  `BBP_MAX_PAYLOAD + 2 + 1` = 1027 (`bbp/bbp.h:41-42`), but COBS adds one byte
-  per 254 plus one, so a 1024-byte message encodes to up to 1029 bytes and
-  `sendFrame()` writes the delimiter at `s_cobsBuf[cobsLen]`
-  (`bbp/bbp.cpp:~162-166`) - a heap/static overrun of up to 3 bytes on
-  near-maximum responses. Separately `sendMsg()` silently **drops** any
-  response over the limit with only a log line, so the host times out instead
-  of getting an error (`SCRIPT_LOGS` can reach this). **Do:** size
-  `BBP_COBS_MAX` as `n + n/254 + 2`, bound COBS decode output, and send
-  `BBP_ERR_*` when a response does not fit. **Prove:** unit test of the COBS
-  encoder at 1024 bytes of non-zero data; live `SCRIPT_LOGS` with a full log. S.
-- **PLT-03** · P1 · BUG · `[VERIFIED]` - `scripting_run_string()` declares
-  `ScriptCmd cmd;` uninitialised (`mp/scripting.cpp:690`) and sets only
-  `id/payload/len/persist`; the worker reads `cmd.is_lint` and gives
-  `cmd.lint_sem` (`:510,531`). Stack garbage can route a run as a lint and
-  `xSemaphoreGive()` a wild pointer. Every other site uses `= {}`. **Do:**
-  `ScriptCmd cmd = {};`. S.
-- **PLT-01** · P0 · SECURITY · `[VERIFIED]` - `POST /api/registry/set_dac_code`,
-  `set_dac_voltage`, `set_dac_current` (`web/http_adapter.cpp:93-249`,
-  registered by `http_adapter_register()` at `webserver.cpp:5761`) drive the
-  DAC with **no admin check** (`http_adapter.cpp` contains no auth call);
-  every other mutating route calls `check_admin_auth()`. No host calls them.
-  **Do:** delete the three routes (or gate them), update the route count gate
-  and the esp32-mainboard manifest. **Prove:** unauthenticated POST returns
-  404/401. S.
 - **WEB-24** · P1 · SECURITY · `[VERIFIED]` - unauthenticated
   `GET /api/daq/wifi_stream/status` returns the DAQ hotspot `ssid` and
   `password` (`net/api_core.cpp:~440-442`, handler `webserver.cpp:2412`).
@@ -490,120 +305,13 @@ what to build, how to prove it. Effort S/M/L.
   the known `power_set_port(0, 0x00)` hazard) and bypasses the e-fuse
   blackout gate (`pca9535.cpp:386`). **Do:** firmware mask that forces the hub
   and logic enables on unless an explicit override flag is sent. S.
-- **IO-1** (BUS-001, BUS-002) · **P0** · SAFETY · `[VERIFIED]` -
-  `bus_planner_route_digital_input()` calls
-  `apply_power_and_mux(..., 3.3f, 3.3f, ...)` (`bus/bus_planner.cpp:~511`),
-  i.e. sets **VADJ and VLOGIC to 3.3 V**, re-arms the e-fuse, and writes a MUX
-  state holding only that route. Callers: `cmd_dio.cpp:73` (every DIO config),
-  `webserver.cpp:1551`, `uart_bridge.cpp:277,284` (RX setup clears the TX
-  switch), `quicksetup.cpp:475`, `mp/autorun.cpp:102`. A user running a 5 V or
-  12 V DUT on that rail has it silently dropped to 3.3 V by configuring one
-  digital input. `target.py:164,170` already works around the route wipe.
-  **Do:** if the rail is enabled, keep its voltage; merge the new route into
-  the current MUX state instead of replacing it. **Prove:** `[BENCH]` set VADJ1
-  to 5 V, configure IO2 as digital input, read VADJ1 back (read-only check
-  after a consented rail set). M.
-- **IO-5** · P1 · BUG · `[VERIFIED]` - firmware `IO_RELEASE` parses
-  `u8 slot_idx, u8 session_id` (`bbp/cmds/cmd_io_owner.cpp:~76-90`); Python
-  sends `u8 n, slots[]` (`client.py:~4372-4378`), and desktop
-  (`commands.rs:~3497`), the simulator and the docs agree with Python. Real
-  releases land on the wrong slot or none. **Do:** change firmware to accept
-  `n, slots[]` with the caller's session (four consumers agree); update the
-  BBP manifest. New evidence for DESK-6. S.
-- **AN-04** (TR-4) · P1 · PERF/BUG · `[VERIFIED]` -
-  `tasks_apply_dac_voltage()` (`tasks.cpp:~991-1003`), used by HTTP and BLE,
-  always calls `setVoutRangePreservingOutput()`, which parks the output,
-  waits and restarts the ADC. The BBP path guards it with
-  `range_change_needed` (`tasks.cpp:~1110-1122`). Every HTTP DAC write costs at
-  least 25 ms and glitches the output. **Do:** share the guard. S.
-- **IO-8** (+ MUX-4) · P1 · BUG · `[REPORTED]` - `mux_set_switch` over BBP and
-  HTTP and `tasks.cpp:890` report success when the U17/U23 interlock refused
-  (`adgs2414d.cpp:443-447,561-563`). Same class as MUX-4, which is still open
-  (`bus_planner.cpp:224-229`). Fix both in one pass. S.
 - **IO-3** · P1 · SAFETY · `[REPORTED]`, `[BENCH]` - `config.h:94`
   `U17_DEVICE_IDX = 2`; `bus_planner.cpp:114-126` puts IO 7-9 on MUX device 3
   while `Docs/mainboard-hardware.md:104` says IO9 is U17 / device 2. One of
   them is wrong, and the interlock may guard the wrong device. **Do:** settle
   against the schematic (`PCB Material/Main PCB`) before touching code. S.
-- **PLT-06** · P1 · BUG · `[VERIFIED]` - seven upload loops `continue` forever
-  on `HTTPD_SOCK_ERR_TIMEOUT` (`webserver.cpp:3823,3935,3994,4326,4590,4633,4781`).
-  One stalled client wedges the only httpd task. **Do:** bounded retry count
-  (e.g. 5) then abort the upload. S.
-- **WEB-23** (TR-5) · P1 · PERF · `[VERIFIED]` loop, impact `[BENCH]` -
-  `handle_get_scope_stream()` (`webserver.cpp:748`) runs `for (;;)` inside the
-  httpd task with no `httpd_req_async_handler_begin()` and no auth check.
-  While a scope tab is open every other request likely stalls. **Do:** move
-  to an async handler / dedicated task, or retire SSE in favour of the existing
-  WS stream. **Prove:** `curl -N /api/scope/stream` then `curl -m 3
-  /api/status` from a second shell. M.
-- **BUS-003** · P1 · BUG · `[VERIFIED]` init, limit `[REPORTED]` - external SPI
-  bus initialised with `SPI_DMA_DISABLED` (`bus/ext_bus.cpp:310`); ESP-IDF caps
-  non-DMA transfers at 64 bytes, but firmware, Python, MCP and docs advertise
-  512. **Do:** `SPI_DMA_CH_AUTO` with a DMA-capable buffer (or cap and document
-  64). S.
-- **BUS-005** · P2 · BUG · `[REPORTED]` - deferred bus `submit_job` reuses
-  slots that are DONE but not yet fetched, and the worker runs the lowest slot
-  rather than the oldest job (`ext_bus.cpp:~462,540-548`). Results lost and
-  reordered. **Do:** FIFO sequence numbers; never reuse an unfetched DONE slot.
-  The simulator completes jobs instantly, so add a sim mode that does not
-  (BUS-021). M.
-- **PLT-10** · P1 · BUG · `[REPORTED]` - BBP OTA session has no timeout or
-  abort; a host drop mid-SPIFFS upload leaves the web partition unmounted
-  (`cmd_ota.cpp:259`), and desktop never sends abort. **Do:** inactivity
-  timeout that aborts and remounts. S.
-- **WEB-25** · P2 · SECURITY · `[REPORTED]` - CORS origin check is a prefix
-  match (`webserver.cpp:157-158`), so `http://localhost.evil.com` passes. S.
-- **WEB-NULL** · P2 · BUG · `[REPORTED]` - several handlers dereference
-  `cJSON_GetObjectItem(...)->valueint` without a NULL check
-  (`webserver.cpp:1542,2711,2746,2972` and others). A malformed body reboots
-  the device. **Do:** grep `GetObjectItem(` without `IsNumber` guard; fix all. S.
-- **PLT-05** · P1 · BUG · `[REPORTED]` - `wifi_connect` runs on httpd /
-  `bbpCli`, blocks for up to a minute, tears down the AP, and on failure leaves
-  the bad SSID configured (`wifi_manager.cpp:318-410`). Over the AP the client
-  never receives its own response. **Do:** async connect with status polling,
-  keep AP up until STA succeeds, roll back on failure. M.
-
 ### Wave C - DAQ HAT firmware (build P4 and C6)
 
-- **C6-20** · P1 · BUG · `[VERIFIED]` - `daq_settings_set_i32()`
-  (`Firmware/DAQ_HAT/ESP32P4/src/config/daq_settings.c:~170-174`) calls
-  `s_apply` even when the value did not change, and the C6 resends all
-  mirrored keys on any menu edit. A brightness change can re-apply sample
-  rate, stop acquisition, zero the energy accumulator and rewrite V_DUT.
-  **Do:** gate `s_apply` on `changed`, with an explicit `DAQ_F_ACTION` flag for
-  keys that are commands; make the C6 send only the edited key. S.
-- **C6-21** · P1 · BUG · `[REPORTED]` - P4 -> C6 sync only pushes changes and
-  only 2 keys on C6 reappearance; factory reset is never pushed, so the C6 later
-  resends stale values. **Do:** full snapshot push on link-up and after reset. M.
-- **C6-23** (C6-11) · P1 · BUG · `[VERIFIED]` - C6 `sdkconfig.esp32c6:1178-1179`
-  has `CONFIG_ESP_TASK_WDT_PANIC` unset and a 5 s timeout; `main.c:92-94`
-  claims "10 s ... triggers a reboot". A hung loop only logs. **Do:** enable
-  panic (or `esp_task_wdt_reconfigure` with `trigger_panic = true`). C6-11 is
-  not "flashed but unproven" - it cannot work as configured. S.
-- **C6-22** (C6-9) · P1 · BUG · `[REPORTED]` - fabricated V/I still render in
-  FAULT state (`ESP32C6 main.c:208-216`); Diagnostics fabricates rails with
-  `valid = 0xFFFF` (`menu.c:250`) and the PD guard reads that. **Do:** show
-  dashes when data is stale. S.
-- **C6-25** · P1 · BUG · `[REPORTED]` - an interrupted C6 staging/push wedges
-  every later S3-driven C6 update (`relay_stage_begin` rejects stale state; S3
-  abort after reboot cannot clear it). **Do:** stale-state timeout or allow
-  begin to reset a non-active session. S.
-- **DAQ-04** · P1 · BUG · `[REPORTED]` - marker handler
-  (`daq_board.c:1768`) and STOP flush (`:654-658`) write the shared
-  `frame_buf` from higher-priority tasks with no lock. **Do:** route both
-  through the producer via a queue. M.
-- **DAQ-05** · P1 · BUG · `[REPORTED]` - missed DRDY edges are never counted;
-  at 256 kSPS the profile shows ~23% conversion loss while drop counters read
-  ~100 (`data/p4_profile_O2.json`). **Do:** count missed conversions from the
-  ADC sequence / timer and report them in STATUS. M.
-- **DAQ-06** · P2 · BUG · `[REPORTED]` - registry rates 10k/50k/100k/250k/1M
-  produce 8/64/128/256/512 kSPS; x8 filter unreachable (`adaq7769.c:389`).
-  **Do:** advertise actual rates, or fix the table. Resolves DOC-1's "1 MSPS"
-  question. S.
-- **DAQ-03** · P1 · BUG · `[REPORTED]` - markers carry no S3 timestamp; the P4
-  stamps arrival (`daq_board.c:1763-1770`) and `sync_epoch` is never read. The
-  "exact sample index" claim in docs is false. M.
-- **P4-8** - see the corrected entry below; widen to u32 together with DAQ-01.
 - **BS-1** · P1 · FEATURE · `[REPORTED]` - battery simulator firmware core
   (P4 `src/battsim/`, C6 menu + battery main screen, DDP v10, `battlog`
   partition). P4 and C6 build; nothing run on hardware yet. **Do:** wired
@@ -623,58 +331,22 @@ what to build, how to prove it. Effort S/M/L.
 
 ### Wave D - latency
 
-- **TR-1** · P1 · BUG · `[BENCH]` - `usb_cdc_cli_write()` calls
-  `tinyusb_cdcacm_write_queue()` once and returns the count
-  (`net/usb_cdc.cpp:192-196`); `sendFrame()` ignores it. TX FIFO is 512 B
-  (`sdkconfig.esp32s3:2337`). Frames over the free FIFO space may lose their
-  tail. **Confirm first** with one live `QS_GET` or `IO_OWNER_STATUS`; then
-  loop until all bytes are queued (with a deadline). S.
-- **TR-3** · P1 · BUG · `[BENCH]` - device leaves BBP after 60 s idle
-  (`bbp.cpp:90,638-640`) and no host sends a keepalive. Plausible root of
-  "every command times out" after idle. **Do:** PING every 20-30 s from the
-  Python and Rust transports when idle. **Prove:** idle 70 s, then a command. S.
-- **AN-07** · P1 · PERF · `[REPORTED]` - `processScopeStream` holds
-  `g_stateMutex` across USB and WS sends (`bbp.cpp:440-477`); ADC poll drops
-  data. **Do:** snapshot under lock, send outside it (the SSE handler already
-  does this). S.
-- **AN-06** · P1 · PERF · `[REPORTED]` - waveform loop spins `taskYIELD()`
-  until the next sample (`tasks.cpp:~1680-1685`), which only yields to equal
-  or higher priority; lower-priority tasks on that core starve at >= 10 Hz.
-  **Do:** esp_timer / `vTaskDelayUntil` pacing. M.
 - **AN-10 / AN-11** · P2 · PERF · `[REPORTED]` - ADC stream `div` is never
   applied (`bbp.cpp:758`); advertised 9.6 kSPS is ~555 SPS; acquisition polls
   SPI at <= 1 kHz while `ADC_RDY` is configured but never read
   (`main.cpp:296`). **Do:** ADC_RDY-driven acquisition task. L - largest
   single analog improvement.
-- **AN-12** · P2 · PERF · `[REPORTED]` - `CMD_ADC_CONFIG` holds the shared SPI
-  mutex across `delay_ms(5)` and `delay_ms(20)` (`tasks.cpp:1153-1179`). S.
-- **IO-13** · P2 · PERF · `[REPORTED]` - unconditional 100 ms all-open dead
-  time on every MUX write, also when no switch opens. **Do:** dead time only
-  for switches going open -> different closed. M.
 - **TR-6 / MCP-31** · P2 · PERF · `[REPORTED]` - `configure_io` is 12-19 BBP
   frames plus ~200 ms firmware dead time; first use per block adds 0.5 s.
   **Do:** one lease around the three calls, drop the redundant DISABLED MUX
   step, use firmware auto-claim. Long term: one `IO_CONFIGURE` firmware
   command. M.
-- **TR-9** · P2 · PERF · `[REPORTED]` - every HAT/DAQ MCP tool issues an
-  uncached `HAT_GET_STATUS` first; firmware adds a UART `GET_DAP_STATUS` the P4
-  does not implement. **Do:** cache HAT type per connection, invalidate on
-  HAT event. S.
-- **TR-7** · P2 · BUG · `[REPORTED]` - `_usb_cmd` retries every opcode after a
-  timeout, including I2C/SPI writes and `SCRIPT_EVAL`. **Do:** retry only an
-  allow-list of idempotent reads. S.
 - **DESK-22..26** · P1/P2 · PERF · `[REPORTED]` - HAT, Voltages, IO Expander,
   USB-PD tabs refetch on every `device-state` tick (300 ms on HTTP); whole
   card grids rebuilt each tick; DAQ transport mutex held across reads up to
   1 s; DAQ view ships ~14k floats of JSON at up to 30 Hz; the HAT probe polls
   forever on a bare board. **Do:** shared poller with per-tab subscription,
   keyed `<For>`, binary Tauri channel for DAQ frames. M.
-- **DESK-28** · P2 · PERF · `[REPORTED]` - 30 Hz `adc-stream` event has no
-  frontend listener and the ADC tab never stops the stream. S.
-- **WEB-28** · P2 · PERF · `[REPORTED]` - no fetch timeouts, so a busy device
-  pins all 6 browser connections; only SignalPath uses the backoff helper.
-  Scope redraws at 60 fps unconditionally and its SSE error counter never
-  resets (latches into 4 req/s polling). M.
 - **IOS-23** · P2 · PERF · `[REPORTED]` - ~6 req/s steady state, six
   sequential requests every 5th cycle; status replies carry both camelCase and
   snake_case copies of every field. **Do:** drop the duplicate keys server-side
@@ -684,9 +356,6 @@ what to build, how to prove it. Effort S/M/L.
   supply reads run a monitor step in the BBP and HTTP tasks
   (`cmd_selftest.cpp:84`, `api_core.cpp:1000`). **Do:** one background
   sampler, readers return the cache. M.
-- **PWR-16** · P3 · PERF · `[REPORTED]` - every `ds4424_set_voltage()` commits
-  NVS (`ds4424.cpp:472`). Debounce. S.
-
 ### Wave E - refactors
 
 - **TR-11** · P2 · REFACTOR · `[REPORTED]` - `api_core` is not a shared layer
@@ -696,55 +365,20 @@ what to build, how to prove it. Effort S/M/L.
   (WEB-26 / IOS-21) and most cross-transport drift. **Do:** one C service
   function per capability, BBP and HTTP as thin adapters (the cmd registry
   pattern in `http_adapter.cpp` is the template). L, incremental.
-- **FEAT-6** - five hand copies of the error table now (Python constants,
-  `error_mapping.py`, Rust, docs, firmware); `error_mapping.py` still has the
-  0x13 collision and no 0x14, and its regex never matches `DeviceError`
-  text. Generate from `bbp.h`.
 - **PY-21** · P2 · REFACTOR · `[REPORTED]` - `client.py` is ~4.8k lines with a
   USB/HTTP branch in most methods. Split into per-capability mixins with a
   transport strategy; extend `Transport` (FEAT-4) so HTTP gaps fail at type
   check. L.
-- **IO-2** · P1 · BUG · `[REPORTED]`, `[BENCH]` - break-before-make is undone:
-  the readback frame re-sends the old shadow, so the dead time elapses with old
-  routes closed (`adgs2414d.cpp:161,425,428`). M.
-- **PWR-REFAC** · P2 · REFACTOR - three divergent power-up sequences (Python
-  HAL, MCP `target.py`, firmware bus planner; the planner enables the e-fuse
-  right after the DCDC with no inrush settle, `bus_planner.cpp:254-266`). One
-  firmware `RAIL_POWER_UP(rail, V, settle_ms)` command used by all. M.
-- **DESK-REFAC** · P2 - 26 Tauri commands never invoked by the frontend
-  (counting method in `DESKTOP.md`); delete or wire. `error_to_string` is dead
-  and the UI only shows "Failed" (DESK-33). S.
-- **PWR-11** · P2 · SAFETY - the >12 V confirm gate exists only in MCP
-  `set_supply_voltage`; MCP `idac_control`, BBP, HTTP, BLE and every UI bypass
-  it, and firmware clamps silently. Move the gate to firmware (a confirm flag
-  in the command) and surface the clamp. M.
-
 ### Wave F - parity features (reuse existing primitives)
 
 - **DESK-3** scripting UI - add `0xF5-0xFD` to `bbp.rs`, Tauri commands, and
   a tab; the HTTP routes already exist. L.
 - **DESK-4 / WEB-3** external I2C/SPI UI - IDs already in `bbp.rs:132-138`; no
   commands or tab. M each.
-- **MCP-5 / PLT-08** - `run_device_script` returns right after enqueue, so
-  logs are always empty (`tools/scripting.py:46-52`); add wait-for-completion
-  and script file management tools (12 `script_*` client methods have no
-  tool). M.
-- **MCP-4** - streaming: add bounded "observe for N seconds" tools rather than
-  open streams. M.
-- **BUS-011** - MCP has no synchronous I2C read/write, setup, close or status
-  tools; deferred jobs cannot do a plain write. An agent cannot write one I2C
-  register today. S.
-- **BUS-016** - I2C register dump and SPI-flash read helpers on top of existing
-  primitives. S.
 - **DAQ-13** - per-range meter calibration reachable only from the P4 serial
   console; expose over BBP DAQ sub-ops + MCP, gated (`cal` writes NVS). M.
-- **DAQ-10** - `pre_samples` stored but unused, Python capture discards
-  pre-trigger data, no trigger-on-current-threshold. M.
 - **IOS-5** - unchanged; use `CLIENTS-WEB-IOS.md` route matrix as the
   checklist.
-- **DESK-9** - AP password: ID is in `bbp.rs:189`; needs a Tauri command,
-  HTTP mapping and UI. S.
-
 ### Wave G - RP2040 (blocked: LA HAT not attached)
 
 - **LA-01** · P1 · `[REPORTED]` - triggered capture programs begin with
@@ -753,10 +387,6 @@ what to build, how to prove it. Effort S/M/L.
 - **LA-02** · P1 · `[REPORTED]` - `sm_config_set_in_shift(..., false, ...)`
   shifts left, so samples within each word could be in reverse order relative
   to every LSB-first decoder. One-line fix if confirmed on hardware.
-- **LA-03** · P1 · `[VERIFIED]` - `handler_hat_la_config()`
-  (`bbp/cmds/cmd_hat.cpp:~583-591`) parses 9 bytes and never forwards the RLE
-  byte; desktop RLE toggle and Python `rle_enabled` do nothing. The S3 half can
-  ship in Wave B.
 - **LA-05..LA-12** - see `RP2040-LA-SWD.md` (28-byte readout per round trip;
   `HAT_CMD_LA_USB_SEND` has no BBP mapping and five desktop commands are dead;
   ring overrun check off by one; DAQ branch of `hat_update_leds` unreachable;
@@ -812,7 +442,6 @@ Code is on the device. The behaviour has not been provoked.
 | C6-11 watchdog | **Cannot work as configured** - task WDT panic is off (see C6-23). Fix, then induce a hang. |
 | C6-9 link-lost banner | Banner is transient and fabricated numbers keep rendering (see C6-22). Fix first. |
 | C6-1 DDP `RSP_ERR` | Send a deliberately truncated DDP frame. |
-| FEAT-9 MUX rollback | Proven 2026-10-01 by the IO-8 bench run in M3: interlock-refused closes return `ERR_ADGS_ROUTE_REJECTED` and the shadow follows the hardware. Remove at release. |
 | DESK-1 STOP on disconnect | Run the desktop app against the device and pull the link. |
 | Web UI | Uploaded to SPIFFS several times in M5/M6 (HTTP and USB); scope SSE and pollers checked live (WEB-28). Every tab not yet opened on the device. |
 

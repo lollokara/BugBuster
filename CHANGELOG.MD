@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **One firmware copy of the MUX device map.** `Firmware/ESP32/src/hal/adgs_mux_map.h` now holds the IO_Block ->
+  ADGS2414D device mapping; `bus_planner.cpp`, `tasks.cpp` and `hat.cpp` use it instead of three hand copies. Values
+  are unchanged. Built for the S3, not flashed.
+- **BBP command and event IDs are generated.** `Firmware/tools/gen_error_tables.py` now also writes the Python
+  `CmdId` members and the Rust `CMD_*` / `EVT_*` constants from `bbp.h` (names and values unchanged; CI `--check`).
+- **iOS unit tests in CI** (`.github/workflows/ios-tests.yml`).
+
+### Fixed
+
+- **iOS standby unit test** asserted a countdown on a fixture with a connected client; it had never passed.
+
+### Removed
+
+- Agent state (`.omc/`), `python/bugbuster.egg-info`, `iOSApp/build.log` and per-user Xcode state are no longer tracked.
+
 ### Added
 
 - **System standby implementation checkpoint (not released or live-verified).**
