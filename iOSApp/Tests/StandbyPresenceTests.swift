@@ -35,7 +35,8 @@ final class StandbyPresenceTests: XCTestCase {
         XCTAssertTrue(s.hardwareReady)
         XCTAssertEqual(s.generation, 4)
         XCTAssertEqual(s.timeoutSeconds, 300)
-        XCTAssertEqual(s.idleLine, "Standby in 4:32")
+        // The fixture has one client, which holds the device awake; the countdown shows with none.
+        XCTAssertEqual(status { $0["clients"] = 0 }.idleLine, "Standby in 4:32")
     }
 
     func testIdleLineExplainsWhatHoldsTheDeviceAwake() {

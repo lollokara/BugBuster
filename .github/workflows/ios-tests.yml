@@ -1,0 +1,43 @@
+name: iOS Tests
+
+# No workflow built the iOS app until 2026-11-16. When this job was written,
+# main did not compile (a `private` view modifier used from another file) and
+# one unit test had never passed. The unit scheme takes seconds once built;
+# the UI-test scheme (bugbuster_iOS_UITests) stays out of CI.
+
+on:
+  push:
+    paths:
+      - "iOSApp/**"
+      - ".github/workflows/ios-tests.yml"
+  pull_request:
+    paths:
+      - "iOSApp/**"
+      - ".github/workflows/ios-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: xcodebuild test (unit scheme)
+    # The deployment target is iOS 26.0, so the image must carry Xcode 26 or newer.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      # Runner images rename simulators with every Xcode; take the first iPhone.
+      - name: Pick a simulator
+        run: |
+          udid=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ {print $2; exit}')
+          test -n "$udid" || { echo "no iPhone simulator on this image"; exit 1; }
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        working-directory: iOSApp
+        run: |
+          xcodebuild test -project bugbuster.xcodeproj -scheme bugbuster_iOS \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            CODE_SIGNING_ALLOWED=NO
