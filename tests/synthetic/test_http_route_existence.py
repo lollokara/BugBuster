@@ -1,7 +1,7 @@
 """M0.5: every HTTP route the Python client calls must be registered by the
 firmware with the same method.
 
-Python side: AST of ``python/bugbuster/client.py`` - first argument of
+Python side: AST of ``python/bugbuster/client*.py`` - first argument of
 ``self._http_get/_http_post/_http_delete`` and ``self._t.get/post/delete``.
 f-string fields become a placeholder segment. The client calls paths without
 the ``/api`` prefix (the transport adds it).
@@ -19,9 +19,7 @@ import re
 import pytest
 
 from tests.lib.fw_routes import PLACEHOLDER, firmware_routes, route_registered
-from tests.lib.srcread import REPO_ROOT, read_source
-
-CLIENT = "python/bugbuster/client.py"
+from tests.lib.srcread import REPO_ROOT, client_source_files, read_source
 
 _METHODS = {
     "_http_get": "GET", "_http_post": "POST", "_http_delete": "DELETE", "_http_put": "PUT",
@@ -48,8 +46,14 @@ def _path_literal(node: ast.expr) -> str | None:
     return None
 
 
-def client_calls() -> list[tuple[str, str, int]]:
-    tree = ast.parse(read_source(CLIENT))
+def client_calls() -> list[tuple[str, str, str]]:
+    calls = []
+    for src in client_source_files():
+        calls += _calls_in(src.name, ast.parse(read_source(src)))
+    return calls
+
+
+def _calls_in(fname: str, tree: ast.AST) -> list[tuple[str, str, str]]:
     calls = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -68,18 +72,18 @@ def client_calls() -> list[tuple[str, str, int]]:
         path = path.split("?")[0]
         if not path.startswith("/api/"):
             path = "/api" + path
-        calls.append((_METHODS[node.func.attr], path, node.lineno))
+        calls.append((_METHODS[node.func.attr], path, f"{fname}:{node.lineno}"))
     return calls
 
 
 def _params():
     out = []
-    for method, path, line in client_calls():
+    for method, path, where in client_calls():
         marks = []
         if (method, path) in KNOWN_BROKEN:
             marks.append(pytest.mark.xfail(strict=True, reason=KNOWN_BROKEN[(method, path)]))
         out.append(pytest.param(method, path, marks=marks,
-                                id=f"client.py:{line}:{method} {path.replace(PLACEHOLDER, '{}')}"))
+                                id=f"{where}:{method} {path.replace(PLACEHOLDER, '{}')}"))
     return out
 
 

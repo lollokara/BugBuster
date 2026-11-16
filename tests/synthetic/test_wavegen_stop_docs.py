@@ -8,7 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FILES = [
-    "python/bugbuster/client.py",
+    "python/bugbuster/client_channels.py",
     "python/bugbuster_mcp/tools/waveform.py",
     "python/examples/04_waveform_and_mux.py",
 ]

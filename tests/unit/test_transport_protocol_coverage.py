@@ -9,9 +9,7 @@ send_command, on_event, get/post/delete, ... were undeclared.
 import re
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[2]
-CLIENT = ROOT / "python" / "bugbuster" / "client.py"
+from tests.lib.srcread import read_client_sources
 
 
 def _declared(proto) -> set:
@@ -28,7 +26,7 @@ def _declared(proto) -> set:
 def test_every_transport_member_used_by_the_client_is_declared():
     from bugbuster.transport import protocol as p
 
-    used = set(re.findall(r"self\._t\.(\w+)", CLIENT.read_text(encoding="utf-8")))
+    used = set(re.findall(r"self\._t\.(\w+)", read_client_sources()))
     declared = _declared(p.Transport) | _declared(p.UsbTransportProtocol) | _declared(p.HttpTransportProtocol)
     assert sorted(used - declared) == []
 

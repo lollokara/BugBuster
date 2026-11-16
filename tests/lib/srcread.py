@@ -21,3 +21,12 @@ def read_source(path: str | Path) -> str:
     if not p.is_absolute():
         p = REPO_ROOT / p
     return p.read_text(encoding="utf-8")
+
+
+def client_source_files() -> list[Path]:
+    """client.py plus the client_*.py modules the BugBuster class is split across."""
+    return sorted((REPO_ROOT / "python" / "bugbuster").glob("client*.py"))
+
+
+def read_client_sources() -> str:
+    return "\n".join(read_source(p) for p in client_source_files())

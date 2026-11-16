@@ -15,10 +15,10 @@ Found 2026-08-06 by the reachability check below.
 import re
 
 from bugbuster.constants import CmdId
-from tests.lib.srcread import read_source
+from tests.lib.srcread import read_client_sources, read_source
 
 BBP_H = read_source("Firmware/ESP32/src/bbp/bbp.h")
-CLIENT_PY = read_source("python/bugbuster/client.py")
+CLIENT_PY = read_client_sources()
 DAQ_CONFIG_PY = read_source("python/bugbuster/daq_config.py")
 OTA_PY = read_source("python/bugbuster/ota.py")
 

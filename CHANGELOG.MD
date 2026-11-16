@@ -10,6 +10,10 @@
 - **BBP command and event IDs are generated.** `Firmware/tools/gen_error_tables.py` now also writes the Python
   `CmdId` members and the Rust `CMD_*` / `EVT_*` constants from `bbp.h` (names and values unchanged; CI `--check`).
 - **iOS unit tests in CI** (`.github/workflows/ios-tests.yml`).
+- **`python/bugbuster/client.py` split by area.** The 5,300-line `BugBuster` class is now a chain of classes in
+  `client_system.py`, `client_scripting.py`, `client_channels.py`, `client_bus.py`, `client_power.py` and
+  `client_hat.py`; `client.py` keeps the core, the result types and the factories. No method body changed and
+  `bugbuster.client.BugBuster` exposes the same API.
 
 ### Fixed
 
