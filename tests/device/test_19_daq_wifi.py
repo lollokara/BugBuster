@@ -9,6 +9,9 @@ directly from `api_daq_wifi_stream_status()` in
     stage: "requested" | "ap" | "dns" | "tcp"   (present only while starting;
            mirrors HAT_WIFI_STAGE_* in Firmware/ESP32/src/hat/hat.h)
     ssid, password, host, port                  (present only when ready)
+    staCount: live softAP association count (wifi_ap_sta_count()), queried
+              fresh on every poll via HATP_CMD_DAQ_GET_STATUS -- present
+              whenever the P4 HAT link answers, regardless of stream state
 
 There is NO "reason" field anywhere in this payload — `failed` carries no
 diagnostic text over HTTP. Tests below report the last observed stage instead.
@@ -258,11 +261,14 @@ def test_wifi_stream_idle_auto_teardown(daq_http, daq_http_base):
     it equally means something joined the softAP. A phone that has previously
     paired with the DAQ hotspot will auto-join it, silently.
 
-    Measured 2026-08-04: stayed `ready` for the full 119s poll window. The
-    status endpoint exposes no station count, so this test CANNOT distinguish
-    the two causes and therefore reports rather than fails. To make it
-    conclusive, either surface `wifi_ap_sta_count()` in
-    /api/daq/wifi_stream/status, or run it with every known client's WiFi off.
+    Originally (2026-08-04) this test could only report rather than fail: the
+    status endpoint exposed no station count, so a stream stuck `ready` for
+    the full 119s poll window was indistinguishable from a broken timer. Now
+    that `/api/daq/wifi_stream/status` carries a live `staCount`
+    (`wifi_ap_sta_count()`, queried fresh via HATP_CMD_DAQ_GET_STATUS on every
+    poll -- see api_core.cpp's `api_daq_wifi_stream_status()`), this test is
+    conclusive: it skips ONLY when a station is actually observed associated
+    during the observation window, and otherwise asserts teardown happens.
     """
     AUTO_TEARDOWN_TIMEOUT_S = 120.0
     try:
@@ -281,26 +287,39 @@ def test_wifi_stream_idle_auto_teardown(daq_http, daq_http_base):
         start = time.monotonic()
         observed = []
         torn_down = False
+        station_seen = False
         while time.monotonic() - start < AUTO_TEARDOWN_TIMEOUT_S:
             st = _status(daq_http, daq_http_base)
             elapsed = time.monotonic() - start
-            observed.append((round(elapsed, 1), st["state"]))
+            sta_count = st.get("staCount", 0)
+            observed.append((round(elapsed, 1), st["state"], sta_count))
+            if sta_count > 0:
+                station_seen = True
             if st["state"] == "idle":
                 torn_down = True
                 break
             time.sleep(2.0)
 
-        print("[test_19_daq_wifi] idle-auto-teardown observed: %r" % observed)
-        if not torn_down:
+        print("[test_19_daq_wifi] idle-auto-teardown observed "
+              "(elapsed_s, state, staCount): %r" % observed)
+
+        if station_seen:
+            # A station really is associated (e.g. a phone auto-joining the
+            # remembered DAQ hotspot) -- the idle timer legitimately keeps
+            # resetting per daq_board.c:1981, so a stream that stays `ready`
+            # here proves nothing about the timer's correctness. This is the
+            # one case the plan explicitly said stays a skip.
             pytest.skip(
-                "stream stayed up for the full %.0fs poll window (last state=%r). "
-                "This is INCONCLUSIVE, not a failure: the idle timer resets while "
-                "any station is associated to the softAP (daq_board.c:1981), and "
-                "the status endpoint exposes no station count, so a remembered "
-                "phone auto-joining is indistinguishable from a broken timer. "
-                "Observed: %r"
-                % (AUTO_TEARDOWN_TIMEOUT_S, observed[-1] if observed else None,
-                   observed))
+                "station(s) associated to the softAP during the observation "
+                "window (staCount > 0 at some point) -- idle timer legitimately "
+                "keeps resetting per daq_board.c:1981, so this run cannot "
+                "exercise the no-client teardown path. Observed: %r" % observed)
+
+        assert torn_down, (
+            "stream stayed up for the full %.0fs poll window with staCount==0 "
+            "throughout (no station ever associated) -- the idle timer should "
+            "have torn the stream down by now. Observed: %r"
+            % (AUTO_TEARDOWN_TIMEOUT_S, observed))
     finally:
         _stop(daq_http, daq_http_base)
         idle = _wait_for_idle(daq_http, daq_http_base)
